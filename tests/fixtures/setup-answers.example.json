@@ -1,0 +1,17 @@
+{
+  "awsRegion": "us-east-1",
+  "cdkStackName": "CCE",
+  "deployTier": 1,
+  "dailyCostCapUsd": 50,
+  "deployMode": "infra-only",
+  "dashboard": { "autoGenerate": true },
+  "addons": {
+    "imageGen": false,
+    "tts": true,
+    "knowledge": true,
+    "jarvisVoice": false,
+    "webSearchVendor": "skip"
+  },
+  "ciMode": "none",
+  "configDir": "~/.claudeclaw-enterprise"
+}

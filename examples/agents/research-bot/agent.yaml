@@ -1,0 +1,14 @@
+# Per-agent config stored alongside CLAUDE.md in the S3 config bucket at
+# agents/research-bot/agent.yaml. The shape matches EXACTLY what
+# src/lib/agents/agent-manager.ts writes at creation: a FLAT key: value
+# document — the runtime parser (readYamlScalar in
+# src/lib/config/agent-loader.ts) is a line scanner, so nested YAML,
+# lists, and multi-line values are NOT supported here.
+#
+# At runtime the loader reads only `knowledgeScope` from this file; name,
+# description, and model are authoritative in the DDB agents-table row
+# (see examples/README.md for that row's shape).
+name: Research Bot
+description: Deep-research agent. Investigates questions thoroughly, cross-checks sources, and synthesizes findings with citations.
+model: us.anthropic.claude-sonnet-4-6
+knowledgeScope: research

@@ -1,0 +1,19 @@
+{
+  "awsRegion": "us-east-1",
+  "cdkStackName": "CCE",
+  "deployTier": 1,
+  "dailyCostCapUsd": 50,
+  "deployMode": "chat",
+  "domainName": "cce.example.com",
+  "telegramToken": "REPLACE_WITH_YOUR_BOTFATHER_TOKEN",
+  "dashboard": { "autoGenerate": true },
+  "addons": {
+    "imageGen": false,
+    "tts": false,
+    "knowledge": true,
+    "jarvisVoice": false,
+    "webSearchVendor": "skip"
+  },
+  "ciMode": "none",
+  "configDir": "~/.claudeclaw-enterprise"
+}

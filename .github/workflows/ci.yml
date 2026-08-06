@@ -1,0 +1,242 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel any in-flight runs on the same branch when new commits land.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck + Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+  integration:
+    name: Integration Tests (LocalStack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # No --health-cmd: the localstack/localstack image does not ship
+      # curl, so any curl-based healthcheck reports unhealthy even after
+      # the service is up. We poll from the runner instead (see "Wait
+      # for LocalStack" step).
+      localstack:
+        image: localstack/localstack:3.8
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: dynamodb,s3,sqs,kms,secretsmanager,iam,scheduler
+          AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for LocalStack
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:4566/_localstack/health >/dev/null 2>&1; then
+              echo "LocalStack ready after ${i} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "LocalStack failed to become ready in 120s" >&2
+          exit 1
+
+      - name: Integration tests
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: us-east-1
+        run: npm run test:integration
+
+  # IaC readiness plan, item 29: credential-free synth. The job configures
+  # NO AWS credentials on purpose; the pinned CDK_DEFAULT_* env is what keeps
+  # the CDK CLI from calling STS to resolve the target account, DOMAIN_NAME
+  # stays unset so no Route 53 hosted-zone lookup runs, and CCE_IMAGE_TAG
+  # pins the image tag so synth never depends on git/ECR state. The ONE
+  # context lookup in the app (VPC maxAzs -> availability-zones for the synth
+  # account) is pre-seeded into cdk.context.json below, because the checked-in
+  # cache only covers real accounts. Verified locally with invalid creds +
+  # IMDS disabled: synth completes with zero AWS calls.
+  synth-hermetic:
+    name: Hermetic CDK Synth (no AWS credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CDK_DEFAULT_ACCOUNT: '111111111111'
+      CDK_DEFAULT_REGION: us-east-1
+      CCE_TIER: '1'
+      CCE_IMAGE_TAG: ci
+      # Belt-and-suspenders: if anything DOES reach for credentials, fail
+      # fast instead of hanging on the (nonexistent) instance metadata
+      # endpoint.
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pin availability-zone context for the synthetic account
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "cdk.context.json";
+            const c = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : {};
+            c["availability-zones:account=111111111111:region=us-east-1"] =
+              ["us-east-1a", "us-east-1b"];
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+          '
+
+      - name: cdk synth (credential-free)
+        run: npx cdk synth --quiet --output cdk.out
+
+      - name: Assert templates were produced
+        run: |
+          count=$(ls cdk.out/*.template.json | wc -l)
+          echo "synthesized ${count} stack templates"
+          test "$count" -ge 10
+
+      - name: Upload cdk.out for the secret scan
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-out
+          path: cdk.out
+          retention-days: 1
+
+  # IaC readiness plan, items 14 / 29: secret-pattern scan over the synth
+  # artifacts plus the manifest/lifecycle test fixtures. The scanner is
+  # dependency-free (bare Node, no npm ci). The tracked denylist holds
+  # placeholders only; the private checkout supplies the real personal-value
+  # list at publish time (scripts/publish/publish-gate.sh).
+  secret-scan-synth:
+    name: Secret Scan (cdk.out + fixtures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: synth-hermetic
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download synthesized cdk.out
+        uses: actions/download-artifact@v4
+        with:
+          name: cdk-out
+          path: cdk.out
+
+      - name: Scan for secret patterns
+        run: >
+          node scripts/ci/secret-scan.mjs
+          --denylist scripts/ci/denylist.txt
+          cdk.out
+          scripts/lib/lifecycle
+
+  # IaC readiness plan, items 14 / 29: rollback --dry-run exercised in CI.
+  # The fake-backed unit suite IS the CI exercise of --dry-run: it drives
+  # runRollback() across all three classes (image / infra / config) against
+  # fake S3/DDB/ECS/ECR/CFN clients, including the dry-run plan paths, the
+  # schema-downgrade refusal, and the manifest round-trip. The CLI smoke on
+  # top asserts the real entrypoint fails GRACEFULLY with no credentials:
+  # nonzero exit, one clean error line, no stack trace.
+  rollback-dry-run:
+    name: Rollback Dry-Run (unit suite + CLI smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rollback unit suite (fake-backed dry-run paths)
+        run: npx vitest run scripts/lib/lifecycle/rollback-classes.test.ts
+
+      - name: CLI smoke - graceful failure without credentials
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_CONFIG_FILE: /dev/null
+          AWS_SHARED_CREDENTIALS_FILE: /dev/null
+        run: |
+          set +e
+          out=$(npx tsx scripts/rollback.ts --class=image --to=previous --dry-run 2>&1)
+          code=$?
+          set -e
+          echo "--- rollback output ---"
+          echo "$out"
+          echo "--- exit code: $code ---"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: expected nonzero exit without credentials" >&2
+            exit 1
+          fi
+          # Clean failure: depending on what's missing first, the catch
+          # block prints either the credentials error ("Could not load
+          # credentials from any providers") or resolveStateNames'
+          # missing-account/region guidance (no .env on a CI runner).
+          # Both are the designed one-line graceful failures.
+          if ! echo "$out" | grep -qiE 'credentials|resolveStateNames needs'; then
+            echo "FAIL: expected a clean credentials/state-name error" >&2
+            exit 1
+          fi
+          # No stack trace vomit (node frames look like "    at fn (file)").
+          if echo "$out" | grep -qE '^\s+at '; then
+            echo "FAIL: stack trace leaked to the operator" >&2
+            exit 1
+          fi
+          echo "OK: graceful failure (exit ${code}, clean error, no stack trace)"

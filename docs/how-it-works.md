@@ -1,0 +1,78 @@
+# How it actually works: one message, end to end
+
+> You send a Telegram message to your agent, and within a couple of seconds a placeholder reply appears and starts filling in with the answer. Under the hood the webhook is verified against a shared secret, your conversation history and the agent's long-term memories are loaded from DynamoDB, and a guardrailed Amazon Bedrock call streams the reply, calling tools along the way if the model needs them. This page tells that story twice: first in plain English, then at code level with file links, followed by what changes on Slack and what an `infra-only` (dashboard-only) install does instead.
+
+Telegram is the **exemplar path** throughout. Slack and the dashboard are deltas on it, covered at the end.
+
+## Part 1: plain English
+
+The sequence diagram for everything below lives at [`diagrams/request-lifecycle.md`](./diagrams/request-lifecycle.md); read them side by side.
+
+1. **The message arrives.** Telegram POSTs the update to your deployment's webhook URL. The handler first checks a shared secret header that only Telegram and your deploy know. No secret, no entry: unsigned requests are rejected.
+2. **Ack fast, work async.** Telegram retries deliveries that don't get a quick 200, so the handler acknowledges immediately and does the real work in the background.
+3. **Figure out who you are and which agent should answer.** If the chat is mapped to the owner alias, or linked to a cross-surface identity, the conversation keys onto that shared id so your memories follow you across surfaces. Then the agent picker chooses a policy: an explicit `/agentname` command wins, then a sticky previous agent, then the default.
+4. **Show signs of life.** The bot posts a "…" placeholder message and then edits it roughly every 1.4 seconds with the text streamed so far, and with a live "running tool X" status whenever the model is off doing tool work.
+5. **Build the model's context.** The agent's system prompt (its CLAUDE.md) is stacked with a fleet-wide conduct floor, the top long-term memories for this chat, recent Hive Mind notes from other agents, and any queued inter-agent inbox messages. Conversation history comes from the session table.
+6. **Call Bedrock, with the safety rail attached.** The Converse call streams, carries the configured Bedrock Guardrail, and offers the model its tool catalog (built-ins plus any MCP servers you've connected). Before any of that, the turn passes the kill switches: a global Bedrock stop, the daily cost cap, a per-identity rate limit, and a maintenance freeze.
+7. **Tools, if needed.** If the model asks for a tool (search the knowledge base, run a web search, schedule a task, call an MCP server), the loop executes it, feeds the result back, and lets the model continue, up to 8 rounds.
+8. **Reply, then remember.** The final text passes an outbound data-loss-prevention scan (secrets get redacted, not the whole reply withheld), replaces the placeholder, and optionally goes out again as a voice note if you spoke to it. Both turns are appended to the session, token usage is recorded for the cost cap, and an audit row is written. If the guardrail blocked the turn, the user gets a gentle notice and **nothing is persisted**, so one blocked message can never poison the rest of the conversation.
+
+## Part 2: the same turn at code level
+
+Every step below names the real function or file.
+
+### 1. Webhook in: route and secret check
+
+[`src/server.ts`](../src/server.ts) mounts the adapter at `/tg`:
+
+```ts
+app.route('/tg', buildTelegramRouter());
+```
+
+[`src/adapters/telegram/handler.ts`](../src/adapters/telegram/handler.ts) handles `POST /tg/:agentId/webhook`. It reads the `x-telegram-bot-api-secret-token` header and compares it to `TELEGRAM_WEBHOOK_SECRET` via `verifyTelegramSecret()` (`src/adapters/telegram/verify.ts`). A missing or `REPLACE_ME` secret **fails closed** with a 401, and verification is **unconditional** — there is no bypass switch. (The old `telegram_signature_check_disabled` kill switch was removed in Wave A: accepting unsigned requests is an authentication-bypass primitive, so break-glass is to *close* ingress via the 401, never to accept unsigned traffic.) The webhook itself (URL + secret + allowed-updates) is registered by the deploy tooling (`scripts/lib/surface-validate.ts` calls `setWebhook` once DNS resolves).
+
+The update is parsed by `parseUpdate()` (`src/adapters/telegram/parse.ts`), bot messages and non-text noise are dropped, then owner aliasing runs: `resolveOwnerChatId('telegram', chatId)` (`src/lib/identity/owner-alias.ts`) first, falling back to `resolveCanonical()` (`src/lib/state/identities-repo.ts`) for identity-claimed chats. The handler returns 200 immediately and continues in `handleMessage()` (fire-and-forget; Telegram retries non-2XX responses and gives up after a number of attempts — the Bot API does not publish the exact window).
+
+### 2. Pick the agent, run slash commands, load the session
+
+- `pickAgent(rawText, sticky)` (`src/agent/picker.ts`): slash command, @mention, sticky agent, or default.
+- `runCommand()` (`src/agent/commands.ts`) intercepts `/newchat`, `/model`, `/status`, `/warroom` and friends before any model call (skipped when there's an attachment, a photo caption starting with `/` is data).
+- `getSession(agentId, chatId)` (`src/lib/state/sessions-repo.ts`) loads prior turns and any per-chat model override from the sessions table.
+- Media (voice, photo, PDF) goes through `downloadAndStore()` (`src/adapters/telegram/media.ts`): voice notes are transcribed with Amazon Transcribe and the transcript joins the user text; images and PDFs become inline Bedrock content blocks.
+
+The handler then posts the placeholder (`sendMessage(...,'…')`) and wires two callbacks: `onChunk` edits the placeholder with cumulative streamed text on a ~1.4s throttle, and `onToolEvent` repaints it with a humanized "running tool" status (`src/lib/tools/humanize.ts`). This live tool status is the cross-surface parity example: Telegram and Slack edit their placeholder, dashboard chat emits a `tool` SSE event.
+
+### 3. The agent loop: memory recall, guardrailed Converse, tool dispatch
+
+`runAgentTurn()` in [`src/agent/agent-loop.ts`](../src/agent/agent-loop.ts) is surface-agnostic and does, in order:
+
+1. **Spend admission (first, wraps the whole turn):** `admitTurnSpend()` runs *before* the frozen/rate-limit refusals and decides cost-cap enforcement — the legacy strict counter (`cost_cap_per_day` switch + `getEffectiveCostCap()` vs `getDailyCostUsd({ strict: true })`, failing **closed** if the day's spend can't be computed), or the atomic reserve-before-spend ledger when `cost/ledger_enabled` is on. It returns a finalize/abort pair the turn settles at its spend-completion points. Then the remaining gates run: `sessions_frozen` kill switch, per-identity rate limit (`checkAndConsume`), and the `bedrock_global` kill switch.
+2. **Memory recall and prompt assembly:** `buildSystemPrompt()` concatenates the fleet-wide `BASE_CONDUCT` floor, the agent's own prompt (`loadAgent()` reads `agents/<id>/CLAUDE.md` from the S3 config bucket, 5-minute cache), then `<long_term_memory>` from `buildMemoryContext()`, `<hive_context>` from `recentHive()` (angle brackets neutralized so a note can't inject structure), and `<inbox>` from `listInbox()`.
+3. **Tool catalog:** built-ins from the registry (`tools.listFor(agentId)`) plus MCP tools (`mcpToolsFor(agentId)`, which reads the server registry in runtime-config and fails soft to an empty list). The `tool_use` / `tool_dispatch_disabled` switches empty the catalog.
+4. **First call, streaming:** `converseStreamTurn()` (`src/lib/bedrock/client.ts`) with the guardrail attached unless `guardrail_disabled` or a per-turn skip applies. History is first scrubbed by `stripBlockedTurns()` so legacy guardrail-blocked exchanges can't re-trip the filter.
+5. **Tool rounds:** if `stopReason === 'tool_use'`, the loop re-issues non-streaming `ConverseCommand`s, dispatching each `toolUse` block (built-in handler or `invokeMcpTool()` for `mcp__server__tool` names) and appending results, up to `TOOL_TURN_LIMIT = 8` rounds, firing `onToolEvent` before each dispatch. Prompt caching (`CCE_PROMPT_CACHE`) adds cache points on the system prompt and tool config.
+6. **Outbound safety:** `scanOutboundReply()` runs the exfil/DLP scan (`src/lib/safety/exfil-guard.ts`); block-severity matches are redacted out of the reply rather than dropping the turn. A guardrail intervention returns `GUARDRAIL_BLOCK_NOTICE` with `blocked: true`.
+7. **Accounting:** `recordUsage()` (`src/lib/usage/token-tracker.ts`) feeds the daily cost cap; `writeAudit()` (`src/lib/audit/audit-writer.ts`) dual-writes the audit row (DynamoDB always, the S3 Object Lock bucket at T2+).
+
+### 4. Reply and persistence
+
+Back in the Telegram handler: the final `editMessage()` replaces the placeholder (with an optional model/latency/cost footer), Polly synthesizes a voice reply when the user sent voice and TTS is enabled, and `appendTurns()` persists both turns with token counts, **skipped entirely when `result.blocked` is true**.
+
+## Where Slack differs
+
+[`src/adapters/slack/handler.ts`](../src/adapters/slack/handler.ts) renders the same `runAgentTurn()` turn; the deltas are all at the edges:
+
+- **Signing, not a secret header.** Slack requests carry an HMAC signature over the raw body plus a timestamp; `verifySlackSignature()` (`src/adapters/slack/verify.ts`) checks it with a 5-minute replay window on all three routes (`/slack/events`, `/slack/commands`, `/slack/interactive`). Missing secret fails closed with a 401, and verification is **unconditional** across all three routes — there is no `slack_signature_check_disabled` bypass switch (removed in Wave A, same as Telegram); break-glass is to close ingress, not to accept unsigned requests.
+- **Event subscription handshake.** Slack's Events API requires a one-time `url_verification` challenge echo when you wire the app, and retries deliveries within ~3 seconds, so the handler dedupes by `event_id` and drops `bot_id` messages to prevent feedback loops. The app manifest lives at [`slack/app-manifest.json`](./slack/app-manifest.json).
+- **TWO send paths.** Replies go out via the main bot token (`postMessage`/`updateMessage` in `src/adapters/slack/send.ts`) **or** via a per-agent Slack app whose credentials live in DynamoDB (`getSlackAgentCredsAsync()` in `src/adapters/slack/multi-agent.ts`). Any chat-UX change must update both, this repo's CLAUDE.md calls that out as the surface-parity rule.
+- **Formatting.** Model output is GitHub markdown; Slack needs mrkdwn, so replies pass the translator in the send path (`###` to bold, `[text](url)` to `<url|text>`).
+- **Per-user chat scoping.** Slack chat ids are `slack:<channel>:<user>` so a shared channel doesn't collapse everyone's memory into one bucket.
+
+## The `infra-only` walkthrough (no webhooks at all)
+
+An `infra-only` install (`CCE_DEPLOY_MODE=infra-only`) has no chat surfaces; the dashboard's Chat tab is the surface, and it drives the **same agent loop**:
+
+- The SPA posts to `POST /api/test-turn` (plain JSON) or `POST /api/test-turn/stream` (SSE) in [`src/adapters/dashboard/handler.ts`](../src/adapters/dashboard/handler.ts). The stream path emits text chunks and `tool` events as SSE, the dashboard's rendering of the same `onChunk`/`onToolEvent` callbacks Telegram uses for message edits.
+- Auth is the dashboard's capability model (bearer token / magic-link session), not a webhook signature; there is nothing for Telegram or Slack to call.
+- **With a domain:** the ALB serves HTTPS via ACM and `/ready` is satisfied by a Bedrock model + dashboard auth (see `isReadyForTraffic()` in [`src/config/env.ts`](../src/config/env.ts)).
+- **Without a domain:** the ALB is synthesized **internal**, nothing answers from the internet, and access is `npm run dashboard:tunnel` ([`scripts/dashboard-tunnel.ts`](../scripts/dashboard-tunnel.ts)): it resolves the running task and opens an SSM port-forward against the ECS Exec target (`ecs:<cluster>_<taskId>_<runtimeId>`), exposing container port 3000 on localhost. The hop is localhost into an SSM-encrypted channel, and the dashboard token still applies. `npm run verify` enforces this posture with the `private-posture` and `dashboard-plain-http` checks (see [`troubleshooting.md`](./troubleshooting.md)).

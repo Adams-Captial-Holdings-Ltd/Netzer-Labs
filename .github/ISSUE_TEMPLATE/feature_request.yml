@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose a scoped improvement or new capability
+title: "[feat]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open-ended ideas and "would it make sense to…" conversations belong in
+        Discussions. Use this template when you can describe a concrete change.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today, or what is painful? Lead with the operator/user story, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should happen instead. If it touches chat UX, remember the surface-parity rule — describe it for Telegram, Slack, AND the dashboard.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Agent loop / tools
+        - Chat surfaces (Telegram/Slack/dashboard parity)
+        - Dashboard UI
+        - Deploy / lifecycle tooling (setup, deploy, verify, rollback, teardown)
+        - Infrastructure (CDK)
+        - MCP / integrations
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including "do nothing" — why is the current behavior not enough?
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and Discussions for this request.
+          required: true

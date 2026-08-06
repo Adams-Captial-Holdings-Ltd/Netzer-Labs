@@ -1,0 +1,178 @@
+{
+  "$comment": "External data-flow inventory for ClaudeClaw Enterprise. This file is the SOURCE OF TRUTH for docs/security-model.md: every processor outside the deployed AWS account (plus the Bedrock prompt path, which stays inside AWS but matters for model-privacy questions) gets an entry here. If you add code that sends data anywhere new, add an entry here in the same PR. Fields: id (stable slug), processor (who receives the data), dataCategories (what leaves), direction (outbound | inbound | bidirectional), when (the condition under which the flow is active), optOut (how an operator turns it off), status (active | provisioned-unused | planned), notes (code pointers and caveats).",
+  "schemaVersion": 1,
+  "flows": [
+    {
+      "id": "slack-payloads",
+      "processor": "Slack Technologies (slack.com APIs)",
+      "dataCategories": [
+        "message text and slash-command text",
+        "user, channel, and team identifiers",
+        "agent replies (full model output)",
+        "bot tokens in API call headers"
+      ],
+      "direction": "bidirectional",
+      "when": "SLACK_BOT_TOKEN (or a per-agent Slack connection) is configured and the slack_posting kill switch is off",
+      "optOut": "Do not connect Slack; or trip the slack_posting kill switch to stop outbound posts",
+      "status": "active",
+      "notes": "src/adapters/slack/handler.ts (inbound events, HMAC-verified), src/adapters/slack/send.ts and src/adapters/slack/multi-agent.ts (two outbound send paths: main bot and per-agent apps)"
+    },
+    {
+      "id": "telegram-payloads",
+      "processor": "Telegram FZ-LLC (api.telegram.org)",
+      "dataCategories": [
+        "message text and captions",
+        "chat and user identifiers",
+        "voice notes, photos, and PDFs (downloaded from Telegram's file API, then stored in your S3)",
+        "agent replies, optional Polly voice replies",
+        "bot tokens in API call URLs"
+      ],
+      "direction": "bidirectional",
+      "when": "TELEGRAM_TOKENS_JSON is configured and the telegram_posting kill switch is off",
+      "optOut": "Do not connect Telegram; or trip the telegram_posting kill switch to stop outbound posts",
+      "status": "active",
+      "notes": "src/adapters/telegram/handler.ts (inbound webhook, secret-token verified), src/adapters/telegram/send.ts and media.ts (outbound replies, media download)"
+    },
+    {
+      "id": "bedrock-prompts",
+      "processor": "Amazon Bedrock (AWS service, inside your account boundary; cross-region inference profiles route to their destination AWS regions)",
+      "dataCategories": [
+        "full prompts: agent system prompt, injected memories, hive notes, inbox items, conversation history, user message",
+        "inline attachments (images, PDFs)",
+        "model output"
+      ],
+      "direction": "outbound",
+      "when": "Every agent turn; this is the core function of the system",
+      "optOut": "No opt-out while serving traffic; the bedrock_global kill switch halts all model calls. Per AWS's service terms, Bedrock does not use your inputs or outputs to train models",
+      "status": "active",
+      "notes": "src/agent/agent-loop.ts (ConverseStream + Converse), src/lib/bedrock/client.ts. The configured guardrail is attached to every call unless guardrail_disabled or a per-turn skip (War Room) applies"
+    },
+    {
+      "id": "web-search-tavily",
+      "processor": "Tavily (api.tavily.com)",
+      "dataCategories": ["search query text (PII-gated, see notes)", "API key"],
+      "direction": "outbound",
+      "when": "TAVILY_API_KEY is set, the web_search tool is invoked, and web_search_disabled is off",
+      "optOut": "Unset the key; trip web_search_disabled; or set CCE_WEB_SEARCH_PII_POLICY=refuse",
+      "status": "active",
+      "notes": "src/lib/search/adapters/tavily.ts via src/lib/tools/web-search-tools.ts. The outbound query passes a PII gate (CCE_WEB_SEARCH_PII_POLICY: refuse | redact (default) | allow) before leaving"
+    },
+    {
+      "id": "web-search-brave",
+      "processor": "Brave Software (api.search.brave.com)",
+      "dataCategories": ["search query text (PII-gated)", "API key"],
+      "direction": "outbound",
+      "when": "BRAVE_SEARCH_API_KEY is set, web_search is invoked, and web_search_disabled is off",
+      "optOut": "Unset the key; trip web_search_disabled; or set CCE_WEB_SEARCH_PII_POLICY=refuse",
+      "status": "active",
+      "notes": "src/lib/search/adapters/brave.ts. The adapter dispatcher picks the first configured vendor (Tavily, then Brave, then Exa, then Serper)"
+    },
+    {
+      "id": "web-search-exa",
+      "processor": "Exa Labs (api.exa.ai)",
+      "dataCategories": ["search query text (PII-gated)", "API key"],
+      "direction": "outbound",
+      "when": "EXA_API_KEY is set, web_search is invoked, and web_search_disabled is off",
+      "optOut": "Unset the key; trip web_search_disabled; or set CCE_WEB_SEARCH_PII_POLICY=refuse",
+      "status": "active",
+      "notes": "src/lib/search/adapters/exa.ts"
+    },
+    {
+      "id": "web-search-serper",
+      "processor": "Serper (google.serper.dev, a Google Search proxy)",
+      "dataCategories": ["search query text (PII-gated)", "API key"],
+      "direction": "outbound",
+      "when": "SERPER_API_KEY is set, web_search is invoked, and web_search_disabled is off",
+      "optOut": "Unset the key; trip web_search_disabled; or set CCE_WEB_SEARCH_PII_POLICY=refuse",
+      "status": "active",
+      "notes": "src/lib/search/adapters/serper.ts"
+    },
+    {
+      "id": "google-gemini",
+      "processor": "Google (Gemini API)",
+      "dataCategories": ["none today; the API key is provisioned but no runtime code calls Google"],
+      "direction": "outbound",
+      "when": "Never in the current codebase. GOOGLE_GEMINI_API_KEY is plumbed through the vendor-keys secret into the task env (infra/lib/compute-stack.ts, src/config/env.ts) for planned Gemini-backed features, but src/ has no consumer",
+      "optOut": "Leave GOOGLE_GEMINI_API_KEY unset; with no key and no caller, no data can flow",
+      "status": "provisioned-unused",
+      "notes": "Listed so the provisioned key is not invisible. If a Gemini consumer lands, this entry must be updated to active in the same PR"
+    },
+    {
+      "id": "mcp-tool-endpoints",
+      "processor": "Operator-configured MCP servers (AgentCore gateways inside AWS, or vendor-hosted remote MCP endpoints such as mcp.slack.com)",
+      "dataCategories": [
+        "tool call arguments (model-generated, can contain conversation content)",
+        "tool results (flow back into the model context)",
+        "bearer tokens for bearer-auth servers"
+      ],
+      "direction": "bidirectional",
+      "when": "One or more servers are registered in runtime-config (category mcp, key servers), the server is enabled for the agent, and the tool_use / tool_dispatch_disabled kill switches are off",
+      "optOut": "Remove or disable the server in the Integrations tab; or trip tool_use to detach all tools",
+      "status": "active",
+      "notes": "src/lib/mcp/servers-repo.ts (registry, HTTPS-only, iam | bearer | none auth), src/lib/mcp/client.ts (SigV4 for AgentCore, bearer for vendors), dispatched from src/agent/agent-loop.ts. Which processors are involved depends entirely on which servers the operator registers"
+    },
+    {
+      "id": "ses-outbound-email",
+      "processor": "Amazon SES, delivering to arbitrary external recipients",
+      "dataCategories": ["email subject and body (model-generated)", "recipient addresses"],
+      "direction": "outbound",
+      "when": "CCE_EMAIL_FROM is set with a verified SES sender, the send_email tool is invoked, and email_send_disabled is off",
+      "optOut": "Unset CCE_EMAIL_FROM; or trip email_send_disabled",
+      "status": "active",
+      "notes": "src/lib/tools/email-tools.ts. SES itself is AWS-native, but the delivered mail leaves your boundary to whoever the recipient is; recipient and body caps apply"
+    },
+    {
+      "id": "npm-registry-build",
+      "processor": "npm public registry (registry.npmjs.org)",
+      "dataCategories": ["package names and versions requested", "egress IP of the build machine"],
+      "direction": "outbound",
+      "when": "Every image build: npm ci inside the Docker build (Dockerfile), local deploys, and CodeBuild builds (buildspec.yml)",
+      "optOut": "Point npm at a private registry mirror; there is no in-app toggle because this is build-time, not runtime",
+      "status": "active",
+      "notes": "Build-time only. The running Fargate task does not call npm"
+    },
+    {
+      "id": "container-registries-build",
+      "processor": "Public container registries (Docker Hub / Amazon ECR Public) serving base images",
+      "dataCategories": ["image names and digests pulled", "egress IP of the build machine"],
+      "direction": "outbound",
+      "when": "Every image build (Dockerfile base-image pull, docker buildx in deploy.ts and buildspec.yml)",
+      "optOut": "Mirror base images into your private ECR and point the Dockerfile at the mirror",
+      "status": "active",
+      "notes": "Runtime tasks pull only from your private ECR repo (claudeclaw-orchestrator); public registries are touched at build time only"
+    },
+    {
+      "id": "codebuild-github-credential",
+      "processor": "GitHub (github.com), via the account-level CodeBuild source credential",
+      "dataCategories": ["repository contents fetched into CodeBuild", "a GitHub PAT stored as an account-level AWS CodeBuild source credential"],
+      "direction": "inbound",
+      "when": "CCE_CODEBUILD_ENABLED=1 and the operator has run aws codebuild import-source-credentials; builds trigger on deploy tags",
+      "optOut": "Keep CCE_CODEBUILD_ENABLED off; deploy from your laptop with npm run deploy instead",
+      "status": "active",
+      "notes": "infra/lib/codebuild-stack.ts, buildspec.yml. The credential is account-wide AWS state (it outlives the stack); the ci-coherence doctor check and the teardown catalog both know about it"
+    },
+    {
+      "id": "github-actions-ci",
+      "processor": "GitHub (Actions runners and log storage)",
+      "dataCategories": [
+        "CI logs and artifacts (test output, cdk synth output) stored on GitHub infrastructure",
+        "with CCE_CICD_ENABLED=1, OIDC-federated deploy actions run against your AWS account from GitHub runners"
+      ],
+      "direction": "bidirectional",
+      "when": "The repo's workflows run (ci.yml on pushes/PRs, cdk-drift.yml daily, deploy.yml when CI deploys are enabled)",
+      "optOut": "Disable Actions on your fork, or keep CCE_CICD_ENABLED off so no workflow holds AWS deploy authority",
+      "status": "active",
+      "notes": ".github/workflows/. The drift workflow assumes an OIDC role (CDK_DIFF_ROLE_ARN secret) and reads repo Variables for domain and model ids; treat workflow logs as public-ish on a public repo"
+    },
+    {
+      "id": "github-releases-update-check",
+      "processor": "GitHub (releases API)",
+      "dataCategories": ["egress IP and timing of the install's daily releases check; no payload telemetry"],
+      "direction": "outbound",
+      "when": "The dashboard checks the public GitHub releases feed, backend-side and fail-silent, cached daily (src/lib/updates/discovery.ts, wired via src/adapters/dashboard/handler.ts)",
+      "optOut": "CCE_UPDATE_CHECK_DISABLED=1 (implemented; short-circuits with zero network calls); air-gapped installs lose only the update banner",
+      "status": "active",
+      "notes": "Implemented and live: src/lib/updates/discovery.ts fetches the emmanuelmadams4-lgtm/Netzer-Labs releases feed via injected fetch, cached daily with backoff, fail-silent when GitHub is unreachable"
+    }
+  ]
+}

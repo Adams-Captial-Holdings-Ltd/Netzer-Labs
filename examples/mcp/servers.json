@@ -1,0 +1,19 @@
+[
+  {
+    "id": "github-tools",
+    "name": "GitHub Tools (AgentCore Gateway)",
+    "url": "https://<gateway-id>.gateway.bedrock-agentcore.<region>.amazonaws.com/mcp",
+    "auth": "iam",
+    "enabled": true,
+    "agents": ["research-bot"]
+  },
+  {
+    "id": "vendor-search",
+    "name": "Vendor-hosted search MCP",
+    "url": "https://mcp.example.com/mcp",
+    "auth": "bearer",
+    "bearerToken": "<vendor-issued-token>",
+    "enabled": false,
+    "agents": []
+  }
+]

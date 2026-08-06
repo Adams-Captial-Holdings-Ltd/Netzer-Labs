@@ -1,0 +1,80 @@
+name: Bug report
+description: Something behaves wrongly at runtime (agents, surfaces, dashboard, tools)
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Two rules keep this useful and safe:
+
+        1. **Never paste raw `npm run verify` / `npm run status` output.** It contains
+           your account ID, ARNs, resource names, and domain — a raw paste publishes
+           your AWS posture to the world. Use the **redacted** support bundle below.
+        2. Deploy/verify failures have their own template ("Deploy or verify failure").
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead.
+      placeholder: |
+        1. Sent "..." to the Telegram main agent
+        2. Expected a reply with a tool-status edit
+        3. Got ...
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where did you observe it?
+      options:
+        - Telegram
+        - Slack
+        - Dashboard chat
+        - Dashboard (other tab)
+        - Orchestrator / agent loop
+        - CLI scripts (setup, deploy, status, ...)
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Deployed version
+      description: >-
+        The `deployedVersion` line from the support bundle (deployId + gitSha +
+        imageTag), or the release tag you deployed.
+      placeholder: "v1.2.3 / deploy 2026-06-11T... git abc1234 image sha-abc1234"
+    validations:
+      required: true
+  - type: textarea
+    id: support-bundle
+    attributes:
+      label: Redacted support bundle
+      description: >-
+        Run `npx tsx scripts/support-bundle.ts --json` and paste the output here.
+        It is redacted by design (resource IDs are salted HMAC hashes) and safe
+        to paste publicly. Do NOT use `--raw` here.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt (sanitized)
+      description: >-
+        CloudWatch or local log lines around the failure. Strip account IDs,
+        ARNs, tokens, and chat content before pasting.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I did not paste raw verify/status output or any secret values.
+          required: true
+        - label: I searched existing issues for this problem.
+          required: true

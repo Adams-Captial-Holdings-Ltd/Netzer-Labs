@@ -1,0 +1,87 @@
+{
+  "docs/diagrams/architecture-compute.md": {
+    "sources": [
+      "infra/bin/app.ts",
+      "infra/lib/compute-stack.ts",
+      "infra/lib/network-stack.ts",
+      "infra/lib/security-stack.ts",
+      "infra/lib/constants.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  },
+  "docs/diagrams/architecture-data.md": {
+    "sources": [
+      "infra/lib/storage-stack.ts",
+      "infra/lib/dynamo-stack.ts",
+      "infra/lib/secrets-stack.ts",
+      "infra/lib/extensions-stack.ts",
+      "infra/lib/constants.ts",
+      "scripts/lib/lifecycle/bootstrap-state.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  },
+  "docs/diagrams/architecture-messaging.md": {
+    "sources": [
+      "infra/lib/messaging-stack.ts",
+      "infra/lib/compute-stack.ts",
+      "infra/lib/extensions-stack.ts",
+      "src/lib/scheduler/eb-scheduler.ts",
+      "src/lib/scheduler/queue-drain.ts",
+      "src/lib/config/invalidation-listener.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  },
+  "docs/diagrams/architecture-security.md": {
+    "sources": [
+      "src/adapters/telegram/handler.ts",
+      "src/adapters/slack/handler.ts",
+      "src/adapters/dashboard/handler.ts",
+      "src/agent/agent-loop.ts",
+      "src/lib/state/kill-switches-repo.ts",
+      "infra/lib/iam-stack.ts",
+      "infra/lib/compute-stack.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  },
+  "docs/diagrams/request-lifecycle.md": {
+    "sources": [
+      "src/adapters/telegram/handler.ts",
+      "src/agent/agent-loop.ts",
+      "src/lib/memory/context-builder.ts",
+      "src/lib/safety/exfil-guard.ts",
+      "src/lib/audit/audit-writer.ts",
+      "src/lib/state/sessions-repo.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  },
+  "docs/diagrams/deploy-pipeline.md": {
+    "sources": [
+      "scripts/deploy.ts",
+      "scripts/lib/lifecycle/bootstrap-state.ts",
+      "scripts/lib/lifecycle/lock.ts",
+      "scripts/lib/lifecycle/journal.ts",
+      "scripts/lib/lifecycle/manifest.ts",
+      "scripts/lib/lifecycle/ids.ts",
+      "scripts/lib/lifecycle/deploy-phases.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  },
+  "docs/diagrams/rollback-classes.md": {
+    "sources": [
+      "scripts/rollback.ts",
+      "scripts/lib/lifecycle/rollback-classes.ts",
+      "scripts/lib/lifecycle/manifest.ts",
+      "scripts/lib/lifecycle/lock.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  },
+  "docs/diagrams/teardown-decision-tree.md": {
+    "sources": [
+      "scripts/teardown.ts",
+      "scripts/lib/lifecycle/teardown-plan.ts",
+      "scripts/lib/lifecycle/bootstrap-state.ts",
+      "infra/lib/storage-stack.ts"
+    ],
+    "owner": "@emmanuelmadams4-lgtm"
+  }
+}

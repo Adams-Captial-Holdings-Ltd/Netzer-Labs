@@ -1,0 +1,849 @@
+{
+  "schemaVersion": 1,
+  "_comment": "Machine-readable contract-element registry (IaC readiness item 49). Every element of the public operator contract carries introduced / deprecated / removed release tags. introduced 0.0.1 = the pre-release baseline: the surface as it existed before the first public tag (the historical introduction points are not reconstructible, and claiming them would be invented data). CI gates: scripts/release/sync-deprecations.mjs (per-commit drift gate for env + runtime-config) and scripts/release/contract-check.mjs (release-time diff against the previous tag, full-support-window validation). Policy text: docs/release-pipeline.md. Prose courtesy copy: docs/UPGRADING.md. Optional per-element fields: deprecated, removed, replacement, notes. A required-without-default env var is only legal when notes contains the literal token security-boundary.",
+  "elements": [
+    {
+      "surface": "env",
+      "id": "NODE_ENV",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "PORT",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "LOG_LEVEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "AWS_REGION",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "AWS_ACCOUNT_ID",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BEDROCK_DEFAULT_MODEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BEDROCK_OPUS_MODEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BEDROCK_SONNET_MODEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BEDROCK_HAIKU_MODEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BEDROCK_EMBED_MODEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BEDROCK_GUARDRAIL_ID",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BEDROCK_GUARDRAIL_VERSION",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CONFIG_BUCKET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "RAW_BUCKET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CURATED_BUCKET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "VECTORS_STAGING_BUCKET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "VECTORS_BUCKET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "AUDIT_LOCK_BUCKET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_DAILY_COST_CAP_USD",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SCHEDULER_TICK_SEC",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SCHEDULER_DISABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_TRANSCRIBE_DISABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_PROMPT_CACHE",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SHOW_FOOTER",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_TIER",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_TIER_LABEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_XRAY_ENABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_DEPLOY_MODE",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_KNOWLEDGE_ENABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_IMAGE_GEN_ENABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_TTS_ENABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_EMAIL_FROM",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_CANARY_ENABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_UPSTREAM_OWNER",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_UPSTREAM_REPO",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_UPDATE_CHECK_DISABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_WEB_SEARCH_PII_POLICY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_OWNER_TELEGRAM_CHATS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_OWNER_SLACK_USERS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_OWNER_LABEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TAVILY_API_KEY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "BRAVE_SEARCH_API_KEY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "EXA_API_KEY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SERPER_API_KEY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "GOOGLE_GEMINI_API_KEY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_SESSIONS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_HIVE_MIND",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_AUDIT_LOG",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_CHAT_CONFIG",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_TOKEN_USAGE",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_MEMORIES",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_CONSOLIDATIONS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_AGENT_FILE_HISTORY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_MISSION_TASKS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_SCHEDULED_TASKS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_KILL_SWITCHES",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_INTER_AGENT_TASKS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_COMPACTION_EVENTS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_QUEUE_LEASE",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_SPEND_LEDGER",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_IDENTITIES",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_AGENTS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_RUNTIME_CONFIG",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TABLE_RATE_LIMITS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_DASHBOARD_URL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_TUNNEL_DOMAIN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_IDENTITY_RESOLUTION_DISABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_RESOURCE_PREFIX",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_COMPUTE_STACK",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_CLOUDTRAIL_NAME",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_KMS_DATA_KEY_ALIAS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_KMS_CURATED_KEY_ALIAS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_KMS_LOGS_KEY_ALIAS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SECRET_SLACK_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SECRET_TELEGRAM_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SECRET_DASHBOARD_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SECRET_DB_ENCRYPTION_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SECRET_BEDROCK_GUARDRAILS_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SECRET_VENDOR_KEYS_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "INGEST_QUEUE_URL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_CONFIG_TOPIC_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_ALERT_TOPIC_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_USE_IN_PROCESS_SCHEDULER",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SCHEDULED_FIRE_QUEUE_URL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SCHEDULED_FIRE_QUEUE_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SCHEDULER_GROUP_NAME",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SCHEDULER_ROLE_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SLACK_BOT_TOKEN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SLACK_SIGNING_SECRET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "SLACK_APP_TOKEN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TELEGRAM_TOKENS_JSON",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "TELEGRAM_WEBHOOK_SECRET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "DASHBOARD_TOKEN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "APP_ENCRYPTION_KEY",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CONFIG_CACHE_TTL_SECONDS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "NOVA_SONIC_MODEL",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_MAX_SESSION_SECONDS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_VOICE_ID",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_MAX_CONCURRENT_SESSIONS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_TTS_VOICE_ID",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_TTS_ENGINE",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_TTS_LANGUAGE",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_TTS_RATE",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_GREETING",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "JARVIS_LAUNCH_ENABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "NOVA_HTTP2_TIMEOUT_MS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "setup:--answers",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "deploy:--env",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "deploy:--image-only",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "deploy:--resume",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "deploy:--skip-preflight",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "deploy:--tier",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "deploy:--yes",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "deploy:-y",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--accept-schema-downgrade",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--class",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--dry-run",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--env",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--list",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--migration-plan",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--rebuild-from-git",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--to",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:--yes",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "rollback:-y",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "teardown:--cryptographic-erasure",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "teardown:--delete-shared-prereqs",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "teardown:--dry-run",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "teardown:--env",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "teardown:--export-first",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "status:--env",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "status:--json",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "status:--strict",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "doctor:--env",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "doctor:--json",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "seed:--env",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "cli-flag",
+      "id": "seed:--json",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "memory/ingest_every_n_turns",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "memory/hive_promote_min_confidence",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "cost/daily_cap_usd",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "cost/cap_enabled",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "cost/ledger_enabled",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "cost/ledger_reserve_usd",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "cost/watch_enabled",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "cost/remediation_enabled",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "cost/report_async_enabled",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "iam/apply_enabled",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "drift/watch_enabled",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "mcp/servers",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "alerting/recipients",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "agent-yaml",
+      "id": "name",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "agent-yaml",
+      "id": "description",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "agent-yaml",
+      "id": "model",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "agent-yaml",
+      "id": "knowledgeScope",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "updater-format",
+      "id": "deploy-manifest",
+      "introduced": "0.0.1",
+      "notes": "Schema-versioned via MANIFEST_SCHEMA_VERSION in scripts/lib/lifecycle/manifest.ts (currently 1). Parsers hard-fail on a version mismatch; an old shim must keep parsing every in-window version."
+    },
+    {
+      "surface": "updater-format",
+      "id": "app-schema",
+      "introduced": "0.0.1",
+      "notes": "APP_SCHEMA_VERSION in scripts/lib/lifecycle/manifest.ts (currently 1): DDB item shapes, runtime-config keys, queue payload formats. Rollback preflight refuses downgrades across a bump."
+    },
+    {
+      "surface": "updater-format",
+      "id": "deploy-journal",
+      "introduced": "0.0.1",
+      "notes": "Immutable per-deploy event objects, scripts/lib/lifecycle/journal.ts (JournalEntry). Carries no standalone *_SCHEMA_VERSION constant yet; versioned implicitly with the manifest. TODO: converge with the release-pipeline work and give it an explicit constant."
+    },
+    {
+      "surface": "updater-format",
+      "id": "release-metadata",
+      "introduced": "0.0.1",
+      "notes": "Signed machine-readable release metadata (item 44). Schema-versioned via RELEASE_METADATA_SCHEMA_VERSION in scripts/lib/release/metadata.ts (currently 1). Old shims must keep parsing every in-window version."
+    },
+    {
+      "surface": "updater-format",
+      "id": "artifact-manifest",
+      "introduced": "0.0.1",
+      "notes": "Release artifact manifest: tag, commit, per-platform image digests, provenance (item 41). Schema-versioned via ARTIFACT_MANIFEST_SCHEMA_VERSION in scripts/lib/release/metadata.ts (currently 1)."
+    },
+    {
+      "surface": "updater-format",
+      "id": "key-rotation-metadata",
+      "introduced": "0.0.1",
+      "notes": "Signed trust-root rotation metadata the updater shim verifies with its pinned old roots (item 42). Schema-versioned via ROTATION_DOC_SCHEMA_VERSION in scripts/lib/release/signing.ts (currently 1)."
+    },
+    {
+      "surface": "updater-format",
+      "id": "signature-artifact",
+      "introduced": "0.0.1",
+      "notes": "Detached signature artifact over the immutable release payload. Schema-versioned via SIGNATURE_ARTIFACT_SCHEMA_VERSION in scripts/lib/release/signing.ts (currently 1)."
+    },
+    {
+      "surface": "updater-format",
+      "id": "promotion-attestation",
+      "introduced": "0.0.1",
+      "notes": "Promotion attestation binding a final v* tag to the exact rc-tested commit + digests (item 44). Schema-versioned via PROMOTION_ATTESTATION_SCHEMA_VERSION in scripts/lib/release/promotion.ts (currently 1)."
+    },
+    {
+      "surface": "env",
+      "id": "CCE_LEDGER_ENABLED",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_LEDGER_MAC_KEY_ARN",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_TRIPWIRE_TTL_HOURS",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_TRIPWIRE_INSTALL_ID",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_SES_CONFIG_SET",
+      "introduced": "0.0.1"
+    },
+    {
+      "surface": "env",
+      "id": "EMERGENCY_KILL_PHRASE",
+      "introduced": "v1.9.0"
+    }
+  ]
+}

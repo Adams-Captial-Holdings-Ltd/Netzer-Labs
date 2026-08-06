@@ -1,0 +1,59 @@
+{
+  "display_information": {
+    "name": "ClaudeClaw",
+    "description": "Bedrock-native AI orchestrator with per-agent personas",
+    "background_color": "#0f1419"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "ClaudeClaw",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/claw",
+        "url": "https://REPLACE_WITH_YOUR_DOMAIN/slack/commands",
+        "description": "Talk to ClaudeClaw or run a control command",
+        "usage_hint": "[message | /help | /status | /agent <id> | /model <id>]",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "chat:write",
+        "chat:write.customize",
+        "commands",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://REPLACE_WITH_YOUR_DOMAIN/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.im",
+        "message.channels",
+        "message.groups"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://REPLACE_WITH_YOUR_DOMAIN/slack/interactive"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

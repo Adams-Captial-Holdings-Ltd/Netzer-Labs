@@ -1,0 +1,8 @@
+# EnterpriseOS CODEOWNERS
+# All changes require review by the repository owner.
+
+*                    @emmanuelmadams4-lgtm
+/infra/              @emmanuelmadams4-lgtm
+/.github/            @emmanuelmadams4-lgtm
+/scripts/deploy.ts   @emmanuelmadams4-lgtm
+/scripts/rollback.ts @emmanuelmadams4-lgtm

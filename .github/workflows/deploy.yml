@@ -1,0 +1,234 @@
+name: Deploy
+
+# Deploys are intentionally manual-only — click "Run workflow" in the
+# Actions tab, or use `gh workflow run deploy.yml`. This is the A5
+# approval gate: GitHub Free org plan does not allow required-reviewer
+# protection rules on private repos, so we substitute manual-dispatch.
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Target environment'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+          - prod
+          - staging
+      tier:
+        description: 'Deploy tier (1/2/3) — must match env'
+        required: false
+        default: '3'
+      confirm:
+        description: 'Type "deploy" to confirm'
+        required: true
+        default: ''
+
+# Only one deploy at a time per branch.
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  # Actions repository variable, never a tracked literal:
+  #   gh variable set AWS_ACCOUNT_ID --body "<your-aws-account-id>"
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  TARGET_ENV: ${{ github.event.inputs.env || 'prod' }}
+  # env-specific values are resolved per-step from TARGET_ENV.
+  CCE_TIER: ${{ github.event.inputs.tier || '3' }}
+
+jobs:
+  verify:
+    name: Typecheck + Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  deploy:
+    name: Build + CDK Deploy + Smoke
+    needs: verify
+    if: inputs.confirm == 'deploy'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.env == 'staging' && 'staging' || 'production' }}
+    timeout-minutes: 60
+    steps:
+      - name: Resolve env-specific values
+        id: cfg
+        run: |
+          if [ "$TARGET_ENV" = "staging" ]; then
+            # Match CDK constants: APP_NAME_SUFFIX=staging produces
+            # app slug `claudeclaw-staging`, so the orchestrator repo
+            # is `claudeclaw-staging-orchestrator` (suffix in the
+            # middle, not at the end). IAM grant in iam-stack.ts
+            # already matches this shape via `claudeclaw-*-orchestrator`.
+            echo "ecr_repo=claudeclaw-staging-orchestrator" >> "$GITHUB_OUTPUT"
+            echo "stack_name=CCE-STAGING" >> "$GITHUB_OUTPUT"
+            echo "public_host=staging.claudeclaw-enterprise.com" >> "$GITHUB_OUTPUT"
+            echo "cluster=claudeclaw-staging-cluster" >> "$GITHUB_OUTPUT"
+            echo "service=claudeclaw-staging-service" >> "$GITHUB_OUTPUT"
+          else
+            echo "ecr_repo=claudeclaw-orchestrator" >> "$GITHUB_OUTPUT"
+            echo "stack_name=CCE" >> "$GITHUB_OUTPUT"
+            echo "public_host=claudeclaw-enterprise.com" >> "$GITHUB_OUTPUT"
+            echo "cluster=claudeclaw-cluster" >> "$GITHUB_OUTPUT"
+            echo "service=claudeclaw-service" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/ClaudeClawGitHubDeploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-deploy-${{ github.run_id }}
+
+      - name: Login to ECR
+        id: ecr
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          echo "registry=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure ECR repo exists
+        env:
+          ECR_REPO: ${{ steps.cfg.outputs.ecr_repo }}
+        run: |
+          # scripts/deploy.ts does this for local deploys; the CI
+          # workflow never did, so the first staging deploy hit a 403
+          # trying to push to a non-existent repo. Idempotent.
+          if ! aws ecr describe-repositories \
+              --repository-names "$ECR_REPO" \
+              --region "$AWS_REGION" \
+              --no-cli-pager >/dev/null 2>&1; then
+            echo "Creating ECR repository: $ECR_REPO"
+            aws ecr create-repository \
+              --repository-name "$ECR_REPO" \
+              --image-scanning-configuration scanOnPush=true \
+              --image-tag-mutability MUTABLE \
+              --region "$AWS_REGION" \
+              --no-cli-pager
+          else
+            echo "ECR repository already exists: $ECR_REPO"
+          fi
+
+      - name: Compute image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Fargate task definition runs on linux/arm64 (Graviton). The
+      # ubuntu-latest runner is amd64, so we use QEMU + buildx to
+      # cross-compile. Without this, ECS tasks fail to start with
+      # "exec format error" and the deployment circuit breaker trips.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + Push (linux/arm64)
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHA: ${{ steps.tag.outputs.sha }}
+          ECR_REPO: ${{ steps.cfg.outputs.ecr_repo }}
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --build-arg DEPLOY_TIER="$CCE_TIER" \
+            -t "$REGISTRY/$ECR_REPO:$SHA" \
+            -t "$REGISTRY/$ECR_REPO:latest" \
+            --provenance=false \
+            --push \
+            -f Dockerfile \
+            .
+
+      - name: CDK deploy
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          DOMAIN_NAME: ${{ steps.cfg.outputs.public_host }}
+          CDK_STACK_NAME: ${{ steps.cfg.outputs.stack_name }}
+          DEPLOY_TIER: ${{ env.CCE_TIER }}
+          CCE_TIER: ${{ env.CCE_TIER }}
+          # Empty for prod, `staging` for staging. Cascades through
+          # constants.ts so every named resource lives under
+          # `claudeclaw[-suffix]-*`.
+          CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}
+          # Pin the task definition to the image we just pushed (never `latest`).
+          CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
+          CCE_CICD_ENABLED: '1'
+          # OIDC trust is fail-closed: synth errors unless the repo identity
+          # and the exact deploy subjects are explicit. Derived from the repo
+          # running the workflow, never a hardcoded default.
+          CCE_GITHUB_OWNER: ${{ github.repository_owner }}
+          CCE_GITHUB_REPO: ${{ github.event.repository.name }}
+          CCE_GITHUB_DEPLOY_REFS: refs/heads/main,refs/heads/staging
+          CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
+        run: |
+          npx cdk deploy --all \
+            --require-approval never \
+            --outputs-file cdk-outputs.json
+
+      - name: Force ECS rollout
+        env:
+          CLUSTER: ${{ steps.cfg.outputs.cluster }}
+          SERVICE: ${{ steps.cfg.outputs.service }}
+        run: |
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --force-new-deployment \
+            --region "$AWS_REGION" \
+            --no-cli-pager > /dev/null
+          echo "Waiting for service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --region "$AWS_REGION"
+
+      - name: Smoke test (health)
+        env:
+          PUBLIC_HOST: ${{ steps.cfg.outputs.public_host }}
+        run: |
+          set -euo pipefail
+          echo "GET /health (with retry — CloudFront origin-header propagation can take ~60-90s after a Compute stack update)"
+          attempts=0
+          max_attempts=8
+          delay=15
+          until curl -fsS --max-time 15 "https://$PUBLIC_HOST/health" -o /tmp/health.json; do
+            attempts=$((attempts + 1))
+            if [ "$attempts" -ge "$max_attempts" ]; then
+              echo "Smoke failed after ${attempts} attempts (${max_attempts} x ${delay}s)" >&2
+              exit 1
+            fi
+            echo "  attempt ${attempts}/${max_attempts} failed, retrying in ${delay}s..."
+            sleep "$delay"
+          done
+          cat /tmp/health.json
+          echo
+          echo "Full readiness check is in docs/runbooks/deploy-validation.md"

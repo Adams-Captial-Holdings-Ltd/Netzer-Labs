@@ -1,0 +1,96 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# CDK
+cdk.out/
+# Stale JS emitted next to infra TS sources shadows tsx resolution
+infra/**/*.js
+infra/**/*.js.map
+# Hand-written Lambda asset (a real source file, not compiled output) — keep it
+!infra/lib/power-switch-handler/*.js
+cdk-outputs.json
+cdk-outputs.*.json
+.cdk.staging/
+cdk.context.json
+
+# Per-machine Claude state
+.claude/
+
+# Environment and config (state, not source)
+.env
+.env.local
+.env.*.local
+# Per-environment .env files (e.g. .env.staging). The *.example
+# templates ARE checked in.
+.env.staging
+.env.production
+claudeclaw.config.yaml
+
+# Test coverage
+coverage/
+*.lcov
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# Local workspaces
+workspace/
+tmp/
+.tmp/
+
+# Deployment artifacts
+deploy-outputs.json
+deployment-manifest.json
+
+# Generated review/QA screenshots & artifacts (large binaries, not source)
+review-screenshots/
+review-screenshots-v2/
+review-v3/
+ceo-review/
+tests/e2e/jarvis/artifacts/
+test-results/
+tests/e2e/**/*.png
+
+# local audit artifacts (not for commit)
+_audit/
+
+# Personal session handoffs / TLDRs (never commit to the shared repo)
+handoff/
+
+# Publish-gate personal-value list (real values live only in the private checkout)
+scripts/publish/personal-values.txt
+
+# Release/update machinery (P8): local artifacts, never source
+dist-release/
+.cce-update/
+scripts/release/keys/
+
+# Onboarding durable run-state (local, per-install, never committed)
+.cladeclaw/
+
+# Personal session notes, never committed
+learnings/

@@ -1,0 +1,35 @@
+# LocalStack for integration tests (F1).
+#
+# Starts on localhost:4566. The integration suite seeds tables/buckets
+# via the AWS SDK pointed at this endpoint (AWS_ENDPOINT_URL).
+#
+# Image: the community LocalStack image covers DDB + S3 + SQS + KMS +
+# SecretsManager + IAM — every service the orchestrator's repos touch
+# in tests. We do not need Pro.
+
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: claudeclaw-localstack-test
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: dynamodb,s3,sqs,kms,secretsmanager,iam,scheduler
+      DEBUG: 0
+      PERSISTENCE: 0
+      DEFAULT_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      DATA_DIR: /tmp/localstack/data
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - "curl -fsS http://localhost:4566/_localstack/health | grep -q 'running'"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s

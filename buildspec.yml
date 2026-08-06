@@ -1,0 +1,233 @@
+version: 0.2
+
+env:
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+    ECR_REPO_NAME: claudeclaw-orchestrator
+    ECS_CLUSTER: claudeclaw-cluster
+    ECS_SERVICE: claudeclaw-service
+    TASK_FAMILY: claudeclaw-orchestrator
+
+phases:
+  pre_build:
+    commands:
+      # DEPLOY-TAG REFUSAL (item 39), the runtime twin of the CodeBuild
+      # webhook filter. Source of truth: infra/lib/deploy-tag-pattern.ts
+      # (normalizeDeployTagPattern). The CodeBuild stack injects the
+      # NORMALIZED CCE_DEPLOY_TAG_PATTERN as a project env var; the default
+      # here MUST stay `deploy/v*` to match DEFAULT_DEPLOY_TAG_PATTERN there.
+      # For tag pushes CODEBUILD_WEBHOOK_TRIGGER is `tag/<name>`, so the
+      # accepted shape is `tag/$CCE_DEPLOY_TAG_PATTERN`, the module's
+      # buildspecGuardPattern. The unquoted variable in the `case` arm makes
+      # the shell treat its `*` as a glob; the module's charset validation
+      # (only [A-Za-z0-9._/-] plus one `*`) is what makes this glob provably
+      # equivalent to the anchored webhook regex. Manual
+      # `aws codebuild start-build` runs have no webhook trigger and skip the
+      # check; authorizing StartBuild is IAM's job, not this script's.
+      - |
+        DEPLOY_TAG_PATTERN="${CCE_DEPLOY_TAG_PATTERN:-deploy/v*}"
+        if [ -n "${CODEBUILD_WEBHOOK_TRIGGER:-}" ]; then
+          case "$CODEBUILD_WEBHOOK_TRIGGER" in
+            tag/$DEPLOY_TAG_PATTERN)
+              echo "Deploy tag accepted: $CODEBUILD_WEBHOOK_TRIGGER (pattern tag/$DEPLOY_TAG_PATTERN)"
+              ;;
+            *)
+              echo "REFUSED: webhook trigger '$CODEBUILD_WEBHOOK_TRIGGER' is not a deploy tag (expected tag/$DEPLOY_TAG_PATTERN)."
+              echo "Upstream release tags (v*) and branch pushes must NOT deploy; only the deploy namespace ships."
+              echo "Pattern source of truth: infra/lib/deploy-tag-pattern.ts (CCE_DEPLOY_TAG_PATTERN)."
+              exit 1
+              ;;
+          esac
+        else
+          echo "No webhook trigger (manual start-build); skipping deploy-tag refusal."
+        fi
+      # DEPLOY-TAG NORMALIZATION + IDENTITY RULE (item 47, dogfooding).
+      # The deploy tag is an AUTHORIZATION TRIGGER ONLY, never the release
+      # identity: release identity comes from the VERIFIED upstream signed
+      # metadata for the normalized upstream tag, and the COMMIT the deploy
+      # tag points at is deliberately ignored by the update path below.
+      #
+      # Normalization rule (documented here and in docs/github-to-aws.md):
+      # the deploy tag matches CCE_DEPLOY_TAG_PATTERN = <prefix>*<suffix>.
+      # The NAMESPACE PREFIX is stripped — defined as the literal prefix up
+      # to and including its LAST '/', or the whole literal prefix when it
+      # contains no '/' — and the literal suffix is stripped. Examples:
+      #   pattern deploy/v*      tag deploy/v1.2.3      -> v1.2.3
+      #   pattern release/cce-*  tag release/cce-1.2.3  -> cce-1.2.3
+      #   pattern ship-*         tag ship-1.2.3         -> 1.2.3 (no '/',
+      #     whole prefix stripped; the star-content must then BE your
+      #     upstream tag)
+      # Proven by scripts/release/buildspec-tag-normalization.test.ts,
+      # which runs this exact logic through `sh -c`. Keep the two in sync.
+      - |
+        if [ -n "${CODEBUILD_WEBHOOK_TRIGGER:-}" ]; then
+          DEPLOY_TAG_PATTERN="${CCE_DEPLOY_TAG_PATTERN:-deploy/v*}"
+          TAG_NAME="${CODEBUILD_WEBHOOK_TRIGGER#tag/}"
+          PATTERN_PREFIX="${DEPLOY_TAG_PATTERN%%\**}"
+          PATTERN_SUFFIX="${DEPLOY_TAG_PATTERN#*\*}"
+          case "$PATTERN_PREFIX" in
+            */*) NAMESPACE_PREFIX="${PATTERN_PREFIX%/*}/" ;;
+            *)   NAMESPACE_PREFIX="$PATTERN_PREFIX" ;;
+          esac
+          UPSTREAM_TAG="${TAG_NAME#"$NAMESPACE_PREFIX"}"
+          if [ -n "$PATTERN_SUFFIX" ]; then
+            UPSTREAM_TAG="${UPSTREAM_TAG%"$PATTERN_SUFFIX"}"
+          fi
+          export UPSTREAM_TAG
+          # RELEASE_TAG is the identity the update pipeline verifies and
+          # deploys; the deploy tag's own commit is ignored on that path.
+          export RELEASE_TAG="$UPSTREAM_TAG"
+          echo "Deploy tag $TAG_NAME authorizes release $RELEASE_TAG (deploy tag = trigger only)."
+        fi
+      # DOGFOODING-BY-SHIM (item 47): our prod must move between releases
+      # via the exact `npm run update` path adopters use. The buildspec
+      # therefore does NOT check out the target and deploy it directly —
+      # it reads the CURRENTLY DEPLOYED version from the manifest and runs
+      # THAT version's updater shim with the target tag, reproducing the
+      # adopter's old-code-to-new-code path (CodeBuild's default checkout
+      # of the target tag would skip exactly the shim-compatibility path
+      # adopters exercise).
+      #
+      # REQUIRED-ACTIONS REFUSAL (item 44 classification): automatic
+      # actions run; manual-preflight or approval-required actions make
+      # the shim — and therefore this build — REFUSE the update unless an
+      # approval artifact exists at
+      #   s3://<state-bucket>/approvals/<target-tag>-<requiredActionsHash>.json
+      # where requiredActionsHash is computed by the shim from the
+      # target's VERIFIED release metadata, so an approval is tied to the
+      # exact target version + required-actions set and cannot be reused
+      # after the actions change. Dogfooding never papers over the manual
+      # pain real adopters feel.
+      #
+      # Armed only when BOTH hold: the updater shim exists in the source
+      # tree AND CCE_UPDATE_PIPELINE=1 is set on the CodeBuild project.
+      # Default (CCE_UPDATE_PIPELINE unset) keeps today's image-build
+      # behavior; dogfooding-by-shim arms when the first release exists.
+      - |
+        if [ -f scripts/update/shim.ts ] && [ "${CCE_UPDATE_PIPELINE:-}" = "1" ]; then
+          : "${UPSTREAM_TAG:?CCE_UPDATE_PIPELINE=1 requires a webhook deploy tag (UPSTREAM_TAG unset)}"
+          : "${CCE_STATE_BUCKET:?CCE_UPDATE_PIPELINE=1 requires CCE_STATE_BUCKET (deploy-state bucket, claudeclaw[-suffix]-deploy-<account>-<region>)}"
+          echo "Dogfood update path: reading the CURRENTLY DEPLOYED version from the manifest..."
+          aws s3 cp "s3://$CCE_STATE_BUCKET/manifests/latest.json" /tmp/cce-latest-manifest.json
+          DEPLOYED_SHA=$(jq -r .gitSha /tmp/cce-latest-manifest.json)
+          if [ -z "$DEPLOYED_SHA" ] || [ "$DEPLOYED_SHA" = "null" ]; then
+            echo "ABORT: manifest has no gitSha — cannot locate the deployed version's shim."
+            exit 1
+          fi
+          echo "Deployed version: $DEPLOYED_SHA — running THAT version's shim against target $RELEASE_TAG"
+          # CodeBuild clones may be shallow; make sure the deployed sha is local.
+          git fetch --no-tags origin "$DEPLOYED_SHA" || true
+          git worktree add --detach /tmp/cce-deployed-shim "$DEPLOYED_SHA"
+          cd /tmp/cce-deployed-shim
+          npm ci
+          # The DEPLOYED version's shim (entry: scripts/update.ts, one
+          # positional tag) verifies the target tag's signature, metadata
+          # and artifacts against its pinned trust roots, then execs the
+          # TARGET release's own update runner (verify-then-exec, item 42).
+          #
+          # REQUIRED-ACTIONS REFUSAL wiring: approval artifacts live at
+          # s3://$CCE_STATE_BUCKET/approvals/<tag>-<requiredActionsHash>.json
+          # (requiredActionsHash = computeRequiredActionsHash over the
+          # VERIFIED metadata, scripts/lib/release/metadata.ts).
+          # ████ TODO (item 47): the runner's NON-INTERACTIVE approval-
+          # artifact lookup is not wired yet — today the runner exposes an
+          # interactive gate seam, which in CI refuses manual-preflight /
+          # approval-required actions by default-deny. That refusal is the
+          # correct fail-closed behavior; wiring the artifact lookup makes
+          # an APPROVED update pass non-interactively. ████
+          CCE_UPDATE_APPROVALS_PREFIX="s3://$CCE_STATE_BUCKET/approvals/" \
+            npx tsx scripts/update.ts "$RELEASE_TAG"
+          cd "$CODEBUILD_SRC_DIR"
+          touch /tmp/cce-shim-deployed
+          # ████ TODO (item 47, arms with the first release): when this
+          # shim path goes LIVE, the legacy docker-build path in the
+          # build/post_build phases below MUST be gated on the
+          # /tmp/cce-shim-deployed flag written above — the shim owns the
+          # whole rollout (migrations, REQUIRED-ACTIONS, rollback posture)
+          # and letting the legacy path also run would deploy twice. The
+          # gate is not added yet because the shim cannot exist before the
+          # first public release (item 42) and a dead gate would only rot.
+          echo "Shim-driven update of $RELEASE_TAG complete."
+        else
+          # Default path: updater pipeline not armed (no shim in tree or
+          # CCE_UPDATE_PIPELINE unset) — today's behavior, build the image
+          # from the checked-out source below. Dogfooding-by-shim arms
+          # when the first release exists and the project sets
+          # CCE_UPDATE_PIPELINE=1.
+          echo "Update pipeline not armed (CCE_UPDATE_PIPELINE!=1 or no shim); using the legacy image build."
+        fi
+      - echo "Logging in to ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - COMMIT_SHA=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-12)
+      - IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_NAME
+
+  build:
+    commands:
+      - echo "Building Docker image for ARM64..."
+      - docker buildx create --use --name arm-builder || true
+      - docker buildx build --no-cache --platform linux/arm64 --load -t $ECR_REPO_NAME:$COMMIT_SHA .
+      - docker tag $ECR_REPO_NAME:$COMMIT_SHA $IMAGE_URI:$COMMIT_SHA
+      - docker tag $ECR_REPO_NAME:$COMMIT_SHA $IMAGE_URI:latest
+
+  post_build:
+    commands:
+      # ████ TODO (item 14): NO LIFECYCLE LOCK IS TAKEN HERE. ████
+      # Local `npm run deploy` acquires the mandatory DynamoDB lease lock
+      # (scripts/lib/lifecycle/lock.ts) before any mutation; this CodeBuild
+      # path mutates ECR and the ECS service WITHOUT it, so a CodeBuild
+      # deploy can interleave with a local deploy or rollback. Item 14's
+      # contract says every mutating path takes the same lock; until this
+      # buildspec does (via the lifecycle TS tooling, not a bash reimplementation),
+      # treat tag deploys and local lifecycle operations as mutually exclusive
+      # by convention. docs/github-to-aws.md states this gap honestly.
+      - echo "Pushing to ECR..."
+      - docker push $IMAGE_URI:$COMMIT_SHA
+      - docker push $IMAGE_URI:latest
+      # UNIFIED DEPLOY (opt-in): when CCE_DEPLOY_INFRA=1, reconcile ALL infra +
+      # image via CDK so the image path can never let infra drift again. Hard
+      # guard: refuse if DOMAIN_NAME is empty — a cdk deploy without it would
+      # destroy the HTTPS listener / ACM cert / Route 53. Default (unset) keeps
+      # the safe image-only behavior.
+      - |
+        if [ "$CCE_DEPLOY_INFRA" = "1" ]; then
+          if [ -z "$DOMAIN_NAME" ]; then
+            echo "ABORT: CCE_DEPLOY_INFRA=1 but DOMAIN_NAME is empty — refusing (would destroy the HTTPS edge)."
+            exit 1
+          fi
+          echo "Unified deploy: cdk deploy --all (tier $DEPLOY_TIER, domain $DOMAIN_NAME)"
+          # The cap is NOT passed as an env var (compute-stack sources it from the
+          # tier default + runtime-config), so it can never be cut by this deploy.
+          unset CCE_DAILY_COST_CAP_USD
+          # DEPLOY_SHA MUST equal compute-stack.ts gitSha() (git rev-parse --short HEAD)
+          # so `cdk diff` and the drift-check workflow read CLEAN after a unified deploy.
+          # (COMMIT_SHA is the 12-char ECR image tag; this short SHA is the deploy marker.)
+          export DEPLOY_SHA="$(git rev-parse --short HEAD)"
+          # Pin the task definition to the image pushed above (never `latest`).
+          export CCE_IMAGE_TAG="$COMMIT_SHA"
+          npm ci
+          npx cdk deploy --all --require-approval never
+          echo "Unified deploy complete (infra + image $COMMIT_SHA)."
+        else
+          echo "Image-only deploy: swapping image into the live task def..."
+          NEW_IMAGE="$IMAGE_URI:$COMMIT_SHA"
+          # Clone the LIVE task def and swap ONLY the orchestrator image, preserving
+          # every other container + all env (launch flag, voice, cost cap, etc.).
+          # Use jq, NOT an inline `python3 -c` heredoc — the YAML block indentation
+          # used to leak into the -c string and crash python with IndentationError,
+          # producing empty JSON so register-task-definition silently failed and the
+          # service was never rolled (the deploy reported success but did nothing).
+          aws ecs describe-task-definition --task-definition $TASK_FAMILY --region $AWS_DEFAULT_REGION --query 'taskDefinition' --output json > /tmp/td-current.json
+          jq --arg img "$NEW_IMAGE" '.containerDefinitions |= map(if .name == "orchestrator" then .image = $img else . end) | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' /tmp/td-current.json > /tmp/new-task-def.json
+          NEW_REV=$(aws ecs register-task-definition --cli-input-json file:///tmp/new-task-def.json --region $AWS_DEFAULT_REGION --query 'taskDefinition.revision' --output text)
+          # Fail LOUD if registration didn't yield a revision — never report a green
+          # build that didn't actually roll the service.
+          if [ -z "$NEW_REV" ] || [ "$NEW_REV" = "None" ]; then
+            echo "ABORT: register-task-definition returned no revision — image pushed to ECR but service NOT rolled."
+            exit 1
+          fi
+          echo "Registered task definition revision $NEW_REV"
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $TASK_FAMILY:$NEW_REV --force-new-deployment --region $AWS_DEFAULT_REGION
+          echo "Waiting for service stability..."
+          aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE --region $AWS_DEFAULT_REGION
+          echo "Image-only deploy complete. Image $NEW_IMAGE rev $NEW_REV"
+        fi

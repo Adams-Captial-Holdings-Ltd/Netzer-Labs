@@ -1,0 +1,14 @@
+# scripts/ci/denylist.txt - literal substrings that must never appear in
+# synth output (cdk.out) or scanned fixtures. Matched case-insensitively by
+# scripts/ci/secret-scan.mjs.
+#
+# PLACEHOLDERS ONLY in this tracked file. The PRIVATE checkout maintains the
+# real personal-value list at scripts/publish/personal-values.txt (gitignored)
+# and the publish gate (scripts/publish/publish-gate.sh) merges it in at
+# publish time. NEVER commit real account ids, domains, handles, chat ids,
+# or tokens here - this file ships in the public repo.
+#
+# One literal per line. Use values specific enough not to match innocent
+# text (a bare 6-digit number would light up everywhere).
+hunter2-example-denylist-entry
+example-personal-domain.invalid

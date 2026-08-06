@@ -1,0 +1,109 @@
+name: CDK drift check
+
+# Catches the "main has undeployed infra changes" failure mode (the complement
+# to the in-app drift-watch worker, which catches manual changes to deployed
+# resources). Runs `cdk diff` against the live account and FAILS if anything
+# differs — so drift can't sit unnoticed.
+#
+# Requires (set once in the repo's GitHub settings):
+#   - Secret  CDK_DIFF_ROLE_ARN  — an IAM role this workflow assumes via OIDC
+#       (created by scripts: trusts token.actions.githubusercontent.com for this
+#        repo; allowed to assume the cdk-hnb659fds-* bootstrap roles + read CFN).
+#   - Variables (Settings > Variables): DOMAIN_NAME, BEDROCK_OPUS_MODEL,
+#       BEDROCK_SONNET_MODEL, BEDROCK_HAIKU_MODEL, BEDROCK_DEFAULT_MODEL,
+#       BEDROCK_EMBED_MODEL, CCE_COST_ALERT_EMAIL, CCE_MONTHLY_BUDGET_USD,
+#       CCE_ANOMALY_MONITOR_ARN, CCE_EMAIL_FROM, CCE_DASHBOARD_URL,
+#       CCE_SES_CONFIG_SET, JARVIS_GREETING, CCE_POWER_COST_NOTE,
+#       CCE_POWER_URL  — the same values deploy.ts forwards, so synth
+#       reproduces the deployed state (esp. DOMAIN_NAME for the HTTPS edge,
+#       the email vars for the magic-link task-def env, and the power vars
+#       for the power-switch Lambda env + the security-stack paused-mode
+#       CloudFront reroute).
+# Note: CCE_DAILY_COST_CAP_USD is intentionally NOT set (the cap comes from the
+# tier default + runtime-config; see compute-stack).
+
+on:
+  schedule:
+    - cron: '0 13 * * *' # daily 13:00 UTC
+  workflow_dispatch: {}
+  pull_request:
+    paths: ['infra/**', 'package.json', 'package-lock.json']
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.CDK_DIFF_ROLE_ARN }}
+          aws-region: us-east-1
+      # This is an INFRA-drift check, not an app-version check. The task def
+      # pins two per-deploy stamps that legitimately differ from the local
+      # checkout — the image tag and DEPLOY_SHA — so we resolve BOTH read-only
+      # from the live service and feed them to synth. Otherwise the diff flags
+      # them on every commit that isn't redeployed (the historical red). Needs
+      # ecs:DescribeTaskDefinition on the role; if it can't read ECS, both fall
+      # back to the local git sha (and the check may red until a redeploy).
+      - name: Resolve deployed image tag + DEPLOY_SHA
+        id: live
+        run: |
+          IMAGE=$(aws ecs describe-task-definition \
+            --task-definition claudeclaw-orchestrator \
+            --region us-east-1 \
+            --query 'taskDefinition.containerDefinitions[?name==`orchestrator`]|[0].image' \
+            --output text 2>/dev/null || true)
+          TAG="${IMAGE##*:}"
+          if [ "$TAG" = "$IMAGE" ] || [ -z "$TAG" ]; then TAG=""; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "deployed image tag: ${TAG:-<unresolved>}"
+          SHA=$(aws ecs describe-task-definition \
+            --task-definition claudeclaw-orchestrator \
+            --region us-east-1 \
+            --query 'taskDefinition.containerDefinitions[?name==`orchestrator`]|[0].environment[?name==`DEPLOY_SHA`]|[0].value' \
+            --output text 2>/dev/null || true)
+          if [ -n "$SHA" ] && [ "$SHA" != "None" ]; then
+            echo "DEPLOY_SHA=$SHA" >> "$GITHUB_ENV"
+            echo "deployed DEPLOY_SHA: $SHA"
+          else
+            echo "deployed DEPLOY_SHA: <unresolved, synth uses local gitSha()>"
+          fi
+      - name: cdk diff (fail on drift)
+        env:
+          CCE_IMAGE_TAG: ${{ steps.live.outputs.tag }}
+          CDK_STACK_NAME: CCE
+          DEPLOY_TIER: '3'
+          CCE_TIER: '3'
+          CCE_IAM_COPILOT_WRITE: '1'
+          DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+          BEDROCK_OPUS_MODEL: ${{ vars.BEDROCK_OPUS_MODEL }}
+          BEDROCK_SONNET_MODEL: ${{ vars.BEDROCK_SONNET_MODEL }}
+          BEDROCK_HAIKU_MODEL: ${{ vars.BEDROCK_HAIKU_MODEL }}
+          BEDROCK_DEFAULT_MODEL: ${{ vars.BEDROCK_DEFAULT_MODEL }}
+          BEDROCK_EMBED_MODEL: ${{ vars.BEDROCK_EMBED_MODEL }}
+          CCE_COST_ALERT_EMAIL: ${{ vars.CCE_COST_ALERT_EMAIL }}
+          CCE_MONTHLY_BUDGET_USD: ${{ vars.CCE_MONTHLY_BUDGET_USD }}
+          CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
+          # Magic-link email config + Jarvis greeting (deploy.ts forwards these
+          # same vars). Without them synth emits the code defaults and the diff
+          # flags the deployed task-def env on every run.
+          CCE_EMAIL_FROM: ${{ vars.CCE_EMAIL_FROM }}
+          CCE_DASHBOARD_URL: ${{ vars.CCE_DASHBOARD_URL }}
+          CCE_SES_CONFIG_SET: ${{ vars.CCE_SES_CONFIG_SET }}
+          JARVIS_GREETING: ${{ vars.JARVIS_GREETING }}
+          # Power-switch panel cost line (power-switch-stack env COST_NOTE).
+          # Forwarded like the email vars so synth matches the deployed Lambda.
+          CCE_POWER_COST_NOTE: ${{ vars.CCE_POWER_COST_NOTE }}
+          # Power panel URL: drives the security-stack paused-mode CloudFront
+          # reroute (and the app proxy fallback). Synth must match deployed.
+          CCE_POWER_URL: ${{ vars.CCE_POWER_URL }}
+        run: npx cdk diff "CCE-*" --fail

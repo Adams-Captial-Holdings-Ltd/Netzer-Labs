@@ -1,0 +1,9 @@
+{
+  "prompt": "n/a (screenshot, not a generated image)",
+  "generator": "macOS screencapture (window capture) of the prod Mission Control dashboard, ClaudeClaw Enterprise v0.0.1",
+  "tab": "Compliance",
+  "date": "2026-06-18",
+  "author": "@emmanuelmadams4-lgtm",
+  "postProcessing": "cropped the top 120px of browser chrome; no other edits",
+  "review": "owner-reviewed before commit; contains no secrets, tokens, AWS account IDs, ARNs, or third-party data"
+}

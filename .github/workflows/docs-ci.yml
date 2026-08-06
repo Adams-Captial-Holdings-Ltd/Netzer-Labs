@@ -1,0 +1,110 @@
+# Docs CI — hermetic per-PR quality gates (IaC readiness item 38a).
+#
+# Everything here runs WITHOUT AWS credentials and WITHOUT external fetches:
+# the only network use is npm's registry (pinned mermaid-cli via npx).
+# External http(s) links are counted but never fetched — external link
+# checking is a scheduled / release-time job with retries and an allowlist,
+# never PR-blocking, because external checks flake.
+#
+# Executable docs blocks are SCHEMA-validated here only; executing them is
+# the release-time canary's job (items 30/38, docs/runnable-blocks.md).
+
+name: Docs CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: docs-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: Internal links + anchors + runnable-block schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Dependency-free scripts: no npm ci needed.
+      - name: Check internal links and anchors (external links skipped, counted only)
+        run: node scripts/ci/docs-links.mjs
+
+      - name: Validate runnable-block annotations (schema only; execution is the release canary)
+        run: node scripts/ci/runnable-blocks.mjs
+
+  mermaid:
+    name: Mermaid render check (pinned renderer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Renders every ```mermaid block with @mermaid-js/mermaid-cli@10.9.1
+      # (the script pins the version and PRINTS it, so the job log records
+      # which renderer validated the syntax — GitHub's own Mermaid version
+      # has no contract; releases also smoke-check rendering on github.com).
+      # Also enforces the ~40-node-per-diagram budget (approximate count).
+      - name: Render all mermaid blocks to SVG
+        run: node scripts/ci/docs-mermaid.mjs
+
+  diagrams-drift:
+    name: diagrams.map drift gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (full history so the PR base is diffable)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Validates every mapped diagram/source path exists, and in PR context
+      # (GITHUB_BASE_REF is set automatically) fails when a mapped source
+      # changed without its diagram, naming the diagram owner. The
+      # owner-approval escape hatch (item 32: approval AFTER the latest
+      # mapped-source commit, stale reviews dismissed) is a launch-time
+      # repository ruleset — docs/launch-checklist.md carries it; this job
+      # implements the simple fail.
+      - name: Check diagram ownership drift
+        run: node scripts/ci/diagrams-drift.mjs
+
+  asset-budget:
+    name: Docs asset size budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ≤2 MB per file under docs/, ≤15 MB total under docs/assets/,
+      # no videos in-repo. Budgets are stated in docs/assets/README.md.
+      - name: Enforce size budgets
+        run: node scripts/ci/docs-assets.mjs

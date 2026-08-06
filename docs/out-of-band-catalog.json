@@ -1,0 +1,128 @@
+[
+ {
+  "id": "state-bucket",
+  "kind": "s3-bucket",
+  "nameOrPattern": "claudeclaw<suffix>-deploy-<account>-<region>",
+  "createdBy": "bootstrap-state",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Bootstrap primitive 1 of 3 (plan item 6): the manifest/state bucket. Versioned, SSE, public-access-blocked; created by scripts/lib/lifecycle/bootstrap-state.ts via SDK, outside CDK, because deploy state must exist before the first stack. Holds manifests, journals, and state/meta.json. Teardown empties all object versions and deletes it LAST, after every other step that still needs the manifest."
+ },
+ {
+  "id": "deploy-lock-table",
+  "kind": "dynamodb-table",
+  "nameOrPattern": "claudeclaw<suffix>-deploy-lock",
+  "createdBy": "bootstrap-state",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Bootstrap primitive 2 of 3: the lifecycle lease-lock table (on-demand billing). Cannot live in the CDK stacks because the lock must be held before the first stack deploys. Teardown itself takes the lock from this table, so it releases the lock and deletes the table as its final mutation."
+ },
+ {
+  "id": "private-ecr-repo",
+  "kind": "ecr-repository",
+  "nameOrPattern": "claudeclaw<suffix>-orchestrator",
+  "createdBy": "bootstrap-state",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Bootstrap primitive 3 of 3: the private ECR repo (release-image import needs it before Compute synth, plan item 41). Teardown deletes all images (immutable per-deploy tags included) then the repository. ECR repos cost by stored image bytes, so leftover images are listed in the costed retained summary."
+ },
+ {
+  "id": "agentcore-mcp-gateways",
+  "kind": "bedrock-agentcore-gateway",
+  "nameOrPattern": "cce-mcp-gateway-* (plus per-gateway service roles and targets)",
+  "createdBy": "cli-runbook",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Created out-of-band by the CLI runbook in docs/mcp/README.md, deliberately NOT in CDK so arming a tool never risks unrelated stack drift. cdk destroy will never see them. Teardown lists gateways via bedrock-agentcore-control and deletes gateways, their targets, and their dedicated service roles. The registry rows pointing at them live in the runtime-config DDB table and die with that table."
+ },
+ {
+  "id": "scheduler-group",
+  "kind": "eventbridge-scheduler-group",
+  "nameOrPattern": "claudeclaw<suffix>",
+  "createdBy": "deploy-script",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Created idempotently by deploy (ensureSchedulerGroup) before Compute starts, tagged app=claudeclaw. It cannot live in CloudFormation: existing installs created it out-of-band and an AWS::Scheduler::ScheduleGroup with the same explicit name would fail their next Messaging deploy with AlreadyExists. Teardown deletes the schedules inside it, then the group itself (aws scheduler delete-schedule-group)."
+ },
+ {
+  "id": "runtime-eventbridge-schedules",
+  "kind": "eventbridge-scheduler-schedule",
+  "nameOrPattern": "schedule/claudeclaw<suffix>/* (inside the deploy-created group claudeclaw<suffix>)",
+  "createdBy": "runtime",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "The schedule GROUP is deploy-created (see scheduler-group); the schedules INSIDE it are app data the orchestrator creates per scheduled-tasks row at runtime. A schedule group with live schedules can fail or hang deletion, so teardown inventories and deletes every schedule in the group BEFORE deleting the group."
+ },
+ {
+  "id": "managed-policy-iam-copilot",
+  "kind": "iam-managed-policy",
+  "nameOrPattern": "CCE-IamCopilot",
+  "createdBy": "cli-runbook",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Live-attached managed policy granting the task role the IAM-copilot apply surface (apply is additionally gated by runtime-config iam/apply_enabled). Created/attached via CLI, not CDK; detaching it is the documented kill switch. Teardown detaches it from every attached entity, then deletes the policy and all non-default versions."
+ },
+ {
+  "id": "managed-policy-playground-nonanthropic",
+  "kind": "iam-managed-policy",
+  "nameOrPattern": "CCE-Playground-NonAnthropicInvoke",
+  "createdBy": "cli-runbook",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Live-attached managed policy that lets the task role invoke non-Anthropic Bedrock models for the Playground — the curated catalog serves 16 models across 7 provider families (OpenAI, DeepSeek, Qwen, Moonshot/Kimi, Meta/Llama, Mistral, Amazon/Nova); see src/lib/bedrock/playground-catalog.ts. Detach to revoke. Teardown detaches from all entities, then deletes."
+ },
+ {
+  "id": "managed-policy-cost-remediation",
+  "kind": "iam-managed-policy",
+  "nameOrPattern": "CCE-CostRemediation",
+  "createdBy": "cli-runbook",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Live-attached managed policy backing the Cost tab's remediation mutations (delete NAT/LB/volume/endpoint, release EIP). Detach to revoke. Teardown detaches from all entities, then deletes."
+ },
+ {
+  "id": "managed-policy-imagegen-stability",
+  "kind": "iam-managed-policy",
+  "nameOrPattern": "CCE-ImageGen-Stability",
+  "createdBy": "cli-runbook",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Live-attached managed policy granting the task role bedrock:InvokeModel on arn:aws:bedrock:*::foundation-model/stability.* . Image generation moved off the now-LEGACY Amazon Nova Canvas (Bedrock refuses it for new callers) to an active Stability text-to-image model in us-west-2. Detach to revoke image generation. NOTE: teardown does NOT auto-remove this policy — scripts/teardown.ts deleteManagedPolicies() only handles the three live-attached policies (CCE-IamCopilot, CCE-Playground-NonAnthropicInvoke, CCE-CostRemediation); CCE-ImageGen-Stability must be detached and deleted manually."
+ },
+ {
+  "id": "telegram-webhook",
+  "kind": "external-webhook",
+  "nameOrPattern": "https://<domain>/telegram (registered at api.telegram.org for the bot token)",
+  "createdBy": "deploy-script",
+  "ownership": "app-owned",
+  "teardown": "report-only",
+  "notes": "Deploy registers it (setWebhook with secret token), but the registration lives in Telegram's infrastructure, not AWS, and removing it needs the bot token, which teardown may no longer have after secrets are schedule-deleted. Report-only: the manual checklist prints the exact deleteWebhook command to run with the bot token."
+ },
+ {
+  "id": "github-oidc-provider",
+  "kind": "iam-oidc-provider",
+  "nameOrPattern": "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com",
+  "createdBy": "cli-runbook",
+  "ownership": "shared-account-prerequisite",
+  "teardown": "report-only",
+  "notes": "Account-level SINGLETON: one provider per URL per account, so other repos' GitHub Actions deploy roles in a shared account may trust this exact provider. Deleting it breaks every one of them at once. Report-only by default; --delete-shared-prereqs first scans every IAM role whose trust policy references the provider ARN, prints that blast radius, and requires an extra typed confirmation."
+ },
+ {
+  "id": "codebuild-source-credential",
+  "kind": "codebuild-source-credential",
+  "nameOrPattern": "GITHUB source credential (account-level, one per provider per account/region)",
+  "createdBy": "cli-runbook",
+  "ownership": "shared-account-prerequisite",
+  "teardown": "report-only",
+  "notes": "aws codebuild import-source-credentials stores ONE GitHub credential for the whole account/region; every CodeBuild project with a GitHub source uses it, including projects that have nothing to do with this app. Report-only by default; --delete-shared-prereqs scans all CodeBuild projects for GitHub sources and prints which would lose their connection before allowing deletion."
+ },
+ {
+  "id": "cdk-bootstrap-stack",
+  "kind": "cloudformation-stack",
+  "nameOrPattern": "CDKToolkit (+ cdk-hnb659fds-assets-<account>-<region> bucket, ECR repo, and roles)",
+  "createdBy": "external",
+  "ownership": "shared-account-prerequisite",
+  "teardown": "report-only",
+  "notes": "npx cdk bootstrap creates this once per account/region and EVERY CDK app in the account depends on it: its asset bucket, asset ECR repo, and deploy/exec roles serve unrelated stacks too. Deleting it would break all other CDK deployments in the account. Report-only, even under --delete-shared-prereqs teardown prints the removal commands instead of running them."
+ }
+]

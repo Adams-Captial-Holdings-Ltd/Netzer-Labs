@@ -1,0 +1,20 @@
+{
+  "awsRegion": "us-east-1",
+  "cdkStackName": "CCE",
+  "deployTier": 1,
+  "dailyCostCapUsd": 50,
+  "deployMode": "chat",
+  "domainName": "cce.example.com",
+  "slackBotToken": "xoxb-REPLACE_WITH_YOUR_BOT_TOKEN",
+  "slackSigningSecret": "REPLACE_WITH_YOUR_SIGNING_SECRET",
+  "dashboard": { "autoGenerate": true },
+  "addons": {
+    "imageGen": false,
+    "tts": false,
+    "knowledge": true,
+    "jarvisVoice": false,
+    "webSearchVendor": "skip"
+  },
+  "ciMode": "none",
+  "configDir": "~/.claudeclaw-enterprise"
+}

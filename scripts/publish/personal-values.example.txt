@@ -1,0 +1,31 @@
+# scripts/publish/personal-values.example.txt
+#
+# Template for scripts/publish/personal-values.txt (GITIGNORED; the real
+# file exists ONLY in the private checkout and must never be committed).
+# publish-gate.sh refuses to certify a publish without the real file, and
+# orphan-export.sh uses it as an extra denylist over the exported tree.
+#
+# Format: one literal per line, `#` comments, blank lines ignored. Entries
+# are matched as substrings across ALL git history, so use values that are
+# specific enough not to match innocent text (a bare 6-digit number will
+# light up everywhere; a full chat id or domain will not).
+#
+# Replace every placeholder below with the real value.
+
+# AWS account id(s)
+000000000000
+
+# Domains (apex + any subdomains that ever appeared in config or docs)
+your-domain.example
+dashboard.your-domain.example
+
+# GitHub / social handles tied to the private lane
+your-github-handle
+
+# Telegram chat ids (owner + operator)
+1000000001
+1000000002
+
+# Slack workspace / user ids
+U00000000
+T00000000

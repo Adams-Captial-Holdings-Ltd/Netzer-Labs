@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & ideas (Discussions)
+    url: https://github.com/emmanuelmadams4-lgtm/Netzer-Labs/discussions
+    about: >-
+      Usage questions, deployment advice, and open-ended ideas go to
+      Discussions. Issues are for reproducible bugs, deploy failures, and
+      scoped feature requests.
+  - name: Security vulnerabilities (private)
+    url: https://github.com/emmanuelmadams4-lgtm/Netzer-Labs/security/advisories/new
+    about: >-
+      Never report vulnerabilities in a public issue. Use a private security
+      advisory (see SECURITY.md).

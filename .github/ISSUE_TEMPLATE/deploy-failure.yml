@@ -1,0 +1,96 @@
+name: Deploy or verify failure
+description: setup / doctor / deploy / status / verify / rollback / teardown failed
+title: "[deploy]: "
+labels: ["deploy", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Why we ask for the redacted support bundle and never a raw paste:**
+        raw `verify`/`status`/`deploy` output names your AWS account ID, every
+        stack/bucket/table/cluster, your ARNs, and your domain. Pasting it into
+        a public issue publishes your AWS posture — an attacker's recon phase,
+        done for them. The support bundle keeps the diagnostic signal (which
+        named check failed, why, tier/mode/region, deployed version) while
+        replacing identifying values with per-deployment salted hashes, so
+        maintainers can still see that two failures refer to the same resource
+        without learning what that resource is.
+  - type: dropdown
+    id: command
+    attributes:
+      label: Which command failed?
+      options:
+        - npm run setup
+        - npm run doctor
+        - npm run deploy
+        - npm run status / npm run verify
+        - npm run deploy:rollback
+        - npm run teardown
+        - npm run dashboard:tunnel
+        - CI deploy (GitHub Actions / CodeBuild)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Deployment mode
+      options:
+        - chat
+        - infra-only (with domain)
+        - infra-only (no domain, private access)
+        - not deployed yet (setup/doctor stage)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version being deployed
+      description: Release tag, or `deployedVersion` from the support bundle for an existing install.
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+  - type: textarea
+    id: support-bundle
+    attributes:
+      label: Redacted support bundle (required)
+      description: >-
+        Run `npx tsx scripts/support-bundle.ts --json` and paste the output.
+        This is the redacting command — safe for a public issue. Never use
+        `--raw` here; if a maintainer needs raw output they will open a private
+        channel (see SECURITY.md, "Sharing diagnostics privately").
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: The failing step's error text (sanitized)
+      description: >-
+        The last ~30 lines before the command exited, with account IDs, ARNs,
+        bucket/stack names, and domains removed (the support bundle already
+        carries them safely hashed).
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Operator environment
+      placeholder: |
+        OS: macOS 15 / Ubuntu 24.04 ...
+        Node: 20.x
+        Docker: 27.x
+        AWS CLI: 2.x
+        Fresh install or upgrade from: ...
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: The "Redacted support bundle" field contains support-bundle output, not raw verify output.
+          required: true
+        - label: I checked docs/troubleshooting.md for the failing check ID.
+          required: true
