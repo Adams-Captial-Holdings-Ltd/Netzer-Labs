@@ -43,8 +43,25 @@ env:
   CCE_TIER: ${{ github.event.inputs.tier || '3' }}
 
 jobs:
+  source-guard:
+    name: Validate deployment source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deployment source
+        env:
+          TARGET_ENV: ${{ github.event.inputs.env }}
+          GITHUB_REF: ${{ github.ref }}
+          # Transitional only. Remove after a production-branch deploy is
+          # proven healthy and main is removed from AWS OIDC trust.
+          CCE_ALLOW_LEGACY_MAIN: '1'
+        run: node scripts/ci/deploy-source-guard.mjs
+
   verify:
     name: Typecheck + Unit Tests
+    needs: source-guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -59,7 +76,7 @@ jobs:
 
   deploy:
     name: Build + CDK Deploy + Smoke
-    needs: verify
+    needs: [source-guard, verify]
     if: inputs.confirm == 'deploy'
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.env == 'staging' && 'staging' || 'production' }}
@@ -187,7 +204,7 @@ jobs:
           # running the workflow, never a hardcoded default.
           CCE_GITHUB_OWNER: ${{ github.repository_owner }}
           CCE_GITHUB_REPO: ${{ github.event.repository.name }}
-          CCE_GITHUB_DEPLOY_REFS: refs/heads/main,refs/heads/staging
+          CCE_GITHUB_DEPLOY_REFS: refs/heads/main,refs/heads/production,refs/heads/staging
           CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
         run: |
           npx cdk deploy --all \
