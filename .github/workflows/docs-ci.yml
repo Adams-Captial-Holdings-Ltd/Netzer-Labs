@@ -13,9 +13,9 @@ name: Docs CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [development, qa, staging, production, main]
   push:
-    branches: [main]
+    branches: [development, qa, staging, production, main]
 
 concurrency:
   group: docs-ci-${{ github.workflow }}-${{ github.ref }}
