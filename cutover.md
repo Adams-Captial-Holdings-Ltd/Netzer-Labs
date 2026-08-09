@@ -100,4 +100,3 @@ Use the approved [repository cutover design](docs/superpowers/specs/2026-08-08-n
 - [ ] Record which items were configured automatically and which remain manual or GitHub-plan-blocked.
 - [ ] Record the final protected branches, required check names, Environment policies, production source, default branch, and non-secret health evidence.
 - [ ] Confirm no secret value was displayed or committed and no unintended `CCE_*` or `claudeclaw` compatibility identifier was renamed.
-

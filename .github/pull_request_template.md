@@ -39,4 +39,3 @@
 - [ ] I did not rename existing `CCE_*`, `claudeclaw`, AWS resource, domain, browser-storage, or release identifiers unless an approved compatibility migration requires it.
 - [ ] I documented deployment impact, rollback, and any required operator action.
 - [ ] I did not disable checks, rewrite history, delete a long-lived branch, or use a force push.
-
