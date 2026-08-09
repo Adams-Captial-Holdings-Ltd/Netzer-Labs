@@ -1,6 +1,6 @@
 name: CDK drift check
 
-# Catches the "main has undeployed infra changes" failure mode (the complement
+# Catches the "production source has undeployed infra changes" failure mode (the complement
 # to the in-app drift-watch worker, which catches manual changes to deployed
 # resources). Runs `cdk diff` against the live account and FAILS if anything
 # differs — so drift can't sit unnoticed.
