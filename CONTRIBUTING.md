@@ -52,6 +52,31 @@ If your change touches a source file mapped in `docs/diagrams.map`, update the
 corresponding diagram in the same PR (or get the diagram owner's approval) —
 the drift gate fails otherwise.
 
+## Branch and promotion workflow
+
+Normal work and promotions move in one direction:
+
+```text
+feature/fix/chore -> development -> qa -> staging -> production
+hotfix/<issue> -> production, then backport to development and promote normally
+```
+
+- Start ordinary work from `development` and open a pull request back to
+  `development`. Ordinary work never targets `production` directly.
+- Promotion branches accept normal changes only from the immediately preceding
+  branch: `development` into `qa`, `qa` into `staging`, and `staging` into
+  `production`.
+- Use pull requests for every promotion. Force pushes, branch deletion, and
+  history rewriting are forbidden on long-lived branches.
+- For an urgent production fix, branch `hotfix/<issue>` from `production`,
+  merge the smallest verified fix into `production`, then backport it to
+  `development` and promote that backport normally.
+- During the controlled cutover, `main` remains production-authorized as a
+  recovery path. After a successful production proof from `production`, it is
+  preserved as protected legacy history and is never deleted.
+
+The operator sequence and stop conditions are in [cutover.md](cutover.md).
+
 ## PR conventions
 
 - One logical change per PR. Describe **what changed and why**, not a file
