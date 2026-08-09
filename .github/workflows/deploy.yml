@@ -54,9 +54,6 @@ jobs:
         env:
           TARGET_ENV: ${{ github.event.inputs.env }}
           GITHUB_REF: ${{ github.ref }}
-          # Transitional only. Remove after a production-branch deploy is
-          # proven healthy and main is removed from AWS OIDC trust.
-          CCE_ALLOW_LEGACY_MAIN: '1'
         run: node scripts/ci/deploy-source-guard.mjs
 
   verify:
@@ -204,7 +201,7 @@ jobs:
           # running the workflow, never a hardcoded default.
           CCE_GITHUB_OWNER: ${{ github.repository_owner }}
           CCE_GITHUB_REPO: ${{ github.event.repository.name }}
-          CCE_GITHUB_DEPLOY_REFS: refs/heads/main,refs/heads/production,refs/heads/staging
+          CCE_GITHUB_DEPLOY_REFS: refs/heads/production,refs/heads/staging
           CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
         run: |
           npx cdk deploy --all \
