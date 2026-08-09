@@ -31,6 +31,14 @@ const tier = Number(
   process.env.CCE_TIER ?? process.env.DEPLOY_TIER ?? '1',
 ) as DeployTier;
 const stackPrefix = process.env.CDK_STACK_NAME ?? 'CCE';
+const powerReservedConcurrency = Number(
+  process.env.CCE_POWER_RESERVED_CONCURRENCY ?? '5',
+);
+if (!Number.isInteger(powerReservedConcurrency) || powerReservedConcurrency < 0) {
+  throw new Error(
+    'CCE_POWER_RESERVED_CONCURRENCY must be a non-negative integer',
+  );
+}
 
 const baseProps = { env, tier };
 
@@ -195,6 +203,7 @@ const powerSwitch = new PowerSwitchStack(app, `${stackPrefix}-PowerSwitch`, {
   // Same env var the magic-link emails use for the public dashboard URL.
   dashboardUrl: process.env.CCE_DASHBOARD_URL,
   costNote: process.env.CCE_POWER_COST_NOTE,
+  reservedConcurrency: powerReservedConcurrency,
 });
 
 void guardrails;

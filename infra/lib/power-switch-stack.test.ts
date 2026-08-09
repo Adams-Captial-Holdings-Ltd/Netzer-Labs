@@ -8,7 +8,7 @@ import { App } from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { PowerSwitchStack } from './power-switch-stack.js';
 
-function synth() {
+function synth(reservedConcurrency?: number) {
   const app = new App();
   const stack = new PowerSwitchStack(app, 'TestPowerSwitch', {
     tier: 3,
@@ -16,6 +16,7 @@ function synth() {
     mutedAlarms: ['CCE-Observability-SchedulerStalledAlarm'],
     dashboardUrl: 'https://dash.example.com',
     costNote: 'Paused about $150/mo. Awake about $700/mo.',
+    reservedConcurrency,
   });
   return Template.fromStack(stack);
 }
@@ -54,6 +55,15 @@ describe('PowerSwitchStack', () => {
           LEASE_MINUTES: '15',
         }),
       },
+    });
+  });
+
+  it('can defer reserved concurrency for an account whose quota is still 10', () => {
+    const lowQuota = synth(0);
+    lowQuota.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'claudeclaw-power-switch',
+      ReservedConcurrentExecutions: Match.absent(),
+      VpcConfig: Match.absent(),
     });
   });
 
