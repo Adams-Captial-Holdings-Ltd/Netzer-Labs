@@ -386,6 +386,17 @@ Dockerfile              multi-stage, ARM64, non-root, healthcheck
 
 </details>
 
+### Repository governance
+
+Repository changes enter through `development` and promote by pull request
+through `qa`, `staging`, and `production`. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the contributor contract, [cutover.md](cutover.md) for the operator
+checklist and stop conditions, and the approved
+[repository cutover design](docs/superpowers/specs/2026-08-08-netzar-os-repository-cutover-design.md)
+for the complete decision record. The existing `CCE_*`, `claudeclaw`, AWS,
+domain, browser-storage, and release identifiers remain compatibility
+contracts unless a separately approved migration changes them.
+
 ## What is not here yet (intentional defers)
 
 - **EventBridge Scheduler cutover**: the fire queue + exec role are provisioned, the in-process scheduler is still the active path.

@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [development, qa, staging, production, main]
   push:
-    branches: [main]
+    branches: [development, qa, staging, production, main]
 
 # Cancel any in-flight runs on the same branch when new commits land.
 concurrency:
@@ -28,12 +28,27 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Build server
+        run: npm run build
+
+      - name: Install dashboard dependencies
+        run: npm ci --prefix web
+
+      - name: Dashboard typecheck
+        run: npm --prefix web run typecheck
+
+      - name: Dashboard production build
+        run: npm --prefix web run build
 
       - name: Unit tests
         run: npm test
