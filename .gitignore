@@ -58,6 +58,7 @@ Thumbs.db
 *.swo
 
 # Local workspaces
+.worktrees/
 workspace/
 tmp/
 .tmp/
