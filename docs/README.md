@@ -20,6 +20,8 @@ The operator quickstart, in order: AWS-side prerequisites first (standalone acco
 - **Connecting Telegram or Slack to an agent**, no redeploy needed: [channels/connect-prompts.md](./channels/connect-prompts.md) and the Slack-specific setup + app manifest in [slack/README.md](./slack/README.md) ([app-manifest.json](./slack/app-manifest.json)).
 - **A second parallel environment** (staging): [staging.md](./staging.md).
 - **Connecting GitHub to AWS** (optional: you do not need CI to deploy; the two accelerators, OIDC deploys and CodeBuild tag deploys, and their trust scopes): [github-to-aws.md](./github-to-aws.md).
+- **Developing from another computer**: the no-extra-cost GitHub workflow, repeatable setup, branch handoff, and validation commands are in [development.md](./development.md).
+- **Promoting development through QA and production**: the persistent QA, protected branch, signed release, client approval, and post-release refresh workflow is in [deployment.md](./deployment.md).
 
 ## I want to understand it
 
