@@ -169,7 +169,9 @@ At the assumed light-traffic profile, token spend is roughly $39/month on Sonnet
 6. **Learn runtime-config.** A DynamoDB table (`claudeclaw-runtime-config`) of live-editable settings: the daily cost cap, memory cadence, MCP server registry, feature arms like `iam/apply_enabled`. Changes apply within about 30 seconds with no redeploy; every such key is tagged `[LIVE_EDITABLE]` in [`.env.reference`](.env.reference), the annotated reference for every variable the system reads.
 7. **Wire the power switch.** `npm run power:setup` prints the always-up pause/wake panel URL (bookmark it) and connects the dashboard's Power card. One tap pauses the whole stack between demos (compute to zero, AI spend hard-stopped, data untouched) and drops the bill to the network-layer floor; wake restores everything in 2 to 3 minutes with a live restore checklist. The panel also shows a live, itemized maintenance-cost breakdown (paused floor vs awake, computed from your actual resources and last-30-day AI spend), and with `CCE_POWER_URL` set at synth time, visiting the dashboard URL while paused redirects straight to the panel instead of a dead 503. A nightly auto-pause backstop means a forgotten wake never bleeds money. Details: [docs/agent-setup.md](docs/agent-setup.md#pause-and-wake-the-power-switch).
 
-**Local development:** `npm run dev` runs the orchestrator locally with tsx watch. The unit suite is `npm test` (vitest; run the FULL suite before pushing) and there is a LocalStack integration suite: `npm run test:integration:all` brings the container up, runs it, and tears it down (`:up` / `:down` to manage it yourself). Playwright e2e harnesses live under `tests/e2e/` (see each directory's README).
+**Local development:** run `npm run local`. It starts the Floci AWS emulator, provisions every table and bucket, seeds runtime config, and runs the orchestrator and dashboard together, fully isolated from real AWS. **[development.md](development.md) is the canonical source of truth** for the local environment: setup, environment variables, ports, seeding, reset, feature testing, AWS isolation and known limitations. Read it before changing anything local.
+
+Lower-level commands: `npm run dev` runs the orchestrator alone with tsx watch. The unit suite is `npm test` (vitest; run the FULL suite before pushing). The integration suite runs against the local emulator via `npm run local:test:integration`; `npm run test:integration:all` is the standalone LocalStack variant and must not run at the same time as `npm run local` (both bind port 4566). Playwright e2e harnesses live under `tests/e2e/` (see each directory's README).
 
 ## Architecture at a glance
 
@@ -235,7 +237,9 @@ If the state bucket itself is lost, teardown still runs in a break-glass degrade
 | `npm run teardown` | Inventoried, ordered destruction with typed confirm; `--dry-run` for the costed plan. |
 | `npm run deploy:cloud` | CodeBuild image-only deploy (no `cdk deploy`, cannot drift infra). |
 | `npm run restore:ddb` | DynamoDB restore CLI (PITR or export, typed confirm). |
-| `npm test` / `npm run test:integration` | Full vitest unit suite / LocalStack integration suite. |
+| `npm test` / `npm run test:integration` | Full vitest unit suite / integration suite (needs an emulator on :4566). |
+| `npm run local` | **Local development stack** (Floci + orchestrator + dashboard). See [development.md](development.md). |
+| `npm run local:verify` / `npm run local:reset` | Prove AWS isolation / rebuild all local state. |
 | `npm run typecheck` / `npm run build` / `npm run synth` | Strict `tsc --noEmit` / compile / `cdk synth`. |
 | `npm run dev` | Local orchestrator, tsx watch. |
 | `npm run mission` / `npm run schedule:cli` / `npm run audit-query` | Terminal CLIs for missions, scheduled tasks, saved Athena audit queries. |

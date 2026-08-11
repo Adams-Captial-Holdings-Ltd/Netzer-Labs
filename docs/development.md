@@ -1,5 +1,13 @@
 # Development from Any Computer
 
+> **Setting up a local environment to actually run Netzer OS?** See
+> [development.md](../development.md) in the repository root. That document is
+> the canonical source of truth for the local development environment: the Floci
+> AWS emulator, environment variables, ports, seeding, resetting, feature
+> testing and AWS isolation.
+>
+> This page covers only the Git workflow for moving work between computers.
+
 > You do not need a paid cloud development environment to work on Netzar OS.
 > Clone the GitHub repository on any authorized Windows/WSL, macOS, or Linux
 > computer, use the same locked dependencies and checks, and push your feature
@@ -11,7 +19,7 @@
 - Access to the private GitHub repository
 - Git
 - Node.js 20 or newer
-- Docker for LocalStack integration tests and local image builds
+- Docker for the local AWS emulator, integration tests, and local image builds
 - No AWS credentials for ordinary coding, unit tests, typecheck, or synth
 
 GitHub Codespaces is optional and may have a separate cost. It is not required
@@ -75,11 +83,16 @@ npm --prefix web run build
 npm test
 ```
 
-When Docker is available, also run:
+When Docker is available, also run the integration suite:
 
 ```bash
 npm run test:integration:all
 ```
+
+If you are already running the local development stack, use
+`npm run local:test:integration` instead. `test:integration:all` starts
+LocalStack on port 4566, which collides with the Floci emulator. See
+[development.md](../development.md).
 
 Push the branch and open a pull request into `development`. GitHub Actions
 repeats the required checks. A failed check blocks the merge and prevents the
