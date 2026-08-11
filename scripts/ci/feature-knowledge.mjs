@@ -7,7 +7,7 @@ import process from 'node:process';
 
 const FIXED_FILES = [
   'docs/features/missions/README.md', 'docs/features/missions/HANDOFF.md',
-  'HANDOFF.md', 'AGENTS.md', 'docs/README.md', 'development.md',
+  'handoff.md', 'AGENTS.md', 'docs/README.md', 'development.md',
   'docs/missions-v2-backlog.md', 'docs/missions-v2-audit.md',
 ];
 const REQUIRED_META = ['feature', 'document_role', 'status', 'observed_at', 'as_of_commit'];
@@ -65,8 +65,11 @@ export function validateFeatureKnowledge({ files, trackedFiles, existingFiles = 
     if (!ROLES.has(role) || role !== expectedRole) failures.push(`${path}: invalid document_role ${role ?? '(missing)'}`);
     if (!STATUSES.has(status) || status !== expectedStatus) failures.push(`${path}: invalid status ${status ?? '(missing)'}`);
     if (parsed.fields.get('feature') !== 'missions') failures.push(`${path}: feature must be missions`);
-    for (const [key, paths] of parsed.lists) {
-      if (!RELATIONSHIPS.has(key)) continue;
+    for (const key of RELATIONSHIPS) {
+      if (parsed.fields.has(key)) failures.push(`${path}: relationship ${key} must be a YAML list`);
+      if (!parsed.lists.has(key)) continue;
+      const paths = parsed.lists.get(key);
+      if (paths.length === 0) failures.push(`${path}: relationship ${key} must be a non-empty YAML list`);
       for (const target of paths) {
         if (target.startsWith('/') || target.includes('..')) failures.push(`${path}: relationship ${target} is not repository-relative`);
         else if (!existingFiles.has(target)) failures.push(`${path}: relationship ${target} does not resolve`);
@@ -75,17 +78,18 @@ export function validateFeatureKnowledge({ files, trackedFiles, existingFiles = 
     }
   }
 
-  const root = files['HANDOFF.md'];
-  if (!root) failures.push('missing root HANDOFF.md compatibility pointer');
+  const root = files['handoff.md'];
+  if (!root) failures.push('missing root handoff.md compatibility pointer');
   else {
     const parsed = parseFrontmatter(root);
-    for (const key of REQUIRED_META) if (!parsed.fields.has(key)) failures.push(`root HANDOFF.md: missing ${key}`);
-    if (parsed.fields.get('feature') !== 'missions') failures.push('root HANDOFF.md: feature must be missions');
-    if (parsed.fields.get('document_role') !== 'compatibility' || parsed.fields.get('status') !== 'compatibility') failures.push('root HANDOFF.md must use compatibility metadata');
-    if (parsed.keys.length !== REQUIRED_META.length || parsed.keys.some((key) => !REQUIRED_META.includes(key))) failures.push('root HANDOFF.md must contain only compatibility metadata');
+    for (const key of REQUIRED_META) if (!parsed.fields.has(key)) failures.push(`root handoff.md: missing ${key}`);
+    if (parsed.fields.get('feature') !== 'missions') failures.push('root handoff.md: feature must be missions');
+    if (parsed.fields.get('document_role') !== 'compatibility' || parsed.fields.get('status') !== 'compatibility') failures.push('root handoff.md must use compatibility metadata');
+    if (parsed.keys.length !== REQUIRED_META.length || parsed.keys.some((key) => !REQUIRED_META.includes(key))) failures.push('root handoff.md must contain only compatibility metadata');
     const bodyLines = parsed.body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (bodyLines.length !== 1 || bodyLines[0].length > 180) failures.push('root HANDOFF.md must contain only one short pointer sentence');
-    if (!/\]\(docs\/features\/missions\/HANDOFF\.md\)/.test(parsed.body)) failures.push('root HANDOFF.md must contain the exact canonical link');
+    if (bodyLines.length !== 1 || bodyLines[0].length > 180) failures.push('root handoff.md must contain only one short pointer sentence');
+    const links = [...parsed.body.matchAll(/(?<!!)\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g)].map((match) => match[1] ?? match[2]);
+    if (links.length !== 1 || links[0] !== 'docs/features/missions/HANDOFF.md') failures.push('root handoff.md must contain exactly one Markdown link targeting docs/features/missions/HANDOFF.md');
   }
 
   if (!/\]\(docs\/features\/missions\/README\.md\)/.test(files['AGENTS.md'] ?? '')) failures.push('AGENTS.md must link the Missions README');

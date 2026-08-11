@@ -8,7 +8,7 @@ import { validateFeatureKnowledge } from './feature-knowledge.mjs';
 const requiredFiles = [
   'docs/features/missions/README.md',
   'docs/features/missions/HANDOFF.md',
-  'HANDOFF.md',
+  'handoff.md',
   'AGENTS.md',
   'docs/README.md',
   'development.md',
@@ -40,7 +40,7 @@ evidence:
   - docs/missions-v2-audit.md
 `)}\n# Missions\n`,
     'docs/features/missions/HANDOFF.md': `${frontmatter('handoff', 'current')}\n# Missions handoff\n`,
-    'HANDOFF.md': `${frontmatter('compatibility', 'compatibility')}\n\nMissions operational state is maintained in [the canonical Missions HANDOFF](docs/features/missions/HANDOFF.md).\n`,
+    'handoff.md': `${frontmatter('compatibility', 'compatibility')}\n\nMissions operational state is maintained in [the canonical Missions HANDOFF](docs/features/missions/HANDOFF.md).\n`,
     'AGENTS.md': '[Missions README](docs/features/missions/README.md)\n',
     'docs/README.md': '[Missions](./features/missions/README.md)\n',
     'development.md': 'Feature state belongs in `docs/features/<slug>/HANDOFF.md`.\n',
@@ -104,15 +104,37 @@ describe('validateFeatureKnowledge', () => {
 
   it('allows the root handoff only as the exact short compatibility pointer', () => {
     expect(failuresFor(({ files }) => {
-      files['HANDOFF.md'] = files['HANDOFF.md'].replace('observed_at: 2026-08-11\n', '');
-    }).join('\n')).toMatch(/root HANDOFF\.md: missing observed_at/);
+      files['handoff.md'] = files['handoff.md'].replace('observed_at: 2026-08-11\n', '');
+    }).join('\n')).toMatch(/root handoff\.md: missing observed_at/);
     expect(failuresFor(({ files }) => {
-      files['HANDOFF.md'] += '\n## Active work\nDo something.\n';
-    }).join('\n')).toMatch(/root HANDOFF.*pointer/i);
+      files['handoff.md'] += '\n## Active work\nDo something.\n';
+    }).join('\n')).toMatch(/root handoff.*pointer/i);
     expect(failuresFor(({ files }) => {
-      files['HANDOFF.md'] = files['HANDOFF.md'].replace('docs/features/missions/HANDOFF.md', 'docs/missions-v2-audit.md');
-    }).join('\n')).toMatch(/canonical link/i);
+      files['handoff.md'] = files['handoff.md'].replace('docs/features/missions/HANDOFF.md', 'docs/missions-v2-audit.md');
+    }).join('\n')).toMatch(/exactly one Markdown link/i);
+    expect(failuresFor(({ files }) => {
+      files['handoff.md'] = files['handoff.md'].replace('.\n', ' and [the README](docs/features/missions/README.md).\n');
+    }).join('\n')).toMatch(/exactly one Markdown link/i);
   });
+
+  it('treats the lowercase root handoff path as casing-sensitive', () => {
+    expect(failuresFor(({ files }) => {
+      files['HANDOFF.md'] = files['handoff.md'];
+      delete files['handoff.md'];
+    }).join('\n')).toMatch(/missing root handoff\.md/);
+  });
+
+  it.each(['implemented_by', 'tested_by', 'decisions', 'approved_work', 'evidence'])(
+    'rejects scalar and malformed %s relationships',
+    (key) => {
+      expect(failuresFor(({ files }) => {
+        files['docs/features/missions/README.md'] = files['docs/features/missions/README.md'].replace(`${key}:\n`, `${key}: src/missions.ts\n`);
+      }).join('\n')).toMatch(new RegExp(`relationship ${key} must be a YAML list`));
+      expect(failuresFor(({ files }) => {
+        files['docs/features/missions/README.md'] = files['docs/features/missions/README.md'].replace(`${key}:\n  -`, `${key}:\n -`);
+      }).join('\n')).toMatch(new RegExp(`relationship ${key} must be a non-empty YAML list`));
+    },
+  );
 
   it('requires AGENTS and the docs index to discover the canonical README', () => {
     expect(failuresFor(({ files }) => { files['AGENTS.md'] = '# Agents\n'; }).join('\n')).toMatch(/AGENTS.*Missions README/);
@@ -121,7 +143,7 @@ describe('validateFeatureKnowledge', () => {
 
   it('requires per-feature handoffs and rejects a writable global operational handoff', () => {
     expect(failuresFor(({ files }) => { files['development.md'] = 'Keep notes nearby.\n'; }).join('\n')).toMatch(/docs\/features\/<slug>\/HANDOFF\.md/);
-    expect(failuresFor(({ files }) => { files['development.md'] += 'Every feature author must update the root HANDOFF.md with operational state.\n'; }).join('\n')).toMatch(/global operational handoff/i);
+    expect(failuresFor(({ files }) => { files['development.md'] += 'Every feature author must update the root handoff.md with operational state.\n'; }).join('\n')).toMatch(/global operational handoff/i);
   });
 
   it('rejects invalid active work states and incomplete closed evidence', () => {
