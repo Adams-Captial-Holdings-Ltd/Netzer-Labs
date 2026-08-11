@@ -53,7 +53,8 @@ export function stripCodeBlocks(markdown) {
 
 /**
  * Extract link targets from markdown: inline links/images `[t](target)`,
- * HTML `href="..."` / `src="..."`. Returns [{ target, line }].
+ * reference-style links, and HTML `href="..."` / `src="..."`.
+ * Returns [{ target, line }].
  */
 export function extractLinks(markdown) {
   const stripped = stripCodeBlocks(markdown);
@@ -61,14 +62,41 @@ export function extractLinks(markdown) {
   const lines = stripped.split('\n');
   const inlineRe = /!?\[[^\]]*\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+"[^"]*")?\s*\)/g;
   const htmlRe = /(?:href|src)\s*=\s*"([^"]+)"/g;
+  const definitionRe = /^\s{0,3}\[([^\]]+)\]:\s*(<[^>]+>|\S+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/;
+  const normalizeLabel = (label) => label.trim().replace(/\s+/g, ' ').toLowerCase();
+  const definitions = new Map();
+
+  for (const line of lines) {
+    const definition = line.match(definitionRe);
+    if (!definition) continue;
+    let target = definition[2];
+    if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1);
+    const label = normalizeLabel(definition[1]);
+    if (!definitions.has(label)) definitions.set(label, target);
+  }
+
   lines.forEach((line, i) => {
     // Spans inside inline code on the same line are still rare false-positive
     // sources; strip single-backtick spans per line.
     const noInlineCode = line.replace(/`[^`]*`/g, '');
+    if (definitionRe.test(noInlineCode)) return;
     for (const m of noInlineCode.matchAll(inlineRe)) {
       let target = m[1];
       if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1);
       links.push({ target, line: i + 1 });
+    }
+    const referenceSpans = [];
+    for (const m of noInlineCode.matchAll(/!?\[([^\]]*)\]\[([^\]]*)\]/g)) {
+      const label = normalizeLabel(m[2] || m[1]);
+      const target = definitions.get(label);
+      if (target !== undefined) links.push({ target, line: i + 1 });
+      referenceSpans.push([m.index, m.index + m[0].length]);
+    }
+    for (const m of noInlineCode.matchAll(/!?\[([^\]]+)\](?!\s*[\[(])/g)) {
+      const start = m.index;
+      if (referenceSpans.some(([from, to]) => start >= from && start < to)) continue;
+      const target = definitions.get(normalizeLabel(m[1]));
+      if (target !== undefined) links.push({ target, line: i + 1 });
     }
     for (const m of noInlineCode.matchAll(htmlRe)) {
       links.push({ target: m[1], line: i + 1 });
@@ -140,8 +168,10 @@ export function checkRepo(rootDir) {
   const files = [];
   const docsDir = join(rootDir, 'docs');
   if (existsSync(docsDir)) files.push(...listMarkdown(docsDir));
-  const readme = join(rootDir, 'README.md');
-  if (existsSync(readme)) files.push(readme);
+  for (const rootFile of ['README.md', 'AGENTS.md', 'development.md', 'handoff.md']) {
+    const file = join(rootDir, rootFile);
+    if (existsSync(file)) files.push(file);
+  }
 
   const anchorCache = new Map();
   const anchorsOf = (file) => {
@@ -169,7 +199,13 @@ export function checkRepo(rootDir) {
       const [pathPart, fragment] = target.split('#', 2);
       let targetFile = file;
       if (pathPart) {
-        const decoded = decodeURIComponent(pathPart);
+        let decoded;
+        try {
+          decoded = decodeURIComponent(pathPart);
+        } catch {
+          failures.push(`${rel}:${line} malformed percent encoding: ${target}`);
+          continue;
+        }
         const resolved = resolve(dirname(file), decoded);
         if (!resolved.startsWith(rootDir + sep) && resolved !== rootDir) {
           failures.push(`${rel}:${line} link escapes the repo: ${target}`);
