@@ -366,18 +366,61 @@ failures before and after.
 Not run: `npm run test:integration` (needs LocalStack), `npx cdk synth`, web
 typecheck/build — no web files were changed by the hotfix.
 
-## 18. Git state
+## 18. Git and deployment state
 
-- **`hotfix/missions-authz`** — off `production`. Head `a44d072`. Three commits:
-  `74c74be` Jarvis capability gate · `de5ea42` central tool audit · `a44d072`
-  mission audit events. **Not pushed. No PR opened.** Needs backport to
-  `development` per `CONTRIBUTING.md`.
-- **`feature/missions-v2`** — off `development` (`72888fe`). Documentation only:
-  this file, `docs/missions-v2-audit.md`, `docs/missions-v2-backlog.md`,
-  `docs/adr/0009-mission-container-model.md`, `docs/adr/README.md` index entry.
-  **No source changes. Not pushed.**
-- **Migrations:** none written or run.
-- **Deployment:** nothing deployed.
+Branch and environment rules: [development.md § Feature handoff](development.md#feature-handoff-handoffmd).
+**"Production" alone is never a sufficient statement of intent** — name the
+branch, and name the AWS environment it does or does not reach.
+
+### Branch: `hotfix/missions-authz`
+
+| | |
+|---|---|
+| Branched from | `production` |
+| Head | `a44d072` |
+| Merges into next | **`production`**, then backport to `development` and promote normally (`CONTRIBUTING.md`) |
+| AWS environment on merge | production — stack `CCE`, resources `claudeclaw-*` |
+| Pushed? | **No.** Local only |
+| PR open? | **No** |
+| Deployed? | **No.** Merging to `production` deploys nothing; `deploy.yml` is manual dispatch and requires typing `deploy` |
+
+Commits: `74c74be` Jarvis capability gate · `de5ea42` central tool audit ·
+`a44d072` mission audit events.
+
+Because this branch has not been pushed, **all three security fixes are absent
+from the deployed production environment.**
+
+### Branch: `feature/missions-v2`
+
+| | |
+|---|---|
+| Branched from | `development` (`72888fe`) |
+| Head | `ebd9bf7` |
+| Merges into next | **`development`** → then `qa` → `staging` → `production` |
+| AWS environment on merge | **none.** `development` and `qa` deploy nowhere |
+| Pushed? | **No.** Local only |
+| PR open? | **No** |
+| Deployed? | **No** — documentation only, nothing deployable |
+
+Contents: this file, `development.md` (feature-handoff rules),
+`docs/missions-v2-audit.md`, `docs/missions-v2-backlog.md`,
+`docs/adr/0009-mission-container-model.md`, `docs/adr/README.md` index entry.
+**No source, infrastructure, or web changes.**
+
+### Environments
+
+| Environment | Reached from | Stack | Resources | State |
+|---|---|---|---|---|
+| staging | `staging` branch, manual dispatch `env: staging` | `CCE-STAGING` | `claudeclaw-staging-*` | untouched by this work |
+| production | `production` branch, manual dispatch `env: prod` | `CCE` | `claudeclaw-*` | untouched by this work |
+
+**Migrations:** none written, none run.
+**AWS:** nothing deployed, no `cdk deploy`, no `deploy:cloud`, no AWS credentials
+used at any point in this work. Every finding about "production" in the audit was
+derived by reading the `production` branch source, which is byte-identical to
+`development` (verified: empty `git diff` over `src`, `infra`, `web`, `scripts`).
+The live AWS account has **not** been scanned, so configuration drift outside CDK
+is unassessed.
 
 ## 19. Next agent instructions
 
