@@ -99,12 +99,12 @@ These are current runtime risks, not fixes claimed by this documentation change.
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| CLI contract mismatch | `?agent=` and the absent detail endpoint make list/show diverge from the routes. | [MISSION-015](../../missions-v2-backlog.md#mission-015-mission-sub-router) includes fixing or removing the CLI with the route contract. |
-| Scan cap, ambiguous prefixes, non-transactional reassign | Mutations list only 200 rows, prefix-match ids, then reassign with separate put/delete writes. | [MISSION-012](../../missions-v2-backlog.md#mission-012-mission-repository-on-the-existing-table). |
-| No central ToolRegistry audit | The registry emits metrics but no audit row. Historical [MISSION-002](../../missions-v2-backlog.md#mission-002-central-audit-in-toolregistryinvoke) is `claimed_unverified`, not completed work; no active backlog item directly owns this cross-tool audit gap. | Record fresh approved work before implementation. |
-| UI per-agent fanout | The all-agent board uses one capped request per known agent. | [MISSION-017](../../missions-v2-backlog.md#mission-017-mission-list-and-detail-ui). |
-| Missing Missions repository, route, and integration coverage | Current coverage is mocked tool parsing/ownership only. | [MISSION-012](../../missions-v2-backlog.md#mission-012-mission-repository-on-the-existing-table), [MISSION-015](../../missions-v2-backlog.md#mission-015-mission-sub-router), and [MISSION-031](../../missions-v2-backlog.md#mission-031-integration-tests-on-localstack). |
-| MISSION-001 through MISSION-003 claims | They are historical `claimed_unverified` records with no reachable commit and absent current source. | Do not treat them as shipped, deployed, or recoverable; use the [reconciled backlog](../../missions-v2-backlog.md#historical-hotfix-claims-current-disposition-unverified) before approving fresh work. |
+| CLI contract mismatch | `?agent=` and the absent detail endpoint make list/show diverge from the routes. | [MISSION-015](../../missions-v2-backlog.md#mission-015--mission-sub-router) includes fixing or removing the CLI with the route contract. |
+| Scan cap, ambiguous prefixes, non-transactional reassign | Mutations list only 200 rows, prefix-match ids, then reassign with separate put/delete writes. | [MISSION-012](../../missions-v2-backlog.md#mission-012--mission-repository-on-the-existing-table). |
+| No central ToolRegistry audit | The registry emits metrics but no audit row. Historical [MISSION-002](../../missions-v2-backlog.md#mission-002--central-audit-in-toolregistryinvoke) is `claimed_unverified`, not completed work; no active backlog item directly owns this cross-tool audit gap. | Record fresh approved work before implementation. |
+| UI per-agent fanout | The all-agent board uses one capped request per known agent. | [MISSION-017](../../missions-v2-backlog.md#mission-017--mission-list-and-detail-ui). |
+| Missing Missions repository, route, and integration coverage | Current coverage is mocked tool parsing/ownership only. | [MISSION-012](../../missions-v2-backlog.md#mission-012--mission-repository-on-the-existing-table), [MISSION-015](../../missions-v2-backlog.md#mission-015--mission-sub-router), and [MISSION-031](../../missions-v2-backlog.md#mission-031--integration-tests-on-localstack). |
+| MISSION-001 through MISSION-003 claims | They are historical `claimed_unverified` records with no reachable commit and absent current source. | Do not treat them as shipped, deployed, or recoverable; use the [reconciled backlog](../../missions-v2-backlog.md#historical-hotfix-claims--current-disposition-unverified) before approving fresh work. |
 
 ## 8. Exact focused and full validation commands
 
