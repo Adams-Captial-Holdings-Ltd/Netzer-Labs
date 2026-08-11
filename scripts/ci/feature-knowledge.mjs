@@ -101,7 +101,10 @@ export function validateFeatureKnowledge({ files, trackedFiles, existingFiles = 
   const backlog = files['docs/missions-v2-backlog.md'] ?? '';
   const records = taskRecords(backlog);
   const retired = new Set();
+  const seenIds = new Set();
   for (const { id, fields } of records) {
+    if (seenIds.has(id)) failures.push(`${id}: duplicate task ID; retired/rejected IDs must never be reused`);
+    seenIds.add(id);
     const work = fields.get('work_state'); const outcome = fields.get('outcome');
     if (work) {
       if (!WORK_STATES.has(work)) failures.push(`${id}: invalid work_state ${work}`);

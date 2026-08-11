@@ -161,6 +161,17 @@ describe('validateFeatureKnowledge', () => {
     }).join('\n')).toMatch(/MISSION-013.*dependency sequencing/);
   });
 
+  it('forbids duplicate or reused task IDs', () => {
+    expect(failuresFor(({ files }) => {
+      files['docs/missions-v2-backlog.md'] += `
+## MISSION-013 — reused
+\`\`\`yaml
+work_state: approved
+\`\`\`
+`;
+    }).join('\n')).toMatch(/MISSION-013.*duplicate|duplicate.*MISSION-013/i);
+  });
+
   it('requires the audit to be historical and link the current README and ADR', () => {
     expect(failuresFor(({ files }) => {
       files['docs/missions-v2-audit.md'] = '# Audit\nCurrent specification.\n';

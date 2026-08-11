@@ -62,6 +62,22 @@ describe('extractLinks', () => {
       { target: 'docs/guide.md', line: 3 },
     ]);
   });
+
+  it('reports undefined full, collapsed, and shortcut references', () => {
+    const md = [
+      '[full][missing-full]',
+      '[missing-collapsed][]',
+      '[missing-shortcut]',
+      '',
+      '[known]: docs/known.md',
+    ].join('\n');
+
+    expect(extractLinks(md)).toEqual([
+      { target: '', line: 1, undefinedReference: 'missing-full' },
+      { target: '', line: 2, undefinedReference: 'missing-collapsed' },
+      { target: '', line: 3, undefinedReference: 'missing-shortcut' },
+    ]);
+  });
 });
 
 describe('slugify / collectAnchors', () => {
@@ -161,6 +177,15 @@ describe('checkRepo (end to end on a fixture tree)', () => {
     const result = checkRepo(root) as { failures: string[] };
 
     expect(result.failures).toEqual(['README.md:1 missing file: docs/missing.md']);
+  });
+
+  it('reports an undefined reference label as a normal link failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-links-reference-'));
+    writeFileSync(join(root, 'README.md'), '[guide][missing]\n');
+
+    const result = checkRepo(root) as { failures: string[] };
+
+    expect(result.failures).toEqual(['README.md:1 undefined reference: missing']);
   });
 
   it('reports malformed percent encoding as a normal link failure', () => {

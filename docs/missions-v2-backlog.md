@@ -24,8 +24,8 @@ is absent from verified current source. They are not active work packages.
 
 Each task is independently completable and reviewable. Work in dependency order.
 A task is **Complete** only when implementation, tests, typecheck, acceptance
-criteria and the `handoff.md` update are all done — generated code alone is not
-completion.
+criteria and the canonical [Missions HANDOFF](features/missions/HANDOFF.md)
+update are all done — generated code alone is not completion.
 
 **Verified file paths** are marked ✅. **Speculative** paths (files that do not
 exist yet) are marked ⬜ and are proposals, not facts.

@@ -54,7 +54,8 @@ export function stripCodeBlocks(markdown) {
 /**
  * Extract link targets from markdown: inline links/images `[t](target)`,
  * reference-style links, and HTML `href="..."` / `src="..."`.
- * Returns [{ target, line }].
+ * Returns resolved links as `{ target, line }` and unresolved references as
+ * `{ target: '', line, undefinedReference }`.
  */
 export function extractLinks(markdown) {
   const stripped = stripCodeBlocks(markdown);
@@ -90,13 +91,19 @@ export function extractLinks(markdown) {
       const label = normalizeLabel(m[2] || m[1]);
       const target = definitions.get(label);
       if (target !== undefined) links.push({ target, line: i + 1 });
+      else links.push({ target: '', line: i + 1, undefinedReference: label });
       referenceSpans.push([m.index, m.index + m[0].length]);
     }
     for (const m of noInlineCode.matchAll(/!?\[([^\]]+)\](?!\s*[\[(])/g)) {
       const start = m.index;
       if (referenceSpans.some(([from, to]) => start >= from && start < to)) continue;
-      const target = definitions.get(normalizeLabel(m[1]));
+      const label = normalizeLabel(m[1]);
+      const target = definitions.get(label);
       if (target !== undefined) links.push({ target, line: i + 1 });
+      // A bare bracket span is ordinary text unless this document actually
+      // uses reference definitions. In a reference-style document, surface a
+      // likely misspelled shortcut label instead of silently dropping it.
+      else if (definitions.size > 0) links.push({ target: '', line: i + 1, undefinedReference: label });
     }
     for (const m of noInlineCode.matchAll(htmlRe)) {
       links.push({ target: m[1], line: i + 1 });
@@ -190,7 +197,12 @@ export function checkRepo(rootDir) {
   for (const file of files) {
     const rel = relative(rootDir, file);
     const links = extractLinks(readFileSync(file, 'utf-8'));
-    for (const { target, line } of links) {
+    for (const { target, line, undefinedReference } of links) {
+      if (undefinedReference) {
+        checkedCount++;
+        failures.push(`${rel}:${line} undefined reference: ${undefinedReference}`);
+        continue;
+      }
       if (isExternal(target)) {
         externalCount++;
         continue;
