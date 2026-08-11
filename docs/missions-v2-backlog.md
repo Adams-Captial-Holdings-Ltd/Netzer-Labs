@@ -40,34 +40,36 @@ to a definition of done.
 
 ## Status summary
 
-| ID | Name | Milestone | Status |
-|---|---|---|---|
-| MISSION-001 | Gate Jarvis reads on capabilities | Historical hotfix claim | Claimed implemented — unverified |
-| MISSION-002 | Central audit in ToolRegistry | Historical hotfix claim | Claimed implemented — unverified |
-| MISSION-003 | Audit mission mutations | Historical hotfix claim | Claimed implemented — unverified |
-| MISSION-010 | Record verified baseline | 0 | Evidence recorded |
-| MISSION-011 | Domain types + state machine | 1 | Not Started |
-| MISSION-012 | Mission repo on the existing table | 1 | Not Started |
-| MISSION-014 | Mission authorization predicate + mutation authority | 1 | Not Started |
-| MISSION-015 | Mission sub-router | 2 | Not Started |
-| MISSION-016 | Task authoring | 2 | Not Started |
-| MISSION-017 | Mission list + detail UI | 2 | Not Started |
-| MISSION-018 | Approval gates + event timeline | 2 | Not Started |
-| MISSION-019 | Dispatch ready tasks | 3 | Not Started |
-| MISSION-020 | Execute tasks in queue-drain | 3 | Not Started |
-| MISSION-021 | Failure taxonomy + retry ladder | 3 | Not Started |
-| MISSION-022 | Heartbeat + orphan sweep | 3 | Not Started |
-| MISSION-023 | Injected mission contract | 3 | Not Started |
-| MISSION-024 | Derived artifacts + evidence gates | 3 | Not Started |
-| MISSION-025 | Cancellation propagation | 3 | Not Started |
-| MISSION-026 | Full mission audit coverage | 4 | Not Started |
-| MISSION-027 | Mission authorization-boundary tests | 4 | Not Started |
-| MISSION-028 | Soft delete + retention | 4 | Not Started |
-| MISSION-029 | Cost attribution by task kind | 4 | Not Started |
-| MISSION-030 | UX states + progress | 5 | Not Started |
-| MISSION-031 | Integration tests (LocalStack) | 6 | Not Started |
-| MISSION-032 | E2E happy + failure paths | 6 | Not Started |
-| MISSION-034 | DLQ depth alarm | 6 | Not Started |
+| ID | Record type | Machine-readable state |
+|---|---|---|
+| MISSION-001 | Historical claim | `outcome: claimed_unverified` |
+| MISSION-002 | Historical claim | `outcome: claimed_unverified` |
+| MISSION-003 | Historical claim | `outcome: claimed_unverified` |
+| MISSION-010 | Closed baseline evidence | `outcome: landed`; `verification: code_verified` |
+| MISSION-011 | Active, milestone 1 | `work_state: approved` |
+| MISSION-012 | Active, milestone 1 | `work_state: approved` |
+| MISSION-013 | Retired | `outcome: rejected` |
+| MISSION-014 | Active, milestone 1 | `work_state: approved` |
+| MISSION-015 | Active, milestone 2 | `work_state: approved` |
+| MISSION-016 | Active, milestone 2 | `work_state: approved` |
+| MISSION-017 | Active, milestone 2 | `work_state: approved` |
+| MISSION-018 | Active, milestone 2 | `work_state: approved` |
+| MISSION-019 | Active, milestone 3 | `work_state: approved` |
+| MISSION-020 | Active, milestone 3 | `work_state: approved` |
+| MISSION-021 | Active, milestone 3 | `work_state: blocked` |
+| MISSION-022 | Active, milestone 3 | `work_state: approved` |
+| MISSION-023 | Active, milestone 3 | `work_state: approved` |
+| MISSION-024 | Active, milestone 3 | `work_state: approved` |
+| MISSION-025 | Active, milestone 3 | `work_state: approved` |
+| MISSION-026 | Active, milestone 4 | `work_state: approved` |
+| MISSION-027 | Active, milestone 4 | `work_state: approved` |
+| MISSION-028 | Active, milestone 4 | `work_state: approved` |
+| MISSION-029 | Active, milestone 4 | `work_state: approved` |
+| MISSION-030 | Active, milestone 5 | `work_state: approved` |
+| MISSION-031 | Active, milestone 6 | `work_state: approved` |
+| MISSION-032 | Active, milestone 6 | `work_state: blocked` |
+| MISSION-033 | Retired | `outcome: superseded` |
+| MISSION-034 | Active, milestone 6 | `work_state: approved` |
 
 ---
 
@@ -82,6 +84,14 @@ work before reimplementation or evidence recovery. See
 [the reconciliation](#reconciled-current-truth-2026-08-11).
 
 ## MISSION-001 — Gate Jarvis reads on capabilities, not just role rank
+
+```yaml
+outcome: claimed_unverified
+reachable_commit: none
+present_in_current_source: false
+deployment: unknown
+verification: not_run
+```
 
 **Historical claim:** claimed implemented, unverified · cited commit `74c74be` (unreachable)
 
@@ -125,6 +135,14 @@ tests pass.
 
 ## MISSION-002 — Central audit in ToolRegistry.invoke
 
+```yaml
+outcome: claimed_unverified
+reachable_commit: none
+present_in_current_source: false
+deployment: unknown
+verification: not_run
+```
+
 **Historical claim:** claimed implemented, unverified · cited commit `de5ea42` (unreachable)
 
 **Objective.** Make "which agent used which tool on whose behalf" answerable from
@@ -152,6 +170,14 @@ the writer. Future suites asserting send counts must do the same.
 
 ## MISSION-003 — Audit mission create, status change and reassign
 
+```yaml
+outcome: claimed_unverified
+reachable_commit: none
+present_in_current_source: false
+deployment: unknown
+verification: not_run
+```
+
 **Historical claim:** claimed implemented, unverified · cited commit `a44d072` (unreachable)
 
 **Why.** None of the four mission routes wrote an audit row, so "who cancelled
@@ -176,8 +202,21 @@ gap was attribution, not authorization.
 
 ## MISSION-010 — Record the verified baseline
 
+```yaml
+outcome: landed
+reachable_commit: d767a36
+present_in_current_source: true
+deployment: unknown
+verification: code_verified
+```
+
 **Historical status:** Evidence recorded; this is not a claim that the proposed
 Missions v2 runtime is complete.
+
+**Verification evidence.** On 2026-08-11, the reachable `d767a36` baseline had
+recorded CI results: `npm test` passed 1,922 tests with 6 skipped across 177
+passing test files and 1 skipped test file. This is code verification only; no
+named deployment environment or deployment evidence is recorded.
 
 **Objective.** Establish what passes *before* any change, so pre-existing
 failures are never mistaken for regressions.
@@ -210,6 +249,10 @@ LocalStack via `docker compose -f docker-compose.test.yml`.
 
 ## MISSION-011 — Mission domain types and state machine
 
+```yaml
+work_state: approved
+```
+
 **Goal.** A pure, dependency-free module defining Mission / MissionTask /
 MissionEvent and the legal transitions.
 
@@ -241,6 +284,10 @@ states have no outgoing edges; `draft → planned` refused with zero tasks;
 adding one requires an ADR note.
 
 ## MISSION-012 — Mission repository on the existing table
+
+```yaml
+work_state: approved
+```
 
 **Goal.** Persist the three row types in `claudeclaw-mission-tasks` with no CDK
 change.
@@ -276,6 +323,10 @@ page to find a mission by id. `cdk synth` output byte-identical to baseline.
 Assert the exact composed strings in tests.
 
 ## MISSION-014 — Mission authorization predicate and mutation authority
+
+```yaml
+work_state: approved
+```
 
 **Goal.** Implement ADR 0009's authorization boundary: an agent may read a
 mission when it has a task on that mission or is the coordinator; it may update
@@ -315,6 +366,10 @@ both callers against the shared service.
 
 ## MISSION-015 — Mission sub-router
 
+```yaml
+work_state: approved
+```
+
 **Goal.** Missions get a dedicated Hono sub-router with the service layer between
 routes and repo.
 
@@ -348,6 +403,10 @@ Unknown mission → 404.
 
 ## MISSION-016 — Task authoring
 
+```yaml
+work_state: approved
+```
+
 **Goal.** A human can add, edit, reorder and remove tasks on a `draft`/`planned`
 mission.
 
@@ -362,6 +421,10 @@ across reorder. Editing a `running` task's prompt is refused.
 **Acceptance.** Full task CRUD on non-terminal missions; refused on terminal ones.
 
 ## MISSION-017 — Mission list and detail UI
+
+```yaml
+work_state: approved
+```
 
 **Goal.** Replace the per-agent kanban with a scope-wide list plus a detail view.
 
@@ -383,6 +446,10 @@ and `build` pass.
 **Risks.** Scope creep into a general redesign. Only the Missions page changes.
 
 ## MISSION-018 — Approval gates and event timeline
+
+```yaml
+work_state: approved
+```
 
 **Goal.** `planned → active` and `review → done` require an explicit human action,
 each recorded as a MissionEvent.
@@ -408,6 +475,10 @@ principal. A body-supplied approver identity is ignored.
 
 ## MISSION-019 — Dispatch ready tasks on activation
 
+```yaml
+work_state: approved
+```
+
 **Goal.** Activating a mission enqueues its ready tasks durably.
 
 **Existing.** ✅ `src/lib/scheduler/eb-scheduler.ts`,
@@ -430,6 +501,10 @@ legacy path explicitly.
 
 ## MISSION-020 — Execute mission tasks in queue-drain
 
+```yaml
+work_state: approved
+```
+
 **Goal.** A dispatched task runs an agent turn and persists its result.
 
 **Existing.** ✅ `src/lib/scheduler/queue-drain.ts` (claim → run → deliver → mark),
@@ -449,6 +524,10 @@ A crash between claim and result leaves the task recoverable (MISSION-022).
 with the run's agent and timing.
 
 ## MISSION-021 — Failure taxonomy and bounded retry ladder
+
+```yaml
+work_state: blocked
+```
 
 **Goal.** Provider capacity walls do not consume a task's retry budget.
 
@@ -476,6 +555,10 @@ merging.
 
 ## MISSION-022 — Heartbeat and orphan reconciliation
 
+```yaml
+work_state: approved
+```
+
 **Goal.** A task whose executor died returns to the queue; a slow-but-live task
 never does.
 
@@ -492,6 +575,10 @@ it is a mutex.
 past the threshold is. A process never reclaims its own in-flight task.
 
 ## MISSION-023 — Injected mission contract
+
+```yaml
+work_state: approved
+```
 
 **Goal.** Outcome, scope and deliverable format reach the executing agent from the
 database, appended last.
@@ -511,6 +598,10 @@ and strip control characters.
 
 ## MISSION-024 — Derived artifacts and evidence gates
 
+```yaml
+work_state: approved
+```
+
 **Goal.** Artifacts are parsed from `DELIVERABLE:` lines; a review task with no
 `VERDICT:` is not accepted as a review.
 
@@ -526,6 +617,10 @@ limitation honestly in its own docs. Acceptable for V1; revisit with structured
 output.
 
 ## MISSION-025 — Cancellation propagation
+
+```yaml
+work_state: approved
+```
 
 **Goal.** Cancelling a mission stops queued and running tasks without clobbering a
 result that landed first.
@@ -543,6 +638,10 @@ A result landing just before cancel is preserved.
 
 ## MISSION-026 — Full mission audit coverage
 
+```yaml
+work_state: approved
+```
+
 **Goal.** Every mission lifecycle event is auditable, including execution.
 
 **Existing.** ✅ `src/lib/audit/audit-writer.ts` (MISSION-003 added three actions).
@@ -556,6 +655,10 @@ which agent ran what, what was produced, what failed, what was retried, who
 accepted.
 
 ## MISSION-027 — Mission authorization-boundary tests
+
+```yaml
+work_state: approved
+```
 
 **Goal.** Prove that Mission access follows ADR 0009's task/coordinator
 predicate, not a caller-supplied boundary or staffing pin.
@@ -575,6 +678,10 @@ entries in `authz-matrix.test.ts`; no test or implementation introduces
 
 ## MISSION-028 — Soft delete and retention
 
+```yaml
+work_state: approved
+```
+
 **Goal.** Cancelled and completed missions are retained under an explicit policy.
 
 **Why.** The table has a `ttl` attribute that **no repo code ever writes**, so
@@ -588,6 +695,10 @@ Audit rows are never TTL'd with the mission.
 outlives the mission.
 
 ## MISSION-029 — Cost attribution by task kind
+
+```yaml
+work_state: approved
+```
 
 **Goal.** Per-mission cost, split by work / review / defect.
 
@@ -606,6 +717,10 @@ into "work".
 
 ## MISSION-030 — Progress, artifacts and all UI states
 
+```yaml
+work_state: approved
+```
+
 **Goal.** Every state a user can land in is designed: empty, loading, error,
 permission-denied, running, failed, awaiting-approval, cancelled, archived.
 
@@ -620,6 +735,10 @@ from empty. A failed task shows its reason and retry count.
 
 ## MISSION-031 — Integration tests on LocalStack
 
+```yaml
+work_state: approved
+```
+
 **Existing.** ✅ `vitest.integration.config.ts` (`*.integration.test.ts`,
 `fileParallelism: false`), ✅ `docker-compose.test.yml`, ✅ `.github/workflows/ci.yml`
 (LocalStack `dynamodb,s3,sqs,kms,secretsmanager,iam,scheduler` already enabled).
@@ -631,6 +750,10 @@ and untouched; SQS enqueue → drain.
 **Acceptance.** `npm run test:integration` passes locally and in CI.
 
 ## MISSION-032 — End-to-end happy and failure paths
+
+```yaml
+work_state: blocked
+```
 
 **Objective.** Cover create → plan → approve → execute → review → complete, plus
 capacity failure, task failure with retry exhaustion, and cancel mid-run.
@@ -652,7 +775,31 @@ add a scope field or legacy-data migration as test preconditions.
 | MISSION-013 | Migration and dual-read shim | Retired | ADR 0009 accepts no Mission legacy migration. Flat rows remain readable and untouched; new Missions use the new shape only. |
 | MISSION-033 | Migration and rollback validation | Retired | It exists only to validate the rejected migration, so it has no remaining purpose. |
 
+### MISSION-013
+
+```yaml
+outcome: rejected
+reachable_commit: none
+present_in_current_source: false
+deployment: not_deployed
+verification: not_run
+```
+
+### MISSION-033
+
+```yaml
+outcome: superseded
+reachable_commit: none
+present_in_current_source: false
+deployment: not_deployed
+verification: not_run
+```
+
 ## MISSION-034 — DLQ depth alarm on scheduled-fire
+
+```yaml
+work_state: approved
+```
 
 **Goal.** A poison mission-task message raises an alarm instead of failing
 silently.
