@@ -31,11 +31,22 @@ approve and accept** — an agent never decides a mission is complete.
 Full reasoning: [ADR 0009](docs/adr/0009-mission-container-model.md) and
 [the audit](docs/missions-v2-audit.md).
 
-- **Core abstraction** — a Mission is a goal container. A MissionTask is a unit
-  of work. Today's flat mission becomes a Mission holding one task.
+- **Core abstraction** — a Mission is the durable, tracked work container in
+  which **several agents collaborate** toward a stated outcome under human
+  approval. It is scoped by which agents work on it, not by a user or workspace.
+  Netzer's four existing agent-collaboration primitives (`ask_agent`,
+  `inter-agent-tasks`, `hive-mind`, War Room) are all messaging or memory; none
+  tracks work. Missions is the missing durable container.
+- **Coordinator** — the `main` agent triages a mission into tasks and staffs
+  them; a human approves the plan and accepts the result.
 - **Entities** — `Mission` (`PK=MISSION#<id>`, `SK=META`), `MissionTask`
-  (`SK=TASK#<seq>#<taskId>`), `MissionEvent` (`SK=EVENT#<iso>#<id>`). Artifacts
-  are **derived** from `DELIVERABLE:` lines, never stored.
+  (`SK=TASK#<seq>#<taskId>`), `MissionEvent` (`SK=EVENT#<iso>#<id>`). Task kinds
+  `build | review | fix`. Artifacts are **derived** from `DELIVERABLE:` lines and
+  ceremony cost from `assignedAgent === coordinator` — neither is stored.
+- **Staffing vs authorization** — kept separate. `team` is an optional staffing
+  pin (`null` = coordinator staffs freely; assigning outside it needs an audited
+  `overrideReason`). Authorization is independent: an agent may read a mission
+  iff it has a task on it or is the coordinator.
 - **State** — `draft → planned → active → review → done`, plus `cancelled` from
   any non-terminal state. Tasks: `queued → running → completed|failed|cancelled`.
   A mission has no `failed` state; its tasks do.
@@ -47,23 +58,32 @@ Full reasoning: [ADR 0009](docs/adr/0009-mission-container-model.md) and
   `GSI1PK`/`GSI1SK`.
 - **Permissions** — the existing capability model, plus a new `missions:write`.
   Authorization moves into a service layer that both routes and agent tools call.
+- **Autonomy** — Gate 1 (`planned → active`) may auto-approve under
+  `{ maxEstimatedUsd, maxTasks }`, off by default. **Gate 2 (`review → done`) can
+  never be auto-approved by any policy.**
+- **Retries** — side-effecting tools are flagged in the registry. A run that
+  fired none may auto-retry; a run that did is marked needs-human-requeue.
+  Capacity failures never consume retry budget.
 - **Tenancy** — per [ADR 0002](docs/adr/0002-single-tenant.md) the **deployment
-  is the tenant boundary**. New mission rows carry a `scopeId` (team/workspace
-  *within* a deployment) defaulting to `default`. No other repo changes.
+  is the tenant boundary**. There is **no `scopeId`** and no user/team scope —
+  see DEC-008.
 
 ## 4. Scope
 
 **In scope:** the three entities and state machine; repo on the existing table;
-migration with a dual-read shim; `missions:write` + scope derivation; a mission
-sub-router with a service layer; task authoring; mission list/detail UI; two
-approval gates; task execution with failure taxonomy, bounded retries, heartbeat
-and cancellation; derived artifacts and evidence gates; audit coverage; scope
-isolation tests; soft delete and retention; one DLQ alarm.
+`missions:write` + the agent-access predicate; a mission sub-router with a
+service layer; coordinator planning and staffing; task authoring; mission
+list/detail UI; two approval gates with the Gate-1 auto-approve policy; task
+execution with failure taxonomy, bounded retries, side-effect-gated retry,
+heartbeat and cancellation; derived artifacts and evidence gates; audit
+coverage; agent-access tests; retention; one DLQ alarm.
 
-**Out of scope (deliberately):** multi-tenant PK refactor · sprints/milestones ·
-cross-mission dependencies · templates · search index · notifications · value/ROI
-reporting · multi-agent collaboration · Step Functions or any workflow engine ·
-event sourcing/CQRS · any new AWS service beyond one CloudWatch alarm.
+**Out of scope (deliberately):** any `scopeId` / user or team scoping · data
+migration (legacy rows are archived in place, not converted) · multi-tenant PK
+refactor · sprints/milestones · cross-mission dependencies · templates · search
+index · notifications · value/ROI reporting · Playwright/browser E2E · Step
+Functions or any workflow engine · event sourcing/CQRS · any new AWS service
+beyond one CloudWatch alarm.
 
 Do not expand V1 because a capability would eventually be useful. Add it to
 [the backlog](docs/missions-v2-backlog.md) under a later milestone instead.
@@ -71,8 +91,8 @@ Do not expand V1 because a capability would eventually be useful. Add it to
 ## 5. Non-negotiable rules
 
 1. **Authorization is server-side and identity comes from the authenticated
-   principal** — never from a request body or query parameter. `scopeId` and the
-   approver identity are both derived from the principal.
+   principal** — never from a request body or query parameter. The approver
+   identity is derived from the principal, never from a request field.
 2. **Never weaken an existing authorization check.** If two mechanisms disagree,
    require both; do not pick the looser one.
 3. **Reuse existing AWS services.** One CloudWatch alarm (MISSION-034) is the
@@ -180,9 +200,12 @@ mission states is the ceiling. A mission deliberately has no `failed` state.
 
 - **Tenant boundary = the deployment** ([ADR 0002](docs/adr/0002-single-tenant.md)).
   Isolation is at the AWS account level; there is no `tenantId` in any PK.
-- **`scopeId`** is the team/workspace boundary within a deployment, on new mission
-  rows only, defaulting to `default`. **Derived from the principal, never from
-  input.**
+- **No `scopeId`.** Missions are scoped by participating agents, not by users or
+  teams. See DEC-008.
+- **Agent access** — read a mission iff you have a task on it or are the
+  coordinator; write a task iff assigned or coordinator; transition/cancel is
+  coordinator-or-human. Replaces today's self-only rule, which blocks
+  collaboration.
 - **Capabilities**: `missions:read` (viewer-tier) and a new `missions:write`
   (operator-tier, MISSION-014). Mutations currently share `agents:write`.
 - **Two authorization mechanisms are live** in the dashboard middleware — the
@@ -266,9 +289,19 @@ run it to ship app code. Only MISSION-034 needs a real `cdk deploy`.
 - `MISSION-010` Verified baseline recorded (§17)
 - Audit, ADR 0009 and this backlog written
 
-**In progress** — none. Awaiting review of the architecture before domain code.
+- Design grilling complete — DEC-008..016 recorded in §15. Every previously
+  blocked question is now answered.
+- Adversarial production security audit — [docs/security-findings-2026-08-11.md](docs/security-findings-2026-08-11.md)
 
-**Next** — `MISSION-011` (domain types + state machine), then `MISSION-012`.
+**In progress** — none.
+
+**Next** — two independent tracks:
+1. **Security hotfix (urgent, unrelated to Missions)** — the four findings in
+   §16. `GET /api/config/*` is a live credential exposure to the lowest
+   privilege tier and should be first.
+2. **Missions v2** — `MISSION-011` (domain types + state machine), then
+   `MISSION-012`. The backlog still describes the pre-grilling design in places;
+   reconcile it against §3 and DEC-008..016, which are authoritative.
 
 **Later** — Milestones 2–6, per [the backlog](docs/missions-v2-backlog.md).
 
@@ -312,12 +345,109 @@ rule breaks both and is bypassable by omitting `owner`. The gap was attribution.
 Consequence: `mission_created` records whether the owner was explicit or
 model-chosen. Revisit if abuse appears.
 
+**DEC-008 — Missions are the container for multi-agent collaboration; there is
+no `scopeId`.** Why: Netzer's four collaboration primitives are all messaging or
+memory, so durable multi-agent work has no home. A Mission is scoped by which
+agents work on it. An earlier draft added a `scopeId` "because it is free now" —
+wrong: no grouping concept exists to map it onto (`UserProfile` has no team
+field, `Seat` binds one user, PR #42 Workspaces deliberately not ported per
+`src/lib/admin/seat-model.ts:4-9`), and the retrofit it avoided is a `GSI1PK`
+backfill measured in hours. Consequence: keys are `GSI1PK = MSTATUS#<status>`
+for missions and `AGENT#<assignedAgent>#<status>` for tasks — the latter is the
+work-pull index and partitions per agent.
+
+**DEC-009 — Staffing and authorization are separate mechanisms.** `team` is an
+optional staffing pin (`null` = coordinator staffs freely; outside-pin
+assignment needs an audited `overrideReason`), ported from Projects
+(`src/dashboard.ts:3520-3528`, coordinator always exempt). Authorization is
+independent and hard. Why: fusing them turns a product dial into a security
+boundary, so loosening staffing would silently loosen access.
+
+**DEC-010 — The `main` agent is the coordinator.** It triages a mission into
+tasks and staffs them; a human approves. Why: `main` is already the hub —
+`agent-loader.ts:235` falls back to `BUILTIN_AGENTS.main`, the create route
+already defaults `owner = 'main'`, and other builtin prompts say "redirect them
+to the main agent". Consequence: the coordinator's plan is LLM output, so the
+human gate is its only check.
+
+**DEC-011 — Agent access is derived from having work.** Read a mission iff you
+have a task on it or are the coordinator; write a task iff assigned or
+coordinator; transition/cancel is coordinator-or-human. Replaces the self-only
+`owner === ctx.agentId` rule at `mission-tools.ts:231,288`, which blocks
+collaboration. Still refuses an unrelated injected agent (no task → no access).
+Consequence: `mission-tools.authz.test.ts` encodes the old rule as a security
+contract and must be deliberately rewritten, proving the new predicate still
+contains injection.
+
+**DEC-012 — Task kinds are `build | review | fix`.** A `review` with no
+`VERDICT:` did not review. `fix` is rework from a failed review, which makes
+failure tax visible. Projects' `polish` (needs brand assets Netzer lacks) and
+`pm` (derivable from coordinator assignment) are not ported.
+
+**DEC-013 — Gate 1 may auto-approve; Gate 2 never can.** Policy
+`{ maxEstimatedUsd, maxTasks }`, off by default. Taken from Projects
+(`src/db.ts:3516` — "Gate 2 … is NEVER auto-approved"). Why: auto-approving a
+plan risks bounded spend; auto-approving output means nobody looked at it. Bound
+is USD rather than Projects' "sessions" because Netzer already meters spend.
+
+**DEC-014 — Side-effecting tools are flagged; retry is gated on them.** Add
+`sideEffecting: true` to handlers that touch the outside world (email,
+Salesforce). `ToolRegistry.invoke` already wraps every dispatch, so it records
+whether a run fired one. Runs that fired none auto-retry; runs that did are
+marked needs-human-requeue. Capacity failures fail before doing work, so they
+always requeue and never consume retry budget. Alternatives (per-call
+idempotency keys, effect staging) deferred — larger, and this is honest about
+where we cannot retry safely.
+
+**DEC-015 — No data migration.** Legacy flat mission rows stay in the table,
+readable and untouched; new missions are written in the new shape only. Why:
+the board was never really used in production. Consequence: MISSION-013 loses
+its dual-read shim — the riskiest task in the backlog — and rollback is trivial
+because nothing is rewritten. Revisit only if real legacy missions are found.
+
+**DEC-016 — Workflow coverage is integration tests, not Playwright.** Drive
+create → plan → approve → execute → review → complete through the API against
+LocalStack via `vitest.integration.config.ts`, which CI already runs. Why:
+`@playwright/test` is not a dependency, there is no `e2e` script and no workflow
+runs the two orphaned configs; adopting it would make a half-abandoned tool
+everyone's problem, for UI coverage that is about to change anyway.
+
 **DEC-007 — No separate architecture document.**
 Why: audit §8–§13 plus ADR 0009 already specify domain, state, execution, AWS,
 security and reliability. A fourth doc would be a second copy to keep in sync,
 against this repo's own "numbers live in one place" discipline.
 
 ## 16. Known issues
+
+### Live security findings — see [docs/security-findings-2026-08-11.md](docs/security-findings-2026-08-11.md)
+
+An adversarial audit of the `production` source (6 dimensions, each finding
+attacked by an independent skeptic) returned **26 surviving findings, 5
+refuted**. These are **pre-existing**, present in the deployed environment, and
+NOT introduced by the Missions work. The four that matter most:
+
+1. **CRITICAL — `GET /api/config/*` has no capability gate and returns live
+   secrets in plaintext.** `handler.ts:2160,2178,2186`. A `seat-user` (whose
+   entire capability set is `dashboard:read` + `usage:self:read`) can read
+   OAuth/Salesforce refresh tokens, Slack client and per-agent signing secrets,
+   and MCP bearer tokens. The router-wide gate only covers non-GET `/config`
+   (`handler.ts:236`), so the GET comparison is `0 < 0` — always false. The
+   leaked per-agent Slack `signingSecret` is the value verified at
+   `src/adapters/slack/handler.ts:270`, turning a viewer-tier read into inbound
+   event forgery. The SPA never calls `/api/config`, so gating it breaks nothing.
+2. **HIGH — Jarvis `ROLE_RANK` bypass.** Fixed on `hotfix/missions-authz`,
+   **not yet in production**.
+3. **HIGH — any Telegram user can disable the Bedrock injection guardrail** via
+   the ungated `/warroom` slash command (`src/agent/commands.ts:180`); War Room
+   turns run `skipGuardrail: true` (`warroom/orchestrator.ts:223`) and the tool
+   blocklist (`warroom/tool-policy.ts:6-10`) omits `ask_agent` and `log_to_hive`.
+4. **HIGH — `dynamodb_query` binds reads to the agent partition but not the
+   chat** (`src/lib/tools/dynamodb-tools.ts:110-115`); `ctx.chatId` is never
+   referenced, so cross-chat memory and session transcripts are readable. Sibling
+   tools (`memory-tools.ts`, `schedule-tools.ts`) all filter on `ctx.chatId`.
+
+None of these is scheduled in the Missions backlog. **They need their own
+hotfix branch and should not wait on Missions v2.**
 
 **Pre-existing (not introduced by this work)**
 

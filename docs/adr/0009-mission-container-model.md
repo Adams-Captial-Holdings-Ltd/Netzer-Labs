@@ -1,42 +1,47 @@
-# ADR 0009 — Missions become a work container, not a task row
+# ADR 0009 — Missions are the durable work container for multi-agent collaboration
 
-**Status:** Accepted (2026-08, Missions v2 audit)
+**Status:** Accepted (2026-08, Missions v2 design)
 
 ## Context
 
-`Missions` today is a flat, single-row entity: 11 fields, four statuses, one
-DynamoDB item per mission (`src/lib/state/mission-tasks-repo.ts`). Its key shape
-is `PK = AGENT#<owner>` / `SK = MISSION#<isoCreated>#<id>`, with one GSI
-(`gsi1-status-agent-priority`) whose only consumer is the kanban board.
+Netzer already has four agent-collaboration primitives, and every one of them is
+messaging or memory rather than work:
 
-Three facts drove this ADR:
+| Primitive | What it does | Persistence |
+|---|---|---|
+| `ask_agent` (`src/lib/tools/agent-tools.ts`) | A asks B a question, gets an answer. Audited `agent_delegation` | ephemeral |
+| `inter-agent-tasks` (`src/lib/state/inter-agent-tasks-repo.ts`) | Async note queue, `PK=AGENT#<toAgent>`, intent `fyi`/`request` | **7-day TTL**, no outcome |
+| `hive-mind` (`src/lib/state/hive-mind-repo.ts`) | Cross-agent shared facts | durable, but memory not work |
+| War Room (`src/lib/warroom/`) | Synchronous multi-agent meeting | turns, not deliverables |
 
-1. **Nothing executes a mission.** The complete set of callers of the five repo
-   functions is `src/adapters/dashboard/handler.ts` (HTTP CRUD),
-   `src/adapters/dashboard/jarvis.ts` (voice read), `src/lib/tools/privacy-tools.ts`
-   (GDPR export) and `src/lib/tools/mission-tools.ts` (agent tools). No worker,
-   Lambda or scheduler ever reads status `open` and acts on it. The
-   `GSI1PK = STATUS#…` index exists to paint columns, and `listMissionsByStatus`
-   has exactly one caller.
-2. **The entity cannot express the work.** There are no sub-tasks, artifacts,
-   outcomes, dependencies, execution runs, comments or history, and no second SK
-   prefix under the mission partition in which to put them.
-3. **Owner is the partition key.** Because `ownerAgent` is in the PK, reassigning
-   a mission is a non-transactional cross-partition put-then-delete whose own
-   comment acknowledges that a crash leaves a duplicate. Both mutation paths also
-   list up to 200 rows and prefix-match in application code, so an 8-character id
-   collision hits the wrong record and mission #201 is unreachable.
+None of them has a status, an outcome, artifacts, or a notion of done. Work that
+several agents contribute to over time has nowhere to live.
 
-A second implementation of the same idea exists in the personal ClaudeClaw OS
-(`Projects` + `mission-worker`), which does execute work. It is a useful source
-of design lessons but is welded to a single machine (SQLite, local filesystem,
-`bypassPermissions` on every agent run, a forgeable caller-asserted `agent_id`
-as its only authorization predicate) and is explicitly not a specification.
+`Missions` looks like it was reaching for exactly that and stopped:
+`src/lib/state/mission-tasks-repo.ts` is a single flat row — 11 fields, four
+statuses, `PK = AGENT#<ownerAgent>` — with no sub-tasks, artifacts, outcomes or
+history, and **nothing executes it**. The complete consumer set is four files,
+all CRUD/read. The `GSI1PK = STATUS#…` index exists only to paint kanban columns.
+
+Worse, the agent-tool layer enforces `owner !== ctx.agentId → refuse` on both
+read and update (`src/lib/tools/mission-tools.ts:231,288`). That rule is correct
+for a private per-agent card and **actively prevents collaboration**: an agent
+cannot read a mission it is working on unless it is the sole owner.
+
+A validated design for this already exists in the personal ClaudeClaw OS
+(`Projects`). It is a source of design lessons, not a specification — it is
+single-user, has no authorization concept whatsoever, and runs every agent with
+`permissionMode: 'bypassPermissions'`.
 
 ## Decision
 
-**A Mission becomes the container for a goal; a MissionTask becomes the unit of
-work.** Three row types share the existing `claudeclaw-mission-tasks` table:
+**A Mission is the durable, tracked work container in which several agents
+collaborate toward a stated outcome, under human approval.** It is not a user's
+record and not a workspace — it is scoped by *which agents are working on it*.
+
+### Shape
+
+Three row types in the existing `claudeclaw-mission-tasks` table:
 
 | Entity | PK | SK |
 |---|---|---|
@@ -44,70 +49,135 @@ work.** Three row types share the existing `claudeclaw-mission-tasks` table:
 | MissionTask | `MISSION#<id>` | `TASK#<seq>#<taskId>` |
 | MissionEvent | `MISSION#<id>` | `EVENT#<iso>#<id>` |
 
-Today's flat missions migrate to a Mission holding exactly one MissionTask.
+GSI1 is repurposed, not extended:
 
-Supporting decisions taken at the same time:
+- Mission rows — `GSI1PK = MSTATUS#<status>`, `GSI1SK = PRIORITY#<pad>#<createdAt>`
+- Task rows — `GSI1PK = AGENT#<assignedAgent>#<status>`, same sort key
 
-- **The name `Mission` is kept.** It is already the noun in the SPA, the CLI, the
-  `missions:read` capability and the route table. Adopting ClaudeClaw's "Project"
-  would introduce a second noun for one concept.
-- **`ownerAgent` leaves the partition key** and becomes an attribute plus a GSI
-  segment, which removes the cross-partition move and the 200-row scan entirely.
-- **Artifacts are derived, not stored** — parsed from `DELIVERABLE:` lines in task
-  results on read, so there is no second bookkeeping system to drift.
-- **A `scopeId` is carried on the new rows from day one**, per
-  [ADR 0002](0002-single-tenant.md). The deployment remains the tenant boundary;
-  `scopeId` is the team/workspace boundary *within* a deployment and defaults to
-  `default`, which is behaviour-preserving. It is added here only because it is
-  free on a new row shape and expensive to retrofit.
-- **No new AWS services and no CDK change for the data model.** The table's PK/SK
-  are generic strings and GSI1 is keyed on generic `GSI1PK`/`GSI1SK`
-  (`infra/lib/dynamo-stack.ts`), so new SK prefixes and repurposed GSI1 values
-  need no infrastructure change. Execution reuses the existing durable path
-  (EventBridge Scheduler → `claudeclaw-scheduled-fire` SQS → `queue-drain.ts`),
-  extended with a message-kind discriminator.
+The task index is the work-pull index an agent needs, and it partitions per
+agent rather than concentrating on one key.
+
+Artifacts are **derived** from `DELIVERABLE:` lines in task results, never
+stored. Ceremony cost is **derived** from `assignedAgent === coordinator`.
+
+### Roles
+
+- **Coordinator = the `main` agent.** It triages a mission, decomposes it into
+  tasks and staffs them. `main` is already the system's hub —
+  `src/lib/config/agent-loader.ts:235` falls back to `BUILTIN_AGENTS.main`, the
+  mission create route already defaults `owner = 'main'`, and other builtin
+  agents' prompts instruct users to "redirect them to the main agent".
+- **Humans approve.** The coordinator proposes; a human activates the plan and
+  accepts the result. An agent never decides a mission is complete.
+
+### Staffing is not authorization
+
+Two separate concerns, deliberately not fused:
+
+- **Staffing** (product): `team` is an optional pin — a set of agent ids.
+  `null` means the coordinator staffs freely. Assigning outside a pin is
+  possible but requires an audited `overrideReason`. This is ported from
+  Projects, which enforces exactly this at assignment time with the coordinator
+  always exempt.
+- **Authorization** (security): an agent may read a mission iff it has a task on
+  that mission, or it is the coordinator. It may write a task iff that task is
+  assigned to it, or it is the coordinator. Transitions and cancellation are
+  coordinator-or-human only.
+
+Fusing them would turn a product dial into a security boundary, so loosening
+staffing would silently loosen access. They stay independent.
+
+### Task kinds
+
+`build | review | fix`. A `review` that emits no `VERDICT:` did not review and
+is treated as an empty run. `fix` is rework from a failed review, which is what
+makes failure tax visible instead of hidden inside a longer build.
+
+Projects' `polish` and `pm` are not ported: `polish` gates on brand assets that
+do not exist here, and `pm` is derivable from the coordinator assignment.
+
+### Autonomy
+
+Gate 1 (`planned → active`) may be auto-approved under a policy
+`{ maxEstimatedUsd, maxTasks }`, off by default. **Gate 2 (`review → done`) can
+never be auto-approved by any policy.** This asymmetry is taken directly from
+Projects (`src/db.ts:3516` — *"Gate 2 (the finished build) is NEVER
+auto-approved"*): auto-approving a plan risks bounded spend, while
+auto-approving output means nobody ever looked at it.
+
+The bound is estimated USD rather than Projects' "sessions" because Netzer
+already meters spend (spend-ledger, `runtime-config cost/daily_cap_usd`, tier
+caps) and has no session unit.
+
+### Execution and retries
+
+Reuse the existing durable path — EventBridge Scheduler →
+`claudeclaw-scheduled-fire` SQS → `queue-drain.ts` — with a message-`kind`
+discriminator. No new queue, no new AWS service.
+
+Side-effecting tools are flagged (`sideEffecting: true`) in the tool registry.
+A run that fired none may auto-retry on the bounded ladder; a run that fired one
+is marked needs-human-requeue rather than retried. Capacity failures fail before
+doing work, so they always requeue and **never consume retry budget**.
+
+### No `scopeId`, no migration
+
+There is no user, team or workspace scope on a Mission. An earlier draft of this
+ADR added a `scopeId` "because it is free now"; that was wrong. Netzer has no
+grouping concept to map it to — `UserProfile` has no team field, `Seat` binds one
+user to a policy, and the Workspace entities from PR #42 were deliberately not
+ported (`src/lib/admin/seat-model.ts:4-9`). A field permanently holding the
+literal `default` is speculative generality, and the retrofit it was avoiding is
+a `GSI1PK` backfill measured in hours at human scale.
+
+Legacy flat mission rows are **not migrated**. They stay in the table, readable
+and untouched; new missions are written in the new shape only.
 
 ## Consequences
 
 Good:
 
-- Missions can finally express an outcome, the work toward it, and what was
-  produced — the three things the current row cannot hold.
-- Reassignment becomes a single-item attribute update. The put-then-delete
-  duplicate window and the id-prefix collision class both disappear.
-- Every child row of a mission is in one partition, so loading a mission with its
-  tasks and history is one query rather than a scan.
-- Zero infrastructure change means the migration ships through
-  `npm run deploy:cloud` (image-only) rather than a `cdk deploy`.
-- Adding team scoping later is an attribute change on two row types instead of a
-  PK rewrite across 13 repos.
+- Multi-agent work finally has somewhere durable to live, alongside the four
+  messaging primitives that already exist.
+- The authorization predicate becomes *more* precise than today: collaboration
+  is enabled while an unrelated injected agent, having no task, is still refused.
+- No CDK change for the data model. PK/SK are generic strings and GSI1 keys on
+  generic attributes (`infra/lib/dynamo-stack.ts`), so this ships through
+  `npm run deploy:cloud` rather than a `cdk deploy`.
+- No migration means the riskiest task in the plan disappears, along with an
+  entire class of two-shapes-coexisting bugs. Rollback is trivial: nothing is
+  rewritten.
+- Ceremony cost and artifacts are derived, so there is no second bookkeeping
+  system to drift.
 
 Bad:
 
-- Existing mission rows must be migrated; a dual-read shim is required during the
-  transition, and the old and new shapes coexist in one table meanwhile.
-- One partition per mission caps a single mission's task+event volume at the
-  10 GB partition limit. This is not a practical constraint for human-scale work
-  but is a real ceiling, and it is the reason events are not the primary store.
-- `scripts/mission.ts` and the Missions SPA page both assume the flat shape and
-  must change together with the repo.
+- The existing kanban UI and `mission-tools.ts` ownership rule both change.
+  `mission-tools.authz.test.ts` encodes the self-only rule as a security
+  contract and must be rewritten — deliberately, with the new predicate proved
+  to still refuse an unrelated agent.
+- Legacy rows and new rows coexist in one table indefinitely. Accepted: they use
+  disjoint key prefixes and the old UI path is retired.
+- One partition per mission caps its task+event volume at DynamoDB's 10 GB
+  partition limit. Not a practical constraint for human-scale work, and it is
+  why events are history rather than the primary store.
+- The coordinator's plan is LLM output. The human approval gate is its only
+  check, which is why Gate 2 can never be automated away.
 
 ## Alternatives considered
 
-- **Keep the flat model and only harden it** (fix authz, add audit, add
-  execution). Smallest change and genuinely tempting, but a single row cannot
-  carry an outcome, its tasks, or its artifacts, so every later capability would
-  need the reshape anyway — at that point against production data instead of
-  before it.
-- **Introduce `Project` above `Mission`, mirroring ClaudeClaw.** Rejected: it
-  adds a second noun for the same concept and silently redefines every existing
-  use of "mission" in the UI, CLI, capability strings and docs to mean the
-  smaller thing.
-- **A separate table per entity.** Rejected: loading a mission would become three
-  queries across three tables with no transactional story, and it would add three
-  CDK resources to solve a problem the existing generic PK/SK already solves.
-- **Full multi-tenant `TENANT#` keys now.** Rejected by
-  [ADR 0002](0002-single-tenant.md), which is Accepted and prices this at roughly
-  two weeks plus indefinite "did I remember to scope this query?" risk, warranted
-  only when the customer base is large and per-customer revenue small. Neither is
-  true today.
+- **Keep Missions as a per-agent card and harden it.** Rejected: it would leave
+  multi-agent work with no home, and the self-only authz rule would keep
+  preventing the collaboration the feature exists for.
+- **Scope missions to a user or workspace.** Rejected on evidence: no grouping
+  concept exists, and Missions is about agents collaborating, not people sharing.
+- **`team` as an access-control list.** Rejected: Projects deliberately makes it
+  a soft, overridable staffing constraint. Turning it into an ACL fuses a product
+  dial with a security boundary.
+- **Introduce `Project` above `Mission`, mirroring Projects' naming.** Rejected:
+  a second noun for one concept, and it silently redefines every existing use of
+  "mission" in the UI, CLI, `missions:read` capability and route table.
+- **Full multi-tenant `TENANT#` keys.** Rejected by
+  [ADR 0002](0002-single-tenant.md), which is Accepted and prices this at ~2
+  weeks plus indefinite scoping risk, warranted only when the customer base is
+  large and per-customer revenue small. Neither is true.

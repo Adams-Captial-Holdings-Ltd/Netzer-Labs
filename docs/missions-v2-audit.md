@@ -263,7 +263,9 @@ result is classified, and completion is gated on typed evidence.
 | Notifications | ABSENT | EXISTS (Telegram-only, interactive) | Design for later; do not port transport |
 | Comments / collaboration | ABSENT | PARTIAL (backlog notes) | Do not build in V1 |
 | Permissions | PARTIAL (capability at route, ownership at tool) | **ABSENT** | Strong in Missions — extend |
-| Tenant / scope isolation | ABSENT by decision (ADR 0002) | ABSENT | Add `scopeId` on new rows only |
+| Agent membership / access | PARTIAL (self-only, blocks collaboration) | ABSENT (no auth at all) | **Redesign** — access derived from having work on the mission |
+| Agent staffing | PARTIAL (Haiku picks one owner) | EXISTS (team pin, coordinator staffs) | **Adopt** Projects' staffing model |
+| Tenant isolation | ABSENT by decision (ADR 0002) | ABSENT | Correct as-is — deployment is the boundary |
 | Audit logs | Now EXISTS (this work) | ABSENT | Strong in Missions |
 | Observability | EXISTS platform-wide, none mission-specific | PARTIAL | Extend Netzer's |
 | Cost / usage tracking | EXISTS platform-wide | EXISTS per project, split by kind | **Adopt the by-kind split** |
@@ -389,45 +391,89 @@ Absent from **both** systems.
 
 ## 8. Product model recommendation
 
-**A Mission is a stated outcome, the work undertaken toward it, and the evidence
-of what that work produced.**
+**A Mission is the durable, tracked work container in which several agents
+collaborate toward a stated outcome, under human approval.**
 
-- **Purpose** — give a team one durable place where an objective, the agent and
-  human work against it, and the resulting artifacts live together.
-- **User** — an operator or team member who wants an outcome, not a task queue.
-- **Core workflow** — state the outcome → generate or author the work → approve
-  it → agents execute → watch progress and intervene → review artifacts →
-  accept.
-- **Role of agents** — execute tasks and propose plans. Agents never decide a
+This is the framing correction that drove the final design. Netzer already has
+four agent-collaboration primitives — `ask_agent`, `inter-agent-tasks`,
+`hive-mind` and War Room — and every one is **messaging or memory**. None tracks
+work: none has a status, an outcome, artifacts, or a notion of done, and
+`inter-agent-tasks` evaporates after 7 days. Missions is the missing durable
+work container, which is why its schema looked execution-shaped but inert.
+
+- **Purpose** — give multi-agent work somewhere durable to live, with an
+  outcome, a record of who did what, and evidence of what was produced.
+- **Scoped by agents, not people.** A Mission is not a user's record and not a
+  workspace. It is scoped by which agents are working on it.
+- **Core workflow** — a human states the outcome → the **coordinator agent
+  (`main`)** triages it into tasks and staffs them → a human approves the plan →
+  assigned agents execute → a human watches and intervenes → a review agent
+  emits a verdict → a human accepts.
+- **Role of agents** — plan, staff, execute, review. An agent never decides a
   mission is complete.
 - **Role of humans** — define the outcome, approve the plan, accept the result.
   Two gates, not twelve.
-- **Completion** — a human accepts at `review → done`. Task-level completion is
-  machine-checked against per-kind evidence; mission-level completion is a human
-  act.
+- **Completion** — a human accepts at `review → done`. Task completion is
+  machine-checked against per-kind evidence; mission completion is a human act.
 
 ---
 
 ## 9. Target domain model
 
-Three entities, one existing table, no new GSI.
+Three entities, one existing table, no new GSI, no new AWS service.
 
-| Entity | PK | SK | Responsibility | Lifecycle |
-|---|---|---|---|---|
-| Mission | `MISSION#<id>` | `META` | Outcome, status, scope, ownership | Created by user/agent; ends `done` or `cancelled` |
-| MissionTask | `MISSION#<id>` | `TASK#<seq>#<taskId>` | One unit of work + execution state | Created during planning; ends `completed`/`failed`/`cancelled` |
-| MissionEvent | `MISSION#<id>` | `EVENT#<iso>#<id>` | Append-only history | Immutable |
+| Entity | PK | SK | Responsibility |
+|---|---|---|---|
+| Mission | `MISSION#<id>` | `META` | Outcome, status, team pin, coordinator |
+| MissionTask | `MISSION#<id>` | `TASK#<seq>#<taskId>` | One unit of work + execution state |
+| MissionEvent | `MISSION#<id>` | `EVENT#<iso>#<id>` | Append-only history |
 
-Artifacts are **derived** from `DELIVERABLE:` lines in task results on read.
+```
+Mission { id, title, outcome, status, kind?, team: string[] | null,
+          coordinator: 'main', autoApproved: boolean, createdBy,
+          estimatedUsd?, createdAt, updatedAt, completedAt? }
+
+MissionTask { id, missionId, seq, title, prompt,
+              kind: 'build' | 'review' | 'fix',
+              assignedAgent, status, result?, error?,
+              retryCount, firedSideEffect: boolean,
+              notBefore?, heartbeatAt?, startedAt?, completedAt? }
+
+MissionEvent { id, missionId, actor, action, from?, to?, detail }
+```
 
 GSI1 is repurposed, not extended:
 
-- Mission rows — `GSI1PK = SCOPE#<scopeId>#STATUS#<status>`,
-  `GSI1SK = PRIORITY#<padded>#<createdAt>`
-- Task rows — `GSI1PK = SCOPE#<scopeId>#TASK#<status>`, same sort key
+- Mission rows — `GSI1PK = MSTATUS#<status>`, `GSI1SK = PRIORITY#<pad>#<createdAt>`
+- Task rows — `GSI1PK = AGENT#<assignedAgent>#<status>`, same sort key
 
-`ownerAgent` becomes an attribute, which removes the cross-partition move and the
-200-row prefix scan.
+The task index is the work-pull index an agent needs, and it partitions per
+agent instead of concentrating on one key. `ownerAgent` leaves the partition key
+entirely, which removes the cross-partition move and the 200-row prefix scan.
+
+**Derived, never stored:** artifacts (from `DELIVERABLE:` lines in results) and
+ceremony cost (from `assignedAgent === coordinator`).
+
+**No `scopeId`.** An earlier draft added one "because it is free now". That was
+wrong: Netzer has no grouping concept to map it onto — `UserProfile` has no team
+field, `Seat` binds one user to a policy, and the PR #42 Workspace entities were
+deliberately not ported (`src/lib/admin/seat-model.ts:4-9`). A field permanently
+holding `default` is speculative generality, and the retrofit it avoided is a
+`GSI1PK` backfill measured in hours.
+
+### Staffing is not authorization
+
+Two concerns, deliberately kept separate:
+
+| | Mechanism | Character |
+|---|---|---|
+| **Staffing** | `team` — optional pin, `null` = coordinator staffs freely. Assigning outside the pin needs an audited `overrideReason` | Soft product constraint, overridable |
+| **Authorization** | Agent may read a mission iff it has a task on it or is the coordinator; may write a task iff assigned or coordinator; transitions are coordinator-or-human | Hard security predicate |
+
+Ported from Projects, which enforces the pin at assignment time with the
+coordinator always exempt (`src/dashboard.ts:3520-3528`). Fusing the two would
+turn a product dial into a security boundary, so loosening staffing would
+silently loosen access.
 
 ### State model
 
@@ -599,7 +645,12 @@ Idempotency keys or effect staging must be decided before retries ship.
 | Capability | Build Now | Design For Later | Do Not Build | Reason |
 |---|---|---|---|---|
 | Mission container + tasks + events | ✅ | | | The current row cannot hold work |
-| `scopeId` on new rows | ✅ | | | Free now, expensive to retrofit |
+| Coordinator agent plans + staffs | ✅ | | | Without it there is no multi-agent collaboration |
+| Agent access derived from having work | ✅ | | | Today's self-only rule blocks the feature |
+| Task kinds build/review/fix + evidence gates | ✅ | | | Makes done machine-checkable and failure tax visible |
+| Gate-1 auto-approve policy | ✅ | | | Small; Gate 2 must never be automatable |
+| Side-effecting tool flag gating retry | ✅ | | | Retries would otherwise re-send email |
+| `scopeId` / user or team scoping | | | ✅ | No grouping concept exists to map it onto |
 | Mission service layer + state machine | ✅ | | | Authorization is inconsistent without one |
 | Owner out of the partition key | ✅ | | | Removes the duplicate + collision bug class |
 | `missions:write` capability | ✅ | | | Mutation shares `agents:write` today |
@@ -623,7 +674,7 @@ Idempotency keys or effect staging must be decided before retries ship.
 | Step Functions / workflow engine | | | ✅ | Two states do not need an orchestrator |
 | Event sourcing / CQRS | | | ✅ | Events are history here, not the store |
 | Plugin system / policy language | | | ✅ | Capability model already covers it |
-| Search index | | | ✅ | GSI1 by scope+status covers real queries |
+| Search index | | | ✅ | GSI1 by status and by agent covers real queries |
 | Gantt / CPM / EVM | | | ✅ | Vendored in ClaudeClaw, referenced by nothing |
 
 ---
@@ -647,8 +698,7 @@ Incremental, never a rewrite. Existing missions keep working throughout.
 writer, Haiku auto-assign, route status validation, the SQS path.
 **Requires refactor:** the repo (key shape), the four routes (service layer),
 `Missions.tsx`, `mission-tools.ts`.
-**Deprecate:** the client-side all-agent fan-out (replaced by a scope+status
-query); `scripts/mission.ts` in its current broken form.
+**Deprecate:** the client-side all-agent fan-out (replaced by a status query); `scripts/mission.ts` in its current broken form.
 **Schema migration:** yes, data-level only — no CDK change.
 
 ---
