@@ -903,6 +903,84 @@ dashboard on the host and orchestrates all of it with one command.
 
 ---
 
+## Feature handoff (`handoff.md`)
+
+**Every feature worked on in this repository keeps a `handoff.md`.** It is
+operational state, not documentation for its own sake: another engineer or AI
+agent must be able to open it and continue the work without access to the
+conversation, chat log, or person that produced it.
+
+Create it when the feature branch is created, update it whenever the state it
+describes changes, and keep it in the branch alongside the code it describes. If
+`handoff.md` and the implementation disagree, **the code wins** — inspect the
+implementation and correct the document.
+
+Reference implementation: [`handoff.md`](handoff.md) (Missions v2).
+
+### Name the branch. Never just say "production"
+
+The single most common way a handoff goes wrong is being vague about where the
+work is going. "Ready for production" is not a statement anyone can act on: this
+repository has five long-lived branches and only two of them correspond to an
+AWS environment at all.
+
+Every `handoff.md` must state, explicitly and by name:
+
+- **The branch the work currently lives on** — e.g. `feature/missions-v2`, not
+  "a feature branch".
+- **The branch it merges into next** — the immediately preceding branch in the
+  promotion chain, per [CONTRIBUTING.md](CONTRIBUTING.md).
+- **The AWS environment that branch reaches, if any** — using the table below.
+- **Whether anything has actually been deployed yet**, and if so, by which
+  command (`npm run deploy:cloud` is image-only; a full `cdk deploy` can shift
+  env-backed tunables such as the daily cost cap).
+- **Whether the work has been pushed at all.** Committed locally and pushed are
+  different states, and a handoff that omits this strands the next person.
+
+### Branch to environment mapping
+
+| Branch | Deploys to | Stack prefix | Resource prefix | How |
+|---|---|---|---|---|
+| `feature/*`, `fix/*`, `chore/*` | nothing | — | — | local only (this document) |
+| `development` | nothing | — | — | CI runs tests + hermetic `cdk synth`; no deploy |
+| `qa` | **nothing** | — | — | review gate only — there is no QA AWS environment |
+| `staging` | staging | `CCE-STAGING` | `claudeclaw-staging-*` | `deploy.yml`, manual dispatch, `env: staging` |
+| `production` | production | `CCE` | `claudeclaw-*` | `deploy.yml`, manual dispatch, `env: prod` |
+| `hotfix/*` | nothing until merged | — | — | branch from `production`, merge to `production`, then backport |
+
+Verified in `.github/workflows/deploy.yml` (the `env` input accepts only `prod`
+and `staging`; `CCE_NAME_SUFFIX` is `staging` or empty) and
+`infra/lib/constants.ts`. **Deployment is never automatic** — `deploy.yml` is
+`workflow_dispatch` only and requires typing `deploy` to confirm. A merge to
+`production` ships nothing on its own.
+
+Two consequences worth stating plainly, because both have surprised people:
+
+- `qa` is a code-promotion gate, not a deployment target. Work sitting on `qa`
+  is not running anywhere.
+- Merging to `production` does not deploy. Someone must dispatch `deploy.yml`.
+
+### Required sections
+
+At minimum a feature `handoff.md` carries: the goal and intended user outcome ·
+the architecture decision and why · what is explicitly in and out of scope ·
+verified framework and commands (never guessed) · important file locations · the
+data model and state model if either changed · the security model · the testing
+strategy · implementation progress with a task queue · a decision log · known
+issues, separating pre-existing from newly introduced · the exact commands last
+run and their results · git and deployment state per the rules above · and
+explicit instructions for the next agent.
+
+Two rules that make the difference between a useful handoff and a misleading one:
+
+- **Record a baseline before changing anything.** Run the test suite on the
+  untouched branch first and write down what already fails. Without it, nobody
+  can tell a pre-existing failure from a regression you introduced.
+- **Never record a command as passing unless it actually ran.** Note what you
+  did not run and why.
+
+---
+
 ## Maintenance rules
 
 **`development.md` in the Netzer-Labs repository root is the source of truth for
@@ -919,6 +997,10 @@ Update this document in the same change whenever you alter:
 - AWS emulation coverage or isolation guarantees
 - authentication behaviour
 - testing procedures
+- the feature handoff rules or the branch-to-environment mapping above (if a
+  branch or AWS environment is added or removed, update that table in the same
+  change — a stale mapping is worse than none, because handoffs are written
+  against it)
 
 Do not create a second local development guide. `docs/development.md` is a
 separate concern (the cross machine Git workflow) and does not describe the
