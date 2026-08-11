@@ -392,6 +392,26 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
   };
 }
 
+/**
+ * Local-emulator escape hatch for ConverseStream.
+ *
+ * Gated on AWS_ENDPOINT_URL, which is set ONLY by local development and the
+ * integration suite. Nothing in infra/, buildspec.yml, the Dockerfile or the
+ * deploy scripts ever sets it, so this branch cannot execute against real AWS
+ * and the deployed streaming path is byte-for-byte unchanged.
+ *
+ * Why it is needed: the local emulator answers ConverseStream with HTTP 501
+ * UnsupportedOperationException. That name matches neither isRetryable() nor
+ * isFallbackTrigger(), so without this every agent turn dies on its very first
+ * model call and no chat surface can be exercised locally at all.
+ */
+function isLocalUnsupportedStream(err: unknown): boolean {
+  if (!process.env.AWS_ENDPOINT_URL) return false;
+  const name = (err as { name?: string })?.name ?? '';
+  const msg = err instanceof Error ? err.message : String(err);
+  return /UnsupportedOperation|UnknownOperation|NotImplemented|501/i.test(`${name} ${msg}`);
+}
+
 export async function converseStreamTurn(
   input: ConverseTurnInput,
   callbacks: ConverseStreamCallbacks = {},
@@ -413,6 +433,17 @@ export async function converseStreamTurn(
       stream = await withRetry(input.modelId, maxRetries, () =>
         bedrockClient().send(new ConverseStreamCommand(buildParams(input))),
       );
+    } else if (isLocalUnsupportedStream(err)) {
+      // Replay the identical request as a single non-streaming Converse and
+      // hand the whole body back through onChunk, so callers that render
+      // deltas still receive one final delta and complete normally.
+      logger.warn(
+        { modelId: input.modelId },
+        'local emulator does not implement ConverseStream; replaying as non-streaming Converse',
+      );
+      const out = await converseTurn(input);
+      if (out.text) callbacks.onChunk?.(out.text);
+      return out;
     } else {
       throw err;
     }
