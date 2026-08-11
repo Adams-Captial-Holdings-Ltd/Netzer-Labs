@@ -11,8 +11,10 @@ with their own documentation, the code wins.
 
 This audit is preserved as **dated evidence**, including its failed approaches
 and historical claims. It is not the current architectural or delivery
-authority. [ADR 0009](adr/0009-mission-container-model.md) is the durable
-authority; its accepted decision is **no `scopeId`, no migration**. The active
+authority. The [current Missions README](features/missions/README.md) is the
+canonical feature index, and
+[ADR 0009](adr/0009-mission-container-model.md) is the durable authority; its
+accepted decision is **no `scopeId`, no migration**. The active
 queue is [the reconciled backlog](missions-v2-backlog.md), and source code is
 ultimate truth.
 

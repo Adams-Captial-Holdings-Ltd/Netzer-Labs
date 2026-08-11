@@ -42,6 +42,9 @@ jobs:
       - name: Check internal links and anchors (external links skipped, counted only)
         run: node scripts/ci/docs-links.mjs
 
+      - name: Validate feature-knowledge contracts
+        run: node scripts/ci/feature-knowledge.mjs
+
       - name: Validate runnable-block annotations (schema only; execution is the release canary)
         run: node scripts/ci/runnable-blocks.mjs
 
