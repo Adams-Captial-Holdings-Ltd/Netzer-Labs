@@ -213,10 +213,17 @@ verification: code_verified
 **Historical status:** Evidence recorded; this is not a claim that the proposed
 Missions v2 runtime is complete.
 
-**Verification evidence.** On 2026-08-11, the reachable `d767a36` baseline had
-recorded CI results: `npm test` passed 1,922 tests with 6 skipped across 177
-passing test files and 1 skipped test file. This is code verification only; no
-named deployment environment or deployment evidence is recorded.
+**Verification evidence.** `code_verified` records source-level commands, not a
+deployment. Two separate 2026-08-11 executions are preserved here:
+
+- **CI evidence at reachable `d767a36`:** `npm test` passed 1,922 tests with 6
+  skipped across 177 passing test files and 1 skipped test file.
+- **Local baseline evidence at `origin/production` (tested commit not recorded):**
+  `npm run typecheck` and `npm run build` passed; full `npm test` had 1,926
+  passing tests and 2 failures in `jarvis.flow.test.ts` that pass in isolation.
+
+Neither record names a deployment environment or supplies deployment evidence,
+so `deployment` remains `unknown`.
 
 **Objective.** Establish what passes *before* any change, so pre-existing
 failures are never mistaken for regressions.
@@ -227,7 +234,7 @@ failures are never mistaken for regressions.
 |---|---|
 | `npm run typecheck` | Pass |
 | `npm run build` | Pass |
-| `npm test` | **1 file / 2 tests failed**, 1926 passed (1928) |
+| `npm test` | **1 file / 2 tests failed**, 1,926 passed (1,928) |
 
 The 2 failures are ✅ `src/adapters/dashboard/jarvis.flow.test.ts` —
 *"drives a navigate tool_call and writes a jarvis_navigate audit row"* and
@@ -644,15 +651,18 @@ work_state: approved
 
 **Goal.** Every mission lifecycle event is auditable, including execution.
 
-**Existing.** ✅ `src/lib/audit/audit-writer.ts` (MISSION-003 added three actions).
+**Existing.** ✅ `src/lib/audit/audit-writer.ts`. Verified current source has no
+`mission_created`, `mission_status_changed`, or `mission_reassigned` actions;
+MISSION-003's historical claim does not establish an implementation.
 
-**Implementation.** Extend to task execution, approvals, failures and retries.
-Evaluate whether approval events belong in `ALWAYS_AUDITED_ACTIONS` so they
-survive the `audit_log_disabled` kill switch.
+**Implementation.** Add and emit audit evidence for Mission creation, status
+change, and reassignment, then add coverage for task execution, approvals,
+failures, and retries. Evaluate whether approval events belong in
+`ALWAYS_AUDITED_ACTIONS` so they survive the `audit_log_disabled` kill switch.
 
-**Acceptance.** An administrator can answer all of: who created, who approved,
-which agent ran what, what was produced, what failed, what was retried, who
-accepted.
+**Acceptance.** An administrator can answer, from audit evidence, who created,
+reassigned, changed status, approved, accepted, and cancelled a Mission; which
+agent ran each task; and what was produced, failed, or retried.
 
 ## MISSION-027 — Mission authorization-boundary tests
 
