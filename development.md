@@ -970,14 +970,21 @@ Two consequences worth stating plainly, because both have surprised people:
 
 ### Required sections
 
-At minimum a feature HANDOFF carries: the goal and intended user outcome ·
-the architecture decision and why · what is explicitly in and out of scope ·
-verified framework and commands (never guessed) · important file locations · the
-data model and state model if either changed · the security model · the testing
-strategy · implementation progress with a task queue · a decision log · known
-issues, separating pre-existing from newly introduced · the exact commands last
-run and their results · git and deployment state per the rules above · and
-explicit instructions for the next agent.
+At minimum a feature HANDOFF carries only volatile operational state:
+
+- the current branch and observed commit;
+- the next merge target;
+- push, PR, and deployment state;
+- the current objective and active task IDs;
+- blockers and unresolved evidence;
+- the last commands actually run and their results, including the baseline;
+- the smallest next action; and
+- links to the feature README and the relevant ADR, backlog, and audit.
+
+Durable facts belong in those linked authorities, not copied into the HANDOFF:
+architecture rationale, scope, implementation and file maps, data, security,
+and testing models, task definitions or queues, and decision logs all belong in
+their owning documents.
 
 Two rules that make the difference between a useful handoff and a misleading one:
 
