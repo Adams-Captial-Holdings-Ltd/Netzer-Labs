@@ -1,7 +1,26 @@
 # Missions v2 — implementation backlog
 
 Executable work packages for the architecture in
-[the audit](missions-v2-audit.md) and [ADR 0009](adr/0009-mission-container-model.md).
+[ADR 0009](adr/0009-mission-container-model.md). The
+[audit](missions-v2-audit.md) is dated evidence, not an executable authority.
+
+## Reconciled current truth (2026-08-11)
+
+**Source is authoritative.** The verified Missions source snapshot is commit
+`d767a36` (`docs(missions): merge Missions v2 audit, architecture, backlog and
+handoff`), reachable from both `development` and
+`origin/production`. This is a Git merge-state observation, **not** deployment
+evidence: the repository contains no evidence that Missions v2 was deployed.
+
+[ADR 0009](adr/0009-mission-container-model.md) is the durable authority. Its
+accepted decision is **no `scopeId`, no migration**: legacy flat rows remain
+untouched and readable, and new Missions use the new shape only. The audit
+retains earlier, superseded recommendations for traceability; its current
+disposition is recorded there.
+
+The former hotfix entries MISSION-001 through MISSION-003 are historical claims,
+not completed work: each is `claimed_unverified`, has no reachable commit, and
+is absent from verified current source. They are not active work packages.
 
 Each task is independently completable and reviewable. Work in dependency order.
 A task is **Complete** only when implementation, tests, typecheck, acceptance
@@ -23,14 +42,13 @@ to a definition of done.
 
 | ID | Name | Milestone | Status |
 |---|---|---|---|
-| MISSION-001 | Gate Jarvis reads on capabilities | Hotfix | **Complete** |
-| MISSION-002 | Central audit in ToolRegistry | Hotfix | **Complete** |
-| MISSION-003 | Audit mission mutations | Hotfix | **Complete** |
-| MISSION-010 | Record verified baseline | 0 | **Complete** |
+| MISSION-001 | Gate Jarvis reads on capabilities | Historical hotfix claim | Claimed implemented — unverified |
+| MISSION-002 | Central audit in ToolRegistry | Historical hotfix claim | Claimed implemented — unverified |
+| MISSION-003 | Audit mission mutations | Historical hotfix claim | Claimed implemented — unverified |
+| MISSION-010 | Record verified baseline | 0 | Evidence recorded |
 | MISSION-011 | Domain types + state machine | 1 | Not Started |
 | MISSION-012 | Mission repo on the existing table | 1 | Not Started |
-| MISSION-013 | Migration + dual-read shim | 1 | Not Started |
-| MISSION-014 | `missions:write` + scope derivation | 1 | Not Started |
+| MISSION-014 | Mission authorization predicate + mutation authority | 1 | Not Started |
 | MISSION-015 | Mission sub-router | 2 | Not Started |
 | MISSION-016 | Task authoring | 2 | Not Started |
 | MISSION-017 | Mission list + detail UI | 2 | Not Started |
@@ -43,25 +61,29 @@ to a definition of done.
 | MISSION-024 | Derived artifacts + evidence gates | 3 | Not Started |
 | MISSION-025 | Cancellation propagation | 3 | Not Started |
 | MISSION-026 | Full mission audit coverage | 4 | Not Started |
-| MISSION-027 | Scope isolation tests | 4 | Not Started |
+| MISSION-027 | Mission authorization-boundary tests | 4 | Not Started |
 | MISSION-028 | Soft delete + retention | 4 | Not Started |
 | MISSION-029 | Cost attribution by task kind | 4 | Not Started |
 | MISSION-030 | UX states + progress | 5 | Not Started |
 | MISSION-031 | Integration tests (LocalStack) | 6 | Not Started |
 | MISSION-032 | E2E happy + failure paths | 6 | Not Started |
-| MISSION-033 | Migration + rollback validation | 6 | Not Started |
 | MISSION-034 | DLQ depth alarm | 6 | Not Started |
 
 ---
 
-# Hotfix — shipped
+# Historical hotfix claims — current disposition: unverified
 
-Branch `hotfix/missions-authz` off `production`, per `CONTRIBUTING.md`
-(`hotfix/<issue>` off `production`, then backport).
+The following records are preserved audit evidence. The cited commits
+`74c74be`, `de5ea42`, and `a44d072` are not reachable from this repository, and
+the cited `hotfix/missions-authz` branch does not exist here. Verified current
+source does not contain these implementations. Do not treat any claim below as
+complete, shipped, merged, deployed, or recoverable; choose and approve fresh
+work before reimplementation or evidence recovery. See
+[the reconciliation](#reconciled-current-truth-2026-08-11).
 
 ## MISSION-001 — Gate Jarvis reads on capabilities, not just role rank
 
-**Status:** Complete · commit `74c74be`
+**Historical claim:** claimed implemented, unverified · cited commit `74c74be` (unreachable)
 
 **Objective.** Close a privilege escalation where a principal reads by voice what
 it is 403'd from on HTTP.
@@ -103,7 +125,7 @@ tests pass.
 
 ## MISSION-002 — Central audit in ToolRegistry.invoke
 
-**Status:** Complete · commit `de5ea42`
+**Historical claim:** claimed implemented, unverified · cited commit `de5ea42` (unreachable)
 
 **Objective.** Make "which agent used which tool on whose behalf" answerable from
 the audit log for every tool.
@@ -130,7 +152,7 @@ the writer. Future suites asserting send counts must do the same.
 
 ## MISSION-003 — Audit mission create, status change and reassign
 
-**Status:** Complete · commit `a44d072`
+**Historical claim:** claimed implemented, unverified · cited commit `a44d072` (unreachable)
 
 **Why.** None of the four mission routes wrote an audit row, so "who cancelled
 this mission" was unanswerable — while `seat_created` and
@@ -154,7 +176,8 @@ gap was attribution, not authorization.
 
 ## MISSION-010 — Record the verified baseline
 
-**Status:** Complete
+**Historical status:** Evidence recorded; this is not a claim that the proposed
+Missions v2 runtime is complete.
 
 **Objective.** Establish what passes *before* any change, so pre-existing
 failures are never mistaken for regressions.
@@ -252,64 +275,39 @@ page to find a mission by id. `cdk synth` output byte-identical to baseline.
 **Risks.** Getting the GSI1 value format wrong strands rows outside every query.
 Assert the exact composed strings in tests.
 
-## MISSION-013 — Migration and dual-read shim
+## MISSION-014 — Mission authorization predicate and mutation authority
 
-**Goal.** Existing missions keep working; each becomes a Mission with one task.
+**Goal.** Implement ADR 0009's authorization boundary: an agent may read a
+mission when it has a task on that mission or is the coordinator; it may update
+a task when assigned to it or when it is the coordinator. Mission transitions
+and cancellation remain coordinator-or-human actions.
 
-**Why.** Production data exists in the flat shape and must not break or be lost.
-
-**Implementation.** Repo reads both shapes and normalizes to the new type. An
-idempotent, re-runnable backfill script with `--dry-run` writes new rows and
-**retains** legacy rows — retention is the rollback. Follow the existing
-`scripts/` conventions.
-
-**Files.** ⬜ `scripts/migrate-missions.ts`, ⬜ `src/lib/missions/legacy.ts`,
-⬜ `src/lib/missions/legacy.test.ts`.
-
-**Dependencies.** MISSION-012.
-
-**Testing.** A legacy row normalizes with id, timestamps, priority, owner and
-status preserved. Running the backfill twice produces no duplicates. Mixed legacy
-and new rows in one scope list correctly.
-
-**Acceptance.** Dry run reports counts and writes nothing. Legacy rows still
-present after backfill. Rollback = stop reading new rows; no data loss.
-
-**Blocked on.** Production mission count — decides online dual-read vs one-shot.
-
-**Risks.** Highest-risk task in the backlog. Never delete legacy rows in the same
-release that writes new ones.
-
-## MISSION-014 — `missions:write` capability and scope derivation
-
-**Goal.** Mission mutation stops sharing `agents:write`; every mission row carries
-a `scopeId` derived from the principal.
-
-**Why.** Per ADR 0002 the deployment is the tenant boundary, so this is about
-authorization *within* a deployment. `scopeId` is added now only because it is
-free on a new row shape and expensive to retrofit.
+**Why.** Staffing (`team`) is an optional, audited product pin and must not be
+used as authorization. There is no user, team, or workspace scope on a Mission.
 
 **Existing.** ✅ `src/lib/auth/permissions.ts` (`Capability`, profile sets),
 ✅ `src/lib/auth/route-capability.ts`.
 
-**Implementation.** Add `missions:write` to the capability union and to
-`OPERATOR_CAPS` and above — matching where `agents:write` sits today, so no
-principal loses access. Derive `scopeId` from the principal, defaulting to
-`default`. **Never** read it from a query parameter.
+**Implementation.** Put the Mission predicate in the shared service layer so
+routes and agent tools make the same decision. Preserve the human/coordinator
+transition gate and require an audited override reason for assignment outside a
+team pin. Do not add a `scopeId`, a scope-derivation module, or a legacy-row
+migration.
 
-**Files.** ✅ `src/lib/auth/permissions.ts`, ⬜ `src/lib/missions/scope.ts`.
+**Files.** ⬜ `src/lib/missions/service.ts`, ⬜ `src/lib/missions/service.test.ts`.
 
-**Dependencies.** MISSION-011.
+**Dependencies.** MISSION-011, MISSION-012.
 
-**Security.** `scopeId` must never be caller-supplied. Add a test asserting a
-request that supplies one is ignored, not honoured.
+**Testing.** A task assignee and coordinator can read as allowed; an unrelated
+agent is denied; only the assignee or coordinator can update a task; and only a
+coordinator or human can transition or cancel. An assignment outside a team pin
+requires and records an override reason.
 
-**Acceptance.** `missions:write` present for operator and above, absent for
-viewer/analyst/seat-user. Existing operators retain mission mutation. Scope is
-never read from input.
+**Acceptance.** Routes and agent tools share one tested predicate. Staffing
+never becomes an ACL, and Mission persistence contains no `scopeId`.
 
-**Risks.** Adding a capability to a templated profile changes `roleForProfileId`
-resolution — re-run `route-manifest.test.ts` and `authorize-read.test.ts`.
+**Risks.** A route-specific check can drift from tool authorization; exercise
+both callers against the shared service.
 
 ---
 
@@ -329,8 +327,9 @@ seats/warroom/compliance which have their own.
 calls `GET /api/missions/:id`, which has never existed).
 
 **Implementation.** `buildMissionsRouter()` following the warroom/seats pattern.
-Routes: list by scope+status, get one with tasks and events, create, transition,
-update. Authorization in the service layer so agent tools share it. Fix or delete
+Routes: list by mission status and caller authorization, get one with tasks and
+events, create, transition, update. Authorization in the service layer so agent
+tools share it. Fix or delete
 `scripts/mission.ts` in the same change.
 
 **Files.** ⬜ `src/adapters/dashboard/missions.ts`, ⬜ `src/lib/missions/service.ts`,
@@ -556,19 +555,23 @@ survive the `audit_log_disabled` kill switch.
 which agent ran what, what was produced, what failed, what was retried, who
 accepted.
 
-## MISSION-027 — Scope isolation tests
+## MISSION-027 — Mission authorization-boundary tests
 
-**Goal.** Prove a principal cannot reach a mission outside its scope.
+**Goal.** Prove that Mission access follows ADR 0009's task/coordinator
+predicate, not a caller-supplied boundary or staffing pin.
 
-**Why.** No mission authorization test exists at the HTTP layer today, and
+**Why.** No Mission authorization test exists at the HTTP layer today, and
 ✅ `src/adapters/dashboard/authz-matrix.test.ts` — the file named for authz
 coverage — has no mission entries.
 
-**Testing.** Cross-scope read/write/transition/cancel all denied. A caller-supplied
-`scopeId` is ignored. A seat-user is denied via both HTTP and Jarvis.
+**Testing.** An unrelated agent is denied read, task update, transition, and
+cancel. A task assignee has only the task-level authority granted by ADR 0009;
+the coordinator and human have their distinct authorities. A team pin cannot
+grant read access, and an outside-pin assignment requires the audited override.
 
-**Acceptance.** Every mission route has a cross-scope denial test and entries in
-`authz-matrix.test.ts`.
+**Acceptance.** Every Mission route has an authorization-boundary denial test and
+entries in `authz-matrix.test.ts`; no test or implementation introduces
+`scopeId`.
 
 ## MISSION-028 — Soft delete and retention
 
@@ -621,12 +624,13 @@ from empty. A failed task shows its reason and retry count.
 `fileParallelism: false`), ✅ `docker-compose.test.yml`, ✅ `.github/workflows/ci.yml`
 (LocalStack `dynamodb,s3,sqs,kms,secretsmanager,iam,scheduler` already enabled).
 
-**Testing.** Real DynamoDB round-trips for all three row types; GSI1 queries by
-scope+status; the migration against seeded legacy rows; SQS enqueue → drain.
+**Testing.** Real DynamoDB round-trips for all three row types; GSI1 queries for
+Mission status and assigned-agent task status; legacy flat rows remain readable
+and untouched; SQS enqueue → drain.
 
 **Acceptance.** `npm run test:integration` passes locally and in CI.
 
-## MISSION-032 — E2E happy and failure paths
+## MISSION-032 — End-to-end happy and failure paths
 
 **Objective.** Cover create → plan → approve → execute → review → complete, plus
 capacity failure, task failure with retry exhaustion, and cancel mid-run.
@@ -635,15 +639,18 @@ capacity failure, task failure with retry exhaustion, and cancel mid-run.
 ✅ `tests/e2e/jarvis/playwright.config.ts` but `@playwright/test` is **not a
 dependency**, there is **no** `e2e` npm script, and **no workflow runs them**.
 Either adopt Playwright properly (dependency + script + CI job) or write these as
-integration tests. Do not assume an E2E runner exists.
+integration tests. Do not assume an E2E runner exists. In either runner, prove
+the task/coordinator authorization boundary and human acceptance gate; do not
+add a scope field or legacy-data migration as test preconditions.
 
-## MISSION-033 — Migration and rollback validation
+---
 
-**Testing.** Backfill against a production-shaped dataset; verify idempotency;
-rehearse rollback (stop reading new rows, confirm legacy rows still serve).
+## Retired IDs (not active work)
 
-**Acceptance.** Rollback demonstrated with zero data loss **before** the migration
-runs against production.
+| ID | Former package | Disposition | Current truth |
+|---|---|---|---|
+| MISSION-013 | Migration and dual-read shim | Retired | ADR 0009 accepts no Mission legacy migration. Flat rows remain readable and untouched; new Missions use the new shape only. |
+| MISSION-033 | Migration and rollback validation | Retired | It exists only to validate the rejected migration, so it has no remaining purpose. |
 
 ## MISSION-034 — DLQ depth alarm on scheduled-fire
 
