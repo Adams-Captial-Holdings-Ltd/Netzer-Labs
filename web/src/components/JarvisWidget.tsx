@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'wouter-preact';
-import { Mic, MicOff, Loader2, Volume2, Play } from 'lucide-preact';
+import { Mic, MicOff, Loader2, Volume2, Play, X } from 'lucide-preact';
 import {
   jarvisState,
   jarvisCaption,
@@ -17,10 +17,13 @@ import {
   jarvisPushToTalk,
   jarvisMicPermission,
   jarvisWidgetPos,
+  jarvisWidgetHidden,
+  setJarvisWidgetHidden,
   saveWidgetPos,
   registerNavigate,
   loadJarvisManifest,
 } from '../lib/jarvis/tools';
+import { stopJarvis, isJarvisBusy } from '../lib/jarvis/stop';
 import { jarvisRoutines, loadJarvisRoutines } from '../lib/jarvis/routines';
 import { runJarvisTextTurn } from '../lib/jarvis/textClient';
 import { runDemoWalkthrough, DEMO_WALKTHROUGH_ROUTINE_ID } from '../lib/jarvis/walkthrough';
@@ -90,11 +93,33 @@ export function JarvisWidget(): preact.JSX.Element | null {
     if (!root.className.includes('jarvis-')) root.classList.add('jarvis-idle');
   }, []);
 
+  // Escape is the universal "get me out". Bound globally (not on the orb) so it
+  // works while a tour has the page dimmed and focus is wherever the user left it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stopJarvis();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // The /jarvis tab IS the orb (full immersive experience), so the floating
   // widget steps aside there to avoid two orbs competing for one session.
-  if (!enabled || location === '/jarvis') return null;
+  if (!enabled || jarvisWidgetHidden.value || location === '/jarvis') return null;
+
+  /** The X: stop everything, then get off the screen. */
+  function onCloseClick() {
+    stopJarvis();
+    setJarvisWidgetHidden(true);
+  }
 
   function onMicClick() {
+    // A running tour/narration owns the orb: tapping it means "stop", not
+    // "poke the voice client" (which would leave the tour navigating on).
+    if (isJarvisBusy()) {
+      stopJarvis();
+      return;
+    }
     const c = clientRef.current;
     if (!c) return;
     if (state === 'idle' || state === 'error' || state === 'disabled') {
@@ -224,6 +249,21 @@ export function JarvisWidget(): preact.JSX.Element | null {
         onMouseLeave={hoverOut}
       >
         {icon}
+      </button>
+
+      {/* Dismiss. Always in the DOM (not hover-only) so it is reachable by
+          keyboard and findable mid-tour, when the user most wants it. */}
+      <button
+        data-testid="jarvis-close"
+        type="button"
+        class="jarvis-orb-close"
+        aria-label="Close Jarvis"
+        title="Close Jarvis (Esc)"
+        onClick={onCloseClick}
+        onMouseEnter={hoverIn}
+        onMouseLeave={hoverOut}
+      >
+        <X class="w-3 h-3" />
       </button>
 
       {hovered && state === 'idle' && !caption && (
