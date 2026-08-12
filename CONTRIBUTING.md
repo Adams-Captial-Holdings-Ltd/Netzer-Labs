@@ -80,7 +80,9 @@ hotfix/<issue> -> production, then backport to development and promote normally
   changes a `docs/features/<slug>/` document must conform to it; Docs CI
   enforces the contract.
 
-The operator sequence and stop conditions are in [cutover.md](cutover.md).
+The rules above are the current model. [cutover.md](cutover.md) is the historical
+checklist from the one-time governance cutover; it is kept as a record and must not be
+executed, because parts of it now describe the opposite of the current branch layout.
 
 ## PR conventions
 
