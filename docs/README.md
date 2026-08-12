@@ -6,6 +6,31 @@ The top-level [README](../README.md) is the landing page; this folder is the dep
 
 ---
 
+## I want to continue feature work
+
+Feature knowledge lives under `docs/features/<slug>/`. Start with the feature
+README to find verified behavior and its authorities, verify the relevant source
+and branch state, then read the feature HANDOFF for volatile branch, command,
+blocker, and next-action state. [Missions](./features/missions/README.md) is the
+reference implementation: its [README](./features/missions/README.md) and
+[HANDOFF](./features/missions/HANDOFF.md) are the canonical entry points.
+
+Use document statuses consistently: `current` is the present maintained view;
+`accepted` is an approved durable decision or work definition; `historical` is
+dated evidence; `superseded` has been replaced; and `compatibility` exists only
+to direct old entry points to their replacement. Active work uses only
+`work_state: approved`, `work_state: in_progress`, or `work_state: blocked`.
+For Missions, source code and tests govern present behavior; its
+[ADR](./adr/0009-mission-container-model.md) governs durable decisions, its
+[backlog](./missions-v2-backlog.md) owns approved work, and its
+[audit](./missions-v2-audit.md) preserves historical evidence.
+
+For future discovery, a new meaningful feature folder begins with only
+`README.md` and `HANDOFF.md`; add another document only when a demonstrated
+maintenance need requires it. Trivial changes do not need a feature folder.
+
+---
+
 ## I want to deploy this
 
 The operator quickstart, in order: AWS-side prerequisites first (standalone account, AWS CLI v2 with working credentials, Node 20+; Docker optional, deploys can build in CodeBuild; handheld in [aws-getting-started.md](./aws-getting-started.md)), then `npm ci --ignore-scripts`, then ONE command: `npm run up`. It conducts the whole install (setup wizard, read-only preflight, a bounded model probe, the phased deploy, strict verify) and, at a human gate like the Bedrock model-access grant, prints one instruction with the console URL and keeps re-checking until it clears. Unattended: `npm run up -- --answers <file> --yes` with a template from [examples/answers/](../examples/answers/README.md). The three commands underneath, for driving yourself: `npm run setup` (interactive wizard), `npm run deploy` (preflight, bootstrap-state, phased stacks, secrets, seed), `npm run verify` (the gate that says it actually works).

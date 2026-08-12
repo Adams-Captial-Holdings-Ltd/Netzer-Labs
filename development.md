@@ -903,19 +903,27 @@ dashboard on the host and orchestrates all of it with one command.
 
 ---
 
-## Feature handoff (`handoff.md`)
+## Feature handoff (`docs/features/<slug>/HANDOFF.md`)
 
-**Every feature worked on in this repository keeps a `handoff.md`.** It is
-operational state, not documentation for its own sake: another engineer or AI
-agent must be able to open it and continue the work without access to the
-conversation, chat log, or person that produced it.
+Every meaningful feature worked on in this repository keeps its operational
+state in `docs/features/<slug>/HANDOFF.md`, not in the root
+[`handoff.md`](handoff.md). Another engineer or AI agent must be able to open
+that feature HANDOFF and continue the work without access to the conversation,
+chat log, or person that produced it. The root handoff is compatibility-only: it
+points to a canonical feature HANDOFF and must never become writable operational
+state.
 
-Create it when the feature branch is created, update it whenever the state it
-describes changes, and keep it in the branch alongside the code it describes. If
-`handoff.md` and the implementation disagree, **the code wins** — inspect the
+When a meaningful feature begins, create `docs/features/<slug>/` with only
+`README.md` and `HANDOFF.md`. Add another feature document only after a
+demonstrated maintenance need cannot be met by those two files and their linked
+authorities. This convention does not require a feature folder for a trivial
+change. Update the feature HANDOFF whenever its operational state changes, and
+keep it in the branch alongside the code it describes. If the feature HANDOFF
+and the implementation disagree, **the code wins** — inspect the
 implementation and correct the document.
 
-Reference implementation: [`handoff.md`](handoff.md) (Missions v2).
+Reference implementation: [Missions README](docs/features/missions/README.md)
+and [Missions HANDOFF](docs/features/missions/HANDOFF.md).
 
 ### Name the branch. Never just say "production"
 
@@ -924,7 +932,7 @@ work is going. "Ready for production" is not a statement anyone can act on: this
 repository has five long-lived branches and only two of them correspond to an
 AWS environment at all.
 
-Every `handoff.md` must state, explicitly and by name:
+Every feature HANDOFF must state, explicitly and by name:
 
 - **The branch the work currently lives on** — e.g. `feature/missions-v2`, not
   "a feature branch".
@@ -962,14 +970,21 @@ Two consequences worth stating plainly, because both have surprised people:
 
 ### Required sections
 
-At minimum a feature `handoff.md` carries: the goal and intended user outcome ·
-the architecture decision and why · what is explicitly in and out of scope ·
-verified framework and commands (never guessed) · important file locations · the
-data model and state model if either changed · the security model · the testing
-strategy · implementation progress with a task queue · a decision log · known
-issues, separating pre-existing from newly introduced · the exact commands last
-run and their results · git and deployment state per the rules above · and
-explicit instructions for the next agent.
+At minimum a feature HANDOFF carries only volatile operational state:
+
+- the current branch and observed commit;
+- the next merge target;
+- push, PR, and deployment state;
+- the current objective and active task IDs;
+- blockers and unresolved evidence;
+- the last commands actually run and their results, including the baseline;
+- the smallest next action; and
+- links to the feature README and the relevant ADR, backlog, and audit.
+
+Durable facts belong in those linked authorities, not copied into the HANDOFF:
+architecture rationale, scope, implementation and file maps, data, security,
+and testing models, task definitions or queues, and decision logs all belong in
+their owning documents.
 
 Two rules that make the difference between a useful handoff and a misleading one:
 

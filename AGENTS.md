@@ -7,6 +7,17 @@ phase-ordered runbook with the safety invariants is
 human are handheld in
 [docs/aws-getting-started.md](docs/aws-getting-started.md).
 
+## Before feature work
+
+When the task is to change the codebase rather than install it, begin by
+choosing the feature and opening `docs/features/<slug>/README.md`. The
+[Missions README](docs/features/missions/README.md) is the reference
+implementation for this convention. Verify the relevant source and tests plus
+the current branch and working-tree state, then open that feature's
+`docs/features/<slug>/HANDOFF.md` for the current operational state and next
+action. The feature README is the discovery page; the feature HANDOFF is the
+canonical volatile state.
+
 ## Order of operations
 
 1. **Human prerequisites, before any command in this repo.** A standalone
