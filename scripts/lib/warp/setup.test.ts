@@ -197,13 +197,13 @@ describe('syncWarpTunnelSecret', () => {
   });
 
   it('names the remotely managed tunnel in the blocker, not a local substitute', async () => {
-    const err = await syncWarpTunnelSecret({
+    const err = (await syncWarpTunnelSecret({
       expectedAccountId: '239887088812',
       actualAccountId: '239887088812',
       secretId: SECRET_ID,
       cloudflared: fakeCloudflared({ tunnels: [] }),
       secrets: fakeSecrets(),
-    }).catch((e: unknown) => e as Error);
+    }).catch((e: unknown) => e)) as Error;
     expect(err.message).toContain('netzar-production-private');
     expect(err.message).toContain('npm run warp:setup');
     expect(err.message).not.toMatch(/cloudflared tunnel create/);
@@ -229,7 +229,7 @@ describe('syncWarpTunnelSecret', () => {
   });
 
   it('redacts the token if the Secrets Manager write fails', async () => {
-    const err = await syncWarpTunnelSecret({
+    const err = (await syncWarpTunnelSecret({
       expectedAccountId: '239887088812',
       actualAccountId: '239887088812',
       secretId: SECRET_ID,
@@ -242,7 +242,7 @@ describe('syncWarpTunnelSecret', () => {
           throw new Error(`AccessDenied while storing ${TOKEN}`);
         },
       },
-    }).catch((e: unknown) => e as Error);
+    }).catch((e: unknown) => e)) as Error;
     expect(err.message).not.toContain(TOKEN);
     expect(err.message).toContain(SECRET_ID);
   });
