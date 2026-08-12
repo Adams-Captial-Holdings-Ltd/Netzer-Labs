@@ -922,6 +922,86 @@ mapping at all.
 Reference implementation: [Missions README](docs/features/missions/README.md)
 and [Missions HANDOFF](docs/features/missions/HANDOFF.md).
 
+### How to develop a new feature, end to end
+
+The whole sequence, in order. Steps 2 and 6 are the only ones people skip, and
+they are the two that make the work legible to whoever picks it up next.
+
+**1. Branch from `development`.** Ordinary work never starts from `production`
+and never targets it directly.
+
+```bash
+git checkout development
+git pull origin development
+git checkout -b feature/<slug>
+```
+
+**2. Create the feature folder before you write code.** `docs/features/<slug>/`
+with exactly `README.md` and `HANDOFF.md`, copied from the templates in the
+[feature knowledge framework](docs/features/README.md). Writing the README first
+forces you to state what you are actually building and which files own it. Skip
+this only for a genuinely trivial change.
+
+**3. Bring the local environment up.** First time on this machine, work through
+[Initial setup](#initial-setup). After that it is one command, covered in
+[Starting development](#starting-development):
+
+```bash
+npm run local
+```
+
+**4. Record a baseline before changing anything.** Run the suite on the
+untouched branch and write down what already fails, into the feature HANDOFF.
+Without it nobody can tell a pre-existing failure from a regression you
+introduced.
+
+```bash
+npm test
+```
+
+**5. Build it test-first.** Write the failing test, watch it fail for the right
+reason, then write the minimum code that passes it. Commit in small steps.
+Cross-surface chat changes must be mirrored across Telegram, Slack, and the
+dashboard, per [CLAUDE.md](CLAUDE.md); manual exercise paths are in
+[Testing Netzer OS features](#testing-netzer-os-features).
+
+**6. Keep the feature HANDOFF current as you go**, not at the end. It is the
+file that answers "where is this, and what is the next action" after you close
+your laptop. If it and the code disagree, **the code wins**: inspect the
+implementation and correct the document.
+
+**7. Run the FULL validation before pushing.** Not a scoped run. The per-command
+expectations are in [Automated tests](#automated-tests); the last two are the
+documentation gates that Docs CI will run anyway.
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm --prefix web run typecheck
+npm --prefix web run build
+npm run local:test:integration
+node scripts/ci/docs-links.mjs
+node scripts/ci/feature-knowledge.mjs
+git diff --check
+```
+
+Never record a command as passing unless it actually ran. A skipped environment
+is not a passing result.
+
+**8. Open a pull request into `development`**, one logical change, describing
+what changed and why. CI and Docs CI must be green before merge. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for PR and commit conventions.
+
+**9. Delete the branch once it merges.** Only the four long-lived branches
+survive, so the branch list stays readable and a handoff that names a branch
+names something that still exists.
+
+**10. Promote in order**, one step at a time: `development` into `qa`, `qa` into
+`staging`, `staging` into `production`. Each promotion is its own pull request,
+and merging to `production` deploys nothing on its own. What each branch does
+and does not reach is the [mapping below](#branch-to-environment-mapping).
+
 ### Name the branch. Never just say "production"
 
 The single most common way a handoff goes wrong is being vague about where the
