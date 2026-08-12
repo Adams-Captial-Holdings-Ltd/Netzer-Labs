@@ -44,6 +44,7 @@
     "handover": "tsx scripts/handover.ts",
     "support-bundle": "tsx scripts/support-bundle.ts",
     "dashboard:tunnel": "tsx scripts/dashboard-tunnel.ts",
+    "warp:setup": "tsx scripts/warp-setup.ts",
     "deploy": "tsx scripts/deploy.ts",
     "deploy:cloud": "aws codebuild start-build --project-name claudeclaw-orchestrator-deploy --region us-east-1",
     "deploy:rollback": "tsx scripts/rollback.ts",

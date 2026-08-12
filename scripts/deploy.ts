@@ -1189,6 +1189,14 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // Deployment mode reaches synth (deploy-mode.ts drives the
     // internal-ALB/infra-only branches in compute-stack).
     CCE_DEPLOY_MODE: env.CCE_DEPLOY_MODE ?? '',
+    // Private WARP access (opt-in, default OFF). warp-private-access.ts reads
+    // these from process.env during synth to decide whether the cloudflared
+    // sidecar and the Route 53 private zone exist at all. Both are
+    // NON-SECRET: a flag and a hostname. The connector TOKEN never travels
+    // this path — it goes cloudflared -> Secrets Manager -> container, and is
+    // deliberately absent from this bag, the manifest, and cdk.out.
+    CCE_WARP_PRIVATE_ACCESS: env.CCE_WARP_PRIVATE_ACCESS ?? '',
+    CCE_WARP_PRIVATE_HOSTNAME: env.CCE_WARP_PRIVATE_HOSTNAME ?? '',
     CCE_CICD_ENABLED: env.CCE_CICD_ENABLED ?? '',
     CCE_CODEBUILD_ENABLED: env.CCE_CODEBUILD_ENABLED ?? '',
     // Opt-in IAM-copilot write grant (default off). Set CCE_IAM_COPILOT_WRITE=1
