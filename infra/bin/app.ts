@@ -238,7 +238,7 @@ if (process.env.CCE_CODEBUILD_ENABLED === '1') {
     ...baseProps,
     githubOwner,
     githubRepo,
-    githubBranch: process.env.CCE_GITHUB_BRANCH?.trim() || 'main',
+    githubBranch: process.env.CCE_GITHUB_BRANCH?.trim() || 'production',
   });
   codebuild.addDependency(iam);
   void codebuild;

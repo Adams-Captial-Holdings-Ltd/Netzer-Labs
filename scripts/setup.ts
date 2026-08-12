@@ -937,9 +937,9 @@ async function q11cCi(state: SetupState): Promise<void> {
     console.log(dim('    bash scripts/oidc-provider.sh'));
   } else {
     const branch = answers
-      ? (answers.github!.branch ?? 'main').trim()
-      : (await ask('Deploy branch?', state.githubBranch ?? 'main')).trim();
-    state.githubBranch = branch || 'main';
+      ? (answers.github!.branch ?? 'production').trim()
+      : (await ask('Deploy branch?', state.githubBranch ?? 'production')).trim();
+    state.githubBranch = branch || 'production';
     // eslint-disable-next-line no-console
     console.log(info('Prerequisite: import a GitHub PAT (repo + admin:repo_hook scopes) once per account:'));
     // eslint-disable-next-line no-console
@@ -1011,7 +1011,7 @@ async function q12WriteArtifacts(state: SetupState): Promise<void> {
     updated.CCE_CODEBUILD_ENABLED = '1';
     updated.CCE_GITHUB_OWNER = state.githubOwner ?? '';
     updated.CCE_GITHUB_REPO = state.githubRepo ?? '';
-    updated.CCE_GITHUB_BRANCH = state.githubBranch ?? 'main';
+    updated.CCE_GITHUB_BRANCH = state.githubBranch ?? 'production';
   } else if (state.ciMode === 'none') {
     updated.CCE_CICD_ENABLED = '';
     updated.CCE_CODEBUILD_ENABLED = '';
