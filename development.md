@@ -903,24 +903,21 @@ dashboard on the host and orchestrates all of it with one command.
 
 ---
 
-## Feature handoff (`docs/features/<slug>/HANDOFF.md`)
+## Feature work (`docs/features/<slug>/HANDOFF.md`)
 
-Every meaningful feature worked on in this repository keeps its operational
-state in `docs/features/<slug>/HANDOFF.md`, not in the root
-[`handoff.md`](handoff.md). Another engineer or AI agent must be able to open
-that feature HANDOFF and continue the work without access to the conversation,
-chat log, or person that produced it. The root handoff is compatibility-only: it
-points to a canonical feature HANDOFF and must never become writable operational
-state.
+Every meaningful feature worked on in this repository keeps its documentation in
+`docs/features/<slug>/`: a `README.md` holding verified behavior and its
+authorities, and a `HANDOFF.md` holding only volatile operational state. The
+folder shape, the frontmatter contract, the status vocabulary, the required
+sections, and the templates are specified in exactly one place, the
+[feature knowledge framework](docs/features/README.md). Docs CI enforces that
+specification with `node scripts/ci/feature-knowledge.mjs`.
 
-When a meaningful feature begins, create `docs/features/<slug>/` with only
-`README.md` and `HANDOFF.md`. Add another feature document only after a
-demonstrated maintenance need cannot be met by those two files and their linked
-authorities. This convention does not require a feature folder for a trivial
-change. Update the feature HANDOFF whenever its operational state changes, and
-keep it in the branch alongside the code it describes. If the feature HANDOFF
-and the implementation disagree, **the code wins** — inspect the
-implementation and correct the document.
+**Do not restate those rules here or on any other page.** A second copy is how
+the convention drifted before. This document owns one part of the picture that
+the framework defers to it: the branch and environment reality below. Feature
+handoffs are written against that mapping, so a stale mapping is worse than no
+mapping at all.
 
 Reference implementation: [Missions README](docs/features/missions/README.md)
 and [Missions HANDOFF](docs/features/missions/HANDOFF.md).
@@ -929,21 +926,12 @@ and [Missions HANDOFF](docs/features/missions/HANDOFF.md).
 
 The single most common way a handoff goes wrong is being vague about where the
 work is going. "Ready for production" is not a statement anyone can act on: this
-repository has five long-lived branches and only two of them correspond to an
+repository has four long-lived branches and only two of them correspond to an
 AWS environment at all.
 
-Every feature HANDOFF must state, explicitly and by name:
-
-- **The branch the work currently lives on** — e.g. `feature/missions-v2`, not
-  "a feature branch".
-- **The branch it merges into next** — the immediately preceding branch in the
-  promotion chain, per [CONTRIBUTING.md](CONTRIBUTING.md).
-- **The AWS environment that branch reaches, if any** — using the table below.
-- **Whether anything has actually been deployed yet**, and if so, by which
-  command (`npm run deploy:cloud` is image-only; a full `cdk deploy` can shift
-  env-backed tunables such as the daily cost cap).
-- **Whether the work has been pushed at all.** Committed locally and pushed are
-  different states, and a handoff that omits this strands the next person.
+The framework requires every feature HANDOFF to name its current branch, its
+next merge target, its deployment state, and whether the work has been pushed.
+The table below is what those statements are resolved against.
 
 ### Branch to environment mapping
 
@@ -968,31 +956,16 @@ Two consequences worth stating plainly, because both have surprised people:
   is not running anywhere.
 - Merging to `production` does not deploy. Someone must dispatch `deploy.yml`.
 
-### Required sections
+### Long-lived branches
 
-At minimum a feature HANDOFF carries only volatile operational state:
+`development`, `qa`, `staging`, and `production` are the only permanent
+branches. Everything else (`feature/*`, `fix/*`, `chore/*`, `hotfix/*`) is
+transient and is deleted once it merges, so the branch list stays readable and a
+handoff that names a branch names something that still exists.
 
-- the current branch and observed commit;
-- the next merge target;
-- push, PR, and deployment state;
-- the current objective and active task IDs;
-- blockers and unresolved evidence;
-- the last commands actually run and their results, including the baseline;
-- the smallest next action; and
-- links to the feature README and the relevant ADR, backlog, and audit.
-
-Durable facts belong in those linked authorities, not copied into the HANDOFF:
-architecture rationale, scope, implementation and file maps, data, security,
-and testing models, task definitions or queues, and decision logs all belong in
-their owning documents.
-
-Two rules that make the difference between a useful handoff and a misleading one:
-
-- **Record a baseline before changing anything.** Run the test suite on the
-  untouched branch first and write down what already fails. Without it, nobody
-  can tell a pre-existing failure from a regression you introduced.
-- **Never record a command as passing unless it actually ran.** Note what you
-  did not run and why.
+The required contents of a feature HANDOFF, including the baseline rule and the
+never-claim-an-unrun-command rule, are specified in the
+[feature knowledge framework](docs/features/README.md).
 
 ---
 
@@ -1012,10 +985,13 @@ Update this document in the same change whenever you alter:
 - AWS emulation coverage or isolation guarantees
 - authentication behaviour
 - testing procedures
-- the feature handoff rules or the branch-to-environment mapping above (if a
-  branch or AWS environment is added or removed, update that table in the same
-  change — a stale mapping is worse than none, because handoffs are written
-  against it)
+- the branch-to-environment mapping above (if a branch or AWS environment is
+  added or removed, update that table in the same change — a stale mapping is
+  worse than none, because handoffs are written against it)
+
+The feature documentation rules themselves are **not** maintained here. They
+live in the [feature knowledge framework](docs/features/README.md); change them
+there and nowhere else.
 
 Do not create a second local development guide. `docs/development.md` is a
 separate concern (the cross machine Git workflow) and does not describe the

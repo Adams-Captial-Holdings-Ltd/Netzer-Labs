@@ -11,23 +11,20 @@ The top-level [README](../README.md) is the landing page; this folder is the dep
 Feature knowledge lives under `docs/features/<slug>/`. Start with the feature
 README to find verified behavior and its authorities, verify the relevant source
 and branch state, then read the feature HANDOFF for volatile branch, command,
-blocker, and next-action state. [Missions](./features/missions/README.md) is the
-reference implementation: its [README](./features/missions/README.md) and
-[HANDOFF](./features/missions/HANDOFF.md) are the canonical entry points.
+blocker, and next-action state.
 
-Use document statuses consistently: `current` is the present maintained view;
-`accepted` is an approved durable decision or work definition; `historical` is
-dated evidence; `superseded` has been replaced; and `compatibility` exists only
-to direct old entry points to their replacement. Active work uses only
-`work_state: approved`, `work_state: in_progress`, or `work_state: blocked`.
-For Missions, source code and tests govern present behavior; its
-[ADR](./adr/0009-mission-container-model.md) governs durable decisions, its
-[backlog](./missions-v2-backlog.md) owns approved work, and its
-[audit](./missions-v2-audit.md) preserves historical evidence.
+**[The feature knowledge framework](./features/README.md) is the single
+specification** for that folder: its shape, its frontmatter contract, the status
+and work-state vocabularies, the required sections, and copy-paste templates for
+starting a new one. Those rules are not restated anywhere else, and Docs CI
+enforces them with `node scripts/ci/feature-knowledge.mjs`.
 
-For future discovery, a new meaningful feature folder begins with only
-`README.md` and `HANDOFF.md`; add another document only when a demonstrated
-maintenance need requires it. Trivial changes do not need a feature folder.
+[Missions](./features/missions/README.md) is the reference implementation: its
+[README](./features/missions/README.md) and
+[HANDOFF](./features/missions/HANDOFF.md) are the canonical entry points, with
+its [ADR](./adr/0009-mission-container-model.md) governing durable decisions,
+its [backlog](./missions-v2-backlog.md) owning approved work, and its
+[audit](./missions-v2-audit.md) preserving historical evidence.
 
 ---
 
