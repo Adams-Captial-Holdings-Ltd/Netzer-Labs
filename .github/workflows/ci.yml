@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [development, qa, staging, production, main]
+    branches: [development, qa, staging, production]
   push:
-    branches: [development, qa, staging, production, main]
+    branches: [development, qa, staging, production]
 
 # Cancel any in-flight runs on the same branch when new commits land.
 concurrency:

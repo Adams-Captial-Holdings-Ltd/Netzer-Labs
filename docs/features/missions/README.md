@@ -54,11 +54,12 @@ The source snapshot is
 the reviewed branch history. This is source and Git-reachability evidence only;
 it is not deployment evidence.
 
-This feature-worktree documentation starts from
-`946ac3f7312179a085cc6cd7b568e0e609920864` on
-`feature/missions-knowledge-system`. That is dated operational documentation
-evidence, not a self-updating promise and not the implementation snapshot.
-Deployment remains unverified from repository evidence.
+This documentation starts from
+`946ac3f7312179a085cc6cd7b568e0e609920864`, authored on the since-merged
+`feature/missions-knowledge-system` branch and now reachable from `development`
+through pull request #12. That is dated operational documentation evidence, not
+a self-updating promise and not the implementation snapshot. Deployment remains
+unverified from repository evidence.
 
 ## 4. Source of truth
 
@@ -137,6 +138,7 @@ on a middle-command failure. A skipped environment is not a passing result.
 ## 9. Related documents
 
 - [Operational HANDOFF](HANDOFF.md)
+- [Feature knowledge framework](../README.md), the specification this document conforms to
 - [ADR 0009 — Mission container model](../../adr/0009-mission-container-model.md)
 - [Missions v2 backlog](../../missions-v2-backlog.md)
 - [Missions v2 audit](../../missions-v2-audit.md)
