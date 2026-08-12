@@ -39,7 +39,7 @@ export class CodeBuildStack extends Stack {
     super(scope, id, props);
     Object.entries(TAGS).forEach(([k, v]) => this.tags.setTag(k, v));
 
-    const branch = props.githubBranch ?? 'production';
+    const branch = props.githubBranch ?? 'main';
 
     // ONE source of truth for the deploy-tag namespace (item 39): the
     // webhook filter below, the buildspec runtime refusal, and the GitHub
