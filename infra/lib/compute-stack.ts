@@ -1,4 +1,4 @@
-import { Stack, Duration, CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
+import { Stack, Duration, CfnOutput, RemovalPolicy, SecretValue } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { execSync } from 'node:child_process';
 
@@ -540,16 +540,27 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     // task IP, no public ALB listener and no security-group hole. awsvpc mode
     // means the sidecar reaches the orchestrator on task-local port 3000, the
     // same way the X-Ray daemon above is reached, so the app needs no change.
-    // Retained on purpose: the connector token is written into this secret
-    // out-of-band by the setup lifecycle, so a stack replacement must never
-    // silently drop it and leave the tunnel unauthenticated. Encryption is
-    // the Secrets Manager AWS-managed KMS key, matching the other secrets
-    // this task reads.
+    // Seeded with a placeholder `token` field, matching secrets-stack.ts. With
+    // no secretObjectValue CDK emits `GenerateSecretString: {}` and Secrets
+    // Manager stores a random PLAINTEXT string, not JSON, so the ECS agent
+    // cannot extract the `token` key and every task dies with
+    // ResourceInitializationError before any container runs. The placeholder
+    // guarantees the key exists from creation; the setup lifecycle overwrites
+    // the whole value with the real token.
+    //
+    // Retained on purpose: the token is written out-of-band, so a stack
+    // replacement must never silently drop it and leave the tunnel
+    // unauthenticated. Note this sits on the Secrets Manager AWS-managed key,
+    // NOT the `claudeclaw-data` CMK the secrets-stack entries use, because
+    // importing that key here would create a cross-stack cycle.
     const publicTunnelSecret = publicAccess.enabled
       ? new SmSecret(this, 'PublicTunnelSecret', {
           secretName: PUBLIC_TUNNEL_SECRET_NAME,
           description:
             'Cloudflare connector token for the netzar-production-public tunnel. Written by the setup lifecycle, never by CDK.',
+          secretObjectValue: {
+            token: SecretValue.unsafePlainText('REPLACE_ME'),
+          },
           removalPolicy: RemovalPolicy.RETAIN,
         })
       : undefined;
@@ -604,9 +615,18 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         // probe cannot execute and a CMD probe could only re-run the binary,
         // which proves nothing about tunnel health. Because this container is
         // essential, a probe that can never pass would roll the task forever.
-        // Liveness is covered instead by `essential: true` (a dead connector
-        // replaces the task) plus the always-on CloudWatch alarm, which is
-        // where connector health belongs since it also has to alert a human.
+        // Liveness therefore rests on `essential: true` alone today: a
+        // connector that EXITS replaces the task. Two gaps are open and
+        // deliberately named rather than papered over. First, cloudflared can
+        // stay alive with a dead tunnel registration (revoked token, tunnel
+        // deleted Cloudflare-side), which keeps the task RUNNING while
+        // app.pgnos.ai serves edge errors, and nothing in AWS notices.
+        // Second, because it is essential, a Cloudflare-side failure that does
+        // exit takes the orchestrator down with it, so a service that has no
+        // Cloudflare dependency today acquires one. The always-on alarm the
+        // design calls for closes the first gap and must land before this is
+        // considered finished; it belongs in observability-stack, which owns
+        // the alert topic.
       });
 
     }

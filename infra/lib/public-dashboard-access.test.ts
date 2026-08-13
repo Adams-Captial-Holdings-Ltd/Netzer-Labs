@@ -107,17 +107,36 @@ describe('resolvePublicDashboardAccess', () => {
     ).toThrow(/invalid CCE_PUBLIC_HOSTNAME/);
   });
 
-  it('normalizes an explicit hostname and splits it into record + zone', () => {
+  it('normalizes an explicit hostname and splits it against the real zone', () => {
+    // The account holds exactly one zone, pgnos.ai. A naive first-label split
+    // would claim zone "staging.pgnos.ai", which does not exist, and record
+    // "app" instead of "app.staging".
     expect(
       resolvePublicDashboardAccess({ ...on, CCE_PUBLIC_HOSTNAME: '  App.Staging.PGNOS.ai  ' }),
     ).toEqual({
       enabled: true,
       hostname: 'app.staging.pgnos.ai',
-      zoneName: 'staging.pgnos.ai',
-      recordName: 'app',
+      zoneName: 'pgnos.ai',
+      recordName: 'app.staging',
       tunnelName: 'netzar-production-public',
       service: 'http://localhost:3000',
     });
+  });
+
+  it('treats a blank hostname as unset, the way cdkEnvBag forwards it', () => {
+    // deploy.ts forwards every var as `env.X ?? ''`, so under a real deploy
+    // this key is always defined and usually blank. `??` would keep the blank
+    // and throw; blank must fall back to the default.
+    for (const blank of ['', '   ']) {
+      expect(resolvePublicDashboardAccess({ ...on, CCE_PUBLIC_HOSTNAME: blank })).toEqual({
+        enabled: true,
+        hostname: 'app.pgnos.ai',
+        zoneName: 'pgnos.ai',
+        recordName: 'app',
+        tunnelName: 'netzar-production-public',
+        service: 'http://localhost:3000',
+      });
+    }
   });
 
   it('rejects malformed hostnames instead of publishing a broken route', () => {

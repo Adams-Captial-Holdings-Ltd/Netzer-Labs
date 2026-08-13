@@ -110,7 +110,12 @@ export function resolvePublicDashboardAccess(
     );
   }
 
-  const hostname = (env.CCE_PUBLIC_HOSTNAME ?? PUBLIC_DEFAULT_HOSTNAME).trim().toLowerCase();
+  // `||`, not `??`. deploy.ts forwards every var through cdkEnvBag as
+  // `env.X ?? ''`, so under a real deploy this key is always DEFINED and often
+  // blank; `??` would keep the blank string, resolve to zero labels, and throw
+  // `invalid CCE_PUBLIC_HOSTNAME:` naming a variable the operator never set.
+  // Blank must mean "unset" and fall back to the default.
+  const hostname = (env.CCE_PUBLIC_HOSTNAME?.trim() || PUBLIC_DEFAULT_HOSTNAME).toLowerCase();
 
   // Invariant 4: checked FIRST so every salessly.io form (including the
   // 2-label apex, which would otherwise trip the shape check below) reports
@@ -135,8 +140,14 @@ export function resolvePublicDashboardAccess(
   return {
     enabled: true,
     hostname,
-    recordName: labels[0],
-    zoneName: labels.slice(1).join('.'),
+    // Derived against the real Cloudflare zone, not by splitting off the first
+    // label. The account holds exactly one zone, `pgnos.ai`; for a deeper
+    // hostname like app.staging.pgnos.ai the naive split yields zoneName
+    // "staging.pgnos.ai", which is not a zone in the account, and recordName
+    // "app" instead of "app.staging". The suffix check above already proves
+    // membership, so the zone is known and the record is the remainder.
+    recordName: hostname.slice(0, -(PUBLIC_ZONE.length + 1)),
+    zoneName: PUBLIC_ZONE,
     tunnelName: PUBLIC_TUNNEL_NAME,
     service: PUBLIC_TUNNEL_SERVICE,
   };
