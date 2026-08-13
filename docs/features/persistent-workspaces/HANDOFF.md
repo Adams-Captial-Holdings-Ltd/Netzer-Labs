@@ -3,7 +3,7 @@ feature: persistent-workspaces
 document_role: handoff
 status: current
 observed_at: 2026-08-13
-as_of_commit: 27cde4415236261e69eab77074180da05fa15aae
+as_of_commit: ef7c6c010db4d5535a78c03265ead0a411b13977
 ---
 
 # Persistent agent workspaces handoff

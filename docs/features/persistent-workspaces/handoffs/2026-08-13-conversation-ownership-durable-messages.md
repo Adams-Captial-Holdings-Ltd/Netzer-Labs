@@ -20,8 +20,8 @@ supersedes: none
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `27cde4415236261e69eab77074180da05fa15aae` (post PR #34/#35/#36) |
-| Commit at session end | TBD |
-| Pushed | no |
+| Commit at session end | `ef7c6c010db4d5535a78c03265ead0a411b13977` (the WIP-pause commit carrying this file; a follow-up docs commit records this SHA) |
+| Pushed | yes — WIP pause push, user-requested |
 | PR | none |
 | Deployed | no |
 
