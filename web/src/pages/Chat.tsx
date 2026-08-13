@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { api, getToken } from '../lib/api';
+import { api, getToken, clearApiCache } from '../lib/api';
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { EmptyState } from '../components/EmptyState';
@@ -18,7 +18,7 @@ interface Agent { id: string; displayName: string; status: string }
 // is the run footer (model · latency · cost · tools) — parity with the
 // Telegram/Slack footers, which surface the same numbers when enabled.
 interface TurnMeta { modelId: string; latencyMs: number; costUsd: number; toolCallCount: number }
-interface Message { role: 'user' | 'assistant'; text: string; ts: number; error?: boolean; kb?: string[]; images?: Array<{ url: string; caption: string }>; meta?: TurnMeta }
+interface Message { role: 'user' | 'assistant'; text: string; ts: number; error?: boolean; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; meta?: TurnMeta }
 interface Model { label: string; id: string; contextWindow: number; family: string; isDefault: boolean }
 
 // Friendly names for the env-driven model labels the backend returns.
@@ -48,6 +48,55 @@ function modelOptionLabel(m: Model): string {
 // scoped to the conversation actually on screen.
 function freshChatId(): string {
   return `dashboard:${Date.now()}`;
+}
+
+// One row of the conversation sidebar. Mirrors the shape /sessions already
+// returns (same as Sessions.tsx) — this feature adds no new endpoint.
+interface Conversation {
+  agentId: string;
+  chatId: string;
+  updatedAt: number;
+  messageCount: number | null;
+  firstMessage: string | null;
+}
+
+// The active conversation survives a reload. Without this the Chat tab minted a
+// fresh chatId on every mount and silently abandoned the previous conversation
+// — which is what made history feel non-existent even though it was stored.
+const ACTIVE_CHAT_KEY = 'cce_chat_active';
+
+function storedChatId(agentId: string): string | null {
+  try {
+    const raw = sessionStorage.getItem(ACTIVE_CHAT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { agentId?: string; chatId?: string };
+    return parsed.agentId === agentId && parsed.chatId ? parsed.chatId : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberChatId(agentId: string, chatId: string): void {
+  try {
+    sessionStorage.setItem(ACTIVE_CHAT_KEY, JSON.stringify({ agentId, chatId }));
+  } catch {
+    /* private mode or quota — the sidebar still works, only resume-on-reload is lost */
+  }
+}
+
+/** Sidebar label for a conversation: its opening message, else the raw id. */
+function conversationTitle(c: Conversation): string {
+  const first = (c.firstMessage ?? '').trim();
+  return first.length > 0 ? first : c.chatId;
+}
+
+/** Compact relative age for the sidebar ("3m", "5h", "2d"). */
+function relativeAge(epochSeconds: number, nowMs = Date.now()): string {
+  const secs = Math.max(0, Math.floor(nowMs / 1000) - epochSeconds);
+  if (secs < 60) return 'now';
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+  return `${Math.floor(secs / 86400)}d`;
 }
 
 // Render assistant markdown to sanitized HTML. marked emits <strong>, <em>,
@@ -97,6 +146,8 @@ export function Chat() {
   // parity"). Shown while the agent works a tool; cleared when text resumes.
   const [toolStatus, setToolStatus] = useState('');
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   // Files staged for the next send (uploaded via presigned PUT on send, which
   // bypasses the CloudFront WAF 8KB body cap — same pattern as Knowledge).
   const [files, setFiles] = useState<File[]>([]);
@@ -134,9 +185,70 @@ export function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamText]);
 
+  // Conversation sidebar. /sessions with an agentId is a single Query on
+  // PK=AGENT#<id> (without it the route Scans the whole table), so always
+  // scope it. Newest first.
+  async function refreshConversations(forAgent: string) {
+    if (!forAgent) return;
+    setHistoryLoading(true);
+    try {
+      const d = await api.get<{ sessions: Conversation[] }>(
+        `/sessions?agentId=${encodeURIComponent(forAgent)}`,
+      );
+      const rows = (d.sessions ?? [])
+        // Only dashboard chats are browsable here; Telegram/Slack rows share
+        // the table but have no UI to reopen them, and still expire.
+        .filter((s) => s.chatId.startsWith('dashboard:'))
+        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      setConversations(rows);
+    } catch (e) {
+      // Non-fatal: the sidebar is an aid, not a prerequisite for chatting.
+      console.error('Chat: failed to load conversations', e);
+    }
+    setHistoryLoading(false);
+  }
+
+  // Load the sidebar whenever the agent changes, and restore the conversation
+  // that was open before a reload.
+  useEffect(() => {
+    if (!agentId) return;
+    void refreshConversations(agentId);
+    const remembered = storedChatId(agentId);
+    if (remembered && remembered !== chatId) void openConversation(remembered);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  // Reopen a stored conversation: point at its chatId and replay its turns.
+  // The transcript endpoint returns the real turn array (Sessions.tsx uses the
+  // same one). Only the last 20 turns exist server-side — the window cap.
+  async function openConversation(id: string) {
+    if (streaming) return;
+    setChatId(id);
+    rememberChatId(agentId, id);
+    setStreamText('');
+    setMessages([]);
+    try {
+      const d = await api.get<{ turns?: Array<{ role: string; text: string; ts: number }> }>(
+        `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(id)}`,
+      );
+      setMessages(
+        (d.turns ?? []).map((t) => ({
+          role: t.role === 'user' ? 'user' : 'assistant',
+          text: t.text,
+          ts: t.ts,
+        })),
+      );
+    } catch (e) {
+      console.error('Chat: failed to load transcript', e);
+      setLoadError('Could not load that conversation. It may have been deleted.');
+    }
+  }
+
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
   function startNewChat() {
-    setChatId(freshChatId());
+    const id = freshChatId();
+    setChatId(id);
+    rememberChatId(agentId, id);
     setMessages([]);
     setStreamText('');
   }
@@ -211,6 +323,7 @@ export function Chat() {
       let errorText = '';
       const kbChips: string[] = [];
       const images: Array<{ url: string; caption: string }> = [];
+      const artifacts: Array<{ url: string; name: string }> = [];
       let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
       let curData = '';
       let buffer = '';
@@ -254,6 +367,14 @@ export function Chat() {
             const im = JSON.parse(curData);
             if (im.url) images.push({ url: im.url, caption: im.caption ?? '' });
           } catch { /* ignore malformed image event */ }
+        } else if (curEvent === 'artifact') {
+          // { url, name } — generated document, rendered as a download card.
+          // This URL comes straight off the tool result, so unlike a link the
+          // model retypes into its reply, its signature is intact.
+          try {
+            const a = JSON.parse(curData);
+            if (a.url) artifacts.push({ url: a.url, name: a.name || a.caption || 'document' });
+          } catch { /* ignore malformed artifact event */ }
         } else if (curEvent === 'error') {
           // Plain-text error message from the SSE writer; surfaced as an error bubble.
           errorText = curData;
@@ -320,6 +441,7 @@ export function Chat() {
         ts: Date.now() / 1000,
         ...(kbChips.length > 0 ? { kb: kbChips } : {}),
         ...(images.length > 0 ? { images } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
         ...(meta ? { meta } : {}),
       }]);
     } catch (e) {
@@ -336,10 +458,59 @@ export function Chat() {
     setStreamText('');
     setToolStatus('');
     setStreaming(false);
+    // Surface the conversation in the sidebar (and refresh its preview/age).
+    // send() uses a raw fetch rather than the api wrapper, so nothing has
+    // invalidated the 60s GET cache — clear it or /sessions returns a stale
+    // list that omits the conversation just created.
+    clearApiCache();
+    void refreshConversations(agentId);
   }
 
+  const historyPanel = (
+    <aside
+      class="hidden lg:flex lg:flex-col w-64 shrink-0 border-r border-border pr-3 mr-4 overflow-y-auto"
+      aria-label="Conversation history"
+    >
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-overline uppercase tracking-wider text-muted">Conversations</h2>
+        {historyLoading && <span class="text-caption text-muted">…</span>}
+      </div>
+      {conversations.length === 0 && !historyLoading && (
+        <p class="text-caption text-muted py-2">
+          No past conversations yet. They appear here once you send a message.
+        </p>
+      )}
+      <ul class="space-y-1">
+        {conversations.map((c) => {
+          const active = c.chatId === chatId;
+          return (
+            <li key={c.chatId}>
+              <button
+                type="button"
+                disabled={streaming}
+                onClick={() => void openConversation(c.chatId)}
+                aria-current={active ? 'true' : undefined}
+                class={`w-full text-left rounded-lg px-2 py-2 transition-colors duration-fast disabled:opacity-50 ${
+                  active ? 'bg-surface-hover border border-border' : 'hover:bg-surface-hover border border-transparent'
+                }`}
+              >
+                <span class="block text-body-sm text-primary truncate">{conversationTitle(c)}</span>
+                <span class="block text-caption text-muted">
+                  {relativeAge(c.updatedAt)}
+                  {c.messageCount ? ` · ${c.messageCount} msg` : ''}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
+  );
+
   return (
-    <div class="flex flex-col h-[calc(100vh-var(--header-height)-3rem)]">
+    <div class="flex h-[calc(100vh-var(--header-height)-3rem)]">
+      {historyPanel}
+      <div class="flex flex-col flex-1 min-w-0">
       <div class="flex items-center gap-3 mb-4 flex-wrap">
         <h1 class="text-display-sm text-primary font-bold" data-tour="chat-title">Chat</h1>
         <span data-tour="chat-agent-picker">
@@ -414,6 +585,26 @@ export function Chat() {
                         class="rounded-lg border border-border max-w-full max-h-96"
                         loading="lazy"
                       />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {m.artifacts && m.artifacts.length > 0 && (
+                <div class="mt-2 space-y-2">
+                  {m.artifacts.map((a, j) => (
+                    <a
+                      key={j}
+                      href={a.url}
+                      download={a.name}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 hover:bg-surface-hover transition-colors duration-fast"
+                    >
+                      <span class="text-overline uppercase tracking-wider text-muted shrink-0">
+                        {(a.name.split('.').pop() || 'file').slice(0, 4)}
+                      </span>
+                      <span class="text-body-sm text-primary truncate">{a.name}</span>
+                      <span class="text-caption text-secondary ml-auto shrink-0">Download</span>
                     </a>
                   ))}
                 </div>
@@ -537,12 +728,13 @@ export function Chat() {
       <ConfirmDialog
         open={newChatOpen}
         title="Start a new chat"
-        message="This clears the conversation on screen and starts a fresh chat session. The current messages won't be recoverable here."
+        message="This starts a fresh chat session. The current conversation stays in the sidebar and can be reopened."
         confirmPhrase="NEW CHAT"
         confirmLabel="Start new chat"
         onConfirm={() => { startNewChat(); setNewChatOpen(false); }}
         onCancel={() => setNewChatOpen(false)}
       />
+      </div>
     </div>
   );
 }
