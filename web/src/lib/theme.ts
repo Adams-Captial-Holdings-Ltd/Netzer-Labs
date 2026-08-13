@@ -72,7 +72,7 @@ export interface Brand {
 // unset we fall back to these exact values so the UI matches today's look.
 export const DEFAULT_PRIMARY = '#6366f1';
 export const DEFAULT_ACCENT = '#06b6d4';
-export const DEFAULT_COMPANY_NAME = 'ClaudeClaw';
+export const DEFAULT_COMPANY_NAME = 'Netzar OS';
 // The sidebar subtitle shown under the company name when a theme doesn't set its
 // own tagline. Matches the previously-hardcoded label so the default theme is
 // visually unchanged.
@@ -86,7 +86,7 @@ export const DEFAULT_FAVICON =
 // The product name shown in the browser tab/title-bar when the default theme is
 // active. Kept distinct from DEFAULT_COMPANY_NAME (the header label) because the
 // stock title carries the "Enterprise" suffix from index.html.
-export const DEFAULT_DOCUMENT_TITLE = 'ClaudeClaw Enterprise';
+export const DEFAULT_DOCUMENT_TITLE = 'Netzar OS Enterprise';
 
 const BRAND_KEYS = {
   companyName: 'cce_brand_company_name',

@@ -94,7 +94,7 @@ export function AcceptInvite({ onLogin }: AcceptInviteProps) {
           <div class="w-12 h-12 bg-gradient-to-br from-claw-500 to-purple-600 rounded-xl flex items-center justify-center mb-3 mx-auto">
             <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
           </div>
-          <h1 class="text-display-sm text-primary font-bold">ClaudeClaw</h1>
+          <h1 class="text-display-sm text-primary font-bold">Netzar OS</h1>
           <p class="text-caption text-muted mt-1">Accept your invitation</p>
         </div>
 
@@ -149,7 +149,7 @@ export function AcceptInvite({ onLogin }: AcceptInviteProps) {
         )}
 
         <p class="text-center text-overline text-muted mt-6">
-          ClaudeClaw Enterprise v1.0
+          Netzar OS Enterprise v1.0
         </p>
       </div>
     </div>

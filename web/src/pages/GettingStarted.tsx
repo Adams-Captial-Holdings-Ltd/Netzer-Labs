@@ -215,7 +215,7 @@ export function GettingStarted() {
               {isAdmin ? 'Admin onboarding' : 'Getting started'}
             </p>
             <h1 class="text-heading-lg text-primary font-bold">
-              {isAdmin ? 'Set up your team on ClaudeClaw' : 'Start with your seat'}
+              {isAdmin ? 'Set up your team on Netzar OS' : 'Start with your seat'}
             </h1>
             <p class="mt-3 text-body text-secondary leading-relaxed max-w-3xl">
               {isAdmin
