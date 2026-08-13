@@ -1,4 +1,4 @@
-import { Stack, Duration, CfnOutput } from 'aws-cdk-lib';
+import { Stack, Duration, CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { execSync } from 'node:child_process';
 
@@ -62,6 +62,7 @@ import {
   ORIGIN_HEADER_NAME,
 } from './cf-origin-secret.js';
 import { resolveDeployMode } from './deploy-mode.js';
+import { resolvePublicDashboardAccess } from './public-dashboard-access.js';
 import type {
   BaseStackProps,
   ComputeOutputs,
@@ -118,6 +119,10 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     // (CCE_DEPLOY_MODE unset/`chat`, or a domain set) this flag is false and
     // every branch below is a no-op against today's synth.
     const { privateAccessOnly, mode: deployMode } = resolveDeployMode(process.env);
+    // Public dashboard access (pgnos design, Task 3). Resolved here so an
+    // invalid combination fails at synth, before anything is created. Off by
+    // default, so this is a guaranteed no-op for every existing deploy.
+    const publicAccess = resolvePublicDashboardAccess(process.env);
 
     // ── Import ECR repo (deploy script creates it before this stack runs) ──
     const ecrRepo = Repository.fromRepositoryName(
@@ -524,6 +529,75 @@ export class ComputeStack extends Stack implements ComputeOutputs {
           logGroup,
         }),
       });
+    }
+
+    // ── Cloudflare connector sidecar (pgnos design, Task 3) ─────
+    // Publishes the dashboard at app.pgnos.ai WITHOUT giving AWS any new
+    // ingress: the connector dials out to Cloudflare, so there is no public
+    // task IP, no public ALB listener and no security-group hole. awsvpc mode
+    // means the sidecar reaches the orchestrator on task-local port 3000, the
+    // same way the X-Ray daemon above is reached, so the app needs no change.
+    if (publicAccess.enabled) {
+      // Retained on purpose: the connector token is written into this secret
+      // out-of-band by the setup lifecycle, so a stack replacement must never
+      // silently drop it and leave the tunnel unauthenticated. Encryption is
+      // the Secrets Manager AWS-managed KMS key, matching the other secrets
+      // this task reads.
+      const publicTunnelSecret = new SmSecret(this, 'PublicTunnelSecret', {
+        secretName: `${APP}-public-tunnel`,
+        description:
+          'Cloudflare connector token for the netzar-production-public tunnel. Written by the setup lifecycle, never by CDK.',
+        removalPolicy: RemovalPolicy.RETAIN,
+      });
+
+      taskDef.addContainer('cloudflared', {
+        // Pinned by version AND digest for the same reason as the X-Ray
+        // daemon above: a floating tag makes archived-template rollback
+        // non-reproducible. 2026.7.3 is the current release and its manifest
+        // list carries linux/arm64, which this ARM64 task requires.
+        image: ContainerImage.fromRegistry(
+          'cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf',
+        ),
+        containerName: 'cloudflared',
+        // Essential: if the connector dies the task is replaced, because a
+        // task that is up but unreachable from the published hostname is a
+        // silent outage. The SSM tunnel remains the break-glass route.
+        essential: true,
+        cpu: 64,
+        memoryReservationMiB: 128,
+        // `--no-autoupdate` because the image is digest-pinned: letting the
+        // binary self-update at runtime would defeat that pin. Config comes
+        // from the remotely-managed tunnel, so the route and its 404
+        // catch-all live in Cloudflare, not in this template.
+        //
+        // Metrics bind to loopback, not 0.0.0.0: nothing outside the task
+        // scrapes them, and the X-Ray daemon above already holds port 2000 in
+        // this shared network namespace. Loopback keeps /ready available for
+        // `ecs execute-command` debugging without putting it on the task ENI.
+        command: ['tunnel', '--no-autoupdate', '--metrics', '127.0.0.1:20241', 'run'],
+        secrets: {
+          // The token reaches the container ONLY as an ECS secret reference
+          // resolved at task start. It is never a command argument, never in
+          // the template, and never in an env var written by a deploy.
+          TUNNEL_TOKEN: EcsSecret.fromSecretsManager(publicTunnelSecret, 'token'),
+        },
+        logging: LogDrivers.awsLogs({
+          streamPrefix: 'cloudflared',
+          logGroup,
+        }),
+        // Deliberately NO container healthCheck. The published image is
+        // distroless: it has no `sh`, and no curl or wget, so a CMD-SHELL
+        // probe cannot execute and a CMD probe could only re-run the binary,
+        // which proves nothing about tunnel health. Because this container is
+        // essential, a probe that can never pass would roll the task forever.
+        // Liveness is covered instead by `essential: true` (a dead connector
+        // replaces the task) plus the always-on CloudWatch alarm, which is
+        // where connector health belongs since it also has to alert a human.
+      });
+
+      new CfnOutput(this, 'PublicHostname', { value: publicAccess.hostname });
+      new CfnOutput(this, 'PublicTunnelName', { value: publicAccess.tunnelName });
+      new CfnOutput(this, 'PublicTunnelSecretArn', { value: publicTunnelSecret.secretArn });
     }
 
     // ── Memory-consolidation worker task def (Wave 3a) ──────────
