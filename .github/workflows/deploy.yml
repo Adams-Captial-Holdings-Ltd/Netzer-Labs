@@ -206,6 +206,7 @@ jobs:
           # Pin the task definition to the image we just pushed (never `latest`).
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
           CCE_CICD_ENABLED: '1'
+          CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
           # OIDC trust is fail-closed: synth errors unless the repo identity
           # and the exact deploy subjects are explicit. Derived from the repo
           # running the workflow, never a hardcoded default.
