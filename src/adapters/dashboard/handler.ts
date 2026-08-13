@@ -90,6 +90,13 @@ import {
   appendTurns,
   getSession,
 } from '../../lib/state/sessions-repo.js';
+import {
+  conversationOwnerId,
+  getConversation,
+  newConversationId,
+  persistTurn,
+  type ConversationMeta,
+} from '../../lib/state/conversations-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
 import {
@@ -1610,14 +1617,20 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         text?: string;
         agentId?: string;
         chatId?: string;
+        /** Continue an existing owner-scoped conversation (ADR 0010). */
+        conversationId?: string;
+        /** Mint a fresh server-side conversation for this first message. */
+        startConversation?: boolean;
+        /** Client-minted idempotency key, reused verbatim on a retry. */
+        clientMessageId?: string;
         modelOverride?: string;
         /** Pre-staged uploads (presigned PUT to the vectors staging bucket). */
         attachments?: Array<{ s3Key?: string; fileName?: string; mimeType?: string }>;
       }>()
       .catch(() => null);
     const text = body?.text ?? '';
-    const agentId = body?.agentId ?? 'main';
-    const chatId = safeDashboardChatId(body?.chatId);
+    let agentId = body?.agentId ?? 'main';
+    let chatId = safeDashboardChatId(body?.chatId);
     const rawAttachments = Array.isArray(body?.attachments)
       ? body.attachments.slice(0, 3)
       : [];
@@ -1631,6 +1644,35 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       if (!a?.s3Key || !isUploadKey(a.s3Key)) {
         return c.json({ error: 'invalid_upload_key' }, 400);
       }
+    }
+    // Conversation resolution (ADR 0010), before the stream opens so failures
+    // are clean JSON. The meta lives under the CALLER'S partition, so the
+    // lookup IS the ownership check: another user's conversation is
+    // indistinguishable from a nonexistent one (uniform 404, no existence
+    // leak). A conversation is pinned to its agent — the meta's agentId wins
+    // over whatever the body claims. The clientMessageId fence answers a
+    // retried send with 409 before any model call or spend.
+    let conversationMeta: ConversationMeta | null = null;
+    let conversationId: string | null = null;
+    if (typeof body?.conversationId === 'string' && body.conversationId !== '') {
+      const principal = getPrincipal(c);
+      if (!principal) return c.json({ error: 'unauthorized' }, 401);
+      const meta = await getConversation(conversationOwnerId(principal), body.conversationId);
+      if (!meta) return c.json({ error: 'not_found' }, 404);
+      if (
+        typeof body.clientMessageId === 'string' &&
+        body.clientMessageId !== '' &&
+        meta.lastClientMessageId === body.clientMessageId
+      ) {
+        return c.json({ error: 'duplicate_message', conversationId: meta.conversationId }, 409);
+      }
+      conversationMeta = meta;
+      conversationId = meta.conversationId;
+      chatId = meta.conversationId; // the conversationId IS the session chatId
+      agentId = meta.agentId;
+    } else if (body?.startConversation) {
+      conversationId = newConversationId();
+      chatId = conversationId;
     }
     return streamSSE(c, async (stream) => {
       // Command? send the reply as a single event and close. Skipped for
@@ -1827,6 +1869,30 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
             { role: 'user', text: userText, ts: now },
             { role: 'assistant', text: result.text, ts: now },
           ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c) });
+          // Durable transcript + owner meta (ADR 0010): the product record
+          // that outlives the session row's 20-turn window. Awaited and
+          // error-propagating (a failed write surfaces as the stream's error
+          // event) — durability is the feature, not a fire-and-forget.
+          if (conversationId) {
+            const principal = getPrincipal(c);
+            if (principal) {
+              await persistTurn({
+                ownerId: conversationMeta?.ownerId ?? conversationOwnerId(principal),
+                conversationId,
+                agentId,
+                userText,
+                assistantText: result.text,
+                ...(typeof body?.clientMessageId === 'string' && body.clientMessageId !== ''
+                  ? { clientMessageId: body.clientMessageId }
+                  : {}),
+              });
+              // Additive event: existing SSE consumers ignore unknown names.
+              await stream.writeSSE({
+                event: 'conversation',
+                data: JSON.stringify({ conversationId }),
+              });
+            }
+          }
         }
         await stream.writeSSE({ event: 'done', data: 'ok' });
       } catch (err) {

@@ -237,6 +237,11 @@ function AppShell() {
             <Route path="/agents"><RequireCapability need="agents:read" label="Agents"><Agents /></RequireCapability></Route>
             <Route path="/agents/:id" component={AgentDetail} />
             <Route path="/chat"><RequireCapability need="chat:read" label="Chat"><Chat /></RequireCapability></Route>
+            {/* Deep link to one owner-scoped conversation. Registered BEFORE
+                /chat/:agentId so the literal `c` segment can't be read as an
+                agent id. :param routes are exempt from the route-manifest
+                drift test; do NOT add a static /chat/c route. */}
+            <Route path="/chat/c/:conversationId" component={Chat} />
             <Route path="/chat/:agentId" component={Chat} />
             <Route path="/playground"><RequireCapability need="chat:read" label="Playground"><Playground /></RequireCapability></Route>
             <Route path="/sessions"><RequireCapability need="sessions:read" label="Sessions"><Sessions /></RequireCapability></Route>

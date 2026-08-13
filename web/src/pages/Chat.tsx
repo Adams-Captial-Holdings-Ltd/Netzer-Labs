@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { useRoute } from 'wouter-preact';
+import { useRoute, useLocation } from 'wouter-preact';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api, getToken, clearApiCache } from '../lib/api';
+import type { ConversationSummary, ConversationDetail } from '../lib/api';
+import { dateGroupLabel } from '../lib/format';
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { EmptyState } from '../components/EmptyState';
@@ -41,53 +43,46 @@ function modelOptionLabel(m: Model): string {
   return `${name} · ${ctx}`;
 }
 
-// Each conversation gets its own chatId. Reusing a single id across agent
-// switches let one agent's accumulated context leak into the next turn, which
-// tripped Bedrock guardrails on later turns (the multi-turn false-positive).
-// A fresh id per agent (and per explicit "new chat") keeps server-side history
-// scoped to the conversation actually on screen.
-function freshChatId(): string {
-  return `dashboard:${Date.now()}`;
-}
+// Conversation identity is SERVER-minted (ADR 0010): the first send carries
+// `startConversation: true`, the backend mints an unguessable
+// `dashboard:c_<uuid>` and announces it on the stream's `conversation` event.
+// A conversation is pinned to one agent; switching agents starts a fresh one
+// (reusing an id across agents let accumulated context leak into the next
+// turn and tripped Bedrock guardrails — the multi-turn false-positive).
 
-// One row of the conversation sidebar. Mirrors the shape /sessions already
-// returns (same as Sessions.tsx) — this feature adds no new endpoint.
-interface Conversation {
-  agentId: string;
-  chatId: string;
-  updatedAt: number;
-  messageCount: number | null;
-  firstMessage: string | null;
-}
-
-// The active conversation survives a reload. Without this the Chat tab minted a
-// fresh chatId on every mount and silently abandoned the previous conversation
-// — which is what made history feel non-existent even though it was stored.
+// The active conversation survives a reload (and the URL survives a deep
+// link). Value is JSON `{ conversationId }`; the pre-ownership shape
+// `{ agentId, chatId }` parses but yields null, so legacy remembered chats
+// simply start fresh instead of resurrecting an unowned id.
 const ACTIVE_CHAT_KEY = 'cce_chat_active';
 
-function storedChatId(agentId: string): string | null {
+function storedConversationId(): string | null {
   try {
     const raw = sessionStorage.getItem(ACTIVE_CHAT_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { agentId?: string; chatId?: string };
-    return parsed.agentId === agentId && parsed.chatId ? parsed.chatId : null;
+    const parsed = JSON.parse(raw) as { conversationId?: string };
+    return parsed.conversationId ?? null;
   } catch {
     return null;
   }
 }
 
-function rememberChatId(agentId: string, chatId: string): void {
+function rememberConversationId(conversationId: string | null): void {
   try {
-    sessionStorage.setItem(ACTIVE_CHAT_KEY, JSON.stringify({ agentId, chatId }));
+    if (conversationId) {
+      sessionStorage.setItem(ACTIVE_CHAT_KEY, JSON.stringify({ conversationId }));
+    } else {
+      sessionStorage.removeItem(ACTIVE_CHAT_KEY);
+    }
   } catch {
     /* private mode or quota — the sidebar still works, only resume-on-reload is lost */
   }
 }
 
-/** Sidebar label for a conversation: its opening message, else the raw id. */
-function conversationTitle(c: Conversation): string {
-  const first = (c.firstMessage ?? '').trim();
-  return first.length > 0 ? first : c.chatId;
+/** Sidebar label: the server-side title (first user message), else the id. */
+function conversationTitle(c: ConversationSummary): string {
+  const t = (c.title ?? '').trim();
+  return t.length > 0 ? t : c.conversationId;
 }
 
 /** Compact relative age for the sidebar ("3m", "5h", "2d"). */
@@ -97,6 +92,15 @@ function relativeAge(epochSeconds: number, nowMs = Date.now()): string {
   if (secs < 3600) return `${Math.floor(secs / 60)}m`;
   if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
   return `${Math.floor(secs / 86400)}d`;
+}
+
+/** Route params arrive raw; the id contains ':' so it travels URL-encoded. */
+function safeDecode(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 // Render assistant markdown to sanitized HTML. marked emits <strong>, <em>,
@@ -130,14 +134,19 @@ function friendlyStreamError(raw: string): string {
 
 export function Chat() {
   const [, params] = useRoute('/chat/:agentId');
+  const [, convParams] = useRoute('/chat/c/:conversationId');
+  const [, navigate] = useLocation();
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [agentId, setAgentId] = useState(params?.agentId ?? '');
+  // `/chat/c/...`'s literal `c` segment must never be read as an agent id.
+  const [agentId, setAgentId] = useState(params?.agentId === 'c' ? '' : params?.agentId ?? '');
   const [models, setModels] = useState<Model[]>([]);
   // '' = let the agent use its own configured model. A non-empty value is a
   // per-turn modelOverride sent with each send (the agent gains access to
   // every model the platform is configured for).
   const [modelId, setModelId] = useState('');
-  const [chatId, setChatId] = useState(freshChatId);
+  // null = no conversation yet: the next send carries startConversation and
+  // adopts the server-minted id from the `conversation` SSE event.
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -185,22 +194,14 @@ export function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamText]);
 
-  // Conversation sidebar. /sessions with an agentId is a single Query on
-  // PK=AGENT#<id> (without it the route Scans the whole table), so always
-  // scope it. Newest first.
-  async function refreshConversations(forAgent: string) {
-    if (!forAgent) return;
+  // Conversation sidebar: the CALLER'S conversations across all agents, one
+  // owner-partition Query server-side (ownership enforced there, never by
+  // client filtering). Newest first, already sorted by the backend.
+  async function refreshConversations() {
     setHistoryLoading(true);
     try {
-      const d = await api.get<{ sessions: Conversation[] }>(
-        `/sessions?agentId=${encodeURIComponent(forAgent)}`,
-      );
-      const rows = (d.sessions ?? [])
-        // Only dashboard chats are browsable here; Telegram/Slack rows share
-        // the table but have no UI to reopen them, and still expire.
-        .filter((s) => s.chatId.startsWith('dashboard:'))
-        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-      setConversations(rows);
+      const d = await api.get<{ conversations: ConversationSummary[] }>('/conversations');
+      setConversations(d.conversations ?? []);
     } catch (e) {
       // Non-fatal: the sidebar is an aid, not a prerequisite for chatting.
       console.error('Chat: failed to load conversations', e);
@@ -208,53 +209,60 @@ export function Chat() {
     setHistoryLoading(false);
   }
 
-  // Load the sidebar whenever the agent changes, and restore the conversation
-  // that was open before a reload.
+  // Load the rail once, and restore the active conversation: the URL wins
+  // (deep link / refresh on /chat/c/...), else the sessionStorage memory.
   useEffect(() => {
-    if (!agentId) return;
-    void refreshConversations(agentId);
-    const remembered = storedChatId(agentId);
-    if (remembered && remembered !== chatId) void openConversation(remembered);
+    void refreshConversations();
+    const fromRoute = convParams?.conversationId ? safeDecode(convParams.conversationId) : null;
+    const remembered = fromRoute ?? storedConversationId();
+    if (remembered) void openConversation(remembered, { updateUrl: !fromRoute });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, []);
 
-  // Reopen a stored conversation: point at its chatId and replay its turns.
-  // The transcript endpoint returns the real turn array (Sessions.tsx uses the
-  // same one). Only the last 20 turns exist server-side — the window cap.
-  async function openConversation(id: string) {
+  // Rail clicks / back-forward navigation to a different conversation id.
+  useEffect(() => {
+    const fromRoute = convParams?.conversationId ? safeDecode(convParams.conversationId) : null;
+    if (fromRoute && fromRoute !== conversationId) {
+      void openConversation(fromRoute, { updateUrl: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convParams?.conversationId]);
+
+  // Reopen a conversation: full durable transcript (not the 20-turn session
+  // window) + the agent it is pinned to. 404 means not-mine-or-gone — the
+  // uniform server answer; never guess which.
+  async function openConversation(id: string, opts?: { updateUrl?: boolean }) {
     if (streaming) return;
-    setChatId(id);
-    rememberChatId(agentId, id);
+    setConversationId(id);
+    rememberConversationId(id);
+    if (opts?.updateUrl !== false) navigate(`/chat/c/${encodeURIComponent(id)}`);
     setStreamText('');
     setMessages([]);
     try {
-      const d = await api.get<{ turns?: Array<{ role: string; text: string; ts: number }> }>(
-        `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(id)}`,
+      const d = await api.get<ConversationDetail>(
+        `/conversations/${encodeURIComponent(id)}`,
       );
-      setMessages(
-        (d.turns ?? []).map((t) => ({
-          role: t.role === 'user' ? 'user' : 'assistant',
-          text: t.text,
-          ts: t.ts,
-        })),
-      );
+      setAgentId(d.conversation.agentId);
+      setMessages(d.messages.map((m) => ({ role: m.role, text: m.text, ts: m.ts })));
     } catch (e) {
-      console.error('Chat: failed to load transcript', e);
+      console.error('Chat: failed to load conversation', e);
       setLoadError('Could not load that conversation. It may have been deleted.');
     }
   }
 
-  // Start a brand-new conversation: fresh server-side chatId + cleared UI.
+  // Start fresh: no conversation until the first send round-trips (the server
+  // mints the id — no empty conversations, nothing to clean up on abandon).
   function startNewChat() {
-    const id = freshChatId();
-    setChatId(id);
-    rememberChatId(agentId, id);
+    setConversationId(null);
+    rememberConversationId(null);
     setMessages([]);
     setStreamText('');
+    navigate('/chat');
   }
 
-  // Switching the selected agent must NOT carry the previous agent's chatId.
-  // Mint a new one so the next turn starts clean (see freshChatId rationale).
+  // Switching the selected agent must NOT carry the previous conversation.
+  // A conversation is pinned to its agent server-side; start clean instead
+  // (shared context across agents tripped Bedrock guardrails).
   function selectAgent(id: string) {
     if (id === agentId) return;
     setAgentId(id);
@@ -300,17 +308,34 @@ export function Chat() {
         attachments.push({ s3Key: key, fileName: f.name, ...(f.type ? { mimeType: f.type } : {}) });
       }
       setToolStatus('');
+      // One idempotency key per logical send; a retry of THIS send would reuse
+      // it and the server answers 409 instead of double-charging the turn.
+      const clientMessageId = crypto.randomUUID();
       const res = await fetch('/api/test-turn/stream', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text,
           agentId,
-          chatId,
+          ...(conversationId ? { conversationId } : { startConversation: true }),
+          clientMessageId,
           ...(modelId ? { modelOverride: modelId } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
         }),
       });
+      if (res.status === 409 && conversationId) {
+        // The server already has this message (a duplicate send). Reconcile to
+        // the stored transcript instead of showing a second bubble.
+        await openConversation(conversationId, { updateUrl: false });
+        setStreaming(false);
+        return;
+      }
+      if (res.status === 404) {
+        setMessages((prev) => prev.slice(0, -1));
+        setLoadError('That conversation no longer exists. Start a new chat.');
+        setStreaming(false);
+        return;
+      }
       if (!res.ok || !res.body) throw new Error('Stream failed');
 
       const reader = res.body.getReader();
@@ -321,6 +346,8 @@ export function Chat() {
       // turn fails mid-stream. We capture it here and surface it as a red bubble
       // after the loop instead of pushing an empty assistant reply.
       let errorText = '';
+      // Server-minted conversation id, announced after successful persistence.
+      let adoptedConversationId = '';
       const kbChips: string[] = [];
       const images: Array<{ url: string; caption: string }> = [];
       const artifacts: Array<{ url: string; name: string }> = [];
@@ -375,6 +402,12 @@ export function Chat() {
             const a = JSON.parse(curData);
             if (a.url) artifacts.push({ url: a.url, name: a.name || a.caption || 'document' });
           } catch { /* ignore malformed artifact event */ }
+        } else if (curEvent === 'conversation') {
+          // { conversationId } — emitted once the turn is durably persisted.
+          try {
+            const cv = JSON.parse(curData);
+            if (cv.conversationId) adoptedConversationId = cv.conversationId;
+          } catch { /* ignore malformed conversation event */ }
         } else if (curEvent === 'error') {
           // Plain-text error message from the SSE writer; surfaced as an error bubble.
           errorText = curData;
@@ -444,6 +477,14 @@ export function Chat() {
         ...(artifacts.length > 0 ? { artifacts } : {}),
         ...(meta ? { meta } : {}),
       }]);
+      // Adopt the server-minted conversation id (first send of a new chat):
+      // remember it and move the URL to the shareable deep link. replace, not
+      // push — back should leave the chat, not step to a pre-id limbo state.
+      if (adoptedConversationId && adoptedConversationId !== conversationId) {
+        setConversationId(adoptedConversationId);
+        rememberConversationId(adoptedConversationId);
+        navigate(`/chat/c/${encodeURIComponent(adoptedConversationId)}`, { replace: true });
+      }
     } catch (e) {
       // Log the raw cause for debugging, but render only sanitized copy: the
       // transcript must never show raw exception text (backend response bodies,
@@ -460,10 +501,10 @@ export function Chat() {
     setStreaming(false);
     // Surface the conversation in the sidebar (and refresh its preview/age).
     // send() uses a raw fetch rather than the api wrapper, so nothing has
-    // invalidated the 60s GET cache — clear it or /sessions returns a stale
-    // list that omits the conversation just created.
+    // invalidated the 60s GET cache — clear it or /conversations returns a
+    // stale list that omits the conversation just created.
     clearApiCache();
-    void refreshConversations(agentId);
+    void refreshConversations();
   }
 
   const historyPanel = (

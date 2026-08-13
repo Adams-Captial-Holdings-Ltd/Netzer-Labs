@@ -29,6 +29,12 @@ import {
   getSession,
 } from '../state/sessions-repo.js';
 import {
+  deleteConversationData,
+  isConversationChatId,
+  listMessages,
+  type ConversationMessage,
+} from '../state/conversations-repo.js';
+import {
   listScheduledTasksForAgent,
   deleteScheduledTask,
 } from '../state/scheduled-tasks-repo.js';
@@ -60,6 +66,12 @@ export interface ExportPayload {
   scheduledTasks: Array<{ id: string; promptText: string; nextRunAt: number; status: string }>;
   inboxFromOthers: Array<{ id: string; fromAgent: string; messageText: string; createdAt: string }>;
   missions: Array<{ id: string; title: string; body: string; status: string; createdAt: string }>;
+  /**
+   * Full durable transcript (ADR 0010) for owner-scoped conversations
+   * (`dashboard:c_*` chatIds). Absent for legacy/bot chats, whose only
+   * transcript is the session's rolling window counted in `session.turns`.
+   */
+  messages?: ConversationMessage[];
 }
 
 function toSessionView(session: Awaited<ReturnType<typeof getSession>>): {
@@ -79,18 +91,20 @@ export async function exportChatData(
   agentId: string,
   chatId: string,
 ): Promise<ExportPayload> {
-  const [session, memories, scheduled, inbox, missions] = await Promise.all([
+  const [session, memories, scheduled, inbox, missions, messages] = await Promise.all([
     getSession(agentId, chatId),
     listMemoriesForChat(agentId, chatId, 500),
     listScheduledTasksForAgent(agentId, 500),
     listInbox(agentId, 200, ['queued', 'delivered', 'completed']),
     listMissionsForAgent(agentId, 200),
+    isConversationChatId(chatId) ? listMessages(chatId, 1000) : Promise.resolve(null),
   ]);
   return {
     agentId,
     chatId,
     exportedAt: new Date().toISOString(),
     session: toSessionView(session),
+    ...(messages ? { messages } : {}),
     memories: memories.map((m) => ({
       id: m.id,
       content: m.content,
@@ -135,6 +149,8 @@ export interface PurgeReport {
     scheduledTasks: number;
     inboxItems: number;
     sessionDeleted: boolean;
+    /** Durable conversation messages removed (0 for legacy/bot chats). */
+    conversationMessages: number;
   };
   /** SHA-256 of the export taken just before purge — proves what was deleted without keeping the content. */
   preDeleteHash: string;
@@ -169,6 +185,13 @@ export async function purgeChatData(
 
   await deleteSession(agentId, chatId);
 
+  // Owner-scoped conversations (ADR 0010) also carry a durable transcript +
+  // meta outside the session row; erasure that left them behind would be
+  // false. Legacy/bot chats have no such items and skip this.
+  const conversation = isConversationChatId(chatId)
+    ? await deleteConversationData(chatId)
+    : { messagesDeleted: 0, metaDeleted: false };
+
   const report: PurgeReport = {
     agentId,
     chatId,
@@ -178,6 +201,7 @@ export async function purgeChatData(
       scheduledTasks: scheduled.length,
       inboxItems: inbox.length,
       sessionDeleted: true,
+      conversationMessages: conversation.messagesDeleted,
     },
     preDeleteHash,
   };

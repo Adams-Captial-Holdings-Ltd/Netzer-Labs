@@ -76,6 +76,17 @@ vi.mock('../../lib/audit/audit-writer.js', () => ({
   writeAudit: () => Promise.resolve(),
 }));
 
+// Conversations repo: the matrix only proves the GATE; an allowed list is empty.
+vi.mock('../../lib/state/conversations-repo.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../lib/state/conversations-repo.js')>();
+  return {
+    ...actual,
+    listConversations: () => Promise.resolve([]),
+    getConversation: () => Promise.resolve(null),
+    listMessages: () => Promise.resolve([]),
+  };
+});
+
 // Seat repo: the matrix only proves the GATE; an allowed list returns empty.
 vi.mock('../../lib/admin/seat-repo.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/admin/seat-repo.js')>();
@@ -188,6 +199,7 @@ import { buildObservabilityPostureRouter } from './posture-observability.js';
 import { buildIamCopilotRouter } from './iam-copilot.js';
 import { buildPanicRouter } from './panic.js';
 import { buildSeatAdminRouter } from './seat-admin.js';
+import { buildConversationsRouter } from './conversations.js';
 import { buildCostCapRouter } from './cost-cap.js';
 import { buildCostRouter } from './cost.js';
 import { buildIntegrationsRouter } from './integrations.js';
@@ -377,6 +389,22 @@ const ROUTES: RouteCase[] = [
     cap: 'seats:read',
     minTier: 'owner',
     run: (t) => call(buildSeatAdminRouter, '/api/seats', '/', 'GET', t),
+  },
+  // ── Conversations: chat:read is held by every templated tier (viewer is
+  // read-only but this IS a read), so the matrix pins the allow direction for
+  // all four; owner-scoping (the 404 boundary) is pinned in
+  // conversations.test.ts, which owns that coverage.
+  {
+    name: 'Conversations list (GET /conversations)',
+    cap: 'chat:read',
+    minTier: 'viewer',
+    run: (t) => call(buildConversationsRouter, '/api/conversations', '/', 'GET', t),
+  },
+  {
+    name: 'Conversation detail (GET /conversations/:id)',
+    cap: 'chat:read',
+    minTier: 'viewer',
+    run: (t) => call(buildConversationsRouter, '/api/conversations', '/dashboard:c_x', 'GET', t),
   },
   // ── MCP server write: admin-rank AND config:write. viewer/operator are
   // blocked by the admin ROLE_RANK check first (it returns { requiredRole:

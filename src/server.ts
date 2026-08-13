@@ -30,6 +30,7 @@ import { buildPowerRouter } from './adapters/dashboard/power.js';
 import { buildDriftRouter } from './adapters/dashboard/drift.js';
 import { buildRateLimitsRouter } from './adapters/dashboard/rate-limits.js';
 import { buildSeatAdminRouter } from './adapters/dashboard/seat-admin.js';
+import { buildConversationsRouter } from './adapters/dashboard/conversations.js';
 import { buildNetworkPostureRouter } from './adapters/dashboard/posture-network.js';
 import { buildSecurityPostureRouter } from './adapters/dashboard/posture-security.js';
 import { buildIamPostureRouter } from './adapters/dashboard/posture-iam.js';
@@ -84,6 +85,10 @@ export function buildApp(env: Env): Hono {
   // workspace surface). Mounted before the /api catch-all so /api/seats/*
   // matches first; capability gates are per route group inside the router.
   app.route('/api/seats', buildSeatAdminRouter());
+  // Owner-scoped chat history (list + full transcript). Mounted before the
+  // /api catch-all so /api/conversations/* matches first; the send path that
+  // WRITES conversations stays on the dashboard router (/api/test-turn/stream).
+  app.route('/api/conversations', buildConversationsRouter());
   app.route('/api/oauth', buildOAuthRouter());
   // Tier B read-only posture: GET-only status cards. Mounted before the
   // /api catch-all so the specific posture paths match first.

@@ -638,6 +638,33 @@ export interface WhoAmI {
   capabilities: string[];
 }
 
+// ── Owner-scoped conversation history (backend /api/conversations) ──────────
+
+// One sidebar row. The list is strictly the CALLER'S conversations (ownership
+// is enforced server-side by partition, never by client filtering).
+export interface ConversationSummary {
+  conversationId: string;
+  title: string;
+  agentId: string;
+  messageCount: number;
+  createdAt: number; // epoch seconds
+  updatedAt: number; // epoch seconds
+}
+
+export interface ConversationMessageView {
+  role: 'user' | 'assistant';
+  text: string;
+  ts: number; // epoch seconds
+}
+
+// GET /api/conversations/:id — meta plus the full durable transcript
+// (oldest-first, last 200 messages), which outlives the session row's
+// 20-turn context window.
+export interface ConversationDetail {
+  conversation: ConversationSummary;
+  messages: ConversationMessageView[];
+}
+
 // Shape returned by the magic-link consume routes (accept + verify). `token` is
 // the per-user session bearer to store via the auth/onLogin flow.
 export interface MagicConsumeResult {
