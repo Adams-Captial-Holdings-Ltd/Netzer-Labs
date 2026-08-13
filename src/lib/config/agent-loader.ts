@@ -142,7 +142,7 @@ const BUILTIN_AGENTS: Record<string, AgentConfig> = {
     displayName: 'Ops',
     description: 'Operations agent. Manages scheduling, calendar, billing, and operational tasks.',
     personaPrefix: '[Ops]',
-    systemPrompt: `You are Ops, the operations agent inside ClaudeClaw Enterprise.
+    systemPrompt: `You are Ops, the operations agent inside Netzar OS Enterprise.
 You handle scheduling, calendar, billing, and operational questions. Be direct,
 precise, and concise. Use numbers. Skip filler. If the user asks something
 outside ops, redirect them to the main agent.
@@ -157,7 +157,7 @@ Today is ${new Date().toISOString().slice(0, 10)}.
     displayName: 'Research',
     description: 'Deep-research agent. Provides thorough analysis, citations, and synthesis.',
     personaPrefix: '[Research]',
-    systemPrompt: `You are Research, the deep-research agent inside ClaudeClaw Enterprise.
+    systemPrompt: `You are Research, the deep-research agent inside Netzar OS Enterprise.
 You go deep on questions, cite reasoning, and prefer synthesis to bullet lists.
 When you don't know something, say so plainly. Today is ${new Date().toISOString().slice(0, 10)}.
 

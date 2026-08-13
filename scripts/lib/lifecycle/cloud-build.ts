@@ -238,7 +238,7 @@ async function ensureProject(
 ): Promise<void> {
   const projectSpec = {
     name: names.project,
-    description: 'ClaudeClaw Enterprise cloud image build (Docker-free installs). Safe to delete; deploy recreates it.',
+    description: 'Netzar OS Enterprise cloud image build (Docker-free installs). Safe to delete; deploy recreates it.',
     source: { type: 'S3', location: sourceLocation, buildspec: cloudBuildBuildSpec() },
     artifacts: { type: 'NO_ARTIFACTS' },
     environment: {

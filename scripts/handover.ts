@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — Operator handover (IaC readiness plan, item 45).
+ * Netzar OS Enterprise — Operator handover (IaC readiness plan, item 45).
  *
  *   npm run handover               # full locked handover (interactive)
  *   npm run handover -- --dry-run  # full inventory + checklist, ZERO mutations
@@ -200,7 +200,7 @@ async function main(): Promise<void> {
   const env = parseEnvFile(readFileSync(envPath, 'utf-8'));
   const region = env.AWS_REGION || 'us-east-1';
 
-  log('\n' + bold(`ClaudeClaw Enterprise · Operator handover (${envFlag})${dryRun ? ' — DRY RUN' : ''}`));
+  log('\n' + bold(`Netzar OS Enterprise · Operator handover (${envFlag})${dryRun ? ' — DRY RUN' : ''}`));
   log(gray('─'.repeat(60)));
   if (dryRun) log(dim('dry run: full inventory + checklist, ZERO mutations\n'));
 

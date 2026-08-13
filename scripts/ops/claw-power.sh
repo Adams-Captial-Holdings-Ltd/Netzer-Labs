@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# claw-power.sh — pause / wake ClaudeClaw Enterprise (CCE) prod to save money
+# claw-power.sh — pause / wake Netzar OS Enterprise (CCE) prod to save money
 # between demos. Phase A ("works today, no new infra") of the demo pause/wake
 # system. See handoff/pause-system-build-plan-*.md.
 #
@@ -116,7 +116,7 @@ cmd_status() {
     mode="PARTIAL"
   fi
 
-  say "ClaudeClaw Enterprise power state"
+  say "Netzar OS Enterprise power state"
   say "  region/cluster/service : ${REGION} / ${CLUSTER} / ${SERVICE}"
   say "  mode                   : ${mode}"
   say "  ecs service            : status=${svc_status:-?} desired=${desired:-?} running=${running:-?}"

@@ -1,6 +1,6 @@
 # Security Policy
 
-ClaudeClaw Enterprise runs entirely in your own AWS account, but it terminates
+Netzar OS Enterprise runs entirely in your own AWS account, but it terminates
 webhooks from the public internet (Slack, Telegram), holds AWS credentials in
 CI, and brokers model calls — so security reports get priority handling.
 

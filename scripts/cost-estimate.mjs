@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ClaudeClaw Enterprise, recalculable per-tier cost estimator.
+ * Netzar OS Enterprise, recalculable per-tier cost estimator.
  *
  * Plain Node, zero dependencies. Run it with:
  *
@@ -167,7 +167,7 @@ const results = tiers.map(estimateTier);
 if (json) {
   console.log(JSON.stringify({ asOf: ASSUMPTIONS.asOf, region: ASSUMPTIONS.region, assumptions: ASSUMPTIONS, results }, null, 2));
 } else {
-  console.log(`ClaudeClaw Enterprise cost estimate, region ${ASSUMPTIONS.region}, unit prices as of ${ASSUMPTIONS.asOf}`);
+  console.log(`Netzar OS Enterprise cost estimate, region ${ASSUMPTIONS.region}, unit prices as of ${ASSUMPTIONS.asOf}`);
   console.log('Unit prices age. Edit the UNIT_PRICES block at the top of this file and re-run.\n');
   for (const r of results) {
     console.log(`T${r.tier} ${r.label}, estimated fixed floor: ~$${r.fixedMonthlyUsd}/mo`);

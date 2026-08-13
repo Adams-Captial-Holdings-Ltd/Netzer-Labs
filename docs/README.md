@@ -1,4 +1,4 @@
-# ClaudeClaw Enterprise documentation
+# Netzar OS Enterprise documentation
 
 > Everything in this folder is organized by what you are trying to do, not by which subsystem a page describes: deploy it, understand it, run it in production, or extend it. Every page opens with a short plain-English summary like this one, then goes technical, so you can skim the summaries and only dive where you need to. Start with the track that matches you; the [glossary](./glossary.md) decodes the project-specific words along the way.
 

@@ -1,6 +1,6 @@
 # Cloudflare Tunnel Setup
 
-Expose the ClaudeClaw Enterprise dashboard via Cloudflare Tunnel to add a zero-trust, SSO-gated access layer in front of it. Note: this does not close the ALB — in the default (chat) deploy the ALB is internet-facing and its security group admits `0.0.0.0/0` on ports 80/443 (`infra/lib/network-stack.ts`). For a genuinely private origin, use `infra-only` mode with no domain set (that combination provisions an internal ALB) or lock down the ALB security group.
+Expose the Netzar OS Enterprise dashboard via Cloudflare Tunnel to add a zero-trust, SSO-gated access layer in front of it. Note: this does not close the ALB — in the default (chat) deploy the ALB is internet-facing and its security group admits `0.0.0.0/0` on ports 80/443 (`infra/lib/network-stack.ts`). For a genuinely private origin, use `infra-only` mode with no domain set (that combination provisions an internal ALB) or lock down the ALB security group.
 
 ## Prerequisites
 

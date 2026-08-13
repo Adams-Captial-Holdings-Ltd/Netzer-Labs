@@ -1,6 +1,6 @@
 # Missions v2 — architecture audit
 
-Audit of the Netzer OS **Missions** feature against the **Projects** feature in
+Audit of the Netzar OS **Missions** feature against the **Projects** feature in
 the personal ClaudeClaw OS, and a recommendation for what Missions should become.
 
 Every claim about current behaviour below was read out of the code. Findings are
@@ -27,7 +27,7 @@ are historical claims: their commits are unreachable and their implementations
 are absent from verified current source. They must not be described as complete,
 shipped, merged, deployed, or recoverable.
 
-- Netzer OS: this repository, branch `development`.
+- Netzar OS: this repository, branch `development`.
 - ClaudeClaw OS: `claudeclaw-os`, branch `main` — a separate personal/OSS system,
   not a fork of this one. Referenced as a source of design lessons only.
 

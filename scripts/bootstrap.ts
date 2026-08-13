@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise · Bootstrap (onboarding Phase 3).
+ * Netzar OS Enterprise · Bootstrap (onboarding Phase 3).
  *
  * `npm run bootstrap`
  *

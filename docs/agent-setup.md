@@ -11,7 +11,7 @@
 
 > **Point your AI agent here.** This is the single file to hand an AI coding
 > agent to drive the whole install. It is the signed, phase-ordered runbook an
-> AI agent (or a careful human) follows to take ClaudeClaw Enterprise from a
+> AI agent (or a careful human) follows to take Netzar OS Enterprise from a
 > freshly cloned members repo to a verified, single-tenant deployment in a
 > brand-new standalone AWS account. Every command speaks one typed JSON
 > envelope; you act only on its typed fields, never on the prose AWS hands back.
@@ -52,7 +52,7 @@ not pass*. Names in this doc are the real defaults from
 You are executing a first-time install with no prior context. This section is
 all you need to start.
 
-**What ClaudeClaw Enterprise is.** A single-tenant AI-agent product. The control
+**What Netzar OS Enterprise is.** A single-tenant AI-agent product. The control
 plane is one container image on AWS ECS Fargate (dashboard, orchestrator, and
 the Slack and Telegram adapters). "Agents" are configs (a system prompt, memory,
 and a tool allowlist) that run as Amazon Bedrock conversation loops inside that

@@ -233,7 +233,7 @@ async function main(): Promise<void> {
   const migrationPlan = flagValue(argv, 'migration-plan');
   const rebuildFromGit = argv.includes('--rebuild-from-git');
 
-  console.log('\n' + bold(`ClaudeClaw Enterprise · Rollback (${klass}, env ${envFlag})`));
+  console.log('\n' + bold(`Netzar OS Enterprise · Rollback (${klass}, env ${envFlag})`));
   console.log(gray('─'.repeat(44)));
 
   if (!dryRun && !yes) {

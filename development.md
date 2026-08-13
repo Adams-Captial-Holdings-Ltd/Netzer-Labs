@@ -1,8 +1,8 @@
-# Netzer Development Environment
+# Netzar OS Enterprise Development Environment
 
-**This document is the canonical source of truth for Netzer OS local development.**
+**This document is the canonical source of truth for Netzar OS local development.**
 
-It covers how to run, develop, test, reset and troubleshoot Netzer OS on a
+It covers how to run, develop, test, reset and troubleshoot Netzar OS on a
 developer machine, isolated from every real AWS environment. Anything in this
 repository that describes local development defers to this file. If another
 document disagrees with this one, this one is right and the other is stale.
@@ -20,15 +20,17 @@ Scope: local development only. Deploying, staging and production are covered by
 
 ## Repository map
 
-### Netzer OS (this repository)
+### Netzar OS (this repository)
 
 - Repository: <https://github.com/emmanuelmadams4-lgtm/Netzer-Labs>
 - Branch used for development: `development`
-- npm package name: `enterpriseos`. Internal codename throughout the source is
-  "ClaudeClaw Enterprise" (CCE), and resources are named `claudeclaw-*`.
+- npm package name: `enterpriseos`. The product is **Netzar OS Enterprise**.
+  `claudeclaw-*` resource names and the `CCE` prefix are legacy compatibility
+  identifiers, not the product name — see [BRAND.md](BRAND.md). Renaming them
+  requires a separately tested migration, so they are deliberately left alone.
 
-**Netzer OS and Netzer Labs are the same repository.** There is no separate
-"Netzer OS" repo on GitHub or on disk. This one repository holds the product,
+**Netzar OS and Netzer Labs are the same repository.** There is no separate
+"Netzar OS" repo on GitHub or on disk. This one repository holds the product,
 its infrastructure, and this documentation.
 
 | Directory | Responsibility |
@@ -46,7 +48,7 @@ its infrastructure, and this documentation.
 ### Floci
 
 - Repository: <https://github.com/floci-io/floci>
-- Role: the local AWS emulator. Netzer OS talks to Floci instead of AWS.
+- Role: the local AWS emulator. Netzar OS talks to Floci instead of AWS.
 - Floci is a drop in replacement for LocalStack Community on the same port
   (4566) and serves the same `/_localstack/health` endpoint.
 
@@ -54,7 +56,7 @@ its infrastructure, and this documentation.
 
 ## Architecture overview
 
-Netzer OS is a single TypeScript orchestrator process fronted by a Preact SPA.
+Netzar OS is a single TypeScript orchestrator process fronted by a Preact SPA.
 It is AWS native: there is no relational database, no Redis and no ORM. All
 state lives in DynamoDB and S3.
 
@@ -235,7 +237,7 @@ Rules for editing `.env`, each verified:
 Every AWS service the running orchestrator touches, and how it is served
 locally. "Verified" means it was exercised against Floci during this work.
 
-| AWS service | Netzer OS feature | Code location | Access | Local implementation | Floci support | Limitations |
+| AWS service | Netzar OS feature | Code location | Access | Local implementation | Floci support | Limitations |
 |---|---|---|---|---|---|---|
 | DynamoDB | All state: sessions, audit, agents, tokens, memories, missions, cost, jarvis | `src/lib/state/*`, `src/lib/state/ddb.ts` | read/write | Floci | Full, verified | No PITR, TTL not enabled locally |
 | S3 | Agent prompts, media, vectors, branding | `src/lib/config/agent-loader.ts`, `src/lib/vectors/store.ts`, `src/lib/branding/assets.ts` | read/write | Floci | Full, verified | No Object Lock |
@@ -265,7 +267,7 @@ locally. "Verified" means it was exercised against Floci during this work.
 
 ### Why Floci
 
-Netzer OS already had a LocalStack Community setup for its integration suite
+Netzar OS already had a LocalStack Community setup for its integration suite
 (`docker-compose.test.yml`). Floci was adopted for local development because it
 is a drop in replacement on the same port and same health endpoint, **and it
 additionally serves services LocalStack Community does not**: Bedrock Runtime,
@@ -465,7 +467,7 @@ development tools. See [Dangerous commands](#dangerous-commands-never-run-locall
 
 ---
 
-## Testing Netzer OS features
+## Testing Netzar OS features
 
 Legend: **Works** = verified locally. **Partial** = runs but with reduced
 fidelity. **Cannot** = does not work locally, reason given.
@@ -995,7 +997,7 @@ npm test
 reason, then write the minimum code that passes it. Commit in small steps.
 Cross-surface chat changes must be mirrored across Telegram, Slack, and the
 dashboard, per [CLAUDE.md](CLAUDE.md); manual exercise paths are in
-[Testing Netzer OS features](#testing-netzer-os-features).
+[Testing Netzar OS features](#testing-netzar-os-features).
 
 **6. Write your session handoff as you go**, not at the end. It is the file that
 answers "where is this, what already went wrong, and what is the next action"
@@ -1089,7 +1091,7 @@ never-claim-an-unrun-command rule, are specified in the
 ## Maintenance rules
 
 **`development.md` in the Netzer-Labs repository root is the source of truth for
-Netzer OS local development.**
+Netzar OS local development.**
 
 Update this document in the same change whenever you alter:
 
