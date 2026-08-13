@@ -35,13 +35,16 @@ as_of_commit: 77a3df9c3ae9d479ba13db6e9374dca19f621ff5
 
 ## Blockers
 
-- **SES production access was DENIED.** AWS support case
-  **`178661777600815`** (`Details.ReviewDetails.Status: DENIED`). The account
-  stays in the sandbox: 200 messages/day, 1/sec, and delivery only to verified
-  identities. Invitations to arbitrary client addresses do **not** work until
-  this is overturned. Next step is to reply to that case in AWS Support Center
-  with the specifics AWS asks for; re-submitting `put-account-details`
-  unchanged is unlikely to help on its own.
+- **SES production access is not granted yet.** AWS support case
+  **`178661777600815`**. The API reports
+  `Details.ReviewDetails.Status: DENIED`, but that status is misleading on its
+  own: AWS's actual reply asks for more detail about sending practices and
+  keeps the case open, with a 24h response cycle. It is a request for
+  information, not a final refusal.
+  The account stays in the sandbox meanwhile: 200 messages/day, 1/sec, and
+  delivery only to verified identities. Reply in AWS Support Center rather than
+  re-submitting `put-account-details`, which would not add the detail they
+  asked for.
 - Consequence today: magic-link sends to unverified addresses fail-soft and
   audit as `ses_error`. The login box still returns its constant 202 by design,
   so nothing appears broken to a user, and nothing is delivered. Sign in with
