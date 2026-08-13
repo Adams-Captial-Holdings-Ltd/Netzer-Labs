@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@preact/signals": "^2.9.1",
-    "dompurify": "^3.4.7",
+    "dompurify": "^3.4.13",
     "lucide-preact": "^0.468.0",
     "marked": "^18.0.4",
     "preact": "^10.25.0",
