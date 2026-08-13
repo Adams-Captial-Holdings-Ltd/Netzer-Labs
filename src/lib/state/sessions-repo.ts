@@ -31,6 +31,26 @@ const TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 // [2, MAX_TURNS] so a turn can never evict off the window before it is ingested.
 const DEFAULT_INGEST_EVERY_N = 8;
 
+/**
+ * Whether a chat's history is kept indefinitely instead of expiring.
+ *
+ * Dashboard conversations are browsable and resumable in the SPA, so deleting
+ * them after a week silently destroys work the user can see listed. Telegram
+ * and Slack have no history UI at all, so a permanent row there is pure storage
+ * growth plus a retention change nobody asked for — they keep the 7-day TTL.
+ *
+ * Matched on the chatId prefix rather than the surface because the surface is
+ * only known to appendTurns, while setModelOverride and clearSession also write
+ * the TTL and see nothing but the id. `safeDashboardChatId` guarantees every
+ * dashboard chat carries this prefix.
+ *
+ * DynamoDB TTL only deletes items that CARRY the attribute, so persisting means
+ * omitting `ttl` entirely — never setting a far-future value.
+ */
+export function isPersistentChat(chatId: string): boolean {
+  return chatId.startsWith('dashboard:');
+}
+
 /** Parse + clamp the configured ingest cadence. Exported for tests. */
 export function clampIngestEveryN(raw: string | undefined): number {
   const n = Number(raw);
@@ -232,7 +252,10 @@ export async function appendTurns(
             turnsTotal,
             turnsIngested,
             updatedAt: now,
-            ttl: now + TTL_SECONDS,
+            // Omitted entirely for dashboard chats — a Put replaces the whole
+            // item, so this also strips the ttl off rows written before
+            // conversations became persistent.
+            ...(isPersistentChat(chatId) ? {} : { ttl: now + TTL_SECONDS }),
             version: (existing?.version ?? 0) + 1,
           },
           // Fence on exactly what the read saw: a missing row must still be
@@ -277,16 +300,23 @@ export async function setModelOverride(
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   if (modelId) {
+    // Strip the ttl on persistent chats rather than refreshing it. Without
+    // this, picking a model on a dashboard conversation would quietly re-arm
+    // the 7-day expiry that appendTurns just removed.
+    const persist = isPersistentChat(chatId);
     await ddb().send(
       new UpdateCommand({
         TableName: TABLE,
         Key: { PK: pk(agentId), SK: sk(chatId) },
-        UpdateExpression: 'SET modelOverride = :m, updatedAt = :u, #t = :t',
+        UpdateExpression: persist
+          ? 'SET modelOverride = :m, updatedAt = :u REMOVE #t'
+          : 'SET modelOverride = :m, updatedAt = :u, #t = :t',
         ExpressionAttributeNames: { '#t': 'ttl' },
         ExpressionAttributeValues: {
           ':m': modelId,
           ':u': now,
-          ':t': now + TTL_SECONDS,
+          // DynamoDB rejects a declared-but-unused expression value.
+          ...(persist ? {} : { ':t': now + TTL_SECONDS }),
         },
       }),
     );
@@ -342,18 +372,23 @@ export async function clearSession(agentId: string, chatId: string): Promise<voi
     }
   }
   const now = Math.floor(Date.now() / 1000);
+  const persist = isPersistentChat(chatId);
   await ddb().send(
     new UpdateCommand({
       TableName: TABLE,
       Key: { PK: pk(agentId), SK: sk(chatId) },
       // Reset the ingest counters — /newchat starts a fresh conversation.
-      UpdateExpression: 'SET turns = :empty, turnsTotal = :z, turnsIngested = :z, updatedAt = :u, #t = :t',
+      // Same TTL rule as everywhere else: refresh it on expiring chats, strip
+      // it on persistent ones.
+      UpdateExpression: persist
+        ? 'SET turns = :empty, turnsTotal = :z, turnsIngested = :z, updatedAt = :u REMOVE #t'
+        : 'SET turns = :empty, turnsTotal = :z, turnsIngested = :z, updatedAt = :u, #t = :t',
       ExpressionAttributeNames: { '#t': 'ttl' },
       ExpressionAttributeValues: {
         ':empty': [],
         ':z': 0,
         ':u': now,
-        ':t': now + TTL_SECONDS,
+        ...(persist ? {} : { ':t': now + TTL_SECONDS }),
       },
     }),
   );
