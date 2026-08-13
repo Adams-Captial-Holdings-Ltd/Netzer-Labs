@@ -1196,6 +1196,8 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // this path — it goes cloudflared -> Secrets Manager -> container, and is
     // deliberately absent from this bag, the manifest, and cdk.out.
     CCE_WARP_PRIVATE_ACCESS: env.CCE_WARP_PRIVATE_ACCESS ?? '',
+    CCE_PUBLIC_ACCESS: env.CCE_PUBLIC_ACCESS ?? '',
+    CCE_PUBLIC_HOSTNAME: env.CCE_PUBLIC_HOSTNAME ?? '',
     CCE_WARP_PRIVATE_HOSTNAME: env.CCE_WARP_PRIVATE_HOSTNAME ?? '',
     CCE_CICD_ENABLED: env.CCE_CICD_ENABLED ?? '',
     CCE_CODEBUILD_ENABLED: env.CCE_CODEBUILD_ENABLED ?? '',

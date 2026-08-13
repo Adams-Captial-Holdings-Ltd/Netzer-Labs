@@ -46,8 +46,16 @@
  * secret-safe setup lifecycle) and from Secrets Manager into the container.
  */
 
+import { APP } from './constants.js';
+
 /** The exact tunnel name this system owns. Never `claudeclaw`. */
 export const PUBLIC_TUNNEL_NAME = 'netzar-production-public';
+
+/**
+ * Secrets Manager entry holding the connector token. Exported so the CDK
+ * stack and the setup CLI name the same secret and cannot drift apart.
+ */
+export const PUBLIC_TUNNEL_SECRET_NAME = `${APP}-public-tunnel`;
 
 /** The one zone this feature may publish into. */
 export const PUBLIC_ZONE = 'pgnos.ai';

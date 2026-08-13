@@ -110,6 +110,8 @@ export const SYNTH_INPUT_ALLOWLIST: readonly string[] = [
   // secret: a '1' flag and a private hostname. The Cloudflare connector token
   // is NOT here and must never be added; it lives only in Secrets Manager.
   'CCE_WARP_PRIVATE_ACCESS',
+  'CCE_PUBLIC_ACCESS',
+  'CCE_PUBLIC_HOSTNAME',
   'CCE_WARP_PRIVATE_HOSTNAME',
 ] as const;
 

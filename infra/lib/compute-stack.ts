@@ -62,7 +62,10 @@ import {
   ORIGIN_HEADER_NAME,
 } from './cf-origin-secret.js';
 import { resolveDeployMode } from './deploy-mode.js';
-import { resolvePublicDashboardAccess } from './public-dashboard-access.js';
+import {
+  resolvePublicDashboardAccess,
+  PUBLIC_TUNNEL_SECRET_NAME,
+} from './public-dashboard-access.js';
 import type {
   BaseStackProps,
   ComputeOutputs,
@@ -544,7 +547,7 @@ export class ComputeStack extends Stack implements ComputeOutputs {
       // the Secrets Manager AWS-managed KMS key, matching the other secrets
       // this task reads.
       const publicTunnelSecret = new SmSecret(this, 'PublicTunnelSecret', {
-        secretName: `${APP}-public-tunnel`,
+        secretName: PUBLIC_TUNNEL_SECRET_NAME,
         description:
           'Cloudflare connector token for the netzar-production-public tunnel. Written by the setup lifecycle, never by CDK.',
         removalPolicy: RemovalPolicy.RETAIN,
