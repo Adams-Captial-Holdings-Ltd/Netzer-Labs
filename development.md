@@ -8,8 +8,9 @@ repository that describes local development defers to this file. If another
 document disagrees with this one, this one is right and the other is stale.
 
 Everything below was verified by actually running it on 2026-08-10 against
-Floci 1.6.0, Docker 28.3.2 and Node 24.3.0 on macOS. Commands that were not
-run are marked as unverified.
+Floci 1.6.0, Docker 28.3.2 and Node 24.3.0 on macOS, and the local command set
+was re-verified on Windows 11 with Node 24.19.0 on 2026-08-13. Commands that
+were not run are marked as unverified.
 
 Scope: local development only. Deploying, staging and production are covered by
 [docs/deployment.md](docs/deployment.md), [docs/staging.md](docs/staging.md) and
@@ -127,6 +128,13 @@ code. Isolation comes from the endpoint override, not from renaming (see
 | Docker + Compose v2 | 28.x / v2.38+ verified | Runs Floci |
 | Node.js | 20 or newer (`.nvmrc` pins 20; 24.3.0 verified) | Orchestrator and tooling |
 | Git | any recent | Source control |
+
+**Operating system: macOS, Linux or Windows.** Verified on macOS (2026-08-10) and
+on Windows 11 with Node 24.19.0 (2026-08-13): guard, provision, reset and the
+integration suite all pass there. The `local:*` scripts and `dev` invoke `tsx`
+and `vitest` in a form that resolves on all three — do not reintroduce
+`node … node_modules/.bin/<tool>`, which is a POSIX shell wrapper that Node
+cannot parse on Windows.
 
 Not required: the AWS CLI (not installed on the verified machine and not
 needed), AWS credentials, an AWS account, LocalStack, or a database server.
