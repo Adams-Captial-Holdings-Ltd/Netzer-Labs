@@ -1,0 +1,47 @@
+# Local development stack for Netzar OS.
+#
+#     docker compose -f docker-compose.local.yml up -d
+#
+# or, more usually, `npm run local`, which brings this up, provisions it, and
+# starts the orchestrator and dashboard together.
+#
+# This file runs the AWS emulator ONLY. The orchestrator (tsx watch) and the
+# dashboard (vite) run on the host so hot reload stays instant and debuggers
+# attach normally.
+#
+# Deliberately separate from docker-compose.test.yml, which runs LocalStack on
+# the same port 4566 for the integration suite. Never run both at once.
+#
+# Canonical guide: development.md at the repo root.
+
+name: netzer-os-local
+
+services:
+  floci:
+    # Floci is a drop-in replacement for LocalStack Community on the same port,
+    # and unlike LocalStack Community it also answers Bedrock Runtime,
+    # CloudTrail, Cost Explorer, WAFv2 and Transcribe, which this app reads.
+    # Pinned rather than :latest so an upstream release cannot silently change
+    # what "works locally" means.
+    image: floci/floci:1.6.0
+    container_name: netzer-os-floci
+    # Bound to loopback on purpose: the emulator holds no real credentials but
+    # it is an unauthenticated API surface, so it must not be reachable from
+    # the network.
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      # Makes returned URLs (SQS QueueUrl and friends) resolve from the host.
+      FLOCI_HOSTNAME: 127.0.0.1
+      # In-memory by default: every `npm run local` starts from a clean, fully
+      # reproducible state and `npm run local:provision` rebuilds it in seconds.
+      # For state that survives a restart, set FLOCI_STORAGE_MODE=persistent
+      # and mount a volume at /app/data.
+      FLOCI_STORAGE_MODE: ${FLOCI_STORAGE_MODE:-memory}
+      QUARKUS_LOG_LEVEL: ${FLOCI_LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 3s

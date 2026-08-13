@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise · Up (one-command install conductor)
+ * Netzar OS Enterprise · Up (one-command install conductor)
  *
  * `npm run up`
  *
@@ -503,7 +503,7 @@ async function driveEnvelopeStep(
 }
 
 function printPlan(envFlag: string): void {
-  log('\n' + bold('ClaudeClaw Enterprise · up (one-command install, plan)'));
+  log('\n' + bold('Netzar OS Enterprise · up (one-command install, plan)'));
   log(gray('─'.repeat(48)));
   log(dim(`env file ${envFileNameFor(envFlag)} · runs nothing in --plan mode`));
   for (const [i, step] of UP_STEPS.entries()) {
@@ -613,7 +613,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Banners name the FILE being read, not the internal flag: the default
   // path's flag is 'prod', which a first-timer never chose and can read as
   // "am I touching production?". "(.env)" says exactly what is loaded.
-  log('\n' + bold(`ClaudeClaw Enterprise · up (${envFileNameFor(envFlag)})`));
+  log('\n' + bold(`Netzar OS Enterprise · up (${envFileNameFor(envFlag)})`));
   log(gray('─'.repeat(48)));
   log(dim('one command from clone to verified install; every step idempotent\n'));
 

@@ -13,9 +13,9 @@ name: Docs CI
 
 on:
   pull_request:
-    branches: [development, qa, staging, production, main]
+    branches: [development, qa, staging, production]
   push:
-    branches: [development, qa, staging, production, main]
+    branches: [development, qa, staging, production]
 
 concurrency:
   group: docs-ci-${{ github.workflow }}-${{ github.ref }}
@@ -31,16 +31,19 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
       # Dependency-free scripts: no npm ci needed.
       - name: Check internal links and anchors (external links skipped, counted only)
         run: node scripts/ci/docs-links.mjs
+
+      - name: Validate feature-knowledge contracts
+        run: node scripts/ci/feature-knowledge.mjs
 
       - name: Validate runnable-block annotations (schema only; execution is the release canary)
         run: node scripts/ci/runnable-blocks.mjs
@@ -51,10 +54,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
@@ -72,12 +75,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout (full history so the PR base is diffable)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
@@ -97,10 +100,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 

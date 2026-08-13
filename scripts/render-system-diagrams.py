@@ -1,5 +1,5 @@
 """
-Render system-flow diagrams for ClaudeClaw Enterprise using Gemini 3 Pro Image Preview.
+Render system-flow diagrams for Netzar OS Enterprise using Gemini 3 Pro Image Preview.
 
 Generates a master left-to-right overview plus one card per microservice stage.
 Each card shows the microservice NAME (top) and a single short sentence (bottom)
@@ -74,7 +74,7 @@ Box 6 SUB: "Claude calls tools and streams the answer."
 Box 7 NAME: "Reply Dispatcher"
 Box 7 SUB: "Sends the reply back to Slack or Telegram."
 
-Title across the top in small caps: "CLAUDECLAW ENTERPRISE  ·  MESSAGE TO REPLY"
+Title across the top in small caps: "NETZAR OS ENTERPRISE  ·  MESSAGE TO REPLY"
 No other text anywhere in the image.
 """,
     },

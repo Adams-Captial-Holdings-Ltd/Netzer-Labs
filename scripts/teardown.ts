@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — teardown (IaC readiness plan, items 23–26).
+ * Netzar OS Enterprise — teardown (IaC readiness plan, items 23–26).
  *
  * Orchestration only: every decision and mutation primitive lives in
  * scripts/lib/lifecycle/teardown-plan.ts with injected clients and unit
@@ -475,7 +475,7 @@ async function main(): Promise<void> {
   const cryptographicErasure = argv.includes('--cryptographic-erasure');
   const deleteSharedPrereqs = argv.includes('--delete-shared-prereqs');
 
-  log('\n' + bold(`ClaudeClaw Enterprise · Teardown${dryRun ? ' (DRY RUN — zero mutations)' : ''}`));
+  log('\n' + bold(`Netzar OS Enterprise · Teardown${dryRun ? ' (DRY RUN — zero mutations)' : ''}`));
   log(gray('─'.repeat(44)));
 
   const env = loadEnv(argv);

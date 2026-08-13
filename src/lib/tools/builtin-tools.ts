@@ -54,7 +54,7 @@ tools.register('list_agents', {
     toolSpec: {
       name: 'list_agents',
       description:
-        'Lists the agents available in this ClaudeClaw Enterprise deployment. Each agent has a different role and system prompt.',
+        'Lists the agents available in this Netzar OS Enterprise deployment. Each agent has a different role and system prompt.',
       inputSchema: {
         json: { type: 'object', properties: {} },
       },

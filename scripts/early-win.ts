@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise · Early Win (onboarding Phase 2).
+ * Netzar OS Enterprise · Early Win (onboarding Phase 2).
  *
  * `npm run early-win`
  *

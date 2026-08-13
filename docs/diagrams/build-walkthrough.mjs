@@ -194,7 +194,7 @@ let y = 40;
 // ─── TITLE ───────────────────────────────────────────────────────────
 text({
   x: 40, y, w: W - 80, h: 48,
-  str: 'ClaudeClaw Enterprise · what happens when you say "hi"',
+  str: 'Netzar OS Enterprise · what happens when you say "hi"',
   size: 32, color: '#1e1e1e', font: 5, align: 'center', valign: 'top',
 });
 y += 56;

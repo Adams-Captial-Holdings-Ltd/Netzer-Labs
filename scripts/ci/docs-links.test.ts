@@ -46,6 +46,38 @@ describe('extractLinks', () => {
     const md = '```mermaid\nflowchart LR\n  A["x"] --> B(round)\n```';
     expect(extractLinks(md)).toEqual([]);
   });
+
+  it('resolves full, collapsed, and shortcut reference-style links', () => {
+    const md = [
+      '[full][guide]',
+      '[guide][]',
+      '[guide]',
+      '',
+      '[guide]: docs/guide.md "Guide"',
+    ].join('\n');
+
+    expect(extractLinks(md)).toEqual([
+      { target: 'docs/guide.md', line: 1 },
+      { target: 'docs/guide.md', line: 2 },
+      { target: 'docs/guide.md', line: 3 },
+    ]);
+  });
+
+  it('reports undefined full, collapsed, and shortcut references', () => {
+    const md = [
+      '[full][missing-full]',
+      '[missing-collapsed][]',
+      '[missing-shortcut]',
+      '',
+      '[known]: docs/known.md',
+    ].join('\n');
+
+    expect(extractLinks(md)).toEqual([
+      { target: '', line: 1, undefinedReference: 'missing-full' },
+      { target: '', line: 2, undefinedReference: 'missing-collapsed' },
+      { target: '', line: 3, undefinedReference: 'missing-shortcut' },
+    ]);
+  });
 });
 
 describe('slugify / collectAnchors', () => {
@@ -106,5 +138,65 @@ describe('checkRepo (end to end on a fixture tree)', () => {
     expect(result.failures).toHaveLength(2);
     expect(result.failures.join('\n')).toMatch(/missing file: docs\/missing\.md/);
     expect(result.failures.join('\n')).toMatch(/broken anchor: a\.md#nope/);
+  });
+
+  it.each(['AGENTS.md', 'development.md', 'handoff.md'])(
+    'checks broken links in the explicitly allowed root file %s',
+    (rootFile) => {
+      const root = mkdtempSync(join(tmpdir(), 'docs-links-root-'));
+      writeFileSync(join(root, 'README.md'), '# Top\n');
+      writeFileSync(join(root, rootFile), `[broken](missing-from-${rootFile})\n`);
+
+      const result = checkRepo(root) as { failures: string[]; files: number };
+
+      expect(result.files).toBe(2);
+      expect(result.failures).toEqual([
+        `${rootFile}:1 missing file: missing-from-${rootFile}`,
+      ]);
+    },
+  );
+
+  it('does not scan arbitrary Markdown files at the repository root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-links-root-'));
+    writeFileSync(join(root, 'README.md'), '# Top\n');
+    writeFileSync(join(root, 'notes.md'), '[broken](missing.md)\n');
+
+    const result = checkRepo(root) as { failures: string[]; files: number };
+
+    expect(result.files).toBe(1);
+    expect(result.failures).toEqual([]);
+  });
+
+  it('checks reference-style Markdown links', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-links-reference-'));
+    writeFileSync(
+      join(root, 'README.md'),
+      '[missing guide][guide]\n\n[guide]: docs/missing.md\n',
+    );
+
+    const result = checkRepo(root) as { failures: string[] };
+
+    expect(result.failures).toEqual(['README.md:1 missing file: docs/missing.md']);
+  });
+
+  it('reports an undefined reference label as a normal link failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-links-reference-'));
+    writeFileSync(join(root, 'README.md'), '[guide][missing]\n');
+
+    const result = checkRepo(root) as { failures: string[] };
+
+    expect(result.failures).toEqual(['README.md:1 undefined reference: missing']);
+  });
+
+  it('reports malformed percent encoding as a normal link failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-links-encoding-'));
+    writeFileSync(join(root, 'README.md'), '[bad encoding](docs/%E0%A4%A.md)\n');
+
+    expect(() => checkRepo(root)).not.toThrow();
+    const result = checkRepo(root) as { failures: string[] };
+
+    expect(result.failures).toEqual([
+      'README.md:1 malformed percent encoding: docs/%E0%A4%A.md',
+    ]);
   });
 });

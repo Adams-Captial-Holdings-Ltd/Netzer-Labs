@@ -1,0 +1,53 @@
+name: Branch Guard
+
+# Detection control for the promotion ladder (development -> qa -> staging ->
+# production). GitHub Free on a private repo returns 403 for both branch
+# protection and rulesets, so a bad merge or a force-push cannot be BLOCKED.
+# This makes each one fail loudly and leave an auditable run instead.
+#
+# Rationale and residual risk: docs/security-posture.md
+# Decision logic and its unit tests: scripts/ci/branch-guard.mjs
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+    branches: [qa, staging, production]
+  push:
+    branches: [qa, staging, production]
+
+concurrency:
+  group: branch-guard-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ladder:
+    name: Promotion ladder
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Full history: the push check walks the commit graph to confirm the
+          # merge parent actually came from the rung below.
+          fetch-depth: 0
+
+      - name: Check pull request source
+        if: github.event_name == 'pull_request'
+        env:
+          GUARD_EVENT: pull_request
+          GUARD_BASE: ${{ github.base_ref }}
+          GUARD_HEAD: ${{ github.head_ref }}
+        run: node scripts/ci/branch-guard.mjs
+
+      - name: Check push
+        if: github.event_name == 'push'
+        env:
+          GUARD_EVENT: push
+          GUARD_BRANCH: ${{ github.ref_name }}
+          GUARD_BEFORE: ${{ github.event.before }}
+          GUARD_FORCED: ${{ github.event.forced }}
+        run: node scripts/ci/branch-guard.mjs

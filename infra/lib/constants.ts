@@ -127,6 +127,12 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
       // Optional vendor API keys (search/Gemini). Kept in Secrets Manager,
       // never in plain task-def env, so synth artifacts contain no keys.
       vendorKeys: `/${app}/vendor-keys`,
+      // Cloudflare Tunnel connector token for opt-in private WARP access.
+      // Written ONLY by `npm run warp:setup` (never by populate-secrets, never
+      // from .env) and read only by the cloudflared sidecar via
+      // EcsSecret.fromSecretsManager. Retained on stack removal so a redeploy
+      // never has to re-authorize the tunnel.
+      cloudflareTunnel: `/${app}/cloudflare-tunnel`,
     },
 
     // Bedrock guardrail

@@ -19,6 +19,7 @@ test.beforeEach(async ({ page }) => {
       localStorage.setItem('cce_token', t);
       localStorage.setItem('cce_onboarded', 'true');
       localStorage.removeItem('cce_jarvis_widget_pos'); // start from the default anchor
+      localStorage.removeItem('cce_jarvis_widget_hidden'); // and with the orb un-dismissed
     },
     { t: TOKEN },
   );
@@ -80,6 +81,25 @@ test('the /jarvis tab offers the guided-tour starter pill', async ({ page }) => 
   const pills = page.getByTestId('jarvis-pills');
   await expect(pills).toBeVisible();
   await expect(pills.getByRole('button', { name: /tour of the dashboard/i })).toBeVisible();
+});
+
+test('the orb can be closed, stays closed, and comes back from the /jarvis tab', async ({ page }) => {
+  const widget = page.getByTestId('jarvis-widget');
+  await expect(widget).toBeVisible();
+
+  await page.getByTestId('jarvis-close').click();
+  await expect(widget).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('cce_jarvis_widget_hidden'))).toBe('true');
+
+  // Dismissal survives a reload — an X that un-does itself is not an X.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('jarvis-widget')).toBeHidden();
+
+  // Opening the Jarvis tab re-arms it, so the X is never a one-way door.
+  await page.goto(`${APP_URL.replace(/\/$/, '')}/jarvis`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('jarvis-console')).toBeVisible();
+  await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('jarvis-widget')).toBeVisible();
 });
 
 test('clicking the orb opens a voice session and Jarvis greets in audio', async ({ page }) => {

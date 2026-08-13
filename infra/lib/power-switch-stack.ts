@@ -70,6 +70,13 @@ export interface PowerSwitchStackProps extends BaseStackProps {
   dashboardUrl?: string;
   /** Free-text cost line shown on the panel (e.g. paused vs awake $/mo). */
   costNote?: string;
+  /**
+   * Reserved concurrency for the power Lambda. Set to 0 only as a temporary
+   * bridge for accounts whose applied Lambda concurrency quota is 10; omitting
+   * the reservation leaves the account's required unreserved pool intact.
+   * Restore the default of 5 after AWS approves the quota increase.
+   */
+  reservedConcurrency?: number;
 }
 
 /** Human label for the panel, derived from the auto-pause cron. */
@@ -254,7 +261,9 @@ export class PowerSwitchStack extends Stack {
       // polls, and the dashboard proxy adds its own reads. At 1, the second
       // concurrent read got a 429 whose JSON body the panel then rendered as
       // a status (the "RESTORED with undefined everywhere" bug, 2026-07-02).
-      reservedConcurrentExecutions: 5,
+      ...(props.reservedConcurrency === 0
+        ? {}
+        : { reservedConcurrentExecutions: props.reservedConcurrency ?? 5 }),
       logGroup,
       environment: {
         CLUSTER: cluster,

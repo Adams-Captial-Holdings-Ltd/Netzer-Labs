@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — Tier 1 zero-cost validation (onboarding phases 0-3).
+ * Netzar OS Enterprise — Tier 1 zero-cost validation (onboarding phases 0-3).
  *
  * Drives the READ-ONLY onboarding gates in order and STOPS at the
  * resource-creation boundary, so it can validate a brand-new standalone account
@@ -232,7 +232,7 @@ const log = (msg: string): void => {
 };
 
 function printPlan(envFlag: string): void {
-  log('\n' + bold('ClaudeClaw Enterprise · Tier 1 zero-cost validation (plan)'));
+  log('\n' + bold('Netzar OS Enterprise · Tier 1 zero-cost validation (plan)'));
   log(gray('─'.repeat(48)));
   log(dim(`env ${envFlag} · runs nothing in --plan mode`));
   for (const [i, step] of TIER1_STEPS.entries()) {
@@ -271,7 +271,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   readFileSync(envPath, 'utf-8');
 
   if (!jsonMode) {
-    log('\n' + bold(`ClaudeClaw Enterprise · Tier 1 zero-cost validation (${envFlag})`));
+    log('\n' + bold(`Netzar OS Enterprise · Tier 1 zero-cost validation (${envFlag})`));
     log(gray('─'.repeat(48)));
     log(dim('read-only gates for a brand-new standalone account; creates NO AWS resource\n'));
   }
