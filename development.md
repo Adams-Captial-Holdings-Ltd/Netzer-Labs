@@ -907,11 +907,13 @@ dashboard on the host and orchestrates all of it with one command.
 
 Every meaningful feature worked on in this repository keeps its documentation in
 `docs/features/<slug>/`: a `README.md` holding verified behavior and its
-authorities, and a `HANDOFF.md` holding only volatile operational state. The
-folder shape, the frontmatter contract, the status vocabulary, the required
-sections, and the templates are specified in exactly one place, the
-[feature knowledge framework](docs/features/README.md). Docs CI enforces that
-specification with `node scripts/ci/feature-knowledge.mjs`.
+authorities, a `HANDOFF.md` holding only volatile operational state, and a
+`handoffs/` directory in which **every working session writes its own dated
+handoff file**. The folder shape, the frontmatter contract, the status
+vocabulary, the required sections, and the templates are specified in exactly
+one place, the [feature knowledge framework](docs/features/README.md). Docs CI
+enforces the machine-checkable part of that specification with
+`node scripts/ci/feature-knowledge.mjs`.
 
 **Do not restate those rules here or on any other page.** A second copy is how
 the convention drifted before. This document owns one part of the picture that
@@ -919,8 +921,15 @@ the framework defers to it: the branch and environment reality below. Feature
 handoffs are written against that mapping, so a stale mapping is worse than no
 mapping at all.
 
-Reference implementation: [Missions README](docs/features/missions/README.md)
-and [Missions HANDOFF](docs/features/missions/HANDOFF.md).
+**The handoff you copy is
+[`docs/features/HANDOFF-TEMPLATE.md`](docs/features/HANDOFF-TEMPLATE.md).** Copy
+it once per session into the feature folder you are working in, as
+`docs/features/<slug>/handoffs/YYYY-MM-DD-<session-slug>.md`. It ships with a
+seeded ledger of the mistakes, standing assumptions, and precautions this
+repository has already paid for; you carry that ledger forward into your session
+verbatim and append what bit you, so the next session does not rediscover any of
+it. For a live feature folder to read alongside it, see the
+[Missions README](docs/features/missions/README.md).
 
 ### How to develop a new feature, end to end
 
@@ -936,11 +945,26 @@ git pull origin development
 git checkout -b feature/<slug>
 ```
 
-**2. Create the feature folder before you write code.** `docs/features/<slug>/`
-with exactly `README.md` and `HANDOFF.md`, copied from the templates in the
+**2. Create the feature folder before you write code**, then open your session
+handoff. `docs/features/<slug>/` starts with `README.md` and `HANDOFF.md`,
+copied from the templates in the
 [feature knowledge framework](docs/features/README.md). Writing the README first
 forces you to state what you are actually building and which files own it. Skip
 this only for a genuinely trivial change.
+
+Then start your own session handoff from
+[the template](docs/features/HANDOFF-TEMPLATE.md), before you touch code, so its
+carried-forward ledger is in front of you while you work rather than recalled at
+the end:
+
+```bash
+mkdir -p docs/features/<slug>/handoffs
+cp docs/features/HANDOFF-TEMPLATE.md \
+   docs/features/<slug>/handoffs/$(date +%Y-%m-%d)-<session-slug>.md
+```
+
+If the folder already has session handoffs, read the newest one first and copy
+its ledger forward into yours instead of the template's seed.
 
 **3. Bring the local environment up.** First time on this machine, work through
 [Initial setup](#initial-setup). After that it is one command, covered in
@@ -951,7 +975,7 @@ npm run local
 ```
 
 **4. Record a baseline before changing anything.** Run the suite on the
-untouched branch and write down what already fails, into the feature HANDOFF.
+untouched branch and write down what already fails, into your session handoff.
 Without it nobody can tell a pre-existing failure from a regression you
 introduced.
 
@@ -965,9 +989,14 @@ Cross-surface chat changes must be mirrored across Telegram, Slack, and the
 dashboard, per [CLAUDE.md](CLAUDE.md); manual exercise paths are in
 [Testing Netzer OS features](#testing-netzer-os-features).
 
-**6. Keep the feature HANDOFF current as you go**, not at the end. It is the
-file that answers "where is this, and what is the next action" after you close
-your laptop. If it and the code disagree, **the code wins**: inspect the
+**6. Write your session handoff as you go**, not at the end. It is the file that
+answers "where is this, what already went wrong, and what is the next action"
+after you close your laptop. Record errors and dead ends *when they happen* —
+reconstructed from memory an hour later, they lose the detail that makes them
+useful. Before you stop: carry the ledger forward with what you learned, promote
+anything durable into the feature `README.md` or an ADR, and update the feature's
+`HANDOFF.md` so its current state and its session index point at your new file.
+If a document and the code disagree, **the code wins**: inspect the
 implementation and correct the document.
 
 **7. Run the FULL validation before pushing.** Not a scoped run. The per-command

@@ -29,6 +29,21 @@ as_of_commit: 69791f997551cd12d786aed6aec2b74e1722718c
 - Smallest next action: read the Docs CI result for the latest `development`
   push and fix any contract failure it reports.
 
+## Session log index
+
+Newest first. Every session that works in this folder adds one file to
+`handoffs/`, copied from the
+[session handoff template](../HANDOFF-TEMPLATE.md), and links it here.
+
+| Session | Date | Summary |
+|---|---|---|
+| _none yet_ | — | The per-session protocol was adopted on 2026-08-12, after the sessions summarised above. The next session to touch Missions writes the first entry, seeding its carried-forward ledger from the template. |
+
+The two facts above that a future session would otherwise rediscover — the
+checks that could not run on a Node-less machine, and the Windows linked-worktree
+Vitest failure — are already carried in the template's seed ledger as **M5** and
+**M6**. Do not delete them from your session handoff when you copy it forward.
+
 Authorities: [README](README.md), [feature knowledge framework](../README.md),
 [ADR 0009](../../adr/0009-mission-container-model.md),
 [backlog](../../missions-v2-backlog.md), [audit](../../missions-v2-audit.md).
