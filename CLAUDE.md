@@ -1,4 +1,4 @@
-# ClaudeClaw Enterprise — working conventions
+# Netzar OS Enterprise — working conventions
 
 Project instructions for anyone (human or agent) making changes in this repo.
 The README explains *what the system is*; this file is *how we work in it*.

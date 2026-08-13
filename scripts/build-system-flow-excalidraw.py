@@ -185,7 +185,7 @@ def main() -> None:
         text_element(
             x=master_x + (master_w - title_w) / 2,
             y=-220,
-            text="ClaudeClaw Enterprise — Message to Reply",
+            text="Netzar OS Enterprise — Message to Reply",
             font_size=64,
             width=title_w,
             height=80,

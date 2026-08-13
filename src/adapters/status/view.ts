@@ -120,7 +120,7 @@ export function renderStatusPage(data: StatusData): string {
   </style>
 </head>
 <body>
-  <h1>ClaudeClaw Enterprise</h1>
+  <h1>Netzar OS Enterprise</h1>
   <div class="banner" style="background:${color}">
     <div class="state">${esc(label)}</div>
     <div class="sub">Generated ${esc(data.generatedAt)} (auto-refreshes every 60s)</div>

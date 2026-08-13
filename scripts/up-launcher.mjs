@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ClaudeClaw Enterprise · up launcher (dependency-free preflight)
+ * Netzar OS Enterprise · up launcher (dependency-free preflight)
  *
  * `npm run up` lands here FIRST, on plain Node with zero dependencies,
  * because the conductor itself (scripts/up.ts) runs under tsx, and tsx only
@@ -27,7 +27,7 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const major = Number(process.versions.node.split('.')[0]);
 if (Number.isFinite(major) && major < 20) {
   console.error(
-    `✗ Node ${process.versions.node} found, but ClaudeClaw Enterprise needs Node 20 or newer.\n` +
+    `✗ Node ${process.versions.node} found, but Netzar OS Enterprise needs Node 20 or newer.\n` +
       '  Install it from https://nodejs.org (or: brew install node@20), then re-run: npm run up',
   );
   process.exit(1);

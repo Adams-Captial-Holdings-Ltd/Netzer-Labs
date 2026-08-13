@@ -1,5 +1,5 @@
 /**
- * Plain-language glossary for the ClaudeClaw Enterprise dashboard.
+ * Plain-language glossary for the Netzar OS Enterprise dashboard.
  *
  * The owner of a deployment is not necessarily an ops engineer. This maps the
  * jargon that shows up across the dashboard (panic semantics, kill-switch

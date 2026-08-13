@@ -1,4 +1,4 @@
-# Contributing to ClaudeClaw Enterprise
+# Contributing to Netzar OS Enterprise
 
 Thanks for contributing. This page covers local dev setup, the test contract,
 PR conventions, and how releases are cut. Working conventions for *changing

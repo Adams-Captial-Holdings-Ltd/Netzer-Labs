@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — Deploy CLI (phased pipeline)
+ * Netzar OS Enterprise — Deploy CLI (phased pipeline)
  *
  * IaC readiness plan items 8 / 10 / 13 / 14. Each step prints its outcome
  * before starting the next; phases are idempotent so re-running after a
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
   const buildPref: BuildPref = buildLocalFlag ? 'local' : buildCloudFlag ? 'cloud' : 'auto';
 
   // eslint-disable-next-line no-console
-  console.log('\n' + bold(`ClaudeClaw Enterprise · Deploy (${envSpec.name})`));
+  console.log('\n' + bold(`Netzar OS Enterprise · Deploy (${envSpec.name})`));
   // eslint-disable-next-line no-console
   console.log(gray('─'.repeat(36)));
 

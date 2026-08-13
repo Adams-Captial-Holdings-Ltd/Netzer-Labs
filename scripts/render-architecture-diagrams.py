@@ -1,5 +1,5 @@
 """
-Render architecture diagrams for ClaudeClaw Enterprise using Gemini 3 Pro Image
+Render architecture diagrams for Netzar OS Enterprise using Gemini 3 Pro Image
 Preview. These complement the system-flow request-path set with the parts of the
 system that walkthrough does not cover: the 15-stack infrastructure, the Mission
 Control dashboard, the security + data model, the pricing-tier ladder, and the
@@ -69,7 +69,7 @@ No other text anywhere in the image.
 Render a clean illustration of a web dashboard. A simple browser window
 frame with a top bar, a left sidebar navigation, and a main content panel.
 
-The top bar shows a small title, text EXACTLY: "ClaudeClaw Enterprise  ·  Mission Control".
+The top bar shows a small title, text EXACTLY: "Netzar OS Enterprise  ·  Mission Control".
 
 The LEFT SIDEBAR lists grouped navigation. Each group has a small bold
 header with menu items under it. Render text EXACTLY:

@@ -1,6 +1,6 @@
 # Security model
 
-> ClaudeClaw Enterprise runs inside your own AWS account: the model calls go to Amazon Bedrock, the state lives in your DynamoDB and S3, and the app ships no third-party telemetry of its own. Data does leave your account in a small, named set of cases, chat platforms you connect, web-search vendors you give keys to, MCP servers you register, and build-time package registries, and every one of those flows is listed in a machine-readable inventory in this folder. This page explains who can touch what (IAM roles and their blast radius), where secrets live, how the audit trail is retained, what the network can reach, and what to harden before you put real data on it.
+> Netzar OS Enterprise runs inside your own AWS account: the model calls go to Amazon Bedrock, the state lives in your DynamoDB and S3, and the app ships no third-party telemetry of its own. Data does leave your account in a small, named set of cases, chat platforms you connect, web-search vendors you give keys to, MCP servers you register, and build-time package registries, and every one of those flows is listed in a machine-readable inventory in this folder. This page explains who can touch what (IAM roles and their blast radius), where secrets live, how the audit trail is retained, what the network can reach, and what to harden before you put real data on it.
 
 This is the page that backs the "runs entirely in your AWS account" claim with specifics. Serious adopters should read it before deploying.
 

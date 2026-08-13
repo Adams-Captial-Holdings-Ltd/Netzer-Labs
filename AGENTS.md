@@ -1,4 +1,4 @@
-# Installing ClaudeClaw Enterprise (agent runbook, short form)
+# Installing Netzar OS Enterprise (agent runbook, short form)
 
 You are an AI coding agent (or a careful human) asked to stand up this system
 in a fresh, standalone AWS account. This file is the short path. The full

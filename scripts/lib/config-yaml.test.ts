@@ -22,7 +22,7 @@ const baseCfg: ClaudeClawConfig = {
 describe('config-yaml', () => {
   it('renders a header comment + version field', () => {
     const out = renderConfigYaml(baseCfg);
-    expect(out).toMatch(/^# ClaudeClaw Enterprise/);
+    expect(out).toMatch(/^# Netzar OS Enterprise/);
     expect(out).toContain('version: 1');
   });
 

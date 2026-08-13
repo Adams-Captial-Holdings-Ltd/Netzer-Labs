@@ -36,7 +36,7 @@ git -C "$ROOT" archive HEAD | tar -x -C "$TARGET"
 echo "== Initializing fresh history (one orphan commit)"
 git -C "$TARGET" init -q -b main
 git -C "$TARGET" add -A
-git -C "$TARGET" commit -q --no-gpg-sign -m "ClaudeClaw Enterprise public export"
+git -C "$TARGET" commit -q --no-gpg-sign -m "Netzar OS Enterprise public export"
 
 echo "== Re-running the scan on the export"
 SCAN_ARGS=(--denylist "$ROOT/scripts/ci/denylist.txt")
