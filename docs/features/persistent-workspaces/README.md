@@ -3,14 +3,17 @@ feature: persistent-workspaces
 document_role: index
 status: current
 observed_at: 2026-08-13
-as_of_commit: 8a66ba45ff1346642e144627eafb6985ad143fed
+as_of_commit: 73383d0e0c0f06aa8010f5e0d4d246dfe7740e97
 implemented_by:
   - src/lib/tools/document-generation-tools.ts
   - src/lib/tools/registry.ts
   - src/lib/state/sessions-repo.ts
   - src/adapters/dashboard/handler.ts
+  - web/src/pages/Chat.tsx
 tested_by:
-  - src/lib/tools/registry.test.ts
+  - src/lib/tools/document-generation-tools.test.ts
+  - src/lib/state/sessions-repo.persistence.test.ts
+  - src/lib/state/sessions-repo.integration.test.ts
 decisions:
   - docs/adr/0002-single-tenant.md
   - docs/adr/0009-mission-container-model.md
@@ -37,23 +40,43 @@ the implementation disagree, the code wins.
 
 ## 2. What persistent-workspaces does today
 
-**Today, before this feature lands, it does not persist anything.** Stated
-precisely, because the gap is smaller than it looks:
+**Dashboard conversations persist and can be reopened. Generated documents are
+delivered reliably.** What is still missing is durable *artifact* storage.
 
-- Conversations **are** stored (`claudeclaw-sessions`, `PK=AGENT#<agentId>`,
-  `SK=CHAT#<chatId>`) but carry a **7-day TTL** and keep only the **20 most
-  recent turns**.
-- The dashboard Chat tab mints `chatId = dashboard:${Date.now()}` in component
-  state and discards it on reload. **There is no conversation list, no resume,
-  and no session picker.**
-- `generate_document` produces real PDF / DOCX / XLSX, stores them in
-  `RAW_BUCKET` under `generations/<chatId>/<uuid>.<ext>`, and returns a **24h
-  presigned URL inside the reply text**. No database record is written, so after
-  24 hours the object is unreachable and unlisted. `RAW_BUCKET` also carries a
-  hard 365-day expiration lifecycle and has **no versioning**.
-- There is **no PPTX support** anywhere in the repository.
-- There is **no artifact list or download route**; nothing reads `generations/`
-  back.
+Working now:
+
+- **Dashboard conversations never expire.** `appendTurns` omits the `ttl`
+  attribute entirely for chats whose id starts with `dashboard:`; DynamoDB TTL
+  only deletes items that carry the attribute. All three write paths honour this
+  (`appendTurns`, `setModelOverride`, `clearSession`) — missing any one would
+  silently re-arm the expiry.
+- **Telegram and Slack sessions still expire after 7 days**, deliberately.
+  Neither surface can browse history, so a permanent row there is storage growth
+  and an unasked-for retention change.
+- **The Chat tab lists prior conversations and reopens them.** The sidebar reads
+  `GET /api/sessions?agentId=` (a single Query on `PK=AGENT#<id>`), titles each
+  row by `firstMessage`, and replays turns from
+  `GET /api/sessions/transcript`. The active `chatId` is kept in
+  `sessionStorage`, so a reload resumes instead of silently abandoning the
+  conversation. No new endpoint was added — both already existed.
+- **Generated documents ride the `ToolMedia` channel**, so the download link
+  never passes through the model. Dashboard renders a download card; Slack
+  uploads the file natively.
+
+Explicitly **not** yet:
+
+- Conversations keep only the **20 most recent turns** (`MAX_TURNS`). Reopening
+  an old conversation shows at most 20 turns, not the whole history. Earlier
+  turns are distilled into durable memory, not retained verbatim.
+- **Artifacts are still not durable.** Documents land in `RAW_BUCKET` under
+  `generations/<chatId>/<uuid>.<ext>` with a 24h presigned URL, no database
+  record, no list route, and no download route. `RAW_BUCKET` has **no
+  versioning** and a hard **365-day expiration lifecycle**.
+- **No PPTX support** anywhere in the repository.
+- No conversation search, rename, pin or archive.
+- The sidebar is dashboard-only. Telegram and Slack have no history UI to mirror
+  it into — noted here rather than silently omitted, per the parity rule in
+  [CLAUDE.md](../../../CLAUDE.md).
 
 ### Known defect this feature fixes
 
@@ -80,10 +103,16 @@ and none is being added.
 
 ## 3. Current status and current source commit
 
-Source evidence only, verified against `8a66ba45ff1346642e144627eafb6985ad143fed`
+Source evidence only, verified against `73383d0e0c0f06aa8010f5e0d4d246dfe7740e97`
 on 2026-08-13. **No deployment evidence** — nothing from this feature has been
 deployed, and the defect above was observed in the running production
 environment, not reproduced locally.
+
+The conversation-persistence claims are stronger than source evidence alone:
+`sessions-repo.integration.test.ts` proves against a real DynamoDB that a
+dashboard row carries no `ttl` attribute after `appendTurns`, `setModelOverride`
+and `clearSession`, that a bot row still does, and that a pre-existing `ttl` on
+a dashboard row is stripped on the next write.
 
 Local reproduction of the agent tool path is **not possible**: Floci's Bedrock
 stub always returns `stopReason: 'end_turn'`, so the tool-dispatch loop never
@@ -112,12 +141,13 @@ flow must be verified in staging.
 | Document build | `src/lib/documents/{pdf,docx,xlsx}.ts` | `pdfkit` / `docx` / `exceljs` produce bytes from a validated spec |
 | Spec validation | `src/lib/documents/types.ts` | `validateDocumentSpec`, `validateSpreadsheetSpec` throw on malformed input |
 | Tool + storage | `src/lib/tools/document-generation-tools.ts` | Kill switch, fail-closed cost cap, S3 PUT to `RAW_BUCKET`, 24h presign, audit row |
-| Media channel | `src/lib/tools/registry.ts` | `ToolMedia.kind` is `'image'` only |
+| Media channel | `src/lib/tools/registry.ts` | `ToolMedia.kind` is `'image' \| 'artifact'` |
 | Image delivery (reference pattern) | `src/lib/tools/nova-canvas-tools.ts` | Returns `media[]`; surfaces deliver bytes, URL in text is a fallback |
-| Surface delivery | `src/adapters/telegram/handler.ts`, `src/adapters/slack/handler.ts`, `src/adapters/dashboard/handler.ts` | Each iterates `result.media` and treats every entry as an image |
-| Conversation storage | `src/lib/state/sessions-repo.ts` | 20-turn window, 7-day TTL, `decideIngest` distillation backstop |
-| Conversation read API | `src/adapters/dashboard/handler.ts` | `GET /api/sessions`, `GET /api/sessions/transcript` both exist and work |
-| Chat UI | `web/src/pages/Chat.tsx` | Mints a fresh `chatId` per mount; no sidebar, no resume |
+| Surface delivery | `src/adapters/telegram/handler.ts`, `src/adapters/slack/handler.ts`, `src/adapters/dashboard/handler.ts` | Slack uploads both kinds natively; dashboard emits `image` or `artifact` SSE; Telegram skips artifacts (no `sendDocument` helper) |
+| Conversation persistence | `src/lib/state/sessions-repo.ts` | `isPersistentChat` — dashboard chats omit `ttl`; all three write paths honour it |
+| Conversation storage | `src/lib/state/sessions-repo.ts` | 20-turn window, `decideIngest` distillation backstop |
+| Conversation read API | `src/adapters/dashboard/handler.ts` | `GET /api/sessions`, `GET /api/sessions/transcript` — both pre-existing, unchanged |
+| Chat UI | `web/src/pages/Chat.tsx` | Conversation sidebar, resume-on-select, `chatId` persisted to `sessionStorage`, artifact download card |
 
 ## 6. Current business/state rules
 
@@ -134,15 +164,24 @@ Rules the code enforces today and that this feature must preserve:
 - Guardrail-blocked exchanges are never persisted to the session.
 - Sessions are keyed per `(agentId, chatId)`; the sessions table is the only
   place conversation turns live.
+- **A chat persists iff its id starts with `dashboard:`** (`isPersistentChat`).
+  Persisting means the `ttl` attribute is **absent**, because DynamoDB TTL only
+  deletes items that carry it. Every write path must honour this — three do
+  (`appendTurns`, `setModelOverride`, `clearSession`), and a fourth that
+  refreshed the TTL would silently re-arm expiry on a visible conversation.
+- The conversation sidebar lists **only** `dashboard:`-prefixed chats. Bot rows
+  share the table but have no UI to reopen them.
+- Conversation history is capped at 20 turns per `MAX_TURNS`; persistence does
+  not widen that window.
 
 ## 7. Known runtime risks and approved next work
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| Document download links fail — signed URL does not survive the model round trip | Production `.xlsx` link observed with no `X-Amz-*` parameters, S3 `AccessDenied` | Return documents through the `media` channel (M0) |
 | Generated documents expire silently | `RAW_BUCKET` 365-day expiration lifecycle, no versioning, no DB record | Store artifacts in `CURATED_BUCKET` (versioned, no expiry) (M2) |
-| Conversations vanish after 7 days idle | `TTL_SECONDS` in `sessions-repo.ts` | Omit `ttl` for `surface === 'dashboard'` (M1) |
-| Artifacts inherit conversation visibility | `GET /api/sessions` scans and returns all sessions to any `sessions:read` holder | Product decision required before M2 ships |
+| Reopened conversations show at most 20 turns | `MAX_TURNS` in `sessions-repo.ts` | Accepted for now; full transcript retention is the strongest follow-up |
+| Conversations are org-visible, not per-user | `GET /api/sessions` without `agentId` Scans and returns every user's sessions to any `sessions:read` holder; the sidebar filters client-side only | Product decision required before artifacts become durable (M2) |
+| Persistent conversations grow storage without bound | No archive, no retention policy, no per-user quota | Revisit if a customer raises retention or cost |
 | `forget_me` does not erase generated documents | `src/lib/tools/privacy-tools.ts` has no artifact path | Extend erasure to the artifact prefix (M2) |
 | Bot surfaces cannot deliver non-image media | Telegram `sendPhoto` hardcodes `filename: 'image.png'`; no `sendDocument` helper exists | Deferred; skipped explicitly at the call site per the parity rule in [CLAUDE.md](../../../CLAUDE.md) |
 
@@ -152,7 +191,17 @@ Focused:
 
 ```powershell
 npx vitest run src/lib/tools/document-generation-tools.test.ts
-npx vitest run src/lib/state/sessions-repo.test.ts
+```
+
+```powershell
+npx vitest run src/lib/state/sessions-repo.persistence.test.ts src/lib/state/sessions-repo.ingest.test.ts
+```
+
+The TTL behaviour is only meaningfully provable against a real DynamoDB, so it
+has an integration test. Needs Docker running:
+
+```powershell
+npm run local:test:integration -- src/lib/state/sessions-repo.integration.test.ts
 ```
 
 Full pre-push suite, run in full and never scoped:
