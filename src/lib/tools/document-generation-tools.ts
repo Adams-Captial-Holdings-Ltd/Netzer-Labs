@@ -22,7 +22,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
-import { tools } from './registry.js';
+import { tools, type ToolResult } from './registry.js';
 import { registerIfConfigured } from '../addons/registry.js';
 import { isKillSwitchActive } from '../state/kill-switches-repo.js';
 import { writeAudit } from '../audit/audit-writer.js';
@@ -65,6 +65,66 @@ const CONTENT_TYPES: Record<GenerateFormat, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
+
+/**
+ * Display filename for a generated document, taken from the spec's own title.
+ *
+ * Sanitized and length-capped because it reaches a Content-Disposition header
+ * and a Telegram/Slack upload filename. It is deliberately NOT used to build
+ * the S3 key — the key stays server-derived from ctx, so a model-supplied
+ * title can never influence where bytes land.
+ */
+export function documentFileName(spec: unknown, format: GenerateFormat): string {
+  const title =
+    spec && typeof spec === 'object' && typeof (spec as { title?: unknown }).title === 'string'
+      ? (spec as { title: string }).title
+      : '';
+  const safe = title.trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
+  return `${safe || 'document'}.${format}`;
+}
+
+/**
+ * Build the tool result for a stored document.
+ *
+ * The document rides on `media` so each surface can deliver the real file
+ * without the URL passing through the model — the same contract
+ * `generate_image` has always used. Returning the link only as text is what
+ * broke downloads: the model reproduces the text in its own reply, and a
+ * signed S3 URL loses its X-Amz-* query string in transit, which S3 then
+ * correctly rejects with AccessDenied.
+ *
+ * The URL is still in `text` on purpose. Telegram and Slack have no document
+ * delivery path yet (neither has a sendDocument helper), so that fallback is
+ * currently their only link. Drop it once bot delivery lands.
+ *
+ * Pure so it is testable without S3 — matches the buildNovaBody pattern.
+ */
+export function buildDocumentResult(a: {
+  format: GenerateFormat;
+  fileName: string;
+  bytes: number;
+  bucket: string;
+  key: string;
+  url: string;
+}): ToolResult {
+  return {
+    text: [
+      `${a.format.toUpperCase()} generated: ${a.fileName} (${a.bytes.toLocaleString()} bytes).`,
+      `It is attached for download. Direct link, valid 24h:`,
+      a.url,
+    ].join('\n'),
+    media: [
+      {
+        kind: 'artifact',
+        s3Bucket: a.bucket,
+        s3Key: a.key,
+        contentType: CONTENT_TYPES[a.format],
+        presignedUrl: a.url,
+        caption: a.fileName,
+      },
+    ],
+  };
+}
 
 registerIfConfigured(
   {
@@ -179,6 +239,9 @@ registerIfConfigured(
         const id = randomUUID();
         const safeChat = ctx.chatId.replace(/[^A-Za-z0-9_-]/g, '_');
         const key = `generations/${safeChat}/${id}.${format}`;
+        // Display name only — never part of the storage key, which stays
+        // server-derived so a model-supplied title cannot steer the S3 path.
+        const fileName = documentFileName(args.spec, format);
         try {
           await s3().send(
             new PutObjectCommand({
@@ -218,9 +281,14 @@ registerIfConfigured(
             detail: { format, key, bytes: bytes.length, latencyMs },
             result: 'ok',
           });
-          return {
-            text: `${format.toUpperCase()} generated (${bytes.length.toLocaleString()} bytes). URL valid 24h:\n${url}`,
-          };
+          return buildDocumentResult({
+            format,
+            fileName,
+            bytes: bytes.length,
+            bucket: RAW_BUCKET,
+            key,
+            url,
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn({ errMessage: msg }, 'document generation failed');

@@ -475,7 +475,7 @@ async function handlePerAgentSlackEvent(
     }
 
     // Generated images: upload as real Slack files (parity with Telegram).
-    await deliverSlackImages(channel, result.media, ev.thread_ts, botToken);
+    await deliverSlackMedia(channel, result.media, ev.thread_ts, botToken);
 
     // Guardrail-blocked exchanges are NOT persisted: keeping them poisons the
     // session (the guardrail re-scans the whole transcript every turn, so one
@@ -688,7 +688,7 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
     }
 
     // Generated images: upload as real Slack files (parity with Telegram).
-    await deliverSlackImages(channel, result.media, ev.thread_ts);
+    await deliverSlackMedia(channel, result.media, ev.thread_ts);
 
     // Guardrail-blocked exchanges are NOT persisted: keeping them poisoned the
     // session (the guardrail re-scans the whole transcript every turn, so one
@@ -713,11 +713,12 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
 }
 
 /**
- * Deliver generated images as native Slack file uploads after the text
- * reply. Fail soft — the presigned URL stays in the reply text as fallback
- * (and a missing files:write scope logs loudly inside uploadFile).
+ * Deliver generated media — images and documents alike — as native Slack file
+ * uploads after the text reply. Fail soft: the presigned URL stays in the
+ * reply text as fallback (and a missing files:write scope logs loudly inside
+ * uploadFile).
  */
-async function deliverSlackImages(
+async function deliverSlackMedia(
   channel: string,
   media: ToolMedia[] | undefined,
   threadTs?: string,
@@ -726,15 +727,19 @@ async function deliverSlackImages(
   for (const m of media ?? []) {
     try {
       const bytes = await getRawObject(m.s3Key, m.s3Bucket);
+      // Slack's uploadFile is format-agnostic, so generated documents deliver
+      // natively here — only the filename differs. Images keep the historical
+      // 'image.png'; artifacts carry their real name so the download is usable.
+      const filename = m.kind === 'artifact' ? (m.caption ?? 'document') : 'image.png';
       await uploadFile(
         channel,
-        { bytes, filename: 'image.png', title: m.caption },
+        { bytes, filename, title: m.caption },
         { threadTs, ...(botToken ? { tokenOverride: botToken } : {}) },
       );
     } catch (err) {
       logger.warn(
-        { errMessage: err instanceof Error ? err.message : String(err), s3Key: m.s3Key },
-        'slack image delivery failed; URL fallback remains in the reply',
+        { errMessage: err instanceof Error ? err.message : String(err), s3Key: m.s3Key, kind: m.kind },
+        'slack media delivery failed; URL fallback remains in the reply',
       );
     }
   }
