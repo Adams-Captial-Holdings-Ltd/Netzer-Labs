@@ -58,36 +58,38 @@ assertion. The feature documents added here are not imported by any of them.
 | `npm --prefix web run build` | **built in 8.41s** |
 | `node scripts/ci/docs-links.mjs` | **OK** — 470 internal links |
 | `node scripts/ci/feature-knowledge.mjs` | **OK** |
+| `node scripts/ci/runnable-blocks.mjs` | **OK** (extra, not in the required list) |
+| `npm run local:verify` | **all 5 isolation checks passed** |
+| `npm run local:provision` | 32 tables, 4 buckets created |
+| `npm run local:test:integration` | **31/32 passed** — see below |
 | `git diff --check` | clean |
 
-### Blocker: one required command could not be run
+### Integration suite — run, and matching the documented expectation
 
-`npm run local:test:integration` **was not run.** Docker is not running on this
-machine (`failed to connect to the docker API at
-npipe:////./pipe/dockerDesktopLinuxEngine`), so Floci cannot start and there is
-no emulator on `127.0.0.1:4566`.
+Docker was started, Floci `1.6.0` came up healthy on `127.0.0.1:4566`, and
+`npm run local:verify` passed all five isolation checks
+(`sts:GetCallerIdentity` returned `000000000000`, the emulator account).
+`npm run local:provision` created 32 tables and 4 buckets.
 
-This is recorded as **not run**, not as passing — a skipped environment is not a
-passing result. It must be run before this branch is pushed. Nothing in M0
-touches an AWS call path (the change is the shape of a tool result, two surface
-delivery branches, and a frontend event), so a failure there would be
-surprising, but that is a prediction and not evidence.
-
-To clear it: start Docker Desktop, then from this worktree run these three as
-**separate** statements — Windows PowerShell 5.1 rejects `&&` with
-`The token '&&' is not a valid statement separator in this version`:
-
-```powershell
-npm run local:up
+```
+Test Files  1 failed | 7 passed (8)
+     Tests  1 failed | 31 passed (32)
 ```
 
-```powershell
-npm run local:provision
-```
+The one failure is
+`scripts/destroy.integration.test.ts > checkSecrets … schedule-deleted`,
+`expected 'pass' to be 'warn'`. This is **the documented known emulator gap**,
+not a regression: `development.md` records the expected result for this command
+as *"31/32 passing, 1 known emulator gap"* and explains it under
+[Known local limitations](../../../development.md#known-local-limitations) —
+Floci's `ListSecrets` omits secrets scheduled for deletion, where real AWS and
+LocalStack list them with a `DeletedDate`. The test is correct and was not
+modified; only the deploy-time destroy sweep depends on that behaviour.
 
-```powershell
-npm run local:test:integration
-```
+**All nine documented pre-push commands have now actually been run.** None were
+skipped or substituted.
+
+The emulator was left running. `npm run local:down` stops it.
 
 ## Environment note that contradicts an older belief
 
@@ -118,9 +120,11 @@ at this commit — the full 1949-test suite ran from
 
 ## Smallest next action
 
-Start Docker and run `npm run local:test:integration` to clear the one
-outstanding gate. After that, M1: omit `ttl` for `surface === 'dashboard'` in
-`sessions-repo.ts` and add the conversation sidebar.
+M0 is complete and every documented gate has been run. Push
+`feature/persistent-workspaces` and open a PR into `development`.
+
+Then M1: omit `ttl` for `surface === 'dashboard'` in `sessions-repo.ts` and add
+the conversation sidebar to the Chat tab.
 
 Authorities: [README](README.md), [ADR 0002](../../adr/0002-single-tenant.md),
 [ADR 0009](../../adr/0009-mission-container-model.md).
