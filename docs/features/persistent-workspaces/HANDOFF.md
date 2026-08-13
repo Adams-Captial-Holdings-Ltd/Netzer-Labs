@@ -45,19 +45,36 @@ Verified these are not caused by this feature: the four collection failures are
 parse errors in the test files themselves, and the fifth is a path-separator
 assertion. The feature documents added here are not imported by any of them.
 
-## Commands actually run
+## Commands actually run, after M0
 
 | Command | Result |
 |---|---|
 | `npm ci --ignore-scripts` | exit 0 |
-| `npm test` | as recorded above (baseline) |
-| `npx vitest run scripts/ci/feature-knowledge.test.ts` | 1 failed (collection), confirming the baseline failure is pre-existing |
+| `npm ci --prefix web --ignore-scripts` | exit 0 |
+| `npm run typecheck` | **clean** |
+| `npm test` | **5 failed / 177 passed / 1 skipped files; 1 failed / 1954 passed / 6 skipped tests** — the same five pre-existing failures as the baseline, plus 12 new passing tests |
+| `npm run build` | **clean** |
+| `npm --prefix web run typecheck` | **clean** |
+| `npm --prefix web run build` | **built in 8.41s** |
+| `node scripts/ci/docs-links.mjs` | **OK** — 470 internal links |
+| `node scripts/ci/feature-knowledge.mjs` | **OK** |
+| `git diff --check` | clean |
 
-**Not yet run:** `npm run typecheck`, `npm run build`,
-`npm --prefix web run typecheck`, `npm --prefix web run build`,
-`npm run local:test:integration`, `node scripts/ci/docs-links.mjs`,
-`node scripts/ci/feature-knowledge.mjs`, `git diff --check`. All are required
-before pushing.
+### Blocker: one required command could not be run
+
+`npm run local:test:integration` **was not run.** Docker is not running on this
+machine (`failed to connect to the docker API at
+npipe:////./pipe/dockerDesktopLinuxEngine`), so Floci cannot start and there is
+no emulator on `127.0.0.1:4566`.
+
+This is recorded as **not run**, not as passing — a skipped environment is not a
+passing result. It must be run before this branch is pushed. Nothing in M0
+touches an AWS call path (the change is the shape of a tool result, two surface
+delivery branches, and a frontend event), so a failure there would be
+surprising, but that is a prediction and not evidence.
+
+To clear it: start Docker Desktop, then from this worktree
+`npm run local:up && npm run local:provision && npm run local:test:integration`.
 
 ## Environment note that contradicts an older belief
 
@@ -66,13 +83,31 @@ recorded that it could not resolve `vitest.config.ts` there; that is not true
 at this commit — the full 1949-test suite ran from
 `.worktrees/persistent-workspaces`.
 
+## M0 as landed
+
+- `ToolMedia.kind` widened to `'image' | 'artifact'`.
+- `generate_document` now returns the document on the media channel via the new
+  pure `buildDocumentResult`, so the usable link no longer depends on the model
+  reproducing a signed URL. The URL stays in `text` as a fallback — removing it
+  would leave Telegram with no link at all.
+- `documentFileName` derives a display name from the spec's own `title`. It is
+  sanitized and length-capped because it reaches a download filename, and is
+  deliberately **not** used to build the S3 key, which stays server-derived.
+- Slack delivers documents natively — its `uploadFile` is format-agnostic, so
+  only the filename needed to change. `deliverSlackImages` renamed
+  `deliverSlackMedia`.
+- Telegram **skips** non-image media, with the reason stated at the call site
+  per the parity rule in [CLAUDE.md](../../../CLAUDE.md): `sendPhoto` hardcodes
+  `image.png` and no `sendDocument` helper exists. Documents reach Telegram via
+  the text URL only.
+- Dashboard emits a distinct `artifact` SSE event; the Chat tab renders a
+  download card.
+
 ## Smallest next action
 
-Apply M0: widen `ToolMedia.kind` to `'image' | 'artifact'`, have
-`generate_document` return the artifact through the media channel instead of
-only as a URL in the reply text, emit an `artifact` SSE event from the dashboard
-stream, and skip non-image media on Telegram/Slack with an explicit comment at
-the call site (no `sendDocument` helper exists on either surface).
+Start Docker and run `npm run local:test:integration` to clear the one
+outstanding gate. After that, M1: omit `ttl` for `surface === 'dashboard'` in
+`sessions-repo.ts` and add the conversation sidebar.
 
 Authorities: [README](README.md), [ADR 0002](../../adr/0002-single-tenant.md),
 [ADR 0009](../../adr/0009-mission-container-model.md).

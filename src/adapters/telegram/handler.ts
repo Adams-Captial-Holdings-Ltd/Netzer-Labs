@@ -361,6 +361,12 @@ async function handleMessage(
     // Generated images: deliver as real photos after the text reply. Fail
     // soft — the presigned URL is already in the reply text as fallback.
     for (const m of result.media ?? []) {
+      // Parity gap, deliberate (see CLAUDE.md): generated documents ride the
+      // same media channel but Telegram has no sendDocument helper yet, and
+      // sendPhoto would post a .xlsx as a photo named image.png. Until that
+      // helper exists, documents reach Telegram only via the presigned URL in
+      // the reply text.
+      if (m.kind !== 'image') continue;
       try {
         const bytes = await getRawObject(m.s3Key, m.s3Bucket);
         await sendPhoto(

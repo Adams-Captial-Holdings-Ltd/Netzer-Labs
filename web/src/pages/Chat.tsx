@@ -18,7 +18,7 @@ interface Agent { id: string; displayName: string; status: string }
 // is the run footer (model · latency · cost · tools) — parity with the
 // Telegram/Slack footers, which surface the same numbers when enabled.
 interface TurnMeta { modelId: string; latencyMs: number; costUsd: number; toolCallCount: number }
-interface Message { role: 'user' | 'assistant'; text: string; ts: number; error?: boolean; kb?: string[]; images?: Array<{ url: string; caption: string }>; meta?: TurnMeta }
+interface Message { role: 'user' | 'assistant'; text: string; ts: number; error?: boolean; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; meta?: TurnMeta }
 interface Model { label: string; id: string; contextWindow: number; family: string; isDefault: boolean }
 
 // Friendly names for the env-driven model labels the backend returns.
@@ -211,6 +211,7 @@ export function Chat() {
       let errorText = '';
       const kbChips: string[] = [];
       const images: Array<{ url: string; caption: string }> = [];
+      const artifacts: Array<{ url: string; name: string }> = [];
       let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
       let curData = '';
       let buffer = '';
@@ -254,6 +255,14 @@ export function Chat() {
             const im = JSON.parse(curData);
             if (im.url) images.push({ url: im.url, caption: im.caption ?? '' });
           } catch { /* ignore malformed image event */ }
+        } else if (curEvent === 'artifact') {
+          // { url, name } — generated document, rendered as a download card.
+          // This URL comes straight off the tool result, so unlike a link the
+          // model retypes into its reply, its signature is intact.
+          try {
+            const a = JSON.parse(curData);
+            if (a.url) artifacts.push({ url: a.url, name: a.name || a.caption || 'document' });
+          } catch { /* ignore malformed artifact event */ }
         } else if (curEvent === 'error') {
           // Plain-text error message from the SSE writer; surfaced as an error bubble.
           errorText = curData;
@@ -320,6 +329,7 @@ export function Chat() {
         ts: Date.now() / 1000,
         ...(kbChips.length > 0 ? { kb: kbChips } : {}),
         ...(images.length > 0 ? { images } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
         ...(meta ? { meta } : {}),
       }]);
     } catch (e) {
@@ -414,6 +424,26 @@ export function Chat() {
                         class="rounded-lg border border-border max-w-full max-h-96"
                         loading="lazy"
                       />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {m.artifacts && m.artifacts.length > 0 && (
+                <div class="mt-2 space-y-2">
+                  {m.artifacts.map((a, j) => (
+                    <a
+                      key={j}
+                      href={a.url}
+                      download={a.name}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 hover:bg-surface-hover transition-colors duration-fast"
+                    >
+                      <span class="text-overline uppercase tracking-wider text-muted shrink-0">
+                        {(a.name.split('.').pop() || 'file').slice(0, 4)}
+                      </span>
+                      <span class="text-body-sm text-primary truncate">{a.name}</span>
+                      <span class="text-caption text-secondary ml-auto shrink-0">Download</span>
                     </a>
                   ))}
                 </div>

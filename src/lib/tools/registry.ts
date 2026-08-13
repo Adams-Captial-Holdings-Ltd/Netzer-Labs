@@ -33,13 +33,25 @@ export interface ToolContext {
 }
 
 /**
- * A binary artifact a tool produced (e.g. a generated image). The model only
- * sees `text`; media rides alongside so the SURFACE can deliver the real
- * thing — a Telegram photo, a Slack file upload, an <img> in dashboard chat —
- * instead of a bare presigned URL.
+ * A binary artifact a tool produced (a generated image or a generated
+ * document). The model only sees `text`; media rides alongside so the SURFACE
+ * can deliver the real thing — a Telegram photo, a Slack file upload, an <img>
+ * or a download card in dashboard chat — instead of a bare presigned URL.
+ *
+ * That distinction is load-bearing. A presigned URL placed in `text` is read
+ * by the model and reproduced in its reply, and a signed S3 URL does not
+ * survive that round trip: an observed production document link lost its
+ * entire X-Amz-* query string and returned AccessDenied. Anything the user
+ * must be able to open belongs here, not only in `text`.
  */
 export interface ToolMedia {
-  kind: 'image';
+  /**
+   * 'image' renders inline (Telegram photo, dashboard <img>). 'artifact' is a
+   * file the user downloads (PDF/DOCX/XLSX) and must NOT be sent down an image
+   * path — Telegram's sendPhoto hardcodes `image.png` and dashboard chat
+   * renders media as <img>, so a spreadsheet tagged 'image' breaks both.
+   */
+  kind: 'image' | 'artifact';
   s3Bucket: string;
   s3Key: string;
   contentType: string;
