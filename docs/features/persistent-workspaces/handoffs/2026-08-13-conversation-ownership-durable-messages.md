@@ -3,343 +3,376 @@ feature: persistent-workspaces
 document_role: session-handoff
 status: current
 observed_at: 2026-08-13
-as_of_commit: 27cde4415236261e69eab77074180da05fa15aae
+as_of_commit: ef7c6c010db4d5535a78c03265ead0a411b13977
 session_slug: conversation-ownership-durable-messages
 supersedes: none
 ---
 
-# Session handoff: per-user conversations + full durable transcripts (P0 delta)
+<!-- Frontmatter retained so this file keeps its place in the feature folder
+     (docs/features/README.md §2-§4). Body follows the handoff template. -->
 
-## 1. Session metadata
+# Handoff: Per-user conversation ownership + durable transcripts (M1.5)
 
-| Field | Value |
-|---|---|
-| Session started | 2026-08-13 |
-| Feature folder | `docs/features/persistent-workspaces/` |
-| Branch worked on | `feature/conversation-history` (linked worktree `.worktrees/conversation-history`) |
-| Branch it merges into next | `development` |
-| AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
-| Commit at session start | `27cde4415236261e69eab77074180da05fa15aae` (post PR #34/#35/#36) |
-| Commit at session end | `ef7c6c010db4d5535a78c03265ead0a411b13977` (the WIP-pause commit carrying this file; a follow-up docs commit records this SHA) |
-| Pushed | yes — WIP pause push, user-requested |
-| PR | none |
-| Deployed | no |
+## Session Metadata
 
-## 2. Current state summary
+- Created: 2026-08-13
+- Project: `C:\dev\Netzer-Labs` (worktree `.worktrees/conversation-history`)
+- Branch: `feature/conversation-history` → merges into `development`; reaches
+  **no** AWS environment ([branch mapping](../../../../development.md#branch-to-environment-mapping))
+- Commits: start `27cde44` → end `ef7c6c0` (+ `88c03e6` docs). **Pushed.** No PR yet. Not deployed.
+- Session duration: one working session, paused mid-frontend at user request
 
-This session builds the two follow-ups the feature README names as next work
-after M1 (PR #36): **full transcript retention** (M1 caps a reopened
-conversation at the 20-turn session window) and **per-user conversations**
-(M1's sidebar reads agent-scoped `GET /sessions?agentId=`, which is org-visible
-and needs `sessions:read`). Delta, per the approved plan (rescoped after PR #36
-landed mid-planning): a `conversations-repo` riding the sessions table with
-owner-partitioned meta items (`USER#<ownerId>/CONV#<chatId>`) and per-message
-items (`CONV#<chatId>/MSG#…`, no ttl), a new owner-scoped
-`GET /api/conversations[/:id]` router under `chat:read`, server-minted
-unguessable ids for new conversations plus a `clientMessageId` idempotency
-fence on the stream route, the M1 rail re-pointed at the new endpoints with
-date grouping and a `/chat/c/:conversationId` deep-link route, and GDPR
-export/purge coverage of the new items. The send path's model history stays
-`session.turns` (sessions never expire after M1 — no rebuild needed).
+## Current State Summary
 
-**Session state at pause (user-requested mid-work handoff): the ENTIRE backend
-delta is implemented and green** (repo + integration test file + router +
-authz-matrix + stream wiring + GDPR; root `npm run typecheck` clean; all
-focused suites pass; legacy-path regression suites re-run untouched-green).
-**The frontend refactor of `web/src/pages/Chat.tsx` is mid-flight and web
-typecheck is RED with exactly four known errors** — see §6.1 for the precise
-remaining edits. The Floci integration suite has not been run yet this session
-(Docker not started). Pushed to GitHub at the user's request BEFORE the full
-pre-push validation list, as an explicit, user-approved deviation from
-`development.md` step 7 recorded here; nothing in §7 is claimed as run that
-did not run.
+Built the two follow-ups the feature README names as approved next work after
+M1 (PR #36): **full transcript retention** (M1 caps a reopened conversation at
+the 20-turn session window) and **per-user conversations** (M1's sidebar reads
+agent-scoped `GET /sessions?agentId=`, which is org-visible and needs
+`sessions:read`). **The entire backend delta is implemented and green.** The
+frontend refactor of `web/src/pages/Chat.tsx` is mid-flight: web typecheck is
+**RED with exactly four known errors**, each enumerated with its fix in
+[Immediate Next Steps](#immediate-next-steps). The Floci integration suite has
+not run this session, so the new integration test has never executed.
 
-An earlier scaffold of this work lived briefly in
-`docs/features/conversation-history/`; it was folded into this folder (one
-feature, one folder) and deleted before any commit.
+Pushed WIP at the user's request **before** the full pre-push validation list —
+an explicit, user-approved deviation from `development.md` step 7, recorded
+here rather than glossed. Nothing in the verification table is claimed as run
+that did not run.
 
-## 3. Codebase understanding
+## Codebase Understanding
 
-### 3.1 Architecture notes discovered this session
+### Architecture Overview
 
-- `runAgentTurn` (`src/agent/agent-loop.ts:484`) is persistence-agnostic:
-  callers do `getSession → runAgentTurn → appendTurns`. All conversation
-  wiring lands in the callers; the loop is untouched.
-- `appendTurns` (`src/lib/state/sessions-repo.ts`) is a full-item PutCommand
-  that drops attributes not in its Item block. Never store conversation state
-  on session rows; separate items only.
-- Dashboard session rows carry `userId = dashboard:<sha256 tokenHash>`, which
-  rotates on every magic-link login. Stable ownership identity is
-  `principal.userId` (users-table uuid), absent on the root env token and
-  legacy minted tokens — hence
-  `conversationOwnerId = userId ?? 'root' (root token) ?? token:<hashPrefix16>`.
-- There is NO ownership enforcement on `chatId` pre-this-session: any
-  `chat:read` principal can continue any dashboard session, and M1's rail
-  lists every user's chats to any `sessions:read` holder. This session closes
-  both for the new conversation flow; legacy raw-`chatId` sends keep working
-  and their hardening is a named follow-up.
-- `hono@4.12.27` `StreamingApi.write` swallows write errors: a client refresh
-  mid-SSE does not abort the handler, so the turn completes and persistence
-  runs. Reload then shows the reply.
-- The route-manifest drift test filters `<Route path>`s containing `:` — a
-  `/chat/c/:conversationId` param route needs no `ROUTE_TABLE` entry; a static
-  `/chat/c` route would fail it.
+- **The agent loop is persistence-agnostic.** `runAgentTurn`
+  (`src/agent/agent-loop.ts:484`) takes caller-supplied `history: Turn[]` and
+  never reads or writes storage; every caller does
+  `getSession → runAgentTurn → appendTurns`. All conversation wiring therefore
+  lands in the callers, and the loop was not touched.
+- **Conversations ride the existing sessions table** (ADR 0010), like
+  `jarvis-memory-repo` does with its own `JARVIS#` partition. Two new item
+  types, zero infra change: owner meta `USER#<ownerId>` / `CONV#<convId>`, and
+  messages `CONV#<convId>` / `MSG#<pad13(ms)>#<0|1>#<uuid>`. Neither carries
+  `ttl`, so DynamoDB never expires them.
+- **`conversationId` IS the session `chatId`** (`dashboard:c_<uuid>`), so M1's
+  `isPersistentChat`, the 20-turn window, memory ingest and model override all
+  keep working unchanged. The session row remains the *model context*; the
+  message items are the *product transcript*. They are allowed to differ.
+- **Ownership is structural, not a filter.** The meta is only ever read under
+  the caller's own partition, so another user's conversation is
+  indistinguishable from a nonexistent one — uniform 404, no existence leak.
 
-### 3.2 Critical files
+### Critical Files
 
-| File | Purpose | Why it mattered this session |
-|---|---|---|
-| `src/adapters/dashboard/handler.ts` (stream route) | Send path | Pre-stream ownership/idempotency checks; persistTurn + `conversation` SSE event |
-| `src/lib/state/sessions-repo.ts` | Window/TTL/ingest + `isPersistentChat` | M1 machinery that must keep working unchanged |
-| `src/lib/state/jarvis-memory-repo.ts` | Rides sessions table, own PK prefix | Zero-infra storage precedent this delta copies |
-| `src/adapters/dashboard/seat-admin.ts:100-118` | Router extraction pattern | Template for the conversations router |
-| `src/adapters/dashboard/test-turn-attachments.test.ts:81-86` | Partial module mock | THE pattern for stream-route tests |
-| `src/lib/state/identities-repo.integration.test.ts:15-33` | Floci integration skeleton | Env + TABLE_* before dynamic import |
-| `web/src/pages/Chat.tsx` | M1 rail + send | Re-point rail, add deep links, keep data-tour anchors |
+| File | Purpose | Relevance |
+|------|---------|-----------|
+| `src/lib/state/conversations-repo.ts` | Owner meta + durable messages, ownership, idempotency fence | The whole data model lives here |
+| `src/adapters/dashboard/conversations.ts` | `GET /api/conversations[/:id]`, `chat:read` | The owner-scoped read API the rail consumes |
+| `src/adapters/dashboard/handler.ts` (stream route, ~`:1599-1880`) | Send path | Pre-stream ownership 404 + duplicate 409; `persistTurn` + `conversation` SSE event inside the `!blocked` block |
+| `src/lib/state/sessions-repo.ts` | M1 window/TTL/ingest + `isPersistentChat` | Must keep working untouched; `appendTurns` is a full-item Put that drops unlisted attributes |
+| `web/src/pages/Chat.tsx` | Chat UI | **Incomplete** — the four typecheck errors are all here |
+| `src/adapters/dashboard/test-turn-attachments.test.ts:81-86` | Partial module mock | The harness pattern every stream-route test copies |
+| `src/lib/state/identities-repo.integration.test.ts:15-33` | Floci skeleton | Env + `TABLE_*` must be set **before** the dynamic import |
 
-### 3.3 Patterns and conventions to follow
+### Key Patterns Discovered
 
-- Repo unit tests: `vi.mock('./ddb.js', () => ({ ddb: () => ({ send }) }))`,
-  assert on `send.mock.calls[i][0].input` (exemplar `memories-repo.test.ts`).
-- Table names are module-load constants (`process.env.TABLE_X ?? '…'`).
-- Error shapes: `{error:'unauthorized'}` 401, `{error:'forbidden',
-  requiredCapability}` 403, uniform `{error:'not_found'}` 404.
-- Sessions-table timestamps are epoch seconds.
-- Chat-surface parity (CLAUDE.md): dashboard-only UX; say so in the PR.
+- Repo unit tests mock the client, not the SDK:
+  `vi.mock('./ddb.js', () => ({ ddb: () => ({ send }) }))`, then assert on
+  `send.mock.calls[i][0].input`. No `aws-sdk-client-mock` in this repo.
+- Route tests drive the **real** router via `app.request()`, stubbing only the
+  token-auth entrypoints so real capability resolution still runs.
+- Partial module mocks (`async (importActual) => ({ ...actual, fn: mock })`)
+  keep the parts of a module that are themselves the contract under test —
+  e.g. the real `conversationOwnerId` and `isConversationChatId`.
+- Error-shape house style: `{error:'unauthorized'}` 401,
+  `{error:'forbidden', requiredCapability}` 403, uniform `{error:'not_found'}` 404.
+- Timestamps in the sessions table are **epoch seconds**; `formatRelativeTime`
+  takes seconds while `formatLocalTime` takes milliseconds.
+- No cursor pagination exists anywhere in this API; the house style is bounded
+  materialize → sort → slice.
 
-## 4. Work completed
+## Work Completed
 
-(Updated as the session progresses.)
+### Tasks Finished
 
-### 4.1 Tasks finished
+- [x] Rescoped the approved plan after PR #36 landed mid-planning; branch based on `27cde44`
+- [x] Recorded the untouched-branch baseline before any change
+- [x] ADR 0010 written (storage, ownership, idempotency, stream-disconnect behavior)
+- [x] `conversations-repo` + unit tests (15/15), test-first
+- [x] Floci integration test **written** (never executed — see Blockers)
+- [x] `conversations.ts` router + tests (7/7) + authz-matrix rows + `server.ts` mount
+- [x] Stream-route wiring + contract tests (6/6); legacy-path regression suites re-run untouched-green
+- [x] GDPR export/purge coverage of the durable items + tests (4/4)
+- [x] Frontend `format.ts`, `api.ts`, `App.tsx` complete
+- [ ] **`Chat.tsx` mid-refactor — web typecheck RED**
+- [ ] Feature README update, how-it-works prose, full validation, manual pass, PR
 
-- [x] Rescope after PR #36; plan updated; branch fast-forwarded to `27cde44`
-- [x] Baseline recorded (§7); ADR 0010 drafted
-- [x] `conversations-repo` + unit tests (15/15) + integration test FILE
-      (written, not yet run — needs Floci)
-- [x] Conversations router + tests (7/7) + authz-matrix rows (115/115) +
-      `server.ts` mount
-- [x] Stream-route wiring + contract tests (6/6); legacy regression suites
-      (`test-turn-attachments`, `test-turn-costcap`,
-      `sessions-repo.persistence`, `sessions-repo.ingest`) re-run
-      untouched-green
-- [x] GDPR export/purge coverage + tests (4/4)
-- [ ] Frontend: `format.ts`, `api.ts`, `App.tsx` done; **`Chat.tsx`
-      mid-refactor, web typecheck RED** (§6.1)
-- [ ] Feature README/HANDOFF final update; how-it-works prose; full
-      validation; manual local pass; PR
+### Verification Actually Performed
 
-### 4.2 Files modified
+Never record a command as passing unless it ran. `not run` is an acceptable answer; a false `pass` is not.
 
-| File | Change | Rationale |
-|---|---|---|
-| `src/lib/state/conversations-repo.ts` (+ `.test.ts`, `.integration.test.ts`) | New | Owner meta + durable message items in the sessions table (ADR 0010) |
-| `src/adapters/dashboard/conversations.ts` (+ `.test.ts`) | New | Owner-scoped GET list/detail router, `chat:read` |
-| `src/adapters/dashboard/handler.ts` | Edit (stream route only) | Body fields `conversationId`/`startConversation`/`clientMessageId`; pre-stream ownership 404 + duplicate 409; `persistTurn` + additive `conversation` SSE event inside the `!blocked` block |
-| `src/adapters/dashboard/test-turn-conversations.test.ts` | New | Ownership / 409 / pinning / persistence / blocked / legacy-untouched contract |
-| `src/adapters/dashboard/authz-matrix.test.ts` | Edit | Two conversations routes registered (all four tiers ALLOWED on `chat:read`) |
+| Command | Baseline (untouched `27cde44`) | After changes |
+|---------|-------------------------------|---------------|
+| `npm run typecheck` | not run separately | **clean** (run twice, last after GDPR wiring) |
+| `npm test` | **7 failed / 176 passed files; 20 failed / 1941 passed / 6 skipped** | not re-run in full |
+| `npm run build` | not run | not run |
+| `npm --prefix web run typecheck` | not run | **RED — 4 known errors**, all in `Chat.tsx` |
+| `npm --prefix web run build` | not run | not run |
+| `npm run local:test:integration` | not run | not run (Docker/Floci never started) |
+| `node scripts/ci/docs-links.mjs` | not run | **OK** — 79 files, 501 links |
+| `node scripts/ci/feature-knowledge.mjs` | not run | **OK** |
+| `git diff --check` | not run | clean |
+
+Focused suites that did run, all green: repo 15/15 · router 7/7 ·
+authz-matrix + server 115/115 · stream contract 6/6 · GDPR 4/4 · regression
+re-runs (`test-turn-attachments` 6/6, `test-turn-costcap`,
+`sessions-repo.persistence`, `sessions-repo.ingest`) 26 tests.
+
+**Baseline detail** (all pre-existing, none caused by this work): four
+`scripts/` files fail to parse (shebang in imported `.mjs`),
+`buildspec-tag-normalization` needs `sh` (6 tests),
+`rollback-classes` asserts POSIX separators (1 test) — all Windows-only,
+CI on ubuntu is green — plus `src/adapters/dashboard/jarvis.flow.test.ts`
+(13 tests, the documented credential-chain timeout flake, **reproduced twice**
+per `development.md`'s procedure: once in the full run, once solo on a warm
+transform cache).
+
+### Files Modified
+
+| File | Changes | Rationale |
+|------|---------|-----------|
+| `src/lib/state/conversations-repo.ts` + `.test.ts` + `.integration.test.ts` | New | Owner meta + durable messages in the sessions table |
+| `src/adapters/dashboard/conversations.ts` + `.test.ts` | New | Owner-scoped list/detail under `chat:read` |
+| `src/adapters/dashboard/handler.ts` | Edit, stream route only | Body fields; pre-stream 404/409; `persistTurn` + additive `conversation` SSE event; agent pinning |
+| `src/adapters/dashboard/test-turn-conversations.test.ts` | New | Ownership / 409 / pinning / persistence / blocked / legacy-untouched |
+| `src/adapters/dashboard/authz-matrix.test.ts` | Edit | Two conversation routes registered across all four tiers |
 | `src/server.ts` | Edit | Mount `/api/conversations` before the `/api` catch-all |
-| `src/lib/tools/privacy-tools.ts` (+ `.test.ts`) | Edit/New | Export includes durable transcript; purge deletes messages + meta for `dashboard:c_*` |
-| `web/src/lib/format.ts` | Edit | `dateGroupLabel` (Today/Yesterday/Previous 7 days/Older) |
-| `web/src/lib/api.ts` | Edit | `ConversationSummary`/`ConversationMessageView`/`ConversationDetail` types |
-| `web/src/App.tsx` | Edit | `/chat/c/:conversationId` route before `/chat/:agentId` |
-| `web/src/pages/Chat.tsx` | Edit, **INCOMPLETE** | Server-minted id model, rail re-point, deep links, 409/404 handling — render blocks still reference removed state (§6.1) |
-| `docs/adr/0010-conversation-ownership-and-durable-messages.md` | New | Storage/ownership/idempotency decision |
-| `docs/features/persistent-workspaces/handoffs/…` (this file) | New | First session log in this folder |
+| `src/lib/tools/privacy-tools.ts` + `.test.ts` | Edit / New | Export includes the durable transcript; purge deletes messages + meta for `dashboard:c_*` |
+| `web/src/lib/format.ts` | Edit | `dateGroupLabel` — Today / Yesterday / Previous 7 days / Older |
+| `web/src/lib/api.ts` | Edit | `ConversationSummary`, `ConversationMessageView`, `ConversationDetail` |
+| `web/src/App.tsx` | Edit | `/chat/c/:conversationId` **before** `/chat/:agentId` |
+| `web/src/pages/Chat.tsx` | Edit, **INCOMPLETE** | Server-minted ids, rail re-point, deep links, 409/404 handling |
+| `docs/adr/0010-...md` | New | The storage/ownership/idempotency decision |
 
-### 4.3 Decisions made
+### Decisions Made
 
-| Decision | Options considered | Why this one |
-|---|---|---|
-| Build delta on top of M1; undo nothing | Replace M1's TTL/rail approach with the pre-#36 plan | M1 is correct and shipped; README lists this delta as next work |
-| conversationId == chatId (`dashboard:c_<uuid>`, server-minted) | Separate conversation id mapped to a chatId | One identifier, no mapping; safeDashboardChatId passes it through |
-| No adoption/migration of pre-existing chatIds into the owner rail | Ownership-adoption marker items with conditional first-writer | Guessable timestamp ids + adoption races add real machinery for hours-old data; legacy rows stay reachable via the admin Sessions tab |
-| Send-path history stays `session.turns` | Always rebuild from durable messages | Sessions never expire post-M1; rebuild solved a problem that no longer exists |
-| Idempotency = `lastClientMessageId` fence on owner meta | Dedicated idempotency items | Meta already read for ownership; client sends serially |
+| Decision | Options Considered | Rationale |
+|----------|-------------------|-----------|
+| Build the delta **on top of** PR #36, undoing nothing | Replace M1's TTL/rail approach with the pre-#36 plan | M1 is correct and shipped; its README lists exactly this delta as next work |
+| Ride the sessions table | New `conversations`/`messages` tables (War Room shape) | ~10 infra touchpoints per new table for no P0 benefit; jarvis precedent proves the pattern |
+| `conversationId` == `chatId` | Separate id mapped to a chatId | One identifier, no mapping; `safeDashboardChatId` passes it through untouched |
+| Time-sorted message SK `MSG#<pad13(ms)>#<0\|1>#<uuid>` | War Room `SEQ#` + `allocateSeq` counter | Both messages of a turn are written from one code path at one instant; a counter round-trip buys nothing |
+| Send-path history stays `session.turns` | Always rebuild from durable messages | Sessions never expire post-M1, so rebuild solved a problem that no longer exists — smaller diff |
+| Idempotency = `lastClientMessageId` on the meta | Dedicated idempotency items | The meta is already read for ownership: zero extra I/O; the composer sends serially so a retry is always the last message |
+| No migration of pre-#36 conversations into the owner rail | Ownership-adoption markers with a conditional first-writer | Guessable timestamp ids + adoption races is real machinery for hours-old data; legacy chats stay reachable in the admin Sessions tab |
 
-Durable versions of these are in ADR 0010.
+## Errors, Mistakes & Learnings
 
-### 4.4 Durable facts promoted out of this log
+### Errors Encountered
 
-| Fact learned | Promoted into | Done |
-|---|---|---|
-| Storage/ownership/idempotency design | `docs/adr/0010-conversation-ownership-and-durable-messages.md` | pending |
-| Hono stream-disconnect behavior | ADR 0010 | pending |
+| Error / Symptom | Cause | Resolution | Status |
+|-----------------|-------|------------|--------|
+| Router list tests 404 while detail tests passed | Hono strips the trailing slash: a router mounted at a prefix with a `/` route matches the **bare prefix** | Request `''` not `'/'` for the root route (the pattern `authz-matrix.test.ts:216-219` already documents) | Resolved |
+| `expect(persistTurnMock).toHaveBeenCalled()` → "called 0 times", while the route worked | With `streamSSE` the handler body executes **as the response is consumed**; assertions before `await res.text()` observe nothing | Drain the stream first, then assert | Resolved |
+| `TS18046: 'body' is of type 'unknown'` | `res.json()` returns `unknown` under this tsconfig | Cast at the call site: `(await res.json()) as { … }` | Resolved |
+| Em-dashes became `â€"` in a source file | A PowerShell `(Get-Content -Raw) -replace … \| Set-Content -Encoding utf8` round-trip re-encoded existing UTF-8 bytes | Repaired with the Edit tool; grepped the tree for other mojibake (none) | Resolved |
+| 13 `jarvis.flow.test.ts` tests time out at 5000ms | Pre-existing flake: mocked reads fall through to the real AWS credential chain (~2s each) | Not touched — reproduced twice and recorded as baseline | Open (pre-existing, documented) |
 
-## 5. Carried-forward mistakes, assumptions and precautions
+### Mistakes Made & Corrections
 
-> Copied forward from the seed ledger in
-> [`HANDOFF-TEMPLATE.md`](../../HANDOFF-TEMPLATE.md) (this folder had no prior
-> session handoffs), then appended to. Nothing is deleted. An entry that is
-> fixed is marked `RESOLVED (<commit>)` and stays.
-
-### 5.1 Process precautions
-
-| # | Precaution | Why it exists |
-|---|---|---|
-| P1 | Record a baseline before changing anything. | Without it a pre-existing failure is indistinguishable from a regression you caused. |
-| P2 | Never record a command as passing unless it actually ran. Say what you skipped and why. | See M5: a handoff once carried checks that no runtime could have executed. |
-| P3 | Name the branch. Never write "ready for production". | Four long-lived branches exist and only two reach an AWS environment. |
-| P4 | Run the FULL `npm test` before pushing, never a scoped run. | Required by [`CLAUDE.md`](../../../../CLAUDE.md). Scoped runs have hidden cross-module regressions here. |
-| P5 | When a document and the code disagree, **the code wins**. Fix the document. | The framework's stated tie-break. |
-| P6 | Never force-add unrelated uncommitted work you find in the tree. Preserve it and hand it back to its owner. | Stray files found during cleanup are somebody's in-flight work, not yours to merge. |
-| P7 | Delete a transient branch once it merges. | Only `development`, `qa`, `staging`, `production` survive, so a handoff that names a branch names something that still exists. |
-| P8 | Docs changes must pass `node scripts/ci/feature-knowledge.mjs` and `node scripts/ci/docs-links.mjs` before pushing. | Docs CI runs them anyway; failing there costs a round trip. |
-| P9 | Never restate feature-documentation rules outside [the framework](../../README.md). | A second copy is exactly how these conventions drifted before — see M1. |
-
-### 5.2 Mistakes already made, and their corrections
+Carried forward from the repository ledger (`M1`–`M8`), then appended. Nothing
+is deleted; a fixed entry is marked `RESOLVED (<commit>)` and stays.
 
 | # | Mistake | Impact | Correction | Lesson |
-|---|---|---|---|---|
-| M1 | Feature-documentation conventions were written on several pages at once. | The copies drifted and no page was trustworthy. | Single specification in [the framework](../../README.md), machine-checked by `scripts/ci/feature-knowledge.mjs`. | One rule, one home, enforced by CI rather than by discipline. |
-| M2 | The repository-root `handoff.md` was used as live, writable operational state. | It became a stale global handoff that contradicted the per-feature ones. | Reduced to a one-sentence compatibility pointer; CI now fails if it grows back. | Operational state is per-feature. A global handoff always rots. |
-| M3 | `infra/lib/dynamo-stack.ts` carries a header comment claiming "All 14 DynamoDB tables". | It creates **32**. The comment misled table-count work. | Read the synthesized template, never the comment. | Comments are not authorities. `infra/lib/constants.ts` and the synth output are. |
-| M4 | The CodeBuild deploy branch default was changed from `main` to `production`, then reverted. | Churn on a live CI path; the doc fixes from that change were kept, the behaviour change was not. | Reverted in `4ce27a7`, doc fixes retained. | Do not re-apply this without first establishing why it was reverted. |
-| M5 | A feature handoff recorded required checks as complete when the authoring machine had no Node runtime, so they could not have run. | The next reader would have trusted an unverified contract. | Disclosed explicitly in the handoff; Docs CI on `development` became the first real execution. | This is precisely what P2 exists to prevent. Disclosure is the minimum; running the check is the goal. |
-| M6 | Targeted Vitest was run inside a Windows **linked worktree**. | Startup failed with `Cannot read directory "../../../../../../../.."` and could not resolve `vitest.config.ts`; no tests collected. | Ran from a normal checkout instead. | On Windows, run test suites from a normal clone. Dependency-free Node CI scripts are fine in a worktree; Vitest is not. |
-| M7 | `npm run test:integration:up` was assumed safe alongside the local stack. | It starts LocalStack on port 4566 and collides with Floci. Two emulators must never run at once. | Use `npm run local:test:integration`, which passes `--env-file=.env`. | One emulator on 4566, ever. |
-| M8 | `.env` was created for local development while several lifecycle scripts default their environment flag to **prod** and read `.env`. | Commands that were previously inert became genuinely dangerous. | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally). | Read that list before running any unfamiliar `npm run` script. |
+|---|---------|--------|------------|--------|
+| M1 | Feature-documentation conventions written on several pages at once | Copies drifted; no page was trustworthy | Single spec in the framework, machine-checked | One rule, one home, enforced by CI not discipline |
+| M2 | Root `handoff.md` used as live operational state | Became a stale global handoff contradicting per-feature ones | Reduced to a one-sentence pointer; CI fails if it grows back | Operational state is per-feature; a global handoff always rots |
+| M3 | `dynamo-stack.ts` header claims "All 14 DynamoDB tables" | It creates **32**; misled table-count work | Read the synthesized template, never the comment | Comments are not authorities |
+| M4 | CodeBuild deploy branch default changed `main`→`production`, then reverted | Churn on a live CI path | Reverted in `4ce27a7`, doc fixes kept | Establish why it was reverted before re-applying |
+| M5 | A handoff recorded checks as complete on a machine with no Node runtime | The next reader would have trusted an unverified contract | Disclosed; Docs CI became the first real execution | Disclosure is the minimum; running the check is the goal |
+| M6 | Targeted Vitest run inside a Windows linked worktree | Startup failed, no tests collected | Ran from a normal checkout | *Superseded by A7 — the full suite does run in a worktree* |
+| M7 | Assumed `npm run test:integration:up` was safe alongside the local stack | Starts LocalStack on 4566 and collides with Floci | Use `npm run local:test:integration` | One emulator on 4566, ever |
+| M8 | Created `.env` while several lifecycle scripts default their env flag to **prod** and read it | Previously inert commands became genuinely dangerous | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally) | Read that list before any unfamiliar `npm run` |
+| **M9** | Planned an entire feature against `8a66ba4` while a parallel session shipped overlapping work (PR #36) | The plan's core mechanism (rebuild context after session expiry) was obsolete before implementation started | `git fetch` + diffed the anchor files before writing code; rescoped to a delta and recorded it | **Re-fetch and re-read the anchors immediately before implementing a plan that was written earlier** |
+| **M10** | Scaffolded a second feature folder (`docs/features/conversation-history/`) for work that belonged to `persistent-workspaces` | Would have split one feature's record across two folders — the exact failure M1 describes | Folded into the existing folder, deleted before any commit | Search `docs/features/` for an owning folder before creating one |
+| **M11** | Used a PowerShell regex round-trip to edit a source file | Corrupted every em-dash in it | Repaired with Edit; grepped for further mojibake | Use the Edit tool for source files; PowerShell text rewriting is not encoding-safe here |
 
-### 5.3 Standing assumptions
+### Key Learnings
 
-| # | Assumption | Confidence and caveat |
-|---|---|---|
-| A1 | Local development never reaches real AWS; `AWS_ENDPOINT_URL` is the isolation control and `scripts/local/guard.ts` fails closed. | Verified. Prove it any time with `npm run local:verify`, which requires account id `000000000000`. |
-| A2 | [`development.md`](../../../../development.md) was verified on **macOS** on 2026-08-10; the local command set was re-verified on Windows 11 on 2026-08-13. | Linux remains unverified. |
-| A3 | Bedrock is a **stub** locally: fixed placeholder text, `stopReason` always `end_turn`, no `ConverseStream`, no embeddings. | Local development validates plumbing, never model behaviour. Tool use is unreachable locally by design. |
-| A4 | `qa` deploys nothing, and merging to `production` deploys nothing on its own. | Verified in `.github/workflows/deploy.yml`; deployment is `workflow_dispatch` only and requires typing `deploy`. |
-| A5 | Table names are compiled in at import time (`process.env.TABLE_X ?? 'claudeclaw-<literal>'` in a module-level const). | A `TABLE_*` override must be set before the first import. `src/lib/state/agents-repo.ts` is the lone lazy exception. |
-| A6 | AWS console access for this account is root-user sign-in via `aws login` with the `netzer-root` profile. | The `netzer-dev` SSO profile is known broken. Do not burn time on it. |
-| A7 | **Appended 2026-08-13 (this session):** contrary to M6, the FULL vitest suite runs in a Windows linked worktree (verified 2026-08-13 at `8a66ba4`: 1949 tests from `.worktrees/persistent-workspaces` after `npm ci --ignore-scripts`; PR #36's session also worked from `.worktrees/chat-history`). This session runs from `.worktrees/conversation-history` because a parallel session holds the main clone's checkout. If vitest startup ever fails in a worktree, fall back to a normal clone per M6 and record which behavior occurred. |
-| A8 | **Appended 2026-08-13 (this session):** the Windows `npm test` baseline on `development` is NOT green: 5 `scripts/`-only test files fail (4 shebang parse errors + 1 POSIX path assert; none in `src/`; CI on ubuntu is green). Post-M1 expected shape: 5 failed / 178 passed files, 1 failed / 1960 passed tests; integration 38/39 with the known `destroy.integration` emulator gap. Verify against §7 before blaming a change. |
+- **`streamSSE` executes the handler body lazily.** Any assertion about what a
+  streaming route did must come *after* the response body is drained. This
+  will bite every future test of `/test-turn/stream`.
+- **hono 4.12.27's `StreamingApi.write` swallows write errors** (verified in
+  `node_modules/hono/dist/utils/stream.js`), and nothing wires an abort signal
+  into `runAgentTurn`. So a browser refresh mid-stream does **not** abort the
+  turn: it completes server-side and persistence still runs. That is why P0
+  needs no reconnect infrastructure — reload simply shows the finished reply.
+- **Ownership by partition beats ownership by filter.** Reading the meta only
+  under the caller's own partition means there is no cross-partition lookup to
+  get wrong, and "not yours" and "doesn't exist" are the same code path.
+- **Two representations of a conversation are fine if their roles are named.**
+  Session `turns` = model context (rolling, trimmed, feeds memory ingest);
+  message items = product transcript (durable, complete). Conflating them was
+  the original design pressure to widen `MAX_TURNS`, which the item-size budget
+  can't absorb.
+- **The dashboard `userId` on session rows is a per-login token hash** and
+  rotates on every magic-link sign-in — unusable for ownership. The stable id
+  is `principal.userId`, absent for the root token and legacy minted tokens,
+  hence the `userId ?? 'root' ?? token:<hashPrefix16>` ladder.
 
-### 5.4 Known traps that cost time
+### Prevention / Future Guidance
 
-Short pointers only. The owning document has the detail; do not copy it here.
+Carried forward (`P1`–`P9`), then appended.
 
-| Trap | Where the detail lives |
-|---|---|
-| A bare `KEY=` in `.env` becomes `''`, and zod's `.optional()`/`.default()` only fire on `undefined`. Omit the line instead. | [Environment variables](../../../../development.md#environment-variables) |
-| `.env.example`, `.env.reference` and `.env.staging.example` all fail `loadEnv()`. Only `.env.local.example` works. | [Environment variables](../../../../development.md#environment-variables) |
-| `NODE_ENV=production` locally arms a deployed-task fail-fast; the orchestrator refuses to start. | [Environment variables](../../../../development.md#environment-variables) |
-| `CCE_NAME_SUFFIX` renames tables but four modules read the unsuffixed literal anyway. | [Environment variables](../../../../development.md#environment-variables) |
-| Vite does **not** always use port 5173, and binds `localhost` (IPv6 `::1`), so the IPv4 literal fails. Read the URL Vite prints. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| `GET /ready` returning `503` locally is **correct** — Slack and Telegram are genuinely unconfigured. | [Starting development](../../../../development.md#starting-development) |
-| A poisoned row in `claudeclaw-dashboard-tokens` causes a permanent `401` with a correct token. Fix: `npm run local:provision`. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| Floci answers `ConverseStream` with 501; the replay-as-non-streaming fallback fires **only** when `AWS_ENDPOINT_URL` is set. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| `src/adapters/dashboard/jarvis.flow.test.ts` intermittently times out at 5000 ms. Pre-existing flake. Reproduce twice before chasing it. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| The IAM Copilot **degrades invisibly** locally: an empty findings list renders identically to "validated clean". | [Known local limitations](../../../../development.md#known-local-limitations) |
-| The cost waste scan reports a **false clean** and caches it for 30 minutes. Local cost output is not meaningful. | [Known local limitations](../../../../development.md#known-local-limitations) |
-| `npm run doctor`, `status` and `verify` fail rather than skip against an empty emulator. They give no useful local signal. | [Known local limitations](../../../../development.md#known-local-limitations) |
-| Windows PowerShell 5.1 has no `&&`; chain with `; if ($?) { … }`. | [Feature README §8](../README.md) |
-| Docker Desktop lives at `%LOCALAPPDATA%\Programs\DockerDesktop`, not Program Files. | [HANDOFF, PR #36 session](../HANDOFF.md) |
+- **P1** Record a baseline before changing anything, or a pre-existing failure is indistinguishable from a regression you caused.
+- **P2** Never record a command as passing unless it actually ran. Say what you skipped and why.
+- **P3** Name the branch. Never write "ready for production" — four long-lived branches exist and only two reach AWS.
+- **P4** Run the FULL `npm test` before pushing, never a scoped run ([CLAUDE.md](../../../../CLAUDE.md)).
+- **P5** When a document and the code disagree, **the code wins**. Fix the document.
+- **P6** Never force-add unrelated uncommitted work found in the tree; preserve it and hand it back.
+- **P7** Delete a transient branch once it merges.
+- **P8** Run `node scripts/ci/feature-knowledge.mjs` and `node scripts/ci/docs-links.mjs` before pushing docs changes.
+- **P9** Never restate feature-documentation rules outside the framework.
+- **P10** *(new)* Before implementing a plan written earlier in the session,
+  `git fetch` and diff the files the plan anchors on. A parallel session can
+  land overlapping work mid-planning (see M9).
+- **P11** *(new)* Edit source files with the Edit tool, never a PowerShell
+  regex round-trip — the re-encode corrupts non-ASCII characters (M11).
+- **P12** *(new)* When testing a `streamSSE` route, `await res.text()` before
+  asserting on any mock.
+- **P13** *(new)* A new dashboard route that reads user data must be proven
+  against a **non-owner** principal, not only an unauthenticated one. The
+  404-not-403 shape is deliberate: it must not leak existence.
 
-## 6. Pending work
+## Pending Work
 
-### 6.1 Smallest next action
+### Immediate Next Steps
 
-Fix the four web-typecheck errors in `web/src/pages/Chat.tsx` — they are the
-tail of the rail-render refactor, enumerated exactly by
-`npm --prefix web run typecheck`:
+1. **Fix the four web-typecheck errors in `web/src/pages/Chat.tsx`** — the tail
+   of the rail-render refactor, enumerated by `npm --prefix web run typecheck`:
+   - `Chat.tsx(158)` — `conversations` state is still typed
+     `useState<Conversation[]>`; that interface was replaced by
+     `ConversationSummary` (already imported). Change the type argument.
+   - `Chat.tsx(~526)` — rail rows still reference the removed `chatId` state:
+     `c.chatId === chatId` → `c.conversationId === conversationId`;
+     `openConversation(c.chatId)` → `openConversation(c.conversationId)`;
+     `key={c.chatId}` → `key={c.conversationId}`. While here, apply the planned
+     grouping: bucket rows by `dateGroupLabel(c.updatedAt)` (imported but
+     unused → error TS6133) under Today / Yesterday / Previous 7 days / Older
+     headers, and show each row's agent display name — the rail is now
+     cross-agent.
+   - `Chat.tsx(~578)` — header still renders `{chatId}`; render
+     `{conversationId ?? 'new conversation'}`, keeping the `InfoTooltip`.
+   - Re-run `npm --prefix web run typecheck` until clean, then
+     `npm --prefix web run build`.
+2. **Run the integration suite for the first time**: `npm run local:up`,
+   `npm run local:provision`, then `npm run local:test:integration`. Expect
+   39/40 — the new file adds one, and `destroy.integration` fails on the known
+   Floci `ListSecrets` gap.
+3. **Docs**: update the feature [README](../README.md) (what it does today,
+   implementation map, close the two risk rows this branch fixes, add ADR 0010
+   to `decisions:` and the new tests to `tested_by:`), and the
+   `docs/how-it-works.md` prose about history coming from the session table.
+4. **Full validation list, verbatim** (`development.md` step 7), all actually run.
+5. **Manual local pass**: send → refresh → deep-link in a new tab → second
+   conversation → switch between them → another owner's id returns 404 →
+   Sessions tab still lists the underlying rows.
+6. **PR into `development`**, one logical change; body must state the
+   dashboard-only surface-parity note, the P1/P2 non-goals, and the
+   legacy-conversation caveat.
 
-1. `Chat.tsx(158)` — the `conversations` state is still
-   `useState<Conversation[]>`; the `Conversation` interface was replaced by
-   `ConversationSummary` (already imported from `../lib/api`). Change the
-   type argument.
-2. `Chat.tsx(~526)` — the rail rows still use the removed `chatId` state:
-   `const active = c.chatId === chatId` →
-   `const active = c.conversationId === conversationId`;
-   `openConversation(c.chatId)` → `openConversation(c.conversationId)`;
-   the row key `key={c.chatId}` → `key={c.conversationId}`. While here, apply
-   the planned date grouping: group `conversations` with
-   `dateGroupLabel(c.updatedAt)` (imported, currently unused — error TS6133)
-   into Today / Yesterday / Previous 7 days / Older section headers, and show
-   the row's agent display name (agents list lookup) since the rail is now
-   cross-agent.
-3. `Chat.tsx(~578)` — the header still renders `{chatId}`; render
-   `{conversationId ?? 'new conversation'}` (keep the `InfoTooltip`).
-4. Re-run `npm --prefix web run typecheck` until clean, then
-   `npm --prefix web run build`.
+### Blockers/Open Questions
 
-### 6.2 Immediate next steps
+- [ ] Blocker: `conversations-repo.integration.test.ts` has **never executed** —
+      needs Docker Desktop running (`%LOCALAPPDATA%\Programs\DockerDesktop`),
+      Floci up, and a `.env` created from `.env.local.example`.
+- [ ] Open: whether the repo's `docs/features/HANDOFF-TEMPLATE.md` should be
+      amended to this template's structure. That is a **process change**
+      requiring explicit approval before editing — not done here.
 
-1. Finish §6.1, then eyeball the rail states (loading / empty / grouped).
-2. Bring up Floci (`npm run local:up` + `npm run local:provision`; `.env` from
-   `.env.local.example` if absent) and run
-   `npm run local:test:integration` — expect 39/40 with the known
-   `destroy.integration` gap; the new
-   `conversations-repo.integration.test.ts` adds one file.
-3. Update feature `README.md` (implementation map, "what it does today",
-   risks table rows for the two closed gaps, frontmatter `implemented_by`/
-   `tested_by`/`decisions` += ADR 0010) and `docs/how-it-works.md` prose;
-   finalize this handoff + canonical `HANDOFF.md`.
-4. Full validation list, verbatim (`development.md` step 7), all run.
-5. Manual local pass (plan §Verification: send / refresh / deep-link /
-   second conversation / cross-owner 404 / Sessions tab intact).
-6. PR into `development`: one logical change; body states dashboard-only
-   surface parity + P1/P2 non-goals + the pre-existing-conversation
-   rail caveat (legacy chats stay in the admin Sessions tab only).
+### Deferred Items
 
-### 6.3 Blockers and open questions
-
-- [ ] None currently.
-
-### 6.4 Deferred, and why
-
-- Rename/delete/auto-titles, cross-surface sidebar, pagination, summaries,
-  stream reconnect, non-stream `/test-turn` conversations — out of P0 scope by
-  the approved plan.
-- Legacy raw-`chatId` ownership hardening + adoption of pre-existing
-  conversations into the owner rail — named follow-up; legacy rows stay
+- Rename, delete, auto-titles beyond first-message, cross-surface sidebar,
+  message pagination, summaries, semantic retrieval, live-stream
+  reconnect/resume, conversation support on the non-stream `/test-turn`,
+  rehydrating kb chips / images / run-meta footers — all out of P0 by the
+  approved plan.
+- Ownership hardening of legacy raw-`chatId` sends, and adoption of pre-#36
+  conversations into the owner rail — named follow-ups; legacy rows remain
   reachable via the admin Sessions tab.
 
-## 7. Verification actually performed
+## Context for Resuming Agent
 
-Fill in the real result. `not run` is an acceptable and expected answer;
-a false `pass` is not.
+### Important Context
 
-Focused suites actually run this session (all green, exit 0):
-`conversations-repo.test.ts` 15/15 · `conversations.test.ts` 7/7 ·
-`authz-matrix.test.ts` 102/102 + `server.test.ts` (115 total in that run) ·
-`test-turn-conversations.test.ts` 6/6 · regression re-runs
-`test-turn-attachments` 6/6, `test-turn-costcap`, `sessions-repo.persistence`,
-`sessions-repo.ingest` (26 tests across the stream-wiring run) ·
-`privacy-tools.test.ts` 4/4.
+**The backend is done and proven; only `Chat.tsx` is unfinished.** Do not
+redesign anything — read [ADR 0010](../../../adr/0010-conversation-ownership-and-durable-messages.md)
+first, then fix the four errors listed above.
 
-| Command | Baseline (before changes) | After changes |
-|---|---|---|
-| `npm run typecheck` | not run separately (baseline `npm test` compiled clean aside from listed failures) | **clean** (run twice during the session, last after GDPR wiring) |
-| `npm test` | **7 failed / 176 passed files (184); 20 failed / 1941 passed / 6 skipped tests (1967)** on untouched `27cde44`, Windows. Failing files: `scripts/ci/{docs-links,feature-knowledge,runnable-blocks}.test.ts` + `scripts/release/sync-deprecations.test.ts` (shebang parse errors), `scripts/release/buildspec-tag-normalization.test.ts` (6 tests, needs `sh`), `scripts/lib/lifecycle/rollback-classes.test.ts` (1 test, POSIX paths) — all `scripts/`, Windows-env-only, CI green on ubuntu; plus `src/adapters/dashboard/jarvis.flow.test.ts` (13 tests, the documented credential-chain timeout flake — reproduced twice per development.md's procedure: full run AND a solo warm-transform rerun, 13 failed / 5 passed, all `Test timed out in 5000ms`, on a freshly restarted machine). | |
-| `npm run build` | not run | not run |
-| `npm --prefix web run typecheck` | not run | **RED — 4 known errors** in `Chat.tsx` (mid-refactor; exact list in §6.1) |
-| `npm --prefix web run build` | not run | not run |
-| `npm run local:test:integration` | not run | not run (Docker/Floci not started this session; the new integration test file has never executed) |
-| `node scripts/ci/docs-links.mjs` | not run | run at pause — see the commit carrying this file |
-| `node scripts/ci/feature-knowledge.mjs` | not run | run at pause — see the commit carrying this file |
-| `git diff --check` | not run | run at pause — clean |
+**Do not undo PR #36.** M1 (session rows never expire for `dashboard:` chats,
+plus the inline rail) is correct and shipped. This branch extends it: the rail
+moves from agent-scoped `/sessions` to owner-scoped `/conversations`, and
+reopen now serves the full durable transcript instead of the 20-turn window.
 
-Anything not run, and why: the session was paused mid-frontend at the user's
-request and pushed WIP (explicit user-approved deviation from the
-run-full-validation-before-pushing rule). `npm run build`, the web gates, and
-the integration suite are owed by the resuming session BEFORE any PR.
+**The legacy path must stay byte-for-byte unchanged.** A send with a raw
+`chatId` and no `conversationId` takes exactly the old code path — no ownership
+read, no `persistTurn`, no `conversation` event. `test-turn-conversations.test.ts`
+pins this; if it goes red, the change is wrong.
 
-## 8. Environment state
+### Assumptions Made
 
-- **Tools and services**: Windows 11, Node 24.19.0; `npm ci --ignore-scripts`
-  completed in the worktree for root AND `web/`. Docker/Floci not started
-  this session.
-- **Active processes**: none left running at pause.
-- **Environment variables**: repo defaults only; no `.env` in the worktree yet
-  (create from `.env.local.example` before the integration suite).
-- **Uncommitted work left in the tree**: main clone checkout sits on
-  `chore/canonical-repo-and-agent-worktrees` with untracked
-  `fix-windows-test-suite/` — a parallel session's work, untouched per P6.
-  This session works only in `.worktrees/conversation-history`.
+- **A1** Local development never reaches real AWS; `AWS_ENDPOINT_URL` is the isolation control and `scripts/local/guard.ts` fails closed. Prove it with `npm run local:verify` (requires account `000000000000`).
+- **A2** `development.md` was verified on macOS 2026-08-10; its local command set was re-verified on Windows 11 on 2026-08-13. Linux is unverified.
+- **A3** Bedrock is a **stub** locally: fixed text, `stopReason` always `end_turn`, no `ConverseStream`, no embeddings. Local runs validate plumbing, never model behavior; tool use is unreachable.
+- **A4** `qa` deploys nothing, and merging to `production` deploys nothing on its own (`deploy.yml` is `workflow_dispatch` and requires typing `deploy`).
+- **A5** Table names are compiled in at import time, so a `TABLE_*` override must be set **before** the first import.
+- **A6** AWS console access is root-user sign-in via `aws login` with the `netzer-root` profile; the `netzer-dev` SSO profile is broken.
+- **A7** Contrary to M6, the **full vitest suite does run in a Windows linked worktree** (verified 2026-08-13 at `8a66ba4`, and this whole session ran from one). Fall back to a normal clone only if startup actually fails.
+- **A8** The Windows `npm test` baseline on `development` is **not green** — 7 failing files, none in `src/`. Check against the table above before blaming a change.
 
-## 9. Related documents
+### Potential Gotchas
 
-- [Feature README](../README.md)
-- [Feature HANDOFF (current state)](../HANDOFF.md)
-- [Feature knowledge framework](../../README.md)
-- [Local development guide](../../../../development.md)
-- [Contributing and branch promotion](../../../../CONTRIBUTING.md)
+| Gotcha | Where the detail lives |
+|--------|------------------------|
+| A bare `KEY=` in `.env` becomes `''`; zod's `.optional()`/`.default()` only fire on `undefined`. Omit the line | [Environment variables](../../../../development.md#environment-variables) |
+| Only `.env.local.example` works — `.env.example`, `.env.reference`, `.env.staging.example` all fail `loadEnv()` | [Environment variables](../../../../development.md#environment-variables) |
+| `NODE_ENV=production` locally arms a fail-fast; the orchestrator refuses to start | [Environment variables](../../../../development.md#environment-variables) |
+| `CCE_NAME_SUFFIX` renames tables but four modules read the unsuffixed literal anyway | [Environment variables](../../../../development.md#environment-variables) |
+| Vite does not always use 5173 and binds `localhost` (IPv6) — read the URL it prints | [Troubleshooting](../../../../development.md#troubleshooting) |
+| `GET /ready` returning `503` locally is **correct** (Slack/Telegram genuinely unconfigured) | [Starting development](../../../../development.md#starting-development) |
+| A poisoned `claudeclaw-dashboard-tokens` row causes a permanent 401 with a correct token. Fix: `npm run local:provision` | [Troubleshooting](../../../../development.md#troubleshooting) |
+| Floci answers `ConverseStream` with 501; the replay fallback fires **only** when `AWS_ENDPOINT_URL` is set | [Troubleshooting](../../../../development.md#troubleshooting) |
+| `jarvis.flow.test.ts` times out intermittently — reproduce twice before chasing | [Troubleshooting](../../../../development.md#troubleshooting) |
+| The IAM Copilot degrades **invisibly** locally: empty findings render as "validated clean" | [Known local limitations](../../../../development.md#known-local-limitations) |
+| The cost waste scan reports a **false clean** and caches it 30 minutes | [Known local limitations](../../../../development.md#known-local-limitations) |
+| `npm run doctor`/`status`/`verify` fail rather than skip against an empty emulator | [Known local limitations](../../../../development.md#known-local-limitations) |
+| PowerShell 5.1 has no `&&`; chain with `; if ($?) { … }` | [Feature README §8](../README.md) |
+| Docker Desktop is under `%LOCALAPPDATA%\Programs\DockerDesktop`, not Program Files | this folder's PR #36 record |
+| `appendTurns` is a full-item Put that silently drops unlisted attributes (it already drops `activeWarroomId`) — never store conversation state on a session row | `src/lib/state/sessions-repo.ts` |
+| `Chat.tsx` sends via raw `fetch`, bypassing the 60s GET cache — call `clearApiCache()` after a turn or the rail lags | `web/src/lib/api.ts` |
+| Six `data-tour` anchors in `Chat.tsx` are asserted by the Playwright tour smoke — preserve them through the layout refactor | `web/src/lib/tour/steps.ts` |
+| `:param` routes are exempt from the route-manifest drift test; a **static** `/chat/c` route would fail it | `src/lib/jarvis/route-manifest.test.ts` |
+
+## Environment State
+
+### Tools/Services Used
+
+- Windows 11, Node 24.19.0, PowerShell 5.1
+- `npm ci --ignore-scripts` completed for root **and** `web/` in the worktree
+- Docker / Floci: **not started this session**
+
+### Active Processes
+
+- None left running at pause.
+
+### Environment Variables
+
+- Repo defaults only; **no `.env` in the worktree yet** — create it from
+  `.env.local.example` before the integration suite. Names only, never values.
+
+## Related Resources
+
+- [Feature README](../README.md) · [canonical HANDOFF](../HANDOFF.md)
+- [ADR 0010 — conversation ownership and durable messages](../../../adr/0010-conversation-ownership-and-durable-messages.md)
+- [ADR 0002 — single tenant](../../../adr/0002-single-tenant.md) · [ADR 0009 — mission container model](../../../adr/0009-mission-container-model.md)
+- [Feature knowledge framework](../../README.md) · [development.md](../../../../development.md) · [CONTRIBUTING.md](../../../../CONTRIBUTING.md)
+- PR #36 (`f132a9c`) — the M1 conversation-persistence work this branch extends
