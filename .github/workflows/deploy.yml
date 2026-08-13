@@ -90,7 +90,13 @@ jobs:
             # already matches this shape via `claudeclaw-*-orchestrator`.
             echo "ecr_repo=claudeclaw-staging-orchestrator" >> "$GITHUB_OUTPUT"
             echo "stack_name=CCE-STAGING" >> "$GITHUB_OUTPUT"
-            echo "public_host=staging.claudeclaw-enterprise.com" >> "$GITHUB_OUTPUT"
+            # Staging is infra-only. DOMAIN_NAME MUST stay empty: there is no
+            # Route 53 hosted zone and no ACM certificate in this account, so a
+            # non-empty value sends compute-stack.ts into HostedZone.fromLookup
+            # and the deploy fails at synth. It would also flip the ALB
+            # internet-facing. staging.pgnos.ai is published by a Cloudflare
+            # Tunnel, never by the ALB.
+            echo "public_host=" >> "$GITHUB_OUTPUT"
             echo "cluster=claudeclaw-staging-cluster" >> "$GITHUB_OUTPUT"
             echo "service=claudeclaw-staging-service" >> "$GITHUB_OUTPUT"
           else
@@ -186,6 +192,10 @@ jobs:
           CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
           DOMAIN_NAME: ${{ steps.cfg.outputs.public_host }}
+          # Staging mirrors prod's posture: blank DOMAIN_NAME + infra-only
+          # resolves privateAccessOnly, so the ALB is synthesized INTERNAL in
+          # private subnets. Left blank for prod, which keeps today's behaviour.
+          CCE_DEPLOY_MODE: ${{ github.event.inputs.env == 'staging' && 'infra-only' || '' }}
           CDK_STACK_NAME: ${{ steps.cfg.outputs.stack_name }}
           DEPLOY_TIER: ${{ env.CCE_TIER }}
           CCE_TIER: ${{ env.CCE_TIER }}
@@ -230,6 +240,17 @@ jobs:
           PUBLIC_HOST: ${{ steps.cfg.outputs.public_host }}
         run: |
           set -euo pipefail
+          # infra-only environments (staging) have no public hostname to curl.
+          # The ECS "wait services-stable" step above is the real gate: it only
+          # returns once the task passes its container health check and the
+          # target group reports healthy. Deeper checks go through the SSM
+          # tunnel (npm run dashboard:tunnel).
+          if [ -z "$PUBLIC_HOST" ]; then
+            echo "No public hostname for this environment (infra-only)."
+            echo "ECS service reached steady state; health verified via the"
+            echo "container health check and target group."
+            exit 0
+          fi
           echo "GET /health (with retry — CloudFront origin-header propagation can take ~60-90s after a Compute stack update)"
           attempts=0
           max_attempts=8
