@@ -1,6 +1,6 @@
 # Cost guide: what each tier actually costs
 
-> Running ClaudeClaw Enterprise has a fixed monthly floor (the always-on AWS plumbing: Fargate tasks, NAT gateways, the load balancer) and a variable part (Bedrock tokens, which the built-in daily cost cap keeps bounded). The floor ranges from roughly $65 to $95 a month at the Hobby tier up to $300-plus at the Enterprise tier before any real traffic, with stated assumptions below. The numbers on this page age, so the repo ships a small recalculable estimator, `scripts/cost-estimate.mjs`, whose unit prices are an editable block at the top; trust the script over any prose snapshot.
+> Running Netzar OS Enterprise has a fixed monthly floor (the always-on AWS plumbing: Fargate tasks, NAT gateways, the load balancer) and a variable part (Bedrock tokens, which the built-in daily cost cap keeps bounded). The floor ranges from roughly $65 to $95 a month at the Hobby tier up to $300-plus at the Enterprise tier before any real traffic, with stated assumptions below. The numbers on this page age, so the repo ships a small recalculable estimator, `scripts/cost-estimate.mjs`, whose unit prices are an editable block at the top; trust the script over any prose snapshot.
 
 **As of:** 2026-06. **Region assumption:** us-east-1. **Traffic profile assumption:** light (about 50 agent turns/day, ~1 ALB LCU, single-digit GB of logs). All figures USD, on-demand pricing, before taxes.
 

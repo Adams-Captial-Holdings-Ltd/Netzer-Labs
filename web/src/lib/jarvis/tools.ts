@@ -150,6 +150,22 @@ export function setJarvisTextModel(id: string): void {
 }
 export const jarvisMicPermission = signal<'unknown' | 'granted' | 'denied' | 'unavailable'>('unknown');
 
+// The floating orb's X. Persisted so "close it" survives a reload; cleared when
+// the user opens the /jarvis tab, which is how the orb comes back. Separate from
+// jarvisEnabled, which is the ADMIN kill switch — a user dismissing the widget
+// must not read as the fleet-wide feature being off.
+const WIDGET_HIDDEN_KEY = 'cce_jarvis_widget_hidden';
+export const jarvisWidgetHidden = signal<boolean>(localStorage.getItem(WIDGET_HIDDEN_KEY) === 'true');
+export function setJarvisWidgetHidden(hidden: boolean): void {
+  jarvisWidgetHidden.value = hidden;
+  try {
+    if (hidden) localStorage.setItem(WIDGET_HIDDEN_KEY, 'true');
+    else localStorage.removeItem(WIDGET_HIDDEN_KEY);
+  } catch {
+    /* storage unavailable — keep the in-memory choice */
+  }
+}
+
 // Draggable widget position (viewport px, top-left of the widget). null → use the
 // default bottom-left CSS anchor. Persisted so a moved orb stays put across reloads.
 const WIDGET_POS_KEY = 'cce_jarvis_widget_pos';

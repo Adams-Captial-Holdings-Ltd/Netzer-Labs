@@ -1,4 +1,4 @@
-# Contributing to ClaudeClaw Enterprise
+# Contributing to Netzar OS Enterprise
 
 Thanks for contributing. This page covers local dev setup, the test contract,
 PR conventions, and how releases are cut. Working conventions for *changing
@@ -66,16 +66,23 @@ hotfix/<issue> -> production, then backport to development and promote normally
 - Promotion branches accept normal changes only from the immediately preceding
   branch: `development` into `qa`, `qa` into `staging`, and `staging` into
   `production`.
-- Use pull requests for every promotion. Force pushes, branch deletion, and
-  history rewriting are forbidden on long-lived branches.
+- `development`, `qa`, `staging`, and `production` are the only long-lived
+  branches. Use pull requests for every promotion. Force pushes, branch
+  deletion, and history rewriting are forbidden on those four.
+- Every other branch is transient. Delete it once it merges, so the branch list
+  never grows past what someone can read in one screen and a handoff that names
+  a branch names something that still exists.
 - For an urgent production fix, branch `hotfix/<issue>` from `production`,
   merge the smallest verified fix into `production`, then backport it to
   `development` and promote that backport normally.
-- During the controlled cutover, `main` remains production-authorized as a
-  recovery path. After a successful production proof from `production`, it is
-  preserved as protected legacy history and is never deleted.
+- Feature documentation follows the
+  [feature knowledge framework](docs/features/README.md). A PR that adds or
+  changes a `docs/features/<slug>/` document must conform to it; Docs CI
+  enforces the contract.
 
-The operator sequence and stop conditions are in [cutover.md](cutover.md).
+The rules above are the current model. [cutover.md](cutover.md) is the historical
+checklist from the one-time governance cutover; it is kept as a record and must not be
+executed, because parts of it now describe the opposite of the current branch layout.
 
 ## PR conventions
 

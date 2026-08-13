@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — private dashboard tunnel (`npm run dashboard:tunnel`)
+ * Netzar OS Enterprise — private dashboard tunnel (`npm run dashboard:tunnel`)
  *
  * The no-domain `infra-only` deployment mode synthesizes the ALB INTERNAL,
  * so the dashboard is not reachable from the internet at all. This script is

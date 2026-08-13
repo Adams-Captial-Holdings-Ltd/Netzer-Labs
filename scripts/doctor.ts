@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — Doctor (pre-deploy preflight)
+ * Netzar OS Enterprise — Doctor (pre-deploy preflight)
  *
  * PURE READ-ONLY. Runs the registry of preflight checks from
  * scripts/lib/preflight/checks.ts against the resolved env and prints
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   if (!quiet) {
     // Name the file being read, not the internal flag ('prod' reads as a
     // choice the first-timer never made).
-    log('\n' + bold(`ClaudeClaw Enterprise · Doctor (${envFileNameFor(envFlag)})`));
+    log('\n' + bold(`Netzar OS Enterprise · Doctor (${envFileNameFor(envFlag)})`));
     log(gray('─'.repeat(40)));
     log(
       dim(

@@ -76,7 +76,7 @@ Row 5 NAME "Deploy"           VALUE "./setup wizard, one command"
 Row 6 NAME "Shape"            VALUE "Monolith, 6 launchd agents"
 
 RIGHT COLUMN HEADER (large, bold):
-"ClaudeClaw Enterprise"
+"Netzar OS Enterprise"
 
 RIGHT COLUMN SUBHEADER (smaller):
 "Cloud-native. Reduced. Lives on AWS."
@@ -121,7 +121,7 @@ the dark navy (#1a2540). Pure white background. No other text in the image.
         "prompt": f"""
 {STYLE_MASCOT}
 
-The mascot for ClaudeClaw Enterprise: the same stylized crab but presented
+The mascot for Netzar OS Enterprise: the same stylized crab but presented
 as a calm, dignified architect. The crab stands upright, posture composed,
 wearing a small clean blazer with a single orange pocket square. In one
 claw it holds a neat blueprint scroll labeled "CDK". In the other claw it

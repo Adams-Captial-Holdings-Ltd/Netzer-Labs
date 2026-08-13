@@ -1,6 +1,6 @@
 # Glossary
 
-> ClaudeClaw Enterprise has a small set of project-specific words that the docs, the scripts, and the dashboard all use without re-explaining. This page defines each one in one to three sentences, grounded in the code that implements it. If a doc uses a term that is not here, that is a docs bug.
+> Netzar OS Enterprise has a small set of project-specific words that the docs, the scripts, and the dashboard all use without re-explaining. This page defines each one in one to three sentences, grounded in the code that implements it. If a doc uses a term that is not here, that is a docs bug.
 
 Terms are alphabetical. File links point at the implementation.
 

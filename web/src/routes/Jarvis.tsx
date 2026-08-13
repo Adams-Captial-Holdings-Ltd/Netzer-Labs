@@ -24,6 +24,7 @@ import {
   setJarvisTextModel,
   registerNavigate,
   loadJarvisManifest,
+  setJarvisWidgetHidden,
   type JarvisSessionState,
 } from '../lib/jarvis/tools';
 import { Select } from '../components/Select';
@@ -83,6 +84,9 @@ export function Jarvis() {
     void loadJarvisManifest();
     void loadJarvisRoutines();
     clientRef.current = getVoiceClient();
+    // Opening this tab is how a dismissed floating orb comes back — otherwise the
+    // X would be a one-way door with no visible way to undo it.
+    setJarvisWidgetHidden(false);
     const root = document.documentElement;
     if (!root.className.includes('jarvis-')) root.classList.add('jarvis-idle');
     // No disconnect on unmount: the shared client keeps the session alive so it

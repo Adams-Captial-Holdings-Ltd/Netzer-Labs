@@ -1,8 +1,30 @@
-# ClaudeClaw Enterprise documentation
+# Netzar OS Enterprise documentation
 
 > Everything in this folder is organized by what you are trying to do, not by which subsystem a page describes: deploy it, understand it, run it in production, or extend it. Every page opens with a short plain-English summary like this one, then goes technical, so you can skim the summaries and only dive where you need to. Start with the track that matches you; the [glossary](./glossary.md) decodes the project-specific words along the way.
 
 The top-level [README](../README.md) is the landing page; this folder is the depth.
+
+---
+
+## I want to continue feature work
+
+Feature knowledge lives under `docs/features/<slug>/`. Start with the feature
+README to find verified behavior and its authorities, verify the relevant source
+and branch state, then read the feature HANDOFF for volatile branch, command,
+blocker, and next-action state.
+
+**[The feature knowledge framework](./features/README.md) is the single
+specification** for that folder: its shape, its frontmatter contract, the status
+and work-state vocabularies, the required sections, and copy-paste templates for
+starting a new one. Those rules are not restated anywhere else, and Docs CI
+enforces them with `node scripts/ci/feature-knowledge.mjs`.
+
+[Missions](./features/missions/README.md) is the reference implementation: its
+[README](./features/missions/README.md) and
+[HANDOFF](./features/missions/HANDOFF.md) are the canonical entry points, with
+its [ADR](./adr/0009-mission-container-model.md) governing durable decisions,
+its [backlog](./missions-v2-backlog.md) owning approved work, and its
+[audit](./missions-v2-audit.md) preserving historical evidence.
 
 ---
 
@@ -20,6 +42,8 @@ The operator quickstart, in order: AWS-side prerequisites first (standalone acco
 - **Connecting Telegram or Slack to an agent**, no redeploy needed: [channels/connect-prompts.md](./channels/connect-prompts.md) and the Slack-specific setup + app manifest in [slack/README.md](./slack/README.md) ([app-manifest.json](./slack/app-manifest.json)).
 - **A second parallel environment** (staging): [staging.md](./staging.md).
 - **Connecting GitHub to AWS** (optional: you do not need CI to deploy; the two accelerators, OIDC deploys and CodeBuild tag deploys, and their trust scopes): [github-to-aws.md](./github-to-aws.md).
+- **Developing from another computer**: the no-extra-cost GitHub workflow, repeatable setup, branch handoff, and validation commands are in [development.md](./development.md).
+- **Promoting development through QA and production**: the persistent QA, protected branch, signed release, client approval, and post-release refresh workflow is in [deployment.md](./deployment.md).
 
 ## I want to understand it
 
@@ -27,6 +51,7 @@ The operator quickstart, in order: AWS-side prerequisites first (standalone acco
 - **The diagram suite**, maintained Mermaid diagrams split by concern: [diagrams/README.md](./diagrams/README.md) is the index. Direct links: [compute](./diagrams/architecture-compute.md), [data](./diagrams/architecture-data.md), [messaging](./diagrams/architecture-messaging.md), [security / trust boundaries](./diagrams/architecture-security.md), [request lifecycle](./diagrams/request-lifecycle.md), [deploy pipeline](./diagrams/deploy-pipeline.md), [rollback classes](./diagrams/rollback-classes.md), [teardown decision tree](./diagrams/teardown-decision-tree.md). Each diagram is tied to the code it depicts via [diagrams.map](./diagrams.map).
 - **Why it is built this way**, the architecture decision records: [adr/README.md](./adr/README.md), covering the [tier framework](./adr/0001-tier-framework.md), [single-tenancy](./adr/0002-single-tenant.md), and [Bedrock inference profiles](./adr/0003-bedrock-inference-profiles.md).
 - **The security model**: IAM roles and blast radius, secrets, audit retention, network posture, the narrow telemetry claim: [security-model.md](./security-model.md).
+- **The governance gaps this plan tier cannot close**, each with its compensating control and remaining risk, plus the standing accepted risks: [security-posture.md](./security-posture.md). Read it alongside the security model — that page covers what the system does, this one covers what the repository around it cannot enforce.
 - **The vocabulary**: [glossary.md](./glossary.md).
 
 ## I run it in production

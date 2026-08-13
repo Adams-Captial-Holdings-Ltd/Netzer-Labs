@@ -108,7 +108,7 @@ export function buildRemediationBrief(summary: ComplianceSummary): RemediationBr
     section(
       'Objective',
       [
-        'You are working in this repository (a ClaudeClaw Enterprise deployment on AWS, CDK-managed).',
+        'You are working in this repository (a Netzar OS Enterprise deployment on AWS, CDK-managed).',
         'Close the SOC 2 and HIPAA gaps listed below, highest-impact first. Prefer infrastructure-as-code (CDK) changes and name every file you touch.',
         'After you finish a batch, tell me to refresh the Compliance tab so it re-scans and regenerates this brief with what remains. Work only the items listed here now; the list shrinks each round.',
       ].join(' '),

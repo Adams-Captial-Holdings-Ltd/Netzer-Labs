@@ -74,7 +74,7 @@ export async function runCommand(
     case 'help':
       return {
         reply:
-          `ClaudeClaw Enterprise on AWS Bedrock.\n\n${HELP_TEXT}\n\nJust send a message to chat — by default you talk to the 'main' agent.`,
+          `Netzar OS Enterprise on AWS Bedrock.\n\n${HELP_TEXT}\n\nJust send a message to chat — by default you talk to the 'main' agent.`,
       };
 
     case 'newchat':

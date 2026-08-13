@@ -6,7 +6,11 @@
 
 ## Product
 
-**EnterpriseOS**
+**Netzar OS Enterprise**
+
+Short form "Netzar OS" is acceptable in running copy once the full name has been
+used. `EnterpriseOS` survives only as the npm package name (`enterpriseos`), not
+as a product name.
 
 ## Repository
 
@@ -14,7 +18,7 @@
 
 ## Positioning
 
-Netzer Labs helps companies build, connect, govern, and operate AI networks they control. EnterpriseOS provides the agent runtime, knowledge layer, integrations, governance controls, and customer-owned AWS infrastructure for that network.
+Netzer Labs helps companies build, connect, govern, and operate AI networks they control. Netzar OS Enterprise provides the agent runtime, knowledge layer, integrations, governance controls, and customer-owned AWS infrastructure for that network.
 
 ## Brand idea
 
