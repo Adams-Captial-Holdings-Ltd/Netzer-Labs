@@ -4,6 +4,13 @@ ClaudeClaw Enterprise runs entirely in your own AWS account, but it terminates
 webhooks from the public internet (Slack, Telegram), holds AWS credentials in
 CI, and brokers model calls — so security reports get priority handling.
 
+> **Doing diligence on this repository?** The governance controls this project
+> cannot enforce at its current GitHub plan tier are documented openly, with the
+> compensating control and residual risk for each, in
+> [docs/security-posture.md](./docs/security-posture.md). That page also carries
+> the standing accepted risks, including why `npm audit fix --force` must never
+> be run here.
+
 ## Reporting a vulnerability
 
 **Do not open a public issue for a vulnerability.** Use one of the private
