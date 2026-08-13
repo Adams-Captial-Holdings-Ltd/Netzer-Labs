@@ -540,19 +540,30 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     // task IP, no public ALB listener and no security-group hole. awsvpc mode
     // means the sidecar reaches the orchestrator on task-local port 3000, the
     // same way the X-Ray daemon above is reached, so the app needs no change.
-    if (publicAccess.enabled) {
-      // Retained on purpose: the connector token is written into this secret
-      // out-of-band by the setup lifecycle, so a stack replacement must never
-      // silently drop it and leave the tunnel unauthenticated. Encryption is
-      // the Secrets Manager AWS-managed KMS key, matching the other secrets
-      // this task reads.
-      const publicTunnelSecret = new SmSecret(this, 'PublicTunnelSecret', {
-        secretName: PUBLIC_TUNNEL_SECRET_NAME,
-        description:
-          'Cloudflare connector token for the netzar-production-public tunnel. Written by the setup lifecycle, never by CDK.',
-        removalPolicy: RemovalPolicy.RETAIN,
-      });
+    // Retained on purpose: the connector token is written into this secret
+    // out-of-band by the setup lifecycle, so a stack replacement must never
+    // silently drop it and leave the tunnel unauthenticated. Encryption is
+    // the Secrets Manager AWS-managed KMS key, matching the other secrets
+    // this task reads.
+    const publicTunnelSecret = publicAccess.enabled
+      ? new SmSecret(this, 'PublicTunnelSecret', {
+          secretName: PUBLIC_TUNNEL_SECRET_NAME,
+          description:
+            'Cloudflare connector token for the netzar-production-public tunnel. Written by the setup lifecycle, never by CDK.',
+          removalPolicy: RemovalPolicy.RETAIN,
+        })
+      : undefined;
 
+    // Two-phase on purpose. The secret above is created and left EMPTY; the
+    // connector is added only once the setup lifecycle has actually written a
+    // token into it. Doing both in one deploy would put an essential container
+    // into the task referencing a JSON field (`token`) that does not exist
+    // yet: ECS cannot resolve the secret, the essential container never
+    // starts, and the rollout of a live service fails. deploy.ts sets
+    // CCE_PUBLIC_CONNECTOR_READY only after confirming the ready version stage
+    // exists, so deploy #1 creates the secret, `npm run public:setup` fills
+    // it, and deploy #2 lands the connector against a token already in place.
+    if (publicAccess.enabled && publicTunnelSecret && process.env.CCE_PUBLIC_CONNECTOR_READY === '1') {
       taskDef.addContainer('cloudflared', {
         // Pinned by version AND digest for the same reason as the X-Ray
         // daemon above: a floating tag makes archived-template rollback
@@ -598,9 +609,18 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         // where connector health belongs since it also has to alert a human.
       });
 
+    }
+
+    // Emitted whenever the feature is on, including after the secret-only
+    // first deploy, so the operator can see the secret to fill before the
+    // connector exists.
+    if (publicAccess.enabled && publicTunnelSecret) {
       new CfnOutput(this, 'PublicHostname', { value: publicAccess.hostname });
       new CfnOutput(this, 'PublicTunnelName', { value: publicAccess.tunnelName });
       new CfnOutput(this, 'PublicTunnelSecretArn', { value: publicTunnelSecret.secretArn });
+      new CfnOutput(this, 'PublicConnectorAttached', {
+        value: String(process.env.CCE_PUBLIC_CONNECTOR_READY === '1'),
+      });
     }
 
     // ── Memory-consolidation worker task def (Wave 3a) ──────────
