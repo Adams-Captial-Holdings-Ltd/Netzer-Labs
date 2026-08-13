@@ -103,6 +103,8 @@ that did not run.
 - [x] Stream-route wiring + contract tests (6/6); legacy-path regression suites re-run untouched-green
 - [x] GDPR export/purge coverage of the durable items + tests (4/4)
 - [x] Frontend `format.ts`, `api.ts`, `App.tsx` complete
+- [x] **Session-handoff template rewritten and made machine-enforced**
+      (`HANDOFF-TEMPLATE.md`, `feature-knowledge.mjs`, framework README, tests)
 - [ ] **`Chat.tsx` mid-refactor — web typecheck RED**
 - [ ] Feature README update, how-it-works prose, full validation, manual pass, PR
 
@@ -118,9 +120,13 @@ Never record a command as passing unless it ran. `not run` is an acceptable answ
 | `npm --prefix web run typecheck` | not run | **RED — 4 known errors**, all in `Chat.tsx` |
 | `npm --prefix web run build` | not run | not run |
 | `npm run local:test:integration` | not run | not run (Docker/Floci never started) |
-| `node scripts/ci/docs-links.mjs` | not run | **OK** — 79 files, 501 links |
-| `node scripts/ci/feature-knowledge.mjs` | not run | **OK** |
+| `node scripts/ci/docs-links.mjs` | not run | **OK** — 79 files, 505 links |
+| `node scripts/ci/feature-knowledge.mjs` | not run | **OK** (and proved to bite: 12 failures on a deliberately-malformed handoff) |
 | `git diff --check` | not run | clean |
+| `node scripts/ci/runnable-blocks.mjs` | not run | **OK** (added because the template gained shell blocks) |
+| `node scripts/ci/diagrams-drift.mjs` | not run | **OK** (path validation; no PR context locally) |
+| `node scripts/ci/docs-assets.mjs` | **FAIL** (proved on `origin/development`) | **FAIL** — same pre-existing oversize asset, untouched here |
+| `npx vitest run scripts/ci/feature-knowledge.test.ts` | fails to collect (shebang) | **still fails to collect on Windows** — new cases are unverified locally, CI on ubuntu is their first real run |
 
 Focused suites that did run, all green: repo 15/15 · router 7/7 ·
 authz-matrix + server 115/115 · stream contract 6/6 · GDPR 4/4 · regression
@@ -152,6 +158,10 @@ transform cache).
 | `web/src/App.tsx` | Edit | `/chat/c/:conversationId` **before** `/chat/:agentId` |
 | `web/src/pages/Chat.tsx` | Edit, **INCOMPLETE** | Server-minted ids, rail re-point, deep links, 409/404 handling |
 | `docs/adr/0010-...md` | New | The storage/ownership/idempotency decision |
+| `docs/features/HANDOFF-TEMPLATE.md` | Rewritten | Session-handoff structure the repository now requires |
+| `scripts/ci/feature-knowledge.mjs` | Edit | Enforces session-log file name, frontmatter, and all nine sections; tolerates a UTF-8 BOM |
+| `scripts/ci/feature-knowledge.test.ts` | Edit | Fixture gains a session log; new cases per rule (**not runnable on Windows** — see Errors) |
+| `docs/features/README.md` | Edit | §4/§6a/§7 updated: handoffs are machine-checked now, ledger subsections renamed |
 
 ### Decisions Made
 
@@ -176,6 +186,9 @@ transform cache).
 | `TS18046: 'body' is of type 'unknown'` | `res.json()` returns `unknown` under this tsconfig | Cast at the call site: `(await res.json()) as { … }` | Resolved |
 | Em-dashes became `â€"` in a source file | A PowerShell `(Get-Content -Raw) -replace … \| Set-Content -Encoding utf8` round-trip re-encoded existing UTF-8 bytes | Repaired with the Edit tool; grepped the tree for other mojibake (none) | Resolved |
 | 13 `jarvis.flow.test.ts` tests time out at 5000ms | Pre-existing flake: mocked reads fall through to the real AWS credential chain (~2s each) | Not touched — reproduced twice and recorded as baseline | Open (pre-existing, documented) |
+| `feature-knowledge: missing frontmatter` on a file that visibly starts with `---` | PowerShell `Set-Content -Encoding utf8` writes a **BOM**, so line 1 is `<BOM>---` and the `!== '---'` check fails | `parseFrontmatter` now strips a leading `﻿`; proved by writing a BOM'd handoff that passes | Resolved |
+| `scripts/ci/feature-knowledge.test.ts` collects **no tests** on Windows | vitest cannot transform the `#!/usr/bin/env node` shebang in the imported `.mjs` | Not fixed (pre-existing, out of scope). Verified the gate empirically instead: a deliberately-malformed handoff produced all 12 expected failures, then a valid one passed | Open (pre-existing) |
+| `docs-assets.mjs` FAILs: `system-flow.excalidraw is 2.3 MB (budget: 2 MB)` | Pre-existing oversize asset | Proved pre-existing by checking `docs/` out from `origin/development` and re-running — identical failure. Untouched by this branch | Open (pre-existing; the Docs CI asset job is already red on `development`) |
 
 ### Mistakes Made & Corrections
 
@@ -242,6 +255,13 @@ Carried forward (`P1`–`P9`), then appended.
 - **P13** *(new)* A new dashboard route that reads user data must be proven
   against a **non-owner** principal, not only an unauthenticated one. The
   404-not-403 shape is deliberate: it must not leak existence.
+- **P14** *(new)* When a CI gate's unit tests cannot run on your machine,
+  prove the gate empirically instead: feed it a deliberately-broken input,
+  confirm the exact failures, then confirm a valid input passes. A green
+  checker that was never shown to fail proves nothing.
+- **P15** *(new)* Before claiming a CI script newly fails, re-run it with the
+  relevant tree checked out from the base branch. Two of this session's
+  "failures" (`docs-assets`, the shebang test collection) were pre-existing.
 
 ## Pending Work
 

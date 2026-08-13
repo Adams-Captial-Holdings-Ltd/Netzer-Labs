@@ -94,13 +94,15 @@ validator reads their contents.
 
 Use these exact values. The validator rejects anything else.
 
-**`document_role`** — `index`, `handoff`, `decision`, `backlog`, `evidence`,
-`compatibility`.
+**`document_role`** — `index`, `handoff`, `session-handoff`, `decision`,
+`backlog`, `evidence`, `compatibility`.
 
 Session logs under `handoffs/` use `document_role: session-handoff` plus two
-extra keys, `session_slug` and `supersedes`. The validator checks only the two
-canonical files, so it neither requires nor rejects these; they are a
-convention, honoured by review rather than by CI.
+extra keys, `session_slug` and `supersedes`. All seven are **required and
+machine-checked**, as are the file name and the presence of every `##` section
+of the [session handoff template](HANDOFF-TEMPLATE.md). A session log carries
+`status: current`, or `historical` once it is a dated record nobody maintains
+any more.
 
 **`status`**
 
@@ -217,9 +219,10 @@ Why a file per session rather than one rolling document:
 
 ### The carried-forward ledger
 
-Section 5 of the template — **mistakes, assumptions and precautions** — is
+Three subsections of the template — **Mistakes Made & Corrections** (`M#`),
+**Prevention / Future Guidance** (`P#`), and **Assumptions Made** (`A#`) — are
 carried forward from the previous session's handoff **verbatim**, then appended
-to. It is never trimmed and never summarised. An entry that has been fixed is
+to. They are never trimmed and never summarised. An entry that has been fixed is
 marked `RESOLVED (<commit>)` and stays in place.
 
 This is a deliberate exception to the no-duplication rule in section 6, and it
@@ -229,7 +232,7 @@ ledger repeats the previous session's mistakes, which is the exact failure this
 framework exists to stop. The cost is real — a stale entry can mislead — and it
 is paid down by the `RESOLVED` marking rather than by deletion.
 
-The seed ledger, current as of 2026-08-12, ships in the
+The seed ledger, current as of 2026-08-13, ships in the
 [template](HANDOFF-TEMPLATE.md). A new feature folder starts from that seed; an
 existing one starts from its own newest session log.
 
@@ -237,16 +240,17 @@ existing one starts from its own newest session log.
 
 A session log is history, so it may hold architecture notes, file maps, and
 decision rationale that the canonical `HANDOFF.md` is forbidden to carry. That
-licence comes with an obligation, recorded in section 4.4 of the template:
-anything learned that will still be true in three months must **also** be
-promoted into the feature `README.md`, an ADR, or
+licence comes with an obligation, recorded under **Promote durable facts** in
+the template: anything learned that will still be true in three months must
+**also** be promoted into the feature `README.md`, an ADR, or
 [`development.md`](../../development.md). A durable fact left only in a dated
 session log is a fact that has been lost.
 
 ### Closing a session
 
-1. Write the session file, including the real results in section 7.
-2. Carry section 5 forward and append.
+1. Write the session file, including the real results in **Verification
+   Actually Performed**.
+2. Carry the three ledgers forward and append.
 3. Promote durable facts and record that you did.
 4. Update the feature's canonical `HANDOFF.md` — current state, and its session
    index pointing at your new file.
@@ -269,13 +273,17 @@ resolves. Run both before pushing. The unit tests for the contract itself:
 npx vitest run scripts/ci/feature-knowledge.test.ts scripts/ci/docs-links.test.ts
 ```
 
-Note the current limit of the machine check: it validates the two canonical
-files, the declared authorities, the root pointer, and the entry points. It does
-**not** yet inspect `handoffs/`, so the session-handoff rules in
-[section 6a](#6a-session-handoffs-one-per-session) — the file naming, the
-carried-forward ledger, the honesty of section 7 — are enforced by review. Do
-not read a green `feature-knowledge: OK` as confirmation that a session handoff
-is complete.
+The machine check validates the two canonical files, the declared authorities,
+the root pointer, the entry points, and — since 2026-08-13 — every session log
+under `handoffs/`: its file name, its seven frontmatter keys, and the presence
+of all nine `##` sections of the [template](HANDOFF-TEMPLATE.md).
+
+Know what that green tick does **not** mean. The checker proves the *shape* of a
+session handoff, never its truthfulness. Whether the carried-forward ledger was
+really carried forward, whether a command recorded as passing actually ran, and
+whether the "smallest next action" is genuinely actionable are all enforced by
+review. `feature-knowledge: OK` on an honest handoff and on a fabricated one
+look identical.
 
 ## 8. Templates
 

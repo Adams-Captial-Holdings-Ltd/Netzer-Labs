@@ -4,6 +4,12 @@
 > handoff file, written into the feature folder it worked in. The rules that
 > govern it live in the [feature knowledge framework](README.md); this page is
 > the artifact those rules point at.
+>
+> **The structure below is enforced.** `node scripts/ci/feature-knowledge.mjs`
+> checks every `docs/features/<slug>/handoffs/*.md` for the file name, the
+> frontmatter keys, and the presence of all nine `##` sections. A handoff that
+> drops a section fails Docs CI, so delete placeholder *text* but never a
+> heading — write "None this session." under it instead.
 
 A session handoff answers one question: **another engineer or agent, with no
 access to your chat log, opens this file and continues the work.** If that is
@@ -24,6 +30,7 @@ docs/features/<slug>/
 
 - File name is `YYYY-MM-DD-<short-kebab-slug>.md`, dated the day the session
   **started**. Two sessions on one day get distinct slugs, never a `-2` suffix.
+  The name is machine-checked.
 - Session handoffs are **append-only history**. You write yours; you never edit
   someone else's.
 - The canonical `HANDOFF.md` stays a single file and keeps carrying only the
@@ -34,8 +41,19 @@ docs/features/<slug>/
 Copy the template with the feature folder already created:
 
 ```bash
+mkdir -p docs/features/<slug>/handoffs
 cp docs/features/HANDOFF-TEMPLATE.md \
    docs/features/<slug>/handoffs/$(date +%Y-%m-%d)-<session-slug>.md
+```
+
+PowerShell 5.1 has no `&&` and no `mkdir -p`:
+
+```powershell
+New-Item -ItemType Directory -Force docs/features/<slug>/handoffs
+```
+
+```powershell
+Copy-Item docs/features/HANDOFF-TEMPLATE.md "docs/features/<slug>/handoffs/$(Get-Date -Format yyyy-MM-dd)-<session-slug>.md"
 ```
 
 ## The two rules that decide whether this is useful or misleading
@@ -49,17 +67,29 @@ cp docs/features/HANDOFF-TEMPLATE.md \
 
 ## Carrying the ledger forward
 
-Section 5, **Carried-forward mistakes, assumptions and precautions**, is not
-optional and is not yours to shorten. Open the previous session's handoff for
-this feature, copy that section forward verbatim, then append what your session
-learned. Nothing is ever deleted from it; an entry that stops being true is
-marked `RESOLVED` with the commit that resolved it and stays in place, because
-"we already tried that and it did not work" is the single most expensive thing
-to rediscover.
+Three subsections are **carried forward from the previous session's handoff and
+then appended to**, never trimmed and never summarised:
 
-The seed below is the accumulated ledger as of 2026-08-12. A brand-new feature
-folder starts from this seed. An existing one starts from its own latest
-session handoff.
+| Subsection | Carries |
+|---|---|
+| **Mistakes Made & Corrections** | `M#` — what went wrong here before, and the lesson |
+| **Prevention / Future Guidance** | `P#` — the guardrails those mistakes bought |
+| **Assumptions Made** | `A#` — what is taken as true, and how confident |
+
+Nothing is ever deleted from them. An entry that stops being true is marked
+`RESOLVED (<commit>)` — or superseded by a later numbered entry — and stays in
+place, because "we already tried that and it did not work" is the single most
+expensive thing to rediscover.
+
+This is a deliberate exception to the no-duplication rule in
+[section 6](README.md#6-what-the-handoff-carries) of the framework, and it is
+the only one. Everywhere else duplication is banned because a second copy goes
+stale. Here the copy *is* the artifact: a session that inherits an empty ledger
+repeats the previous session's mistakes.
+
+The seed ledger below is the accumulated record as of 2026-08-13. A brand-new
+feature folder starts from this seed. An existing one starts from its own
+newest session log.
 
 ## Promote durable facts, do not strand them
 
@@ -68,7 +98,7 @@ the canonical `HANDOFF.md` is forbidden to carry. That licence comes with an
 obligation: anything you learn that will still be true in three months belongs
 in the feature `README.md`, an ADR, or [`development.md`](../../development.md)
 **as well**. Leaving a durable fact only in a dated session log is how it gets
-lost. Section 4.4 of the template is where you record that you did it.
+lost.
 
 ---
 
@@ -87,159 +117,53 @@ session_slug: <short-kebab-slug>
 supersedes: <previous session file name, or none>
 ---
 
-# Session handoff: <task title>
+# Handoff: <task title>
 
-## 1. Session metadata
+## Session Metadata
 
-| Field | Value |
-|---|---|
-| Session started | YYYY-MM-DD |
-| Feature folder | `docs/features/<slug>/` |
-| Branch worked on | `<branch>` — name it, never say "a feature branch" |
-| Branch it merges into next | `<branch>` |
-| AWS environment that branch reaches | none / staging / production — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
-| Commit at session start | `<SHA>` |
-| Commit at session end | `<SHA>` |
-| Pushed | yes / no — committed locally and pushed are different states |
-| PR | `#NN` / none |
-| Deployed | no, or the exact command that deployed it |
+- Created: YYYY-MM-DD
+- Project: <repository path, and the worktree if not the main checkout>
+- Branch: `<branch>` → merges into `<branch>`; reaches `<none | staging | production>`
+  ([branch mapping](../../../../development.md#branch-to-environment-mapping))
+- Commits: start `<SHA>` → end `<SHA>`. Pushed: yes/no. PR: `#NN`/none. Deployed: no, or the exact command.
+- Session duration: <approximate>
 
-## 2. Current state summary
+Name the branch. Never write "ready for production" — this repository has four
+long-lived branches and only two reach an AWS environment.
 
-One paragraph. What was being worked on, what state it is in right now, and
+## Current State Summary
+
+One paragraph: what was being worked on, what state it is in right now, and
 where it was left off. Write it for someone who has read nothing else.
 
-## 3. Codebase understanding
+## Codebase Understanding
 
-### 3.1 Architecture notes discovered this session
+### Architecture Overview
 
 What you had to work out about how the system fits together. Omit anything the
 feature README or [`development.md`](../../../../development.md) already says —
 link it instead.
 
-### 3.2 Critical files
+### Critical Files
 
-| File | Purpose | Why it mattered this session |
+| File | Purpose | Relevance |
 |---|---|---|
 | `src/path/to/file.ts:142` | What it does | Why the next person will need it |
 
-### 3.3 Patterns and conventions to follow
+### Key Patterns Discovered
 
 Idioms this codebase actually uses that a newcomer would otherwise violate.
 Cross-surface chat work must respect the parity rule in
 [`CLAUDE.md`](../../../../CLAUDE.md).
 
-## 4. Work completed
+## Work Completed
 
-### 4.1 Tasks finished
+### Tasks Finished
 
 - [x] `<TASK-ID>` — what was done
-- [ ] `<TASK-ID>` — started, not finished; see section 6
+- [ ] `<TASK-ID>` — started, not finished; see Pending Work
 
-### 4.2 Files modified
-
-| File | Change | Rationale |
-|---|---|---|
-
-### 4.3 Decisions made
-
-| Decision | Options considered | Why this one |
-|---|---|---|
-
-Anything durable here must also become an ADR. A decision recorded only in a
-session log is not an accepted decision.
-
-### 4.4 Durable facts promoted out of this log
-
-| Fact learned | Promoted into | Done |
-|---|---|---|
-| | `docs/features/<slug>/README.md` / ADR / `development.md` | yes / no — if no, say why |
-
-## 5. Carried-forward mistakes, assumptions and precautions
-
-> Copied forward from the previous session handoff, then appended to. Nothing is
-> deleted. An entry that is fixed is marked `RESOLVED (<commit>)` and stays.
-
-### 5.1 Process precautions
-
-| # | Precaution | Why it exists |
-|---|---|---|
-| P1 | Record a baseline before changing anything. | Without it a pre-existing failure is indistinguishable from a regression you caused. |
-| P2 | Never record a command as passing unless it actually ran. Say what you skipped and why. | See M5: a handoff once carried checks that no runtime could have executed. |
-| P3 | Name the branch. Never write "ready for production". | Four long-lived branches exist and only two reach an AWS environment. |
-| P4 | Run the FULL `npm test` before pushing, never a scoped run. | Required by [`CLAUDE.md`](../../../../CLAUDE.md). Scoped runs have hidden cross-module regressions here. |
-| P5 | When a document and the code disagree, **the code wins**. Fix the document. | The framework's stated tie-break. |
-| P6 | Never force-add unrelated uncommitted work you find in the tree. Preserve it and hand it back to its owner. | Stray files found during cleanup are somebody's in-flight work, not yours to merge. |
-| P7 | Delete a transient branch once it merges. | Only `development`, `qa`, `staging`, `production` survive, so a handoff that names a branch names something that still exists. |
-| P8 | Docs changes must pass `node scripts/ci/feature-knowledge.mjs` and `node scripts/ci/docs-links.mjs` before pushing. | Docs CI runs them anyway; failing there costs a round trip. |
-| P9 | Never restate feature-documentation rules outside [the framework](../../README.md). | A second copy is exactly how these conventions drifted before — see M1. |
-
-### 5.2 Mistakes already made, and their corrections
-
-| # | Mistake | Impact | Correction | Lesson |
-|---|---|---|---|---|
-| M1 | Feature-documentation conventions were written on several pages at once. | The copies drifted and no page was trustworthy. | Single specification in [the framework](../../README.md), machine-checked by `scripts/ci/feature-knowledge.mjs`. | One rule, one home, enforced by CI rather than by discipline. |
-| M2 | The repository-root `handoff.md` was used as live, writable operational state. | It became a stale global handoff that contradicted the per-feature ones. | Reduced to a one-sentence compatibility pointer; CI now fails if it grows back. | Operational state is per-feature. A global handoff always rots. |
-| M3 | `infra/lib/dynamo-stack.ts` carries a header comment claiming "All 14 DynamoDB tables". | It creates **32**. The comment misled table-count work. | Read the synthesized template, never the comment. | Comments are not authorities. `infra/lib/constants.ts` and the synth output are. |
-| M4 | The CodeBuild deploy branch default was changed from `main` to `production`, then reverted. | Churn on a live CI path; the doc fixes from that change were kept, the behaviour change was not. | Reverted in `4ce27a7`, doc fixes retained. | Do not re-apply this without first establishing why it was reverted. |
-| M5 | A feature handoff recorded required checks as complete when the authoring machine had no Node runtime, so they could not have run. | The next reader would have trusted an unverified contract. | Disclosed explicitly in the handoff; Docs CI on `development` became the first real execution. | This is precisely what P2 exists to prevent. Disclosure is the minimum; running the check is the goal. |
-| M6 | Targeted Vitest was run inside a Windows **linked worktree**. | Startup failed with `Cannot read directory "../../../../../../../.."` and could not resolve `vitest.config.ts`; no tests collected. | Ran from a normal checkout instead. | On Windows, run test suites from a normal clone. Dependency-free Node CI scripts are fine in a worktree; Vitest is not. |
-| M7 | `npm run test:integration:up` was assumed safe alongside the local stack. | It starts LocalStack on port 4566 and collides with Floci. Two emulators must never run at once. | Use `npm run local:test:integration`, which passes `--env-file=.env`. | One emulator on 4566, ever. |
-| M8 | `.env` was created for local development while several lifecycle scripts default their environment flag to **prod** and read `.env`. | Commands that were previously inert became genuinely dangerous. | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally). | Read that list before running any unfamiliar `npm run` script. |
-
-### 5.3 Standing assumptions
-
-| # | Assumption | Confidence and caveat |
-|---|---|---|
-| A1 | Local development never reaches real AWS; `AWS_ENDPOINT_URL` is the isolation control and `scripts/local/guard.ts` fails closed. | Verified. Prove it any time with `npm run local:verify`, which requires account id `000000000000`. |
-| A2 | [`development.md`](../../../../development.md) was verified on **macOS**, Floci 1.6.0, Docker 28.3.2, Node 24.3.0, on 2026-08-10. | Windows and Linux behaviour is **not** covered by that verification. See M6. |
-| A3 | Bedrock is a **stub** locally: fixed placeholder text, `stopReason` always `end_turn`, no `ConverseStream`, no embeddings. | Local development validates plumbing, never model behaviour. Tool use is unreachable locally by design. |
-| A4 | `qa` deploys nothing, and merging to `production` deploys nothing on its own. | Verified in `.github/workflows/deploy.yml`; deployment is `workflow_dispatch` only and requires typing `deploy`. |
-| A5 | Table names are compiled in at import time (`process.env.TABLE_X ?? 'claudeclaw-<literal>'` in a module-level const). | A `TABLE_*` override must be set before the first import. `src/lib/state/agents-repo.ts` is the lone lazy exception. |
-| A6 | AWS console access for this account is root-user sign-in via `aws login` with the `netzer-root` profile. | The `netzer-dev` SSO profile is known broken. Do not burn time on it. |
-
-### 5.4 Known traps that cost time
-
-Short pointers only. The owning document has the detail; do not copy it here.
-
-| Trap | Where the detail lives |
-|---|---|
-| A bare `KEY=` in `.env` becomes `''`, and zod's `.optional()`/`.default()` only fire on `undefined`. Omit the line instead. | [Environment variables](../../../../development.md#environment-variables) |
-| `.env.example`, `.env.reference` and `.env.staging.example` all fail `loadEnv()`. Only `.env.local.example` works. | [Environment variables](../../../../development.md#environment-variables) |
-| `NODE_ENV=production` locally arms a deployed-task fail-fast; the orchestrator refuses to start. | [Environment variables](../../../../development.md#environment-variables) |
-| `CCE_NAME_SUFFIX` renames tables but four modules read the unsuffixed literal anyway. | [Environment variables](../../../../development.md#environment-variables) |
-| Vite does **not** always use port 5173, and binds `localhost` (IPv6 `::1`), so the IPv4 literal fails. Read the URL Vite prints. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| `GET /ready` returning `503` locally is **correct** — Slack and Telegram are genuinely unconfigured. | [Starting development](../../../../development.md#starting-development) |
-| A poisoned row in `claudeclaw-dashboard-tokens` causes a permanent `401` with a correct token. Fix: `npm run local:provision`. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| Floci answers `ConverseStream` with 501; the replay-as-non-streaming fallback fires **only** when `AWS_ENDPOINT_URL` is set. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| `src/adapters/dashboard/jarvis.flow.test.ts` intermittently times out at 5000 ms. Pre-existing flake. Reproduce twice before chasing it. | [Troubleshooting](../../../../development.md#troubleshooting) |
-| The IAM Copilot **degrades invisibly** locally: an empty findings list renders identically to "validated clean". | [Known local limitations](../../../../development.md#known-local-limitations) |
-| The cost waste scan reports a **false clean** and caches it for 30 minutes. Local cost output is not meaningful. | [Known local limitations](../../../../development.md#known-local-limitations) |
-| `npm run doctor`, `status` and `verify` fail rather than skip against an empty emulator. They give no useful local signal. | [Known local limitations](../../../../development.md#known-local-limitations) |
-
-## 6. Pending work
-
-### 6.1 Smallest next action
-
-One concrete step. Not a theme, not "continue the work" — the literal next thing
-to type or open.
-
-### 6.2 Immediate next steps
-
-1.
-2.
-3.
-
-### 6.3 Blockers and open questions
-
-- [ ] Blocker: `<what>` — needs: `<what would unblock it>`
-- [ ] Question: `<what is unclear>` — suggested resolution: `<your best guess>`
-
-### 6.4 Deferred, and why
-
-- `<item>` — deferred because `<out of scope / needs user input / blocked on X>`
-
-## 7. Verification actually performed
+### Verification Actually Performed
 
 Fill in the real result. `not run` is an acceptable and expected answer;
 a false `pass` is not.
@@ -258,15 +182,146 @@ a false `pass` is not.
 
 Anything not run, and why:
 
-## 8. Environment state
+### Files Modified
 
-- **Tools and services**: versions and configuration that mattered.
-- **Active processes**: dev servers, watchers, containers left running.
-- **Environment variables**: names only. **Never values, never secrets.**
-- **Uncommitted work left in the tree**: what it is and whose it is. Per **P6**,
-  do not commit work that is not yours.
+| File | Changes | Rationale |
+|---|---|---|
 
-## 9. Related documents
+### Decisions Made
+
+| Decision | Options Considered | Rationale |
+|---|---|---|
+
+Anything durable here must also become an ADR. A decision recorded only in a
+session log is not an accepted decision.
+
+## Errors, Mistakes & Learnings
+
+### Errors Encountered
+
+| Error / Symptom | Cause | Resolution | Status |
+|---|---|---|---|
+| <exact error text or observed failure> | <root cause, if known> | <what fixed it, or what was attempted> | Resolved / Open |
+
+### Mistakes Made & Corrections
+
+> Carried forward from the previous session handoff, then appended. Nothing is
+> deleted. A fixed entry is marked `RESOLVED (<commit>)` and stays.
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M1 | Feature-documentation conventions written on several pages at once | Copies drifted; no page was trustworthy | Single spec in [the framework](../../README.md), machine-checked | One rule, one home, enforced by CI not discipline |
+| M2 | Root `handoff.md` used as live, writable operational state | Became a stale global handoff contradicting the per-feature ones | Reduced to a one-sentence compatibility pointer; CI fails if it grows back | Operational state is per-feature; a global handoff always rots |
+| M3 | `infra/lib/dynamo-stack.ts` header claims "All 14 DynamoDB tables" | It creates **32**; misled table-count work | Read the synthesized template, never the comment | Comments are not authorities |
+| M4 | CodeBuild deploy branch default changed `main`→`production`, then reverted | Churn on a live CI path | Reverted in `4ce27a7`, doc fixes kept | Establish why it was reverted before re-applying |
+| M5 | A handoff recorded required checks as complete on a machine with no Node runtime | The next reader would have trusted an unverified contract | Disclosed in the handoff; Docs CI became the first real execution | Disclosure is the minimum; running the check is the goal |
+| M6 | Targeted Vitest run inside a Windows linked worktree | Startup failed; no tests collected | Ran from a normal checkout | Superseded by **A7** — the full suite does run in a worktree |
+| M7 | Assumed `npm run test:integration:up` was safe alongside the local stack | It starts LocalStack on 4566 and collides with Floci | Use `npm run local:test:integration` | One emulator on 4566, ever |
+| M8 | Created `.env` while several lifecycle scripts default their environment flag to **prod** and read it | Previously inert commands became genuinely dangerous | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally) | Read that list before running any unfamiliar `npm run` |
+| M9 | Planned a feature against a commit while a parallel session shipped overlapping work | The plan's core mechanism was obsolete before implementation began | `git fetch` + diffed the anchor files, then rescoped to a delta | Re-read the anchors immediately before implementing an earlier plan |
+| M10 | Scaffolded a second feature folder for work that belonged to an existing one | Would have split one feature's record in two — the exact failure M1 describes | Folded into the existing folder before any commit | Search `docs/features/` for an owning folder before creating one |
+| M11 | Edited a source file with a PowerShell regex round-trip | The re-encode corrupted every em-dash in it | Repaired with the editor; grepped the tree for further mojibake | Edit source files with an editor, not shell text rewriting |
+
+### Key Learnings
+
+- **Learning 1:** new understanding about the codebase, tooling, workflow, or requirement
+- **Learning 2:** behavior, constraint, or edge case discovered
+- **Learning 3:** an approach that worked well and should be repeated
+
+### Prevention / Future Guidance
+
+> Carried forward, then appended. Same rules as the mistake ledger.
+
+- **P1** Record a baseline before changing anything.
+- **P2** Never record a command as passing unless it actually ran.
+- **P3** Name the branch. Never write "ready for production".
+- **P4** Run the FULL `npm test` before pushing, never a scoped run ([CLAUDE.md](../../../../CLAUDE.md)).
+- **P5** When a document and the code disagree, **the code wins**. Fix the document.
+- **P6** Never force-add unrelated uncommitted work found in the tree.
+- **P7** Delete a transient branch once it merges.
+- **P8** Run `node scripts/ci/feature-knowledge.mjs` and `node scripts/ci/docs-links.mjs` before pushing docs changes.
+- **P9** Never restate feature-documentation rules outside [the framework](../../README.md).
+- **P10** Before implementing a plan written earlier, `git fetch` and diff the files it anchors on.
+- **P11** Edit source files with an editor; a PowerShell regex round-trip corrupts non-ASCII characters.
+- **P12** When testing a `streamSSE` route, `await res.text()` before asserting on any mock.
+- **P13** Prove a new user-data route against a **non-owner** principal, not only an unauthenticated one.
+
+## Pending Work
+
+### Immediate Next Steps
+
+1. The literal next thing to type or open — not a theme, not "continue the work".
+2.
+3.
+
+### Blockers/Open Questions
+
+- [ ] Blocker: `<what>` — needs: `<what would unblock it>`
+- [ ] Question: `<what is unclear>` — suggested: `<your best guess>`
+
+### Deferred Items
+
+- `<item>` — deferred because `<out of scope / needs user input / blocked on X>`
+
+## Context for Resuming Agent
+
+### Important Context
+
+The critical things the next agent MUST know to continue effectively. This is
+the most important section in the file.
+
+### Assumptions Made
+
+> Carried forward, then appended. Same rules as the mistake ledger.
+
+- **A1** Local development never reaches real AWS; `AWS_ENDPOINT_URL` is the isolation control and `scripts/local/guard.ts` fails closed. Prove it with `npm run local:verify` (requires account `000000000000`).
+- **A2** [`development.md`](../../../../development.md) was verified on **macOS** on 2026-08-10; its local command set was re-verified on **Windows 11** on 2026-08-13. Linux is unverified.
+- **A3** Bedrock is a **stub** locally: fixed placeholder text, `stopReason` always `end_turn`, no `ConverseStream`, no embeddings. Local runs validate plumbing, never model behaviour; tool use is unreachable by design.
+- **A4** `qa` deploys nothing, and merging to `production` deploys nothing on its own — `deploy.yml` is `workflow_dispatch` only and requires typing `deploy`.
+- **A5** Table names are compiled in at import time (`process.env.TABLE_X ?? 'claudeclaw-<literal>'` in a module-level const), so a `TABLE_*` override must be set before the first import. `src/lib/state/agents-repo.ts` is the lone lazy exception.
+- **A6** AWS console access is root-user sign-in via `aws login` with the `netzer-root` profile. The `netzer-dev` SSO profile is known broken.
+- **A7** The full vitest suite **does** run in a Windows linked worktree (verified 2026-08-13). Fall back to a normal clone only if startup actually fails (M6).
+- **A8** The Windows `npm test` baseline on `development` is **not green**: `scripts/` files fail on shebang parsing, a missing `sh`, and POSIX path assertions. None are in `src/`; CI on ubuntu is green. Check the recorded baseline before blaming a change.
+
+### Potential Gotchas
+
+Short pointers only. The owning document has the detail; do not copy it here.
+
+| Gotcha | Where the detail lives |
+|---|---|
+| A bare `KEY=` in `.env` becomes `''`, and zod's `.optional()`/`.default()` only fire on `undefined`. Omit the line instead. | [Environment variables](../../../../development.md#environment-variables) |
+| `.env.example`, `.env.reference` and `.env.staging.example` all fail `loadEnv()`. Only `.env.local.example` works. | [Environment variables](../../../../development.md#environment-variables) |
+| `NODE_ENV=production` locally arms a deployed-task fail-fast; the orchestrator refuses to start. | [Environment variables](../../../../development.md#environment-variables) |
+| `CCE_NAME_SUFFIX` renames tables but four modules read the unsuffixed literal anyway. | [Environment variables](../../../../development.md#environment-variables) |
+| Vite does **not** always use port 5173, and binds `localhost` (IPv6 `::1`). Read the URL Vite prints. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| `GET /ready` returning `503` locally is **correct** — Slack and Telegram are genuinely unconfigured. | [Starting development](../../../../development.md#starting-development) |
+| A poisoned row in `claudeclaw-dashboard-tokens` causes a permanent `401` with a correct token. Fix: `npm run local:provision`. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| Floci answers `ConverseStream` with 501; the replay fallback fires **only** when `AWS_ENDPOINT_URL` is set. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| `src/adapters/dashboard/jarvis.flow.test.ts` intermittently times out at 5000 ms. Reproduce twice before chasing it. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| The IAM Copilot **degrades invisibly** locally: an empty findings list renders identically to "validated clean". | [Known local limitations](../../../../development.md#known-local-limitations) |
+| The cost waste scan reports a **false clean** and caches it for 30 minutes. | [Known local limitations](../../../../development.md#known-local-limitations) |
+| `npm run doctor`, `status` and `verify` fail rather than skip against an empty emulator. | [Known local limitations](../../../../development.md#known-local-limitations) |
+| PowerShell 5.1 has no `&&`; chain with `; if ($?) { … }`. | [Contributing](../../../../CONTRIBUTING.md) |
+
+## Environment State
+
+### Tools/Services Used
+
+- `<tool/service>`: versions and configuration that mattered.
+
+### Active Processes
+
+- Dev servers, watchers, containers left running — or "none".
+
+### Environment Variables
+
+- Names only. **Never values, never secrets.**
+
+### Uncommitted Work Left in the Tree
+
+- What it is and whose it is. Per **P6**, do not commit work that is not yours.
+
+## Related Resources
 
 - [Feature README](../README.md)
 - [Feature HANDOFF (current state)](../HANDOFF.md)
@@ -280,21 +335,24 @@ Anything not run, and why:
 
 ## Before you close the session
 
-1. Fill section 7 honestly.
-2. Carry section 5 forward and append what bit you.
-3. Promote durable facts (section 4.4).
+1. Fill **Verification Actually Performed** honestly.
+2. Carry the three ledgers forward and append what bit you.
+3. Promote durable facts into the feature `README.md`, an ADR, or `development.md`.
 4. Update the feature's canonical [`HANDOFF.md`](missions/HANDOFF.md) so its
    current state and its session index point at your new file.
 5. Run both documentation gates:
 
 ```bash
 node scripts/ci/feature-knowledge.mjs
+```
+
+```bash
 node scripts/ci/docs-links.mjs
 ```
 
 ## Related documents
 
 - [Feature knowledge framework](README.md) — the rules this template implements
-- [Missions feature folder](missions/README.md) — a live feature folder
+- [Missions feature folder](missions/README.md) and [Missions HANDOFF](missions/HANDOFF.md), the reference implementation
 - [Local development guide](../../development.md)
 - [Contributing and branch promotion](../../CONTRIBUTING.md)

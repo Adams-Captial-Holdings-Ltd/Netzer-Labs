@@ -13,10 +13,41 @@ as_of_commit: d767a368bca3cbb32e0abfc50a42cd3a001c64fa
 ${relationships}---`;
 }
 
+/** The nine `##` sections docs/features/HANDOFF-TEMPLATE.md requires. */
+const SESSION_SECTIONS = [
+  'Session Metadata',
+  'Current State Summary',
+  'Codebase Understanding',
+  'Work Completed',
+  'Errors, Mistakes & Learnings',
+  'Pending Work',
+  'Context for Resuming Agent',
+  'Environment State',
+  'Related Resources',
+];
+
+function sessionHandoff(feature: string, slug = 'mission-container'): string {
+  return `---
+feature: ${feature}
+document_role: session-handoff
+status: current
+observed_at: 2026-08-12
+as_of_commit: d767a368bca3cbb32e0abfc50a42cd3a001c64fa
+session_slug: ${slug}
+supersedes: none
+---
+
+# Handoff: ${slug}
+
+${SESSION_SECTIONS.map((section) => `## ${section}\n`).join('\n')}`;
+}
+
+const SESSION_PATH = 'docs/features/missions/handoffs/2026-08-12-mission-container.md';
+
 /**
  * Two unrelated features prove the contract is generic: `missions` exercises
- * every relationship key, `warp-private-access` is the minimum conforming
- * folder (two files, no declared authorities).
+ * every relationship key plus a session log, `warp-private-access` is the
+ * minimum conforming folder (two files, no declared authorities).
  */
 function fixture() {
   const files: Record<string, string> = {
@@ -33,6 +64,7 @@ evidence:
   - docs/missions-v2-audit.md
 `)}\n# Missions\n\nSee the [framework](../README.md).\n`,
     'docs/features/missions/HANDOFF.md': `${frontmatter('missions', 'handoff', 'current')}\n# Missions handoff\n`,
+    [SESSION_PATH]: sessionHandoff('missions'),
     'docs/features/warp-private-access/README.md': `${frontmatter('warp-private-access', 'index', 'current')}\n# WARP\n\nSee the [framework](../README.md).\n`,
     'docs/features/warp-private-access/HANDOFF.md': `${frontmatter('warp-private-access', 'handoff', 'current')}\n# WARP handoff\n`,
     'handoff.md': `${frontmatter('missions', 'compatibility', 'compatibility')}\n\nMissions operational state is maintained in [the canonical Missions HANDOFF](docs/features/missions/HANDOFF.md).\n`,
@@ -124,6 +156,59 @@ describe('validateFeatureKnowledge', () => {
     expect(failuresFor(({ files }) => {
       files['docs/features/missions/HANDOFF.md'] = files['docs/features/missions/HANDOFF.md'].replace('document_role: handoff', 'document_role: diary').replace('status: current', 'status: draft');
     }).join('\n')).toMatch(/document_role.*diary[\s\S]*status.*draft/);
+  });
+
+  // ── Session logs: docs/features/<slug>/handoffs/*.md ──────────────────────
+  // The template is enforced structurally (file name, frontmatter, the nine
+  // headings). What is written UNDER each heading stays a review concern.
+
+  it('requires session logs to be named YYYY-MM-DD-<kebab-slug>.md', () => {
+    expect(failuresFor(({ files }) => {
+      files['docs/features/missions/handoffs/notes.md'] = files[SESSION_PATH];
+      delete files[SESSION_PATH];
+    }).join('\n')).toMatch(/handoffs\/notes\.md: session handoff must be named YYYY-MM-DD-<kebab-slug>\.md/);
+  });
+
+  it('requires the session-handoff role, both extra keys, and a valid status', () => {
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = files[SESSION_PATH].replace('document_role: session-handoff', 'document_role: handoff');
+    }).join('\n')).toMatch(/document_role must be session-handoff/);
+
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = files[SESSION_PATH].replace('session_slug: mission-container\n', '');
+    }).join('\n')).toMatch(/missing session_slug/);
+
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = files[SESSION_PATH].replace('supersedes: none\n', '');
+    }).join('\n')).toMatch(/missing supersedes/);
+
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = files[SESSION_PATH].replace('status: current', 'status: draft');
+    }).join('\n')).toMatch(/invalid status draft/);
+  });
+
+  it('accepts a session log kept as historical, not only current', () => {
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = files[SESSION_PATH].replace('status: current', 'status: historical');
+    })).toEqual([]);
+  });
+
+  it('requires the session log to declare its own feature folder', () => {
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = files[SESSION_PATH].replace('feature: missions', 'feature: warp-private-access');
+    }).join('\n')).toMatch(/handoffs\/2026-08-12-mission-container\.md: feature must be missions/);
+  });
+
+  it.each(SESSION_SECTIONS)('requires the "%s" section', (section) => {
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = files[SESSION_PATH].replace(`## ${section}\n`, '');
+    }).join('\n')).toContain(`missing required section "## ${section}"`);
+  });
+
+  it('tolerates a UTF-8 BOM, which PowerShell writes by default', () => {
+    expect(failuresFor(({ files }) => {
+      files[SESSION_PATH] = `\uFEFF${files[SESSION_PATH]}`;
+    })).toEqual([]);
   });
 
   it('requires every feature README to link the framework', () => {

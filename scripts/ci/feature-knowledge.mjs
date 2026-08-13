@@ -13,6 +13,9 @@
  *   - every feature folder has README.md (index) + HANDOFF.md (handoff), both
  *     `current`, both carrying the five required frontmatter keys, and both
  *     declaring `feature:` equal to their own directory name;
+ *   - every session log under docs/features/<slug>/handoffs/ is named
+ *     YYYY-MM-DD-<kebab-slug>.md, carries the session-handoff frontmatter, and
+ *     keeps all nine sections of docs/features/HANDOFF-TEMPLATE.md;
  *   - relationship keys are YAML lists of repository-relative, Git-tracked,
  *     existing paths;
  *   - each declared `approved_work` queue uses the task-record vocabulary, never
@@ -38,7 +41,7 @@ const DOCS_INDEX = 'docs/README.md';
 const DEVELOPMENT = 'development.md';
 
 const REQUIRED_META = ['feature', 'document_role', 'status', 'observed_at', 'as_of_commit'];
-const ROLES = new Set(['index', 'handoff', 'decision', 'backlog', 'evidence', 'compatibility']);
+const ROLES = new Set(['index', 'handoff', 'session-handoff', 'decision', 'backlog', 'evidence', 'compatibility']);
 const STATUSES = new Set(['current', 'accepted', 'historical', 'superseded', 'compatibility']);
 const RELATIONSHIPS = new Set(['implemented_by', 'tested_by', 'decisions', 'approved_work', 'evidence']);
 const WORK_STATES = new Set(['approved', 'in_progress', 'blocked']);
@@ -50,6 +53,29 @@ const FEATURE_FILE = /^docs\/features\/([^/]+)\/(.+)$/;
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TASK_ID = /[A-Z][A-Z0-9]*-\d+/;
 const CANONICAL = [['README.md', 'index'], ['HANDOFF.md', 'handoff']];
+
+/** Session logs: docs/features/<slug>/handoffs/<file>.md, direct children only. */
+const SESSION_FILE = /^docs\/features\/([^/]+)\/handoffs\/([^/]+)$/;
+const SESSION_NAME = /^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
+const SESSION_META = [...REQUIRED_META, 'session_slug', 'supersedes'];
+/**
+ * A session log is only useful if it answers the same questions every time, so
+ * the nine `##` sections of docs/features/HANDOFF-TEMPLATE.md are required.
+ * Delete placeholder text, never a heading: write "None this session." instead.
+ */
+const SESSION_SECTIONS = [
+  'Session Metadata',
+  'Current State Summary',
+  'Codebase Understanding',
+  'Work Completed',
+  'Errors, Mistakes & Learnings',
+  'Pending Work',
+  'Context for Resuming Agent',
+  'Environment State',
+  'Related Resources',
+];
+/** History stays readable as `current`, or honestly dated as `historical`. */
+const SESSION_STATUSES = new Set(['current', 'historical']);
 
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -73,7 +99,10 @@ function linksTo(text, fromFile, toFile) {
 }
 
 export function parseFrontmatter(text) {
-  const lines = text.replaceAll('\r\n', '\n').split('\n');
+  // Strip a UTF-8 BOM first: PowerShell's `Set-Content -Encoding utf8` writes
+  // one, and it would otherwise make line 1 "<BOM>---" and report "missing
+  // frontmatter" on a file that visibly opens with `---`.
+  const lines = text.replace(/^\uFEFF/, '').replaceAll('\r\n', '\n').split('\n');
   if (lines[0] !== '---') return { fields: new Map(), lists: new Map(), keys: [], body: text, error: 'missing frontmatter' };
   const end = lines.indexOf('---', 1);
   if (end < 0) return { fields: new Map(), lists: new Map(), keys: [], body: '', error: 'unterminated frontmatter' };
@@ -129,6 +158,37 @@ function validateWorkQueue(path, markdown) {
   for (const line of markdown.split(/\r?\n/).filter((line) => /^\*\*Dependencies\.\*\*/.test(line))) {
     for (const id of line.match(new RegExp(TASK_ID.source, 'g')) ?? []) {
       if (retired.has(id)) failures.push(`${path}: ${id}: retired/rejected ID appears in dependency sequencing`);
+    }
+  }
+  return failures;
+}
+
+/**
+ * One session log. The template is enforced structurally, not by wording: the
+ * file name, the frontmatter contract, and the presence of every `##` section.
+ * What goes UNDER each heading is enforced by review, as it always was.
+ */
+export function validateSessionHandoff(path, markdown, slug) {
+  const failures = [];
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  if (!SESSION_NAME.test(name)) {
+    failures.push(`${path}: session handoff must be named YYYY-MM-DD-<kebab-slug>.md`);
+  }
+
+  const parsed = parseFrontmatter(markdown);
+  if (parsed.error) return [...failures, `${path}: ${parsed.error}`];
+
+  for (const key of SESSION_META) if (!parsed.fields.has(key)) failures.push(`${path}: missing ${key}`);
+  if (parsed.fields.get('document_role') !== 'session-handoff') {
+    failures.push(`${path}: document_role must be session-handoff`);
+  }
+  const status = parsed.fields.get('status');
+  if (!SESSION_STATUSES.has(status)) failures.push(`${path}: invalid status ${status ?? '(missing)'}`);
+  if (parsed.fields.get('feature') !== slug) failures.push(`${path}: feature must be ${slug}`);
+
+  for (const section of SESSION_SECTIONS) {
+    if (!new RegExp(`^##\\s+${escapeRegExp(section)}\\s*$`, 'm').test(parsed.body)) {
+      failures.push(`${path}: missing required section "## ${section}" (see docs/features/HANDOFF-TEMPLATE.md)`);
     }
   }
   return failures;
@@ -198,6 +258,11 @@ export function validateFeatureKnowledge({ files, trackedFiles, existingFiles = 
         if (target in files) failures.push(...validateEvidence(target, files[target], path));
       }
     }
+  }
+
+  for (const [path, markdown] of Object.entries(files)) {
+    const match = path.match(SESSION_FILE);
+    if (match) failures.push(...validateSessionHandoff(path, markdown, match[1]));
   }
 
   const root = files[ROOT_HANDOFF];
