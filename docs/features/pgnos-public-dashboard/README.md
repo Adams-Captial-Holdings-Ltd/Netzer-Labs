@@ -3,7 +3,7 @@ feature: pgnos-public-dashboard
 document_role: index
 status: current
 observed_at: 2026-08-13
-as_of_commit: 0cde78943c8eb6e8df54e226a2c0999b6f228218
+as_of_commit: 77a3df9c3ae9d479ba13db6e9374dca19f621ff5
 implemented_by:
   - infra/lib/public-dashboard-access.ts
   - infra/lib/compute-stack.ts
@@ -29,7 +29,7 @@ This describes making the already-deployed production dashboard reachable at
 `https://app.pgnos.ai`, and enabling `no-reply@pgnos.ai` as the SES sender.
 
 Reading order: the [approved design](../../superpowers/specs/2026-08-11-netzar-os-pgnos-public-dashboard-email-design.md)
-first — it is authoritative and the owner confirmed it final — then this page,
+first â€” it is authoritative and the owner confirmed it final â€” then this page,
 then [HANDOFF.md](HANDOFF.md) for where the work actually stands right now.
 
 Source code is the ultimate truth for present behavior. Where this page and the
@@ -50,29 +50,35 @@ Netzar OS remains the authentication boundary. There is deliberately no
 Cloudflare Access in front of it, so an unauthenticated browser reaches the
 Netzar sign-in page and nothing more. `DASHBOARD_TOKEN` is the owner login.
 
+Email is wired end to end â€” the `pgnos.ai` SES identity is DKIM and MAIL FROM
+verified, and the task carries `CCE_EMAIL_FROM=no-reply@pgnos.ai` and
+`CCE_DASHBOARD_URL=https://app.pgnos.ai` â€” but the account is still in the SES
+**sandbox**, so delivery reaches only separately verified identities.
+
 What it is **not** yet:
 
-- Not serving until the connector sidecar is attached (a two-phase deploy).
-- Email sign-in is **inert**: SES has no verified `pgnos.ai` identity and the
-  account is in the **sandbox**, so `CCE_EMAIL_FROM` / `CCE_DASHBOARD_URL` are
-  deliberately not yet deployed to the task.
+- Invitations to arbitrary client addresses do not deliver. SES production
+  access was **denied** (AWS case `178661777600815`); sends to unverified
+  addresses fail-soft and audit as `ses_error`.
 - No always-on CloudWatch alarm (design Component 9, deferred).
 - No Cloudflare edge rate-limit on the login path yet.
 
 ## 3. Current status and current source commit
 
-Verified against `0cde78943c8eb6e8df54e226a2c0999b6f228218` on 2026-08-13.
+Verified against `77a3df9c3ae9d479ba13db6e9374dca19f621ff5` on 2026-08-13.
 
-This is **source evidence plus partial deployment evidence**, and the two are
-not the same thing:
+This is **source evidence plus deployment evidence**, and the two are not the
+same thing:
 
 - *Source*: components 1, 2, 3 and 5 are implemented and unit-tested.
-- *Deployment*: Cloudflare is live (tunnel, ingress, DNS). AWS production was
-  still at task definition `claudeclaw-orchestrator:2` with containers
-  `[xray-daemon, orchestrator]` when this was written — no connector attached.
-- `app.pgnos.ai` returns Cloudflare **Error 1033** until the sidecar attaches.
-  That is the expected pre-attach state, not a fault: the tunnel exists with
-  zero connectors.
+- *Deployment*: live. Task definition `claudeclaw-orchestrator:5`, 3/3 running,
+  carrying `orchestrator`, a digest-pinned essential `cloudflared`, and
+  `xray-daemon`. The tunnel reports 12 edge connections.
+- `https://app.pgnos.ai/dashboard/` returns **200** with the sign-in SPA, and
+  an unauthenticated `/api/agents` returns **401**.
+
+Cloudflare **Error 1033** on this hostname means the tunnel has no connector â€”
+i.e. the sidecar is missing or the task is down, not that DNS is wrong.
 
 ## 4. Source of truth
 
@@ -91,9 +97,9 @@ not the same thing:
 |---|---|---|
 | Access resolver | `infra/lib/public-dashboard-access.ts` | Exact-literal `'1'` opt-in; requires `infra-only` and no `DOMAIN_NAME`; rejects `salessly.io`; `pgnos.ai` only; blank hostname falls back to `app.pgnos.ai` |
 | Connector sidecar | `infra/lib/compute-stack.ts` | Digest-pinned `cloudflared`, `essential: true`, secret by `ValueFrom`, gated on connector readiness |
-| Token transfer | `scripts/lib/public-tunnel/setup.ts` | `cloudflared` → memory → `PutSecretValue`; never argv, printed, or in `.env` |
+| Token transfer | `scripts/lib/public-tunnel/setup.ts` | `cloudflared` â†’ memory â†’ `PutSecretValue`; never argv, printed, or in `.env` |
 | SES lifecycle | `scripts/lib/ses/setup.ts` | Discover-or-create identity, custom MAIL FROM, public DNS plan, sandbox gate |
-| SES CLI | `scripts/email-setup.ts` | `npm run email:setup`; ≤2 AWS writes; creates no DNS record, sends no mail |
+| SES CLI | `scripts/email-setup.ts` | `npm run email:setup`; â‰¤2 AWS writes; creates no DNS record, sends no mail |
 | Windows spawn | `scripts/lib/shell.ts` | Resolves `.bin` shims to their JS entry so `npx cdk` runs without a shell |
 
 ## 6. Current business/state rules
@@ -103,7 +109,7 @@ not the same thing:
   valid token and take down a live 3/3 service.
 - The `cloudflared` image is **distroless**: no `sh`, no curl. A `CMD-SHELL`
   container health check cannot work and must not be added.
-- The connector token travels `cloudflared` → memory → `PutSecretValue` only.
+- The connector token travels `cloudflared` â†’ memory â†’ `PutSecretValue` only.
 - Every SES DNS record lands on a **subdomain**. The `pgnos.ai` apex carries
   live Microsoft 365 records (`MS=ms53482844`) and must not be touched; SPF and
   the bounce MX therefore sit under `bounce.pgnos.ai`, and DMARC under
@@ -118,9 +124,9 @@ not the same thing:
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| SES sandbox blocks invites to arbitrary addresses | `GetAccount` → `ProductionAccessEnabled: false` on 2026-08-13 | Human-gated AWS production-access request |
+| SES sandbox blocks invites to arbitrary addresses | `GetAccount` â†’ `ProductionAccessEnabled: false` on 2026-08-13 | Human-gated AWS production-access request |
 | Dead connector silently drops public access | `essential: true` restarts the task, but nothing alerts | Component 9, always-on alarm, in `observability-stack.ts` |
-| Login path has no edge rate limit | Design §"Authentication and membership" | Cloudflare rate-limit rule on the login path |
+| Login path has no edge rate limit | Design Â§"Authentication and membership" | Cloudflare rate-limit rule on the login path |
 | `deploy-phases.ts` writes the dashboard secret as `env.X ?? ''` | `scripts/lib/lifecycle/deploy-phases.ts:154-158` | Verify `.env` matches the live secret before every deploy |
 
 ## 8. Exact focused and full validation commands
