@@ -150,15 +150,30 @@ Rules the code enforces today and that this feature must preserve:
 
 Focused:
 
-```bash
+```powershell
 npx vitest run src/lib/tools/document-generation-tools.test.ts
 npx vitest run src/lib/state/sessions-repo.test.ts
 ```
 
 Full pre-push suite, run in full and never scoped:
 
-```bash
-npm run typecheck && npm test && npm run build && npm --prefix web run typecheck && npm --prefix web run build && npm run local:test:integration && node scripts/ci/docs-links.mjs && node scripts/ci/feature-knowledge.mjs && git diff --check
+```powershell
+npm run typecheck; if ($?) { npm test }; if ($?) { npm run build }; if ($?) { npm --prefix web run typecheck }; if ($?) { npm --prefix web run build }; if ($?) { npm run local:test:integration }; if ($?) { node scripts/ci/docs-links.mjs }; if ($?) { node scripts/ci/feature-knowledge.mjs }; if ($?) { git diff --check }
+```
+
+**Windows PowerShell 5.1 has no `&&` operator** — chaining with it is a parser
+error (`The token '&&' is not a valid statement separator in this version`), so
+the list above uses `; if ($?) { ... }`. On bash or PowerShell 7+, `&&` works.
+
+Bringing the emulator up before the integration suite, as separate statements
+for the same reason:
+
+```powershell
+npm run local:up
+```
+
+```powershell
+npm run local:provision
 ```
 
 Use `npm run local:test:integration`, never `npm run test:integration:up` — the

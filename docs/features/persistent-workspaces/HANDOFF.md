@@ -73,8 +73,21 @@ touches an AWS call path (the change is the shape of a tool result, two surface
 delivery branches, and a frontend event), so a failure there would be
 surprising, but that is a prediction and not evidence.
 
-To clear it: start Docker Desktop, then from this worktree
-`npm run local:up && npm run local:provision && npm run local:test:integration`.
+To clear it: start Docker Desktop, then from this worktree run these three as
+**separate** statements — Windows PowerShell 5.1 rejects `&&` with
+`The token '&&' is not a valid statement separator in this version`:
+
+```powershell
+npm run local:up
+```
+
+```powershell
+npm run local:provision
+```
+
+```powershell
+npm run local:test:integration
+```
 
 ## Environment note that contradicts an older belief
 
