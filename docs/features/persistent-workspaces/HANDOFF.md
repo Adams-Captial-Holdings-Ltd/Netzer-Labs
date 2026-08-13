@@ -3,128 +3,90 @@ feature: persistent-workspaces
 document_role: handoff
 status: current
 observed_at: 2026-08-13
-as_of_commit: 8a66ba45ff1346642e144627eafb6985ad143fed
+as_of_commit: 73383d0e0c0f06aa8010f5e0d4d246dfe7740e97
 ---
 
 # Persistent agent workspaces handoff
 
-- Branch: `feature/persistent-workspaces`; merge target: `development`.
-- Worked in a linked worktree at `.worktrees/persistent-workspaces` so the
-  in-flight `chore/netzar-os-enterprise-rename` tree and its uncommitted changes
-  (`scripts/local/dev.mjs`, `.env.localdev.bak`) stay untouched.
-- Pushed: no. PR: none. Deployment: none, and nothing here has been deployed.
-- Phases/tasks: M0 (media-channel delivery for documents) in progress. M1
-  (conversation persistence), M2 (durable artifacts), M3 (PPTX + editing) not
+- Branch: `feature/chat-history`; merge target: `development`.
+- **Stacked on `feature/persistent-workspaces` (PR #34), which is open and
+  green.** Both touch `web/src/pages/Chat.tsx`, so this branch was based on that
+  one rather than on `development` to avoid a conflict on the `Message`
+  interface and the SSE parser. **Merge #34 first.**
+- Pushed: see below. PR: none for this branch yet. Deployment: none.
+- Worked in `C:\dev\Netzer-Labs\.worktrees\chat-history`. **Not** the OneDrive
+  copy — OneDrive sync locks files and broke `git worktree remove` there.
+- Phases: M0 (document delivery, PR #34) complete. **M1 (conversation
+  persistence) complete.** M2 (durable artifacts) and M3 (PPTX + editing) not
   started.
-- Blockers: none blocking M0. **One product decision blocks M2**: whether
-  artifacts are private to their creator or visible to everyone in the
-  deployment, since `GET /api/sessions` currently scans and returns all
-  sessions to any `sessions:read` holder.
+- Blockers: none for M1. **One product decision blocks M2**: whether artifacts
+  are private to their creator or visible to everyone in the deployment.
 
-## Baseline recorded before any change
+## Baseline
 
-`npm test` on `development` (`8a66ba4`) in this worktree, 2026-08-13:
+Recorded on `development` (`8a66ba4`) before any change, Windows:
 
 ```
 Test Files  5 failed | 176 passed | 1 skipped (182)
      Tests  1 failed | 1942 passed | 6 skipped (1949)
 ```
 
-All five failures are pre-existing and Windows-environment specific. **None are
-in `src/`.**
+All five are pre-existing, Windows-only, and all in `scripts/` — four are parse
+errors caused by importing `.mjs` helpers that begin with `#!/usr/bin/env node`
+(vitest's transform cannot handle the shebang; proven by deleting one, which
+made 7 tests pass), and the fifth asserts POSIX path separators. **None are in
+`src/`.** CI on ubuntu-latest is green, so these do not gate anything.
 
-| File | Failure |
-|---|---|
-| `scripts/ci/docs-links.test.ts` | collection — `SyntaxError` parsing the test file |
-| `scripts/ci/feature-knowledge.test.ts` | collection — `SyntaxError: Invalid or unexpected token` at line 3 |
-| `scripts/ci/runnable-blocks.test.ts` | collection — `SyntaxError` parsing the test file |
-| `scripts/release/sync-deprecations.test.ts` | collection — `SyntaxError` parsing the test file |
-| `scripts/lib/lifecycle/rollback-classes.test.ts` | 1 assertion — expects `/tmp/fake/cdk.out`, gets `\tmp\fake\cdk.out` (POSIX vs Windows separators) |
-
-Verified these are not caused by this feature: the four collection failures are
-parse errors in the test files themselves, and the fifth is a path-separator
-assertion. The feature documents added here are not imported by any of them.
-
-## Commands actually run, after M0
+## Commands actually run, after M1
 
 | Command | Result |
 |---|---|
-| `npm ci --ignore-scripts` | exit 0 |
-| `npm ci --prefix web --ignore-scripts` | exit 0 |
-| `npm run typecheck` | **clean** |
-| `npm test` | **5 failed / 177 passed / 1 skipped files; 1 failed / 1954 passed / 6 skipped tests** — the same five pre-existing failures as the baseline, plus 12 new passing tests |
-| `npm run build` | **clean** |
-| `npm --prefix web run typecheck` | **clean** |
-| `npm --prefix web run build` | **built in 8.41s** |
-| `node scripts/ci/docs-links.mjs` | **OK** — 470 internal links |
-| `node scripts/ci/feature-knowledge.mjs` | **OK** |
-| `node scripts/ci/runnable-blocks.mjs` | **OK** (extra, not in the required list) |
-| `npm run local:verify` | **all 5 isolation checks passed** |
-| `npm run local:provision` | 32 tables, 4 buckets created |
-| `npm run local:test:integration` | **31/32 passed** — see below |
-| `git diff --check` | clean |
+| `npm run typecheck` | clean |
+| `npm test` | **5 failed / 178 passed files; 1 failed / 1960 passed tests** — the same five pre-existing failures, plus 6 new passing tests |
+| `npm run build` | clean |
+| `npm --prefix web run typecheck` | clean |
+| `npm --prefix web run build` | built in 21.73s |
+| `npm run local:test:integration` | **38/39 passed** — 7 of those are new |
+| `node scripts/ci/docs-links.mjs` | see below |
+| `node scripts/ci/feature-knowledge.mjs` | see below |
+| `git diff --check` | see below |
 
-### Integration suite — run, and matching the documented expectation
+The single integration failure is
+`scripts/destroy.integration.test.ts > checkSecrets … schedule-deleted`, which
+`development.md` documents as the expected result for this command
+("31/32 passing, 1 known emulator gap" — now 38/39 with the new tests): Floci's
+`ListSecrets` omits secrets scheduled for deletion. Not modified.
 
-Docker was started, Floci `1.6.0` came up healthy on `127.0.0.1:4566`, and
-`npm run local:verify` passed all five isolation checks
-(`sts:GetCallerIdentity` returned `000000000000`, the emulator account).
-`npm run local:provision` created 32 tables and 4 buckets.
+Docker Desktop lives at `%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe`,
+not under Program Files. `npm run local:verify` passed all five isolation checks
+before provisioning.
 
-```
-Test Files  1 failed | 7 passed (8)
-     Tests  1 failed | 31 passed (32)
-```
+## M1 as landed
 
-The one failure is
-`scripts/destroy.integration.test.ts > checkSecrets … schedule-deleted`,
-`expected 'pass' to be 'warn'`. This is **the documented known emulator gap**,
-not a regression: `development.md` records the expected result for this command
-as *"31/32 passing, 1 known emulator gap"* and explains it under
-[Known local limitations](../../../development.md#known-local-limitations) —
-Floci's `ListSecrets` omits secrets scheduled for deletion, where real AWS and
-LocalStack list them with a `DeletedDate`. The test is correct and was not
-modified; only the deploy-time destroy sweep depends on that behaviour.
-
-**All nine documented pre-push commands have now actually been run.** None were
-skipped or substituted.
-
-The emulator was left running. `npm run local:down` stops it.
-
-## Environment note that contradicts an older belief
-
-**Vitest runs correctly in a Windows linked worktree.** A previous session
-recorded that it could not resolve `vitest.config.ts` there; that is not true
-at this commit — the full 1949-test suite ran from
-`.worktrees/persistent-workspaces`.
-
-## M0 as landed
-
-- `ToolMedia.kind` widened to `'image' | 'artifact'`.
-- `generate_document` now returns the document on the media channel via the new
-  pure `buildDocumentResult`, so the usable link no longer depends on the model
-  reproducing a signed URL. The URL stays in `text` as a fallback — removing it
-  would leave Telegram with no link at all.
-- `documentFileName` derives a display name from the spec's own `title`. It is
-  sanitized and length-capped because it reaches a download filename, and is
-  deliberately **not** used to build the S3 key, which stays server-derived.
-- Slack delivers documents natively — its `uploadFile` is format-agnostic, so
-  only the filename needed to change. `deliverSlackImages` renamed
-  `deliverSlackMedia`.
-- Telegram **skips** non-image media, with the reason stated at the call site
-  per the parity rule in [CLAUDE.md](../../../CLAUDE.md): `sendPhoto` hardcodes
-  `image.png` and no `sendDocument` helper exists. Documents reach Telegram via
-  the text URL only.
-- Dashboard emits a distinct `artifact` SSE event; the Chat tab renders a
-  download card.
+- `isPersistentChat(chatId)` — a chat persists iff its id starts with
+  `dashboard:`. Matched on the id rather than the surface because
+  `setModelOverride` and `clearSession` also write the TTL and see nothing but
+  the id.
+- All **three** TTL write paths honour it. `appendTurns` omits the attribute
+  from its `PutCommand` item (which also strips a `ttl` left on rows written
+  before this change); `setModelOverride` and `clearSession` switch their
+  `UpdateExpression` to `REMOVE #t` and drop the now-unused `:t` value, because
+  DynamoDB rejects a declared-but-unused expression value.
+- `web/src/pages/Chat.tsx` gains a conversation sidebar, resume-on-select, and
+  `sessionStorage` persistence of the active `chatId`. It calls
+  `clearApiCache()` after a turn — `send()` uses a raw `fetch`, so nothing
+  otherwise invalidates the 60s GET cache and the new conversation would not
+  appear in the list.
+- The "New chat" confirm copy was corrected: it claimed the current messages
+  "won't be recoverable", which is no longer true now that they persist.
+- No new endpoint. `GET /api/sessions` and `GET /api/sessions/transcript`
+  already existed and were used unchanged.
 
 ## Smallest next action
 
-M0 is complete and every documented gate has been run. Push
-`feature/persistent-workspaces` and open a PR into `development`.
+Merge PR #34, then open a PR for this branch into `development`.
 
-Then M1: omit `ttl` for `surface === 'dashboard'` in `sessions-repo.ts` and add
-the conversation sidebar to the Chat tab.
+After that, M2 (durable artifacts) — but answer the visibility question first.
 
 Authorities: [README](README.md), [ADR 0002](../../adr/0002-single-tenant.md),
 [ADR 0009](../../adr/0009-mission-container-model.md).
