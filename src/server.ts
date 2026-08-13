@@ -152,7 +152,7 @@ export function buildApp(env: Env): Hono {
   app.get('/', (c) =>
     c.text(
       [
-        'ClaudeClaw Enterprise',
+        'Netzar OS Enterprise',
         `env: ${env.NODE_ENV}`,
         `region: ${env.AWS_REGION}`,
         'See /health and /ready for status.',

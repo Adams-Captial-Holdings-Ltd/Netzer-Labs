@@ -1,0 +1,79 @@
+# Dependabot — dependency update PRs.
+#
+# Dependabot alerts, security updates, and the dependency graph are free on
+# private repos; they were simply switched off until now. This file adds the
+# scheduled *version* updates on top of the security ones.
+#
+# Dependabot only ever OPENS pull requests. It never merges and never touches
+# a deployed environment, so nothing here can affect the running service.
+#
+# Grouping: patch + minor land as one PR per ecosystem per week. Majors come
+# through individually, because those are the ones that need a human reading
+# the changelog — notably aws-cdk-lib, where a bump can move synthesized
+# templates (see docs/security-posture.md).
+
+version: 2
+
+updates:
+  # Server / infra dependencies.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      server-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # The only remediation npm offers for the uuid advisory is a semver-major
+      # DOWNGRADE to exceljs@3.4.0, which would break Excel export. Tracked as
+      # accepted risk in docs/security-posture.md; revisit if a v4 line moves
+      # off the affected uuid.
+      - dependency-name: exceljs
+        versions: ['<4']
+
+  # Dashboard.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels: [dependencies, dashboard]
+    groups:
+      web-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  # Workflow actions. Pinned to full commit SHAs, so Dependabot is what keeps
+  # those pins current — without it, SHA pinning silently freezes us on stale
+  # action versions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci]
+    groups:
+      actions-all:
+        patterns: ['*']
+
+  # No `docker` ecosystem on purpose.
+  #
+  # All four Dockerfile stages build from `public.ecr.aws/docker/library/node`,
+  # and ECR Public requires a token even for anonymous reads. Dependabot runs
+  # with no registry credential, so its docker updater gets
+  # `401 https://public.ecr.aws/v2/docker/library/node/tags/list` and the job
+  # fails on every scheduled run — a permanently red weekly job teaches people
+  # to ignore red.
+  #
+  # Enabling it means adding a `registries:` block with AWS credentials, which
+  # is a larger decision than a base-image pin justifies. Until then the base
+  # image is bumped by hand; the tag is `node:20-alpine`, matching `.nvmrc`.

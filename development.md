@@ -1,15 +1,16 @@
-# Netzer Development Environment
+# Netzar OS Enterprise Development Environment
 
-**This document is the canonical source of truth for Netzer OS local development.**
+**This document is the canonical source of truth for Netzar OS local development.**
 
-It covers how to run, develop, test, reset and troubleshoot Netzer OS on a
+It covers how to run, develop, test, reset and troubleshoot Netzar OS on a
 developer machine, isolated from every real AWS environment. Anything in this
 repository that describes local development defers to this file. If another
 document disagrees with this one, this one is right and the other is stale.
 
 Everything below was verified by actually running it on 2026-08-10 against
-Floci 1.6.0, Docker 28.3.2 and Node 24.3.0 on macOS. Commands that were not
-run are marked as unverified.
+Floci 1.6.0, Docker 28.3.2 and Node 24.3.0 on macOS, and the local command set
+was re-verified on Windows 11 with Node 24.19.0 on 2026-08-13. Commands that
+were not run are marked as unverified.
 
 Scope: local development only. Deploying, staging and production are covered by
 [docs/deployment.md](docs/deployment.md), [docs/staging.md](docs/staging.md) and
@@ -19,15 +20,17 @@ Scope: local development only. Deploying, staging and production are covered by
 
 ## Repository map
 
-### Netzer OS (this repository)
+### Netzar OS (this repository)
 
 - Repository: <https://github.com/emmanuelmadams4-lgtm/Netzer-Labs>
 - Branch used for development: `development`
-- npm package name: `enterpriseos`. Internal codename throughout the source is
-  "ClaudeClaw Enterprise" (CCE), and resources are named `claudeclaw-*`.
+- npm package name: `enterpriseos`. The product is **Netzar OS Enterprise**.
+  `claudeclaw-*` resource names and the `CCE` prefix are legacy compatibility
+  identifiers, not the product name — see [BRAND.md](BRAND.md). Renaming them
+  requires a separately tested migration, so they are deliberately left alone.
 
-**Netzer OS and Netzer Labs are the same repository.** There is no separate
-"Netzer OS" repo on GitHub or on disk. This one repository holds the product,
+**Netzar OS and Netzer Labs are the same repository.** There is no separate
+"Netzar OS" repo on GitHub or on disk. This one repository holds the product,
 its infrastructure, and this documentation.
 
 | Directory | Responsibility |
@@ -45,7 +48,7 @@ its infrastructure, and this documentation.
 ### Floci
 
 - Repository: <https://github.com/floci-io/floci>
-- Role: the local AWS emulator. Netzer OS talks to Floci instead of AWS.
+- Role: the local AWS emulator. Netzar OS talks to Floci instead of AWS.
 - Floci is a drop in replacement for LocalStack Community on the same port
   (4566) and serves the same `/_localstack/health` endpoint.
 
@@ -53,7 +56,7 @@ its infrastructure, and this documentation.
 
 ## Architecture overview
 
-Netzer OS is a single TypeScript orchestrator process fronted by a Preact SPA.
+Netzar OS is a single TypeScript orchestrator process fronted by a Preact SPA.
 It is AWS native: there is no relational database, no Redis and no ORM. All
 state lives in DynamoDB and S3.
 
@@ -127,6 +130,13 @@ code. Isolation comes from the endpoint override, not from renaming (see
 | Docker + Compose v2 | 28.x / v2.38+ verified | Runs Floci |
 | Node.js | 20 or newer (`.nvmrc` pins 20; 24.3.0 verified) | Orchestrator and tooling |
 | Git | any recent | Source control |
+
+**Operating system: macOS, Linux or Windows.** Verified on macOS (2026-08-10) and
+on Windows 11 with Node 24.19.0 (2026-08-13): guard, provision, reset and the
+integration suite all pass there. The `local:*` scripts and `dev` invoke `tsx`
+and `vitest` in a form that resolves on all three — do not reintroduce
+`node … node_modules/.bin/<tool>`, which is a POSIX shell wrapper that Node
+cannot parse on Windows.
 
 Not required: the AWS CLI (not installed on the verified machine and not
 needed), AWS credentials, an AWS account, LocalStack, or a database server.
@@ -227,7 +237,7 @@ Rules for editing `.env`, each verified:
 Every AWS service the running orchestrator touches, and how it is served
 locally. "Verified" means it was exercised against Floci during this work.
 
-| AWS service | Netzer OS feature | Code location | Access | Local implementation | Floci support | Limitations |
+| AWS service | Netzar OS feature | Code location | Access | Local implementation | Floci support | Limitations |
 |---|---|---|---|---|---|---|
 | DynamoDB | All state: sessions, audit, agents, tokens, memories, missions, cost, jarvis | `src/lib/state/*`, `src/lib/state/ddb.ts` | read/write | Floci | Full, verified | No PITR, TTL not enabled locally |
 | S3 | Agent prompts, media, vectors, branding | `src/lib/config/agent-loader.ts`, `src/lib/vectors/store.ts`, `src/lib/branding/assets.ts` | read/write | Floci | Full, verified | No Object Lock |
@@ -257,7 +267,7 @@ locally. "Verified" means it was exercised against Floci during this work.
 
 ### Why Floci
 
-Netzer OS already had a LocalStack Community setup for its integration suite
+Netzar OS already had a LocalStack Community setup for its integration suite
 (`docker-compose.test.yml`). Floci was adopted for local development because it
 is a drop in replacement on the same port and same health endpoint, **and it
 additionally serves services LocalStack Community does not**: Bedrock Runtime,
@@ -457,7 +467,7 @@ development tools. See [Dangerous commands](#dangerous-commands-never-run-locall
 
 ---
 
-## Testing Netzer OS features
+## Testing Netzar OS features
 
 Legend: **Works** = verified locally. **Partial** = runs but with reduced
 fidelity. **Cannot** = does not work locally, reason given.
@@ -903,39 +913,144 @@ dashboard on the host and orchestrates all of it with one command.
 
 ---
 
-## Feature handoff (`handoff.md`)
+## Feature work (`docs/features/<slug>/HANDOFF.md`)
 
-**Every feature worked on in this repository keeps a `handoff.md`.** It is
-operational state, not documentation for its own sake: another engineer or AI
-agent must be able to open it and continue the work without access to the
-conversation, chat log, or person that produced it.
+Every meaningful feature worked on in this repository keeps its documentation in
+`docs/features/<slug>/`: a `README.md` holding verified behavior and its
+authorities, a `HANDOFF.md` holding only volatile operational state, and a
+`handoffs/` directory in which **every working session writes its own dated
+handoff file**. The folder shape, the frontmatter contract, the status
+vocabulary, the required sections, and the templates are specified in exactly
+one place, the [feature knowledge framework](docs/features/README.md). Docs CI
+enforces the machine-checkable part of that specification with
+`node scripts/ci/feature-knowledge.mjs`.
 
-Create it when the feature branch is created, update it whenever the state it
-describes changes, and keep it in the branch alongside the code it describes. If
-`handoff.md` and the implementation disagree, **the code wins** — inspect the
+**Do not restate those rules here or on any other page.** A second copy is how
+the convention drifted before. This document owns one part of the picture that
+the framework defers to it: the branch and environment reality below. Feature
+handoffs are written against that mapping, so a stale mapping is worse than no
+mapping at all.
+
+**The handoff you copy is
+[`docs/features/HANDOFF-TEMPLATE.md`](docs/features/HANDOFF-TEMPLATE.md).** Copy
+it once per session into the feature folder you are working in, as
+`docs/features/<slug>/handoffs/YYYY-MM-DD-<session-slug>.md`. It ships with a
+seeded ledger of the mistakes, standing assumptions, and precautions this
+repository has already paid for; you carry that ledger forward into your session
+verbatim and append what bit you, so the next session does not rediscover any of
+it. For a live feature folder to read alongside it, see the
+[Missions README](docs/features/missions/README.md).
+
+### How to develop a new feature, end to end
+
+The whole sequence, in order. Steps 2 and 6 are the only ones people skip, and
+they are the two that make the work legible to whoever picks it up next.
+
+**1. Branch from `development`.** Ordinary work never starts from `production`
+and never targets it directly.
+
+```bash
+git checkout development
+git pull origin development
+git checkout -b feature/<slug>
+```
+
+**2. Create the feature folder before you write code**, then open your session
+handoff. `docs/features/<slug>/` starts with `README.md` and `HANDOFF.md`,
+copied from the templates in the
+[feature knowledge framework](docs/features/README.md). Writing the README first
+forces you to state what you are actually building and which files own it. Skip
+this only for a genuinely trivial change.
+
+Then start your own session handoff from
+[the template](docs/features/HANDOFF-TEMPLATE.md), before you touch code, so its
+carried-forward ledger is in front of you while you work rather than recalled at
+the end:
+
+```bash
+mkdir -p docs/features/<slug>/handoffs
+cp docs/features/HANDOFF-TEMPLATE.md \
+   docs/features/<slug>/handoffs/$(date +%Y-%m-%d)-<session-slug>.md
+```
+
+If the folder already has session handoffs, read the newest one first and copy
+its ledger forward into yours instead of the template's seed.
+
+**3. Bring the local environment up.** First time on this machine, work through
+[Initial setup](#initial-setup). After that it is one command, covered in
+[Starting development](#starting-development):
+
+```bash
+npm run local
+```
+
+**4. Record a baseline before changing anything.** Run the suite on the
+untouched branch and write down what already fails, into your session handoff.
+Without it nobody can tell a pre-existing failure from a regression you
+introduced.
+
+```bash
+npm test
+```
+
+**5. Build it test-first.** Write the failing test, watch it fail for the right
+reason, then write the minimum code that passes it. Commit in small steps.
+Cross-surface chat changes must be mirrored across Telegram, Slack, and the
+dashboard, per [CLAUDE.md](CLAUDE.md); manual exercise paths are in
+[Testing Netzar OS features](#testing-netzar-os-features).
+
+**6. Write your session handoff as you go**, not at the end. It is the file that
+answers "where is this, what already went wrong, and what is the next action"
+after you close your laptop. Record errors and dead ends *when they happen* —
+reconstructed from memory an hour later, they lose the detail that makes them
+useful. Before you stop: carry the ledger forward with what you learned, promote
+anything durable into the feature `README.md` or an ADR, and update the feature's
+`HANDOFF.md` so its current state and its session index point at your new file.
+If a document and the code disagree, **the code wins**: inspect the
 implementation and correct the document.
 
-Reference implementation: [`handoff.md`](handoff.md) (Missions v2).
+**7. Run the FULL validation before pushing.** Not a scoped run. The per-command
+expectations are in [Automated tests](#automated-tests); the last two are the
+documentation gates that Docs CI will run anyway.
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm --prefix web run typecheck
+npm --prefix web run build
+npm run local:test:integration
+node scripts/ci/docs-links.mjs
+node scripts/ci/feature-knowledge.mjs
+git diff --check
+```
+
+Never record a command as passing unless it actually ran. A skipped environment
+is not a passing result.
+
+**8. Open a pull request into `development`**, one logical change, describing
+what changed and why. CI and Docs CI must be green before merge. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for PR and commit conventions.
+
+**9. Delete the branch once it merges.** Only the four long-lived branches
+survive, so the branch list stays readable and a handoff that names a branch
+names something that still exists.
+
+**10. Promote in order**, one step at a time: `development` into `qa`, `qa` into
+`staging`, `staging` into `production`. Each promotion is its own pull request,
+and merging to `production` deploys nothing on its own. What each branch does
+and does not reach is the [mapping below](#branch-to-environment-mapping).
 
 ### Name the branch. Never just say "production"
 
 The single most common way a handoff goes wrong is being vague about where the
 work is going. "Ready for production" is not a statement anyone can act on: this
-repository has five long-lived branches and only two of them correspond to an
+repository has four long-lived branches and only two of them correspond to an
 AWS environment at all.
 
-Every `handoff.md` must state, explicitly and by name:
-
-- **The branch the work currently lives on** — e.g. `feature/missions-v2`, not
-  "a feature branch".
-- **The branch it merges into next** — the immediately preceding branch in the
-  promotion chain, per [CONTRIBUTING.md](CONTRIBUTING.md).
-- **The AWS environment that branch reaches, if any** — using the table below.
-- **Whether anything has actually been deployed yet**, and if so, by which
-  command (`npm run deploy:cloud` is image-only; a full `cdk deploy` can shift
-  env-backed tunables such as the daily cost cap).
-- **Whether the work has been pushed at all.** Committed locally and pushed are
-  different states, and a handoff that omits this strands the next person.
+The framework requires every feature HANDOFF to name its current branch, its
+next merge target, its deployment state, and whether the work has been pushed.
+The table below is what those statements are resolved against.
 
 ### Branch to environment mapping
 
@@ -960,31 +1075,23 @@ Two consequences worth stating plainly, because both have surprised people:
   is not running anywhere.
 - Merging to `production` does not deploy. Someone must dispatch `deploy.yml`.
 
-### Required sections
+### Long-lived branches
 
-At minimum a feature `handoff.md` carries: the goal and intended user outcome ·
-the architecture decision and why · what is explicitly in and out of scope ·
-verified framework and commands (never guessed) · important file locations · the
-data model and state model if either changed · the security model · the testing
-strategy · implementation progress with a task queue · a decision log · known
-issues, separating pre-existing from newly introduced · the exact commands last
-run and their results · git and deployment state per the rules above · and
-explicit instructions for the next agent.
+`development`, `qa`, `staging`, and `production` are the only permanent
+branches. Everything else (`feature/*`, `fix/*`, `chore/*`, `hotfix/*`) is
+transient and is deleted once it merges, so the branch list stays readable and a
+handoff that names a branch names something that still exists.
 
-Two rules that make the difference between a useful handoff and a misleading one:
-
-- **Record a baseline before changing anything.** Run the test suite on the
-  untouched branch first and write down what already fails. Without it, nobody
-  can tell a pre-existing failure from a regression you introduced.
-- **Never record a command as passing unless it actually ran.** Note what you
-  did not run and why.
+The required contents of a feature HANDOFF, including the baseline rule and the
+never-claim-an-unrun-command rule, are specified in the
+[feature knowledge framework](docs/features/README.md).
 
 ---
 
 ## Maintenance rules
 
 **`development.md` in the Netzer-Labs repository root is the source of truth for
-Netzer OS local development.**
+Netzar OS local development.**
 
 Update this document in the same change whenever you alter:
 
@@ -997,10 +1104,13 @@ Update this document in the same change whenever you alter:
 - AWS emulation coverage or isolation guarantees
 - authentication behaviour
 - testing procedures
-- the feature handoff rules or the branch-to-environment mapping above (if a
-  branch or AWS environment is added or removed, update that table in the same
-  change — a stale mapping is worse than none, because handoffs are written
-  against it)
+- the branch-to-environment mapping above (if a branch or AWS environment is
+  added or removed, update that table in the same change — a stale mapping is
+  worse than none, because handoffs are written against it)
+
+The feature documentation rules themselves are **not** maintained here. They
+live in the [feature knowledge framework](docs/features/README.md); change them
+there and nowhere else.
 
 Do not create a second local development guide. `docs/development.md` is a
 separate concern (the cross machine Git workflow) and does not describe the

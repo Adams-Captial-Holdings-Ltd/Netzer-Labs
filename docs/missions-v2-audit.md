@@ -1,19 +1,45 @@
 # Missions v2 — architecture audit
 
-Audit of the Netzer OS **Missions** feature against the **Projects** feature in
+Audit of the Netzar OS **Missions** feature against the **Projects** feature in
 the personal ClaudeClaw OS, and a recommendation for what Missions should become.
 
 Every claim about current behaviour below was read out of the code. Findings are
 labelled **EXISTS** / **PARTIAL** / **ABSENT**. Where the two systems disagree
 with their own documentation, the code wins.
 
-- Netzer OS: this repository, branch `development`.
+## Current disposition (reconciled 2026-08-11)
+
+This audit is preserved as **dated evidence**, including its failed approaches
+and historical claims. It is not the current architectural or delivery
+authority. The [current Missions README](features/missions/README.md) is the
+canonical feature index, and
+[ADR 0009](adr/0009-mission-container-model.md) is the durable authority; its
+accepted decision is **no `scopeId`, no migration**. The active
+queue is [the reconciled backlog](missions-v2-backlog.md), and source code is
+ultimate truth.
+
+The verified Missions source snapshot is commit `d767a36`, reachable from both
+`development` and `origin/production`. The reconciliation changes documentation
+only. Those are Git merge-state facts, **not** deployment evidence: the
+repository does not establish that Missions v2 was deployed. MISSION-001/002/003
+and the `hotfix/missions-authz` branch cited below
+are historical claims: their commits are unreachable and their implementations
+are absent from verified current source. They must not be described as complete,
+shipped, merged, deployed, or recoverable.
+
+- Netzar OS: this repository, branch `development`.
 - ClaudeClaw OS: `claudeclaw-os`, branch `main` — a separate personal/OSS system,
   not a fork of this one. Referenced as a source of design lessons only.
 
 ---
 
 ## 1. Executive recommendation
+
+> **Current disposition — historical recommendation.** The former "Ship" and
+> "Done" language in this section is not verified current state. The current
+> architecture and active work are governed by
+> [ADR 0009](adr/0009-mission-container-model.md) and
+> [the reconciled backlog](missions-v2-backlog.md), respectively.
 
 **Reframe the concept, keep the name, port ideas rather than code.**
 
@@ -549,6 +575,13 @@ access patterns are key-based).
 
 ## 12. Security and multi-tenancy
 
+> **Current disposition — superseded design.** This section preserves the
+> earlier scope-based recommendation and hotfix assertions as audit evidence.
+> ADR 0009 rejects a Mission `scopeId` and legacy-data migration. The current
+> Mission authorization model is task-assignee/coordinator based; staffing is
+> not authorization. See [ADR 0009](adr/0009-mission-container-model.md) and
+> [the reconciled backlog](missions-v2-backlog.md#reconciled-current-truth-2026-08-11).
+
 ### Isolation boundary
 
 Per [ADR 0002](adr/0002-single-tenant.md), **the deployment is the tenant
@@ -642,6 +675,11 @@ Idempotency keys or effect staging must be decided before retries ship.
 
 ## 14. Build now vs later
 
+> **Current disposition — historical proposal.** This matrix records the
+> proposal evaluated at the time of the audit. Current executable work is only
+> [the reconciled backlog](missions-v2-backlog.md); ADR 0009 governs any
+> conflict, including its rejection of `scopeId` and migration work.
+
 | Capability | Build Now | Design For Later | Do Not Build | Reason |
 |---|---|---|---|---|
 | Mission container + tasks + events | ✅ | | | The current row cannot hold work |
@@ -681,6 +719,12 @@ Idempotency keys or effect staging must be decided before retries ship.
 
 ## 15. Migration strategy
 
+> **Current disposition — superseded and retired.** The strategy below is kept
+> as evidence of the rejected approach. ADR 0009 accepts **no Mission legacy
+> migration**: flat rows stay readable and untouched, while new Missions use the
+> new shape only. The related backlog IDs are retired in
+> [the reconciled backlog](missions-v2-backlog.md#retired-ids-not-active-work).
+
 Incremental, never a rewrite. Existing missions keep working throughout.
 
 1. **Add, don't replace.** New row shapes go into the same table under new SK
@@ -705,6 +749,11 @@ writer, Haiku auto-assign, route status validation, the SQS path.
 
 ## 16. Recommended implementation sequence
 
+> **Current disposition — historical sequence.** Do not execute this sequence.
+> It contains the superseded scope and migration work. Use
+> [the reconciled backlog](missions-v2-backlog.md) for approved active work and
+> [ADR 0009](adr/0009-mission-container-model.md) for architecture.
+
 Full detail with acceptance criteria in [the backlog](missions-v2-backlog.md).
 
 | Milestone | Outcome |
@@ -721,6 +770,11 @@ Full detail with acceptance criteria in [the backlog](missions-v2-backlog.md).
 ---
 
 ## 17. Risks and open questions
+
+> **Current disposition — partly superseded.** The `scopeId` and backfill
+> questions below were resolved by ADR 0009: neither is part of the accepted
+> Mission architecture. Other observations remain historical evidence until
+> re-verified against source.
 
 1. **Production mission volume is unknown.** It determines whether the backfill is
    an online dual-read or a one-shot job. Must be measured before Milestone 1.
@@ -744,6 +798,11 @@ Full detail with acceptance criteria in [the backlog](missions-v2-backlog.md).
 ---
 
 ## 18. Final proposed Mission experience
+
+> **Current disposition — superseded walkthrough.** This scenario is retained
+> to show the prior proposal. Its Mission `scopeId`, scope-based authorization,
+> and any legacy-data migration implication are rejected by ADR 0009; current
+> work must follow [the reconciled backlog](missions-v2-backlog.md).
 
 A realistic enterprise walkthrough under the target architecture.
 

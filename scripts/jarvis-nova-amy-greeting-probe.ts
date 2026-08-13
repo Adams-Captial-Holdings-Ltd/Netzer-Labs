@@ -22,7 +22,7 @@ const GREETING = process.env.JARVIS_GREETING ?? 'Hello, sir. How may I help you?
 // appended last (exactly as src/adapters/dashboard/jarvis.ts builds it), to prove
 // the greeting instruction still dominates after a long persona prompt.
 const butler = [
-  'You are Jarvis, a warm, concise British concierge and read-only co-pilot inside the ClaudeClaw Enterprise dashboard.',
+  'You are Jarvis, a warm, concise British concierge and read-only co-pilot inside the Netzar OS Enterprise dashboard.',
   'You are speaking with the operator (role: admin).',
   '',
   'STYLE — this is a spoken conversation, so sound like a person, not a menu:',

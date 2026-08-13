@@ -103,6 +103,14 @@ export const SYNTH_INPUT_ALLOWLIST: readonly string[] = [
   'HOSTED_ZONE_NAME',
   'CCE_ANOMALY_MONITOR_ARN',
   'CCE_PRIVATE_ENDPOINTS',
+  // Private WARP access opt-in + hostname. Both change what synth produces
+  // (cloudflared sidecar, Route 53 private zone, ALB ingress shape), so a
+  // rollback that re-synths from this manifest must replay them or it would
+  // silently drop the connector — or re-open world ingress. Neither is a
+  // secret: a '1' flag and a private hostname. The Cloudflare connector token
+  // is NOT here and must never be added; it lives only in Secrets Manager.
+  'CCE_WARP_PRIVATE_ACCESS',
+  'CCE_WARP_PRIVATE_HOSTNAME',
 ] as const;
 
 /**

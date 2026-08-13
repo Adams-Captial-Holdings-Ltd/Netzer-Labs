@@ -20,7 +20,7 @@ tenant boundary per [ADR 0002](adr/0002-single-tenant.md).
 
 ---
 
-# Netzer OS / ClaudeClaw Enterprise — Production Remediation List
+# Netzar OS Enterprise — Production Remediation List
 
 The honest headline: **four issues are genuinely serious.** One of those (Jarvis `ROLE_RANK`) is already fixed on `hotfix/missions-authz` but is not in production. Everything below the "Ship now" cut is either a narrow-population capability gap or an audit-completeness problem — real, worth fixing, not worth a page.
 

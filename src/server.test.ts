@@ -58,7 +58,7 @@ describe('server', () => {
     const res = await app.request('/');
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(text).toContain('ClaudeClaw Enterprise');
+    expect(text).toContain('Netzar OS Enterprise');
     expect(text).toContain('us-east-1');
   });
 

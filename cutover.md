@@ -1,5 +1,21 @@
 # Netzar OS repository cutover checklist
 
+> **Historical planning document. Do not execute it.** This is the checklist as it was
+> written before the cutover, kept as the record of what was planned. The repository has
+> since moved past it, and two steps below now describe the opposite of what is true:
+> section 10 says to preserve `main` and never delete it, and section 11 says to make
+> `development` the default branch. Neither holds. The unchecked boxes are the original
+> plan, not outstanding work.
+>
+> Observed repository state on 2026-08-12: the long-lived branches are exactly
+> `development`, `qa`, `staging`, and `production`; the GitHub default branch is
+> `production`; `main` no longer exists on the remote or locally; CI and Docs CI run on
+> all four branches. The current branch and promotion model is
+> [CONTRIBUTING.md](CONTRIBUTING.md), which supersedes anything below.
+>
+> This note records repository state only. It is not evidence that the staging or
+> production proofs in sections 8 and 9 were performed.
+
 This checklist moves repository governance to the promotion path below without changing the running AWS installation by itself:
 
 ```text

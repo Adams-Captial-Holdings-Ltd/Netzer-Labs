@@ -86,7 +86,7 @@ export const DEFAULT_FAVICON =
 // The product name shown in the browser tab/title-bar when the default theme is
 // active. Kept distinct from DEFAULT_COMPANY_NAME (the header label) because the
 // stock title carries the "Enterprise" suffix from index.html.
-export const DEFAULT_DOCUMENT_TITLE = 'ClaudeClaw Enterprise';
+export const DEFAULT_DOCUMENT_TITLE = 'Netzar OS Enterprise';
 
 const BRAND_KEYS = {
   companyName: 'cce_brand_company_name',

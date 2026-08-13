@@ -149,7 +149,7 @@ export function AcceptInvite({ onLogin }: AcceptInviteProps) {
         )}
 
         <p class="text-center text-overline text-muted mt-6">
-          ClaudeClaw Enterprise v1.0
+          Netzar OS Enterprise v1.0
         </p>
       </div>
     </div>

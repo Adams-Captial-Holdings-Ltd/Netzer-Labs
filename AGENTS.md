@@ -1,4 +1,4 @@
-# Installing ClaudeClaw Enterprise (agent runbook, short form)
+# Installing Netzar OS Enterprise (agent runbook, short form)
 
 You are an AI coding agent (or a careful human) asked to stand up this system
 in a fresh, standalone AWS account. This file is the short path. The full
@@ -6,6 +6,23 @@ phase-ordered runbook with the safety invariants is
 [docs/agent-setup.md](docs/agent-setup.md); AWS-side prerequisites for the
 human are handheld in
 [docs/aws-getting-started.md](docs/aws-getting-started.md).
+
+## Before feature work
+
+When the task is to change the codebase rather than install it, begin by
+choosing the feature and opening `docs/features/<slug>/README.md`. Verify the
+relevant source and tests plus the current branch and working-tree state, then
+open that feature's `docs/features/<slug>/HANDOFF.md` for the current
+operational state and next action. The feature README is the discovery page; the
+feature HANDOFF is the canonical volatile state.
+
+Before you create or edit any feature document, read the
+[feature knowledge framework](docs/features/README.md). It is the only
+specification for the folder shape, the required frontmatter, the status
+vocabulary, and what belongs in a README versus a HANDOFF, and Docs CI rejects
+documents that do not conform. The
+[Missions README](docs/features/missions/README.md) is the reference
+implementation.
 
 ## Order of operations
 

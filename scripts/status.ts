@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — Status / Verify (IaC readiness plan, P2)
+ * Netzar OS Enterprise — Status / Verify (IaC readiness plan, P2)
  *
  * Runs the post-deploy verification registry (scripts/lib/verify/checks.ts)
  * against the resolved env and prints per-check pass/warn/fail/skip with the
@@ -112,7 +112,7 @@ async function main(): Promise<void> {
   if (!quiet) {
     // Name the file being read, not the internal flag ('prod' reads as a
     // choice the first-timer never made).
-    log('\n' + bold(`ClaudeClaw Enterprise · Status${strict ? ' (strict / verify)' : ''} (${envFileNameFor(envFlag)})`));
+    log('\n' + bold(`Netzar OS Enterprise · Status${strict ? ' (strict / verify)' : ''} (${envFileNameFor(envFlag)})`));
     log(gray('─'.repeat(40)));
     log(
       dim(

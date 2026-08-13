@@ -1,5 +1,5 @@
 /**
- * ClaudeClaw Enterprise — redacting support bundle (IaC readiness item 36).
+ * Netzar OS Enterprise — redacting support bundle (IaC readiness item 36).
  *
  * Runs the SAME verification registry as `npm run status` programmatically
  * (scripts/lib/verify/checks.ts) and emits a machine-readable bundle that is

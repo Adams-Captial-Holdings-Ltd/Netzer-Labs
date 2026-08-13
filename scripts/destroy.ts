@@ -1021,7 +1021,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   env.CCE_NAME_SUFFIX = suffix;
 
   if (!flags.json) {
-    log('\n' + bold(`ClaudeClaw Enterprise · Destroy (Phase 7)${flags.dryRun ? ' (DRY RUN)' : ''}`));
+    log('\n' + bold(`Netzar OS Enterprise · Destroy (Phase 7)${flags.dryRun ? ' (DRY RUN)' : ''}`));
     log(gray('─'.repeat(52)));
     log(dim('runs teardown, then verifies completeness by MULTIPLE identifiers (not tags alone)'));
   }

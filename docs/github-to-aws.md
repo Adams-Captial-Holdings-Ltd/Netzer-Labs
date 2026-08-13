@@ -83,7 +83,7 @@ then enable the path at synth time:
 CCE_CICD_ENABLED=1
 CCE_GITHUB_OWNER=<your-org-or-user>          # required, no default
 CCE_GITHUB_REPO=<your-fork>                  # required, no default
-CCE_GITHUB_DEPLOY_REFS=refs/heads/main       # and/or...
+CCE_GITHUB_DEPLOY_REFS=refs/heads/production # and/or...
 CCE_GITHUB_DEPLOY_ENVIRONMENTS=production
 ```
 
@@ -108,7 +108,7 @@ is fail-closed in [../infra/lib/github-oidc.ts](../infra/lib/github-oidc.ts):
   authority into your account the moment you flipped CI on.
 - The trust uses `StringEquals` (exact match, never `StringLike`) on
   `token.actions.githubusercontent.com:sub`, pinned to the exact subjects
-  you list: `repo:<owner>/<repo>:ref:refs/heads/main` for each entry in
+  you list: `repo:<owner>/<repo>:ref:refs/heads/production` for each entry in
   `CCE_GITHUB_DEPLOY_REFS`, and `repo:<owner>/<repo>:environment:<name>` for
   each entry in `CCE_GITHUB_DEPLOY_ENVIRONMENTS`. A repo-wide
   `repo:owner/name:*` subject is never produced, and inputs containing
