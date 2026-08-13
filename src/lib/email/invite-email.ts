@@ -128,14 +128,14 @@ function renderCopy(
   const buttonLabel = purpose === 'invite' ? 'Accept your invite' : 'Sign in';
   const subject =
     purpose === 'invite'
-      ? 'You have been invited to ClaudeClaw'
-      : 'Your ClaudeClaw sign-in link';
+      ? 'You have been invited to Netzar OS'
+      : 'Your Netzar OS sign-in link';
   const lead =
     purpose === 'invite'
       ? invitedBy
-        ? `${invitedBy} invited you to the ClaudeClaw dashboard.`
-        : 'You have been invited to the ClaudeClaw dashboard.'
-      : 'Use the link below to sign in to the ClaudeClaw dashboard.';
+        ? `${invitedBy} invited you to the Netzar OS dashboard.`
+        : 'You have been invited to the Netzar OS dashboard.'
+      : 'Use the link below to sign in to the Netzar OS dashboard.';
   const expiry =
     purpose === 'invite'
       ? 'This invite link works once and expires in 72 hours.'
