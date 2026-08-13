@@ -22,12 +22,16 @@ name: CDK drift check
 # Note: CCE_DAILY_COST_CAP_USD is intentionally NOT set (the cap comes from the
 # tier default + runtime-config; see compute-stack).
 
+# No pull_request trigger: CDK_DIFF_ROLE_ARN is unset, so the job can only fail
+# with "Could not load credentials" and reds every PR, which teaches reviewers to
+# ignore CI. It still runs daily and on demand. Restore the trigger once the
+# secret and variables above exist:
+#   pull_request:
+#     paths: ['infra/**', 'package.json', 'package-lock.json']
 on:
   schedule:
     - cron: '0 13 * * *' # daily 13:00 UTC
   workflow_dispatch: {}
-  pull_request:
-    paths: ['infra/**', 'package.json', 'package-lock.json']
 
 permissions:
   id-token: write
