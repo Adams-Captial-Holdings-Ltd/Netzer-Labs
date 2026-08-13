@@ -65,12 +65,15 @@ updates:
       actions-all:
         patterns: ['*']
 
-  # Runtime base image.
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 3
-    labels: [dependencies, docker]
+  # No `docker` ecosystem on purpose.
+  #
+  # All four Dockerfile stages build from `public.ecr.aws/docker/library/node`,
+  # and ECR Public requires a token even for anonymous reads. Dependabot runs
+  # with no registry credential, so its docker updater gets
+  # `401 https://public.ecr.aws/v2/docker/library/node/tags/list` and the job
+  # fails on every scheduled run — a permanently red weekly job teaches people
+  # to ignore red.
+  #
+  # Enabling it means adding a `registries:` block with AWS credentials, which
+  # is a larger decision than a base-image pin justifies. Until then the base
+  # image is bumped by hand; the tag is `node:20-alpine`, matching `.nvmrc`.
