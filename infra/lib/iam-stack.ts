@@ -820,6 +820,39 @@ export class IamStack extends Stack implements IamOutputs {
           resources: ['*'],
         }),
       );
+
+      // Public connector readiness probe. DescribeSecret ONLY: the workflow
+      // checks whether the CCE-PUBLIC-READY version stage exists and never
+      // reads the token, so GetSecretValue is deliberately not granted.
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PublicTunnelReadiness',
+          effect: Effect.ALLOW,
+          actions: ['secretsmanager:DescribeSecret'],
+          resources: [
+            `arn:aws:secretsmanager:${this.region}:${this.account}:secret:claudeclaw-public-tunnel*`,
+            `arn:aws:secretsmanager:${this.region}:${this.account}:secret:claudeclaw-*-public-tunnel*`,
+          ],
+        }),
+      );
+    }
+
+    // The deploy role is an account-wide singleton created by the PROD stack
+    // above, so a staging deploy cannot extend it there. Staging still needs
+    // the readiness probe for its own tunnel secret, and granting it from the
+    // staging stack keeps this deployable without touching production at all.
+    // Same DescribeSecret-only scope, narrowed to this environment's secret.
+    if (process.env.CCE_CICD_ENABLED === '1' && isStagingDeploy) {
+      Role.fromRoleName(this, 'GithubDeployRoleRef', 'ClaudeClawGitHubDeploy').addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PublicTunnelReadinessStaging',
+          effect: Effect.ALLOW,
+          actions: ['secretsmanager:DescribeSecret'],
+          resources: [
+            `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${APP}-public-tunnel*`,
+          ],
+        }),
+      );
     }
 
     // v5.6: ECS RunTask for consolidation worker (Fargate one-shots)

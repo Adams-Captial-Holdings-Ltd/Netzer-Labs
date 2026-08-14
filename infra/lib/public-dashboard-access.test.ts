@@ -3,6 +3,8 @@ import {
   resolvePublicDashboardAccess,
   PUBLIC_DEFAULT_HOSTNAME,
   PUBLIC_TUNNEL_NAME,
+  buildPublicTunnelName,
+  buildPublicTunnelSecretName,
 } from './public-dashboard-access.js';
 
 /**
@@ -153,5 +155,63 @@ describe('resolvePublicDashboardAccess', () => {
         resolvePublicDashboardAccess({ ...on, CCE_PUBLIC_HOSTNAME: hostname }),
       ).toThrow();
     }
+  });
+});
+
+/**
+ * Every name this feature touches has to carry the environment suffix. These
+ * pin the three ways a suffixed deploy could otherwise reach into production:
+ * reading prod's tunnel, writing prod's secret, or claiming prod's hostname.
+ */
+describe('environment isolation', () => {
+  it('derives a distinct tunnel per environment, prod unchanged', () => {
+    expect(buildPublicTunnelName('')).toBe('netzar-production-public');
+    expect(PUBLIC_TUNNEL_NAME).toBe('netzar-production-public');
+    expect(buildPublicTunnelName('staging')).toBe('netzar-staging-public');
+  });
+
+  it('derives a distinct tunnel secret per environment, prod unchanged', () => {
+    expect(buildPublicTunnelSecretName('')).toBe('claudeclaw-public-tunnel');
+    expect(buildPublicTunnelSecretName('staging')).toBe('claudeclaw-staging-public-tunnel');
+  });
+
+  it('resolves the suffixed tunnel name for a suffixed environment', () => {
+    const cfg = resolvePublicDashboardAccess({
+      ...on,
+      CCE_NAME_SUFFIX: 'staging',
+      CCE_PUBLIC_HOSTNAME: 'staging.pgnos.ai',
+    });
+    expect(cfg.enabled).toBe(true);
+    if (cfg.enabled) {
+      expect(cfg).toEqual({
+        enabled: true,
+        hostname: 'staging.pgnos.ai',
+        zoneName: 'pgnos.ai',
+        recordName: 'staging',
+        tunnelName: 'netzar-staging-public',
+        service: 'http://localhost:3000',
+      });
+    }
+  });
+
+  it('refuses to let a suffixed environment inherit prod’s default hostname', () => {
+    // Without this guard a staging deploy that forgot CCE_PUBLIC_HOSTNAME
+    // would silently publish app.pgnos.ai and point prod's hostname at
+    // staging's tunnel.
+    for (const hostname of [undefined, '', '   ']) {
+      expect(() =>
+        resolvePublicDashboardAccess({
+          ...on,
+          CCE_NAME_SUFFIX: 'staging',
+          CCE_PUBLIC_HOSTNAME: hostname,
+        }),
+      ).toThrow(/CCE_PUBLIC_HOSTNAME is required/);
+    }
+  });
+
+  it('still defaults to the prod hostname when there is no suffix', () => {
+    const cfg = resolvePublicDashboardAccess({ ...on, CCE_NAME_SUFFIX: '' });
+    expect(cfg.enabled).toBe(true);
+    if (cfg.enabled) expect(cfg.hostname).toBe(PUBLIC_DEFAULT_HOSTNAME);
   });
 });

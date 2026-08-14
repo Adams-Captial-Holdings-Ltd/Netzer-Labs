@@ -18,6 +18,7 @@ import {
 const ACCOUNT = '239887088812';
 const TOKEN = 'eyJhIjoiVE9LRU4tTVVTVC1OT1QtTEVBSyJ9';
 const SECRET_ID = 'claudeclaw-public-tunnel';
+const TUNNEL = 'netzar-production-public';
 
 function cloudflaredStub(opts: { tunnels?: unknown; token?: string; calls?: string[][] } = {}) {
   const calls = opts.calls ?? [];
@@ -60,6 +61,7 @@ describe('syncPublicTunnelSecret', () => {
       expectedAccountId: ACCOUNT,
       actualAccountId: ACCOUNT,
       secretId: SECRET_ID,
+      tunnelName: TUNNEL,
       cloudflared: adapter,
       secrets: client,
     });
@@ -86,6 +88,7 @@ describe('syncPublicTunnelSecret', () => {
       expectedAccountId: ACCOUNT,
       actualAccountId: ACCOUNT,
       secretId: SECRET_ID,
+      tunnelName: TUNNEL,
       cloudflared: adapter,
       secrets: client,
       log: (l) => lines.push(l),
@@ -106,6 +109,7 @@ describe('syncPublicTunnelSecret', () => {
         expectedAccountId: ACCOUNT,
         actualAccountId: ACCOUNT,
         secretId: SECRET_ID,
+        tunnelName: TUNNEL,
         cloudflared: adapter,
         secrets: client,
       }),
@@ -116,6 +120,7 @@ describe('syncPublicTunnelSecret', () => {
         expectedAccountId: ACCOUNT,
         actualAccountId: ACCOUNT,
         secretId: SECRET_ID,
+        tunnelName: TUNNEL,
         cloudflared: adapter,
         secrets: client,
       }),
@@ -131,6 +136,7 @@ describe('syncPublicTunnelSecret', () => {
         expectedAccountId: ACCOUNT,
         actualAccountId: '111122223333',
         secretId: SECRET_ID,
+        tunnelName: TUNNEL,
         cloudflared: adapter,
         secrets: client,
       }),
@@ -150,6 +156,7 @@ describe('syncPublicTunnelSecret', () => {
         expectedAccountId: '',
         actualAccountId: ACCOUNT,
         secretId: SECRET_ID,
+        tunnelName: TUNNEL,
         cloudflared: adapter,
         secrets: client,
       }),
@@ -169,6 +176,7 @@ describe('syncPublicTunnelSecret', () => {
         expectedAccountId: ACCOUNT,
         actualAccountId: ACCOUNT,
         secretId: SECRET_ID,
+        tunnelName: TUNNEL,
         cloudflared: adapter,
         secrets: client,
       }),
@@ -186,6 +194,7 @@ describe('syncPublicTunnelSecret', () => {
           expectedAccountId: ACCOUNT,
           actualAccountId: ACCOUNT,
           secretId: SECRET_ID,
+          tunnelName: TUNNEL,
           cloudflared: adapter,
           secrets: client,
         }),
@@ -207,6 +216,7 @@ describe('syncPublicTunnelSecret', () => {
         expectedAccountId: ACCOUNT,
         actualAccountId: ACCOUNT,
         secretId: SECRET_ID,
+        tunnelName: TUNNEL,
         cloudflared: adapter,
         secrets: client,
       }),

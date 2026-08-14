@@ -27,7 +27,6 @@
 
 import { spawn } from 'node:child_process';
 import { PutSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import { PUBLIC_TUNNEL_NAME } from '../../../infra/lib/public-dashboard-access.js';
 
 /**
  * Secrets Manager version stage that marks "a real connector token has been
@@ -54,9 +53,12 @@ export const PUBLIC_SECRET_MISSING_REMEDIATION =
  * restart. The tunnel must be remotely managed, created through the connected
  * Cloudflare API.
  */
-export const PUBLIC_TUNNEL_MISSING_REMEDIATION =
-  `Create the remotely managed \`${PUBLIC_TUNNEL_NAME}\` tunnel through the connected ` +
-  'Cloudflare API, then re-run `npm run public:setup`.';
+export function publicTunnelMissingRemediation(tunnelName: string): string {
+  return (
+    `Create the remotely managed \`${tunnelName}\` tunnel through the connected ` +
+    'Cloudflare API, then re-run `npm run public:setup`.'
+  );
+}
 
 /** A typed operator blocker: expected, actionable, not a crash. */
 export class PublicSetupBlocker extends Error {
@@ -83,6 +85,12 @@ export interface SyncPublicTunnelSecretOptions {
   actualAccountId: string;
   /** Full Secrets Manager path, e.g. `claudeclaw-public-tunnel`. */
   secretId: string;
+  /**
+   * Exact Cloudflare tunnel name to look up, e.g. `netzar-staging-public`.
+   * Passed in rather than imported so each environment reads its own tunnel:
+   * a frozen name here would make a staging run fetch prod's connector token.
+   */
+  tunnelName: string;
   cloudflared: CloudflaredAdapter;
   secrets: SecretsManagerLike;
   /** Progress sink. Receives status lines only — never the token. */
@@ -91,7 +99,7 @@ export interface SyncPublicTunnelSecretOptions {
 
 export interface PublicTunnelResult {
   tunnelId: string;
-  tunnelName: typeof PUBLIC_TUNNEL_NAME;
+  tunnelName: string;
   secretVersionId: string;
 }
 
@@ -115,7 +123,7 @@ function messageOf(err: unknown): string {
 export async function syncPublicTunnelSecret(
   opts: SyncPublicTunnelSecretOptions,
 ): Promise<PublicTunnelResult> {
-  const { expectedAccountId, actualAccountId, secretId, cloudflared, secrets } = opts;
+  const { expectedAccountId, actualAccountId, secretId, tunnelName, cloudflared, secrets } = opts;
   const log = opts.log ?? ((): void => {});
 
   // Gate: account identity, before Cloudflare and before Secrets Manager.
@@ -148,19 +156,19 @@ export async function syncPublicTunnelSecret(
   // unrelated `claudeclaw` tunnel, which belongs to salessly.io and must
   // never be touched by this system.
   const tunnel = Array.isArray(tunnels)
-    ? tunnels.find((t) => t?.name === PUBLIC_TUNNEL_NAME)
+    ? tunnels.find((t) => t?.name === tunnelName)
     : undefined;
   if (!tunnel?.id) {
-    throw new PublicSetupBlocker(PUBLIC_TUNNEL_MISSING_REMEDIATION);
+    throw new PublicSetupBlocker(publicTunnelMissingRemediation(tunnelName));
   }
-  log(`Found remotely managed tunnel ${PUBLIC_TUNNEL_NAME} (${tunnel.id}).`);
+  log(`Found remotely managed tunnel ${tunnelName} (${tunnel.id}).`);
 
   // The single sensitive read. `token` is scoped tightly and cleared below.
   let token = (await cloudflared.capture(['tunnel', 'token', tunnel.id])).trim();
   if (!token || token === 'REPLACE_ME') {
     token = '';
     throw new PublicSetupBlocker(
-      `cloudflared returned no tunnel token for ${PUBLIC_TUNNEL_NAME}. ` + PUBLIC_LOGIN_REMEDIATION,
+      `cloudflared returned no tunnel token for ${tunnelName}. ` + PUBLIC_LOGIN_REMEDIATION,
     );
   }
 
@@ -186,7 +194,7 @@ export async function syncPublicTunnelSecret(
   }
 
   log(`Wrote ${secretId} version ${secretVersionId} (token not displayed).`);
-  return { tunnelId: tunnel.id, tunnelName: PUBLIC_TUNNEL_NAME, secretVersionId };
+  return { tunnelId: tunnel.id, tunnelName, secretVersionId };
 }
 
 // ── Real adapters ─────────────────────────────────────────────────────

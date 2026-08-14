@@ -46,16 +46,35 @@
  * secret-safe setup lifecycle) and from Secrets Manager into the container.
  */
 
-import { APP } from './constants.js';
+import { APP_NAME_SUFFIX, buildApp } from './constants.js';
 
-/** The exact tunnel name this system owns. Never `claudeclaw`. */
-export const PUBLIC_TUNNEL_NAME = 'netzar-production-public';
+/**
+ * The exact tunnel name this system owns, per environment. Never `claudeclaw`.
+ *
+ * Suffix-derived for the same reason every other resource name is: prod and
+ * staging each own a distinct Cloudflare tunnel, and a frozen literal here
+ * would make a staging run read prod's connector token.
+ */
+export function buildPublicTunnelName(suffix: string = APP_NAME_SUFFIX): string {
+  return `netzar-${suffix || 'production'}-public`;
+}
+
+/** Prod-default name. Callers outside the CDK app must pass their own suffix. */
+export const PUBLIC_TUNNEL_NAME = buildPublicTunnelName();
 
 /**
  * Secrets Manager entry holding the connector token. Exported so the CDK
  * stack and the setup CLI name the same secret and cannot drift apart.
+ *
+ * Takes an explicit suffix because the CLIs resolve their environment from a
+ * parsed `.env` file that never reaches `process.env`; a module-level constant
+ * would freeze to prod there and write across environments.
  */
-export const PUBLIC_TUNNEL_SECRET_NAME = `${APP}-public-tunnel`;
+export function buildPublicTunnelSecretName(suffix: string = APP_NAME_SUFFIX): string {
+  return `${buildApp(suffix)}-public-tunnel`;
+}
+
+export const PUBLIC_TUNNEL_SECRET_NAME = buildPublicTunnelSecretName();
 
 /** The one zone this feature may publish into. */
 export const PUBLIC_ZONE = 'pgnos.ai';
@@ -79,7 +98,7 @@ export type PublicDashboardAccessConfig =
       zoneName: string;
       /** The first label — the record name inside that zone. */
       recordName: string;
-      tunnelName: typeof PUBLIC_TUNNEL_NAME;
+      tunnelName: string;
       service: typeof PUBLIC_TUNNEL_SERVICE;
     };
 
@@ -110,12 +129,24 @@ export function resolvePublicDashboardAccess(
     );
   }
 
+  // The default hostname belongs to prod alone. A suffixed environment that
+  // forgot CCE_PUBLIC_HOSTNAME would otherwise silently claim `app.pgnos.ai`
+  // and point prod's hostname at staging's tunnel, so it fails closed instead.
+  const suffix = (env.CCE_NAME_SUFFIX ?? '').trim();
+  const explicitHostname = env.CCE_PUBLIC_HOSTNAME?.trim();
+  if (suffix && !explicitHostname) {
+    throw new Error(
+      `CCE_PUBLIC_HOSTNAME is required when CCE_NAME_SUFFIX is set (got '${suffix}'): ` +
+        `refusing to fall back to the production default ${PUBLIC_DEFAULT_HOSTNAME}`,
+    );
+  }
+
   // `||`, not `??`. deploy.ts forwards every var through cdkEnvBag as
   // `env.X ?? ''`, so under a real deploy this key is always DEFINED and often
   // blank; `??` would keep the blank string, resolve to zero labels, and throw
   // `invalid CCE_PUBLIC_HOSTNAME:` naming a variable the operator never set.
   // Blank must mean "unset" and fall back to the default.
-  const hostname = (env.CCE_PUBLIC_HOSTNAME?.trim() || PUBLIC_DEFAULT_HOSTNAME).toLowerCase();
+  const hostname = (explicitHostname || PUBLIC_DEFAULT_HOSTNAME).toLowerCase();
 
   // Invariant 4: checked FIRST so every salessly.io form (including the
   // 2-label apex, which would otherwise trip the shape check below) reports
@@ -148,7 +179,7 @@ export function resolvePublicDashboardAccess(
     // membership, so the zone is known and the record is the remainder.
     recordName: hostname.slice(0, -(PUBLIC_ZONE.length + 1)),
     zoneName: PUBLIC_ZONE,
-    tunnelName: PUBLIC_TUNNEL_NAME,
+    tunnelName: buildPublicTunnelName(suffix),
     service: PUBLIC_TUNNEL_SERVICE,
   };
 }
