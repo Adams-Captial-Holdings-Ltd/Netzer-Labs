@@ -57,7 +57,7 @@ async function publishAlert(message: string): Promise<void> {
     return;
   }
   await sns().send(
-    new PublishCommand({ TopicArn: arn, Subject: 'ClaudeClaw CDK drift', Message: message }),
+    new PublishCommand({ TopicArn: arn, Subject: 'Netzar OS CDK drift', Message: message }),
   );
 }
 
@@ -162,7 +162,7 @@ export async function runDriftCheckOnce(opts: { force?: boolean } = {}): Promise
 
   if (drifted.length > 0) {
     const body = [
-      'ClaudeClaw CDK drift detected — deployed resources differ from their CloudFormation templates.',
+      'Netzar OS CDK drift detected — deployed resources differ from their CloudFormation templates.',
       '',
       ...drifted.map((d) => `• ${d}`),
       '',

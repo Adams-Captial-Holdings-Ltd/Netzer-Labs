@@ -207,6 +207,15 @@ jobs:
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
           CCE_CICD_ENABLED: '1'
           CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
+          # Must be forwarded or a CI deploy silently UNDOES the public
+          # dashboard: synth resolves the feature off, drops the cloudflared
+          # container so app.pgnos.ai stops serving, and removes the tunnel
+          # secret from the template. That secret is RETAIN with a fixed name,
+          # so it survives as an orphan and the next flagged deploy fails with
+          # "already exists". The smoke test would not catch it: it curls the
+          # ALB host, not the published hostname.
+          CCE_PUBLIC_ACCESS: ${{ vars.CCE_PUBLIC_ACCESS }}
+          CCE_PUBLIC_HOSTNAME: ${{ vars.CCE_PUBLIC_HOSTNAME }}
           # OIDC trust is fail-closed: synth errors unless the repo identity
           # and the exact deploy subjects are explicit. Derived from the repo
           # running the workflow, never a hardcoded default.

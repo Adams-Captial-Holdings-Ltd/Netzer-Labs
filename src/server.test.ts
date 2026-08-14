@@ -53,13 +53,11 @@ describe('server', () => {
     expect(body.status).toBe('ready');
   });
 
-  it('GET / returns plain text banner', async () => {
+  it('GET / redirects to the dashboard', async () => {
     const app = buildApp(baseEnv);
     const res = await app.request('/');
-    expect(res.status).toBe(200);
-    const text = await res.text();
-    expect(text).toContain('Netzar OS Enterprise');
-    expect(text).toContain('us-east-1');
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/dashboard');
   });
 
   it('GET /nonexistent returns 404', async () => {
