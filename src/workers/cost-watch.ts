@@ -52,7 +52,7 @@ async function publishAlert(message: string): Promise<void> {
     return;
   }
   await sns().send(
-    new PublishCommand({ TopicArn: arn, Subject: 'ClaudeClaw cost alert', Message: message }),
+    new PublishCommand({ TopicArn: arn, Subject: 'Netzar OS cost alert', Message: message }),
   );
 }
 
@@ -109,7 +109,7 @@ export async function runCostWatchOnce(opts: { force?: boolean } = {}): Promise<
   if (alerts.length === 0) return { ran: true, alerted: false };
 
   const body = [
-    'ClaudeClaw cost watch',
+    'Netzar OS cost watch',
     `MTD $${(summary.monthToDateUsd ?? 0).toFixed(2)} | projected $${(summary.projectedMonthUsd ?? 0).toFixed(0)} | last month $${(summary.lastMonthUsd ?? 0).toFixed(0)}`,
     '',
     ...alerts,

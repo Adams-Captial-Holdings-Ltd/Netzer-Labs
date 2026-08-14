@@ -158,7 +158,7 @@ export function PowerCard() {
       <ConfirmDialog
         open={confirming}
         title="Pause the whole stack"
-        message="Compute goes to zero and all paid AI calls hard-stop. The dashboard, Telegram, and Slack are offline until you wake it from the power panel. Your data is kept, and nothing outside ClaudeClaw is touched."
+        message="Compute goes to zero and all paid AI calls hard-stop. The dashboard, Telegram, and Slack are offline until you wake it from the power panel. Your data is kept, and nothing outside Netzar OS is touched."
         confirmPhrase="pause"
         confirmLabel="Pause stack"
         danger
