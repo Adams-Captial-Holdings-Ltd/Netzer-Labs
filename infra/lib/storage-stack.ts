@@ -106,6 +106,21 @@ export class StorageStack extends Stack implements StorageOutputs {
         resources: ['*'],
       }),
     );
+    // SES publishes magic-link bounce/complaint events to the ops-alerts topic.
+    // AllowSNS above covers the SNS principal, not the SES one, so without this
+    // CreateConfigurationSetEventDestination fails with "Access denied to KMS
+    // key for SNS topic".
+    this.logsKey.addToResourcePolicy(
+      new PolicyStatement({
+        sid: 'AllowSES',
+        principals: [new ServicePrincipal('ses.amazonaws.com')],
+        actions: ['kms:GenerateDataKey*', 'kms:Decrypt'],
+        resources: ['*'],
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': this.account },
+        },
+      }),
+    );
 
     // ── Logs bucket (target for server access logs from other buckets) ──
     // NOTE: S3 server access logging cannot deliver to SSE-KMS buckets, so
