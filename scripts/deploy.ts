@@ -49,7 +49,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { SecretsManagerClient, DescribeSecretCommand } from '@aws-sdk/client-secrets-manager';
-import { PUBLIC_TUNNEL_SECRET_NAME } from '../infra/lib/public-dashboard-access.js';
+import { buildPublicTunnelSecretName } from '../infra/lib/public-dashboard-access.js';
 import { PUBLIC_SECRET_READY_STAGE } from './lib/public-tunnel/setup.js';
 import { DEPLOY_EXIT_DECLINED } from './lib/exit-codes.js';
 import { maybePrintHelp } from './lib/help.js';
@@ -464,9 +464,14 @@ async function main(): Promise<void> {
     // value behind it is never read here.
     if (env.CCE_PUBLIC_ACCESS === '1') {
       let ready = false;
+      // Suffix-derived from the parsed env bag, matching what the cdk child
+      // will synthesize. Reading the module default would probe PROD's secret
+      // from a staging deploy, report a false ready, and attach an essential
+      // connector to a token that is still REPLACE_ME.
+      const publicSecretId = buildPublicTunnelSecretName(nameSuffix);
       try {
         const described = await secretsClient.send(
-          new DescribeSecretCommand({ SecretId: PUBLIC_TUNNEL_SECRET_NAME }),
+          new DescribeSecretCommand({ SecretId: publicSecretId }),
         );
         ready = Object.values(described.VersionIdsToStages ?? {}).some((stages) =>
           (stages ?? []).includes(PUBLIC_SECRET_READY_STAGE),

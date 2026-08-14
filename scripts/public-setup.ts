@@ -22,7 +22,7 @@ import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { SecretsManagerClient, DescribeSecretCommand } from '@aws-sdk/client-secrets-manager';
 import {
   resolvePublicDashboardAccess,
-  PUBLIC_TUNNEL_SECRET_NAME,
+  buildPublicTunnelSecretName,
 } from '../infra/lib/public-dashboard-access.js';
 import { maybePrintHelp } from './lib/help.js';
 import { parseEnvFile, resolveEnvFlag, envFileNameFor } from './lib/env-file.js';
@@ -66,6 +66,14 @@ async function main(): Promise<number> {
   }
   const env = parseEnvFile(readFileSync(envFile, 'utf-8'));
 
+  // Resolved from the PARSED env file, never from process.env. This CLI reads
+  // its whole configuration out of `.env.<env>`, which never reaches
+  // process.env, so a module-level constant here would freeze to the prod name
+  // and this command would write the staging token over prod's secret.
+  // Same shape as scripts/warp-setup.ts.
+  const nameSuffix = env.CCE_NAME_SUFFIX ?? '';
+  const publicTunnelSecretName = buildPublicTunnelSecretName(nameSuffix);
+
   // Throws a typed error when the flag is set outside the private posture.
   const publicAccess = resolvePublicDashboardAccess(env);
   if (!publicAccess.enabled) {
@@ -98,7 +106,7 @@ async function main(): Promise<number> {
   // Gate 2: the foundation phase created the secret.
   const secrets = new SecretsManagerClient({ region });
   try {
-    await secrets.send(new DescribeSecretCommand({ SecretId: PUBLIC_TUNNEL_SECRET_NAME }));
+    await secrets.send(new DescribeSecretCommand({ SecretId: publicTunnelSecretName }));
   } catch (err) {
     if ((err as { name?: string }).name === 'ResourceNotFoundException') {
       say(PUBLIC_SECRET_MISSING_REMEDIATION);
@@ -110,7 +118,8 @@ async function main(): Promise<number> {
   const result = await syncPublicTunnelSecret({
     expectedAccountId,
     actualAccountId,
-    secretId: PUBLIC_TUNNEL_SECRET_NAME,
+    secretId: publicTunnelSecretName,
+    tunnelName: publicAccess.tunnelName,
     cloudflared: realCloudflared(),
     secrets,
     log: say,
@@ -118,7 +127,7 @@ async function main(): Promise<number> {
 
   say('');
   say(`OK tunnel    ${result.tunnelName} (${result.tunnelId})`);
-  say(`OK secret    ${PUBLIC_TUNNEL_SECRET_NAME} version ${result.secretVersionId}`);
+  say(`OK secret    ${publicTunnelSecretName} version ${result.secretVersionId}`);
   say(`OK hostname  ${publicAccess.hostname}`);
   say(`   staged    AWSCURRENT + ${PUBLIC_SECRET_READY_STAGE}`);
   say('');

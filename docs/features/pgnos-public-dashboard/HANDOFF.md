@@ -2,17 +2,22 @@
 feature: pgnos-public-dashboard
 document_role: handoff
 status: current
-observed_at: 2026-08-13
-as_of_commit: 77a3df9c3ae9d479ba13db6e9374dca19f621ff5
+observed_at: 2026-08-14
+as_of_commit: cc905b6e88a27b15976e891f3e52bac5e7586f03
 ---
 
 # pgnos public dashboard handoff
 
-- Branch: `feature/pgnos-public-dashboard`; merge target: `development`.
-  The owner explicitly directed this work straight to production rather than
-  through the documented `development â†’ qa â†’ staging â†’ production` promotion.
-  Whether to merge back afterwards is still open.
-- Pushed: **no**. Two commits local only (`5790d96`, `77a3df9`). PR: none.
+- Branch: `fix/staging-public-url`; merge target: `development`, then the
+  `development → qa → staging` ladder.
+- Scope widened on 2026-08-14: this feature is no longer production-only. The
+  same machinery now publishes **`staging.pgnos.ai`**, which required making
+  every Cloudflare-facing name suffix-aware.
+- Pushed: **yes**. `origin/feature/pgnos-public-dashboard` now exists and PR
+  #46 merged it into `development`. Until 2026-08-14 the branch was local only,
+  which meant production's running configuration was reproducible from exactly
+  one laptop and any CI deploy from `origin/production` would have dropped the
+  cloudflared sidecar and taken `app.pgnos.ai` offline.
 - Deployment: **live**. Three sequential runs of
   `AWS_PROFILE=netzer-process npm run deploy -- --build-cloud`:
   1. created the retained `claudeclaw-public-tunnel` secret (no connector),
@@ -110,8 +115,21 @@ was invoked instead.
 
 ## Smallest next action
 
-Reply to AWS support case `178661777600815` to appeal the SES sandbox denial.
-Until then, verify one recipient address in SES to exercise the invite flow.
+Promote `development → qa → staging`. The push to `staging` auto-deploys and
+creates `claudeclaw-staging-public-tunnel` holding `REPLACE_ME` with no sidecar
+(expected). Then run `npm run public:setup -- --env=staging` and let the next
+deploy attach the connector.
+
+Separately, and unrelated to staging: reply to AWS support case
+`178661777600815` to appeal the SES sandbox denial. Until then, verify one
+recipient address in SES to exercise the invite flow.
+
+## Session index
+
+- [2026-08-14 — staging public URL](handoffs/2026-08-14-staging-public-url.md):
+  pushed the feature branch, merged it through PR #46, made every
+  Cloudflare-facing name suffix-aware, and made staging deploy on merge.
 
 Authorities: [README](README.md),
-[design spec](../../superpowers/specs/2026-08-11-netzar-os-pgnos-public-dashboard-email-design.md).
+[design spec](../../superpowers/specs/2026-08-11-netzar-os-pgnos-public-dashboard-email-design.md),
+[staging runbook](../../staging.md).

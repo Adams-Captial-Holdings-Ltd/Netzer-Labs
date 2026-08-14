@@ -556,8 +556,7 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     const publicTunnelSecret = publicAccess.enabled
       ? new SmSecret(this, 'PublicTunnelSecret', {
           secretName: PUBLIC_TUNNEL_SECRET_NAME,
-          description:
-            'Cloudflare connector token for the netzar-production-public tunnel. Written by the setup lifecycle, never by CDK.',
+          description: `Cloudflare connector token for the ${publicAccess.tunnelName} tunnel. Written by the setup lifecycle, never by CDK.`,
           secretObjectValue: {
             token: SecretValue.unsafePlainText('REPLACE_ME'),
           },
