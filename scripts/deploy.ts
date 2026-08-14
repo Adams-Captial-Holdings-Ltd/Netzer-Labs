@@ -48,7 +48,9 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { SecretsManagerClient, DescribeSecretCommand } from '@aws-sdk/client-secrets-manager';
+import { buildPublicTunnelSecretName } from '../infra/lib/public-dashboard-access.js';
+import { PUBLIC_SECRET_READY_STAGE } from './lib/public-tunnel/setup.js';
 import { DEPLOY_EXIT_DECLINED } from './lib/exit-codes.js';
 import { maybePrintHelp } from './lib/help.js';
 import { confirm, spinner, closePrompt } from './lib/prompt.js';
@@ -451,6 +453,43 @@ async function main(): Promise<void> {
       skipped: seedResult.skipped.length,
     });
     const seedRevision = seedRevisionOf(seedRows);
+
+    // ── Public connector readiness gate (pgnos design) ───────────────
+    // The connector is an ESSENTIAL container reading the `token` JSON field
+    // of the tunnel secret. Attaching it before that field exists means ECS
+    // cannot resolve the secret, the container never starts, and the rollout
+    // of a live service fails. So the first deploy creates the secret only;
+    // the connector joins on a later deploy, once `npm run public:setup` has
+    // written the token. Existence of the ready stage is the signal; the
+    // value behind it is never read here.
+    if (env.CCE_PUBLIC_ACCESS === '1') {
+      let ready = false;
+      // Suffix-derived from the parsed env bag, matching what the cdk child
+      // will synthesize. Reading the module default would probe PROD's secret
+      // from a staging deploy, report a false ready, and attach an essential
+      // connector to a token that is still REPLACE_ME.
+      const publicSecretId = buildPublicTunnelSecretName(nameSuffix);
+      try {
+        const described = await secretsClient.send(
+          new DescribeSecretCommand({ SecretId: publicSecretId }),
+        );
+        ready = Object.values(described.VersionIdsToStages ?? {}).some((stages) =>
+          (stages ?? []).includes(PUBLIC_SECRET_READY_STAGE),
+        );
+      } catch (err) {
+        if ((err as { name?: string }).name !== 'ResourceNotFoundException') throw err;
+      }
+      env.CCE_PUBLIC_CONNECTOR_READY = ready ? '1' : '';
+      // eslint-disable-next-line no-console
+      console.log(
+        ready
+          ? ok('public connector: token present, attaching the cloudflared sidecar')
+          : warn(
+              'public connector: no token yet, deploying the secret only. ' +
+                'Run `npm run public:setup`, then re-run this deploy to attach the sidecar.',
+            ),
+      );
+    }
 
     // ── PHASE d — remaining stacks + force-roll + stability ──────────
     section('Phase d · remaining stacks (cdk deploy --all)');
@@ -1196,6 +1235,11 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // this path — it goes cloudflared -> Secrets Manager -> container, and is
     // deliberately absent from this bag, the manifest, and cdk.out.
     CCE_WARP_PRIVATE_ACCESS: env.CCE_WARP_PRIVATE_ACCESS ?? '',
+    CCE_PUBLIC_ACCESS: env.CCE_PUBLIC_ACCESS ?? '',
+    CCE_PUBLIC_HOSTNAME: env.CCE_PUBLIC_HOSTNAME ?? '',
+    // Set by the readiness gate below, never by the operator's env file: the
+    // connector may only join the task once its token actually exists.
+    CCE_PUBLIC_CONNECTOR_READY: env.CCE_PUBLIC_CONNECTOR_READY ?? '',
     CCE_WARP_PRIVATE_HOSTNAME: env.CCE_WARP_PRIVATE_HOSTNAME ?? '',
     CCE_CICD_ENABLED: env.CCE_CICD_ENABLED ?? '',
     CCE_CODEBUILD_ENABLED: env.CCE_CODEBUILD_ENABLED ?? '',
