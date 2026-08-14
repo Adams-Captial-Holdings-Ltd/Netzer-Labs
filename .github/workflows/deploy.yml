@@ -66,9 +66,10 @@ jobs:
 
       - name: Validate deployment source
         env:
-          # The resolved value, not the raw input: a push carries no inputs and
-          # would otherwise reach the guard as an empty string.
-          TARGET_ENV: ${{ env.TARGET_ENV }}
+          # TARGET_ENV is inherited from the workflow-level env block, which
+          # already resolves push -> staging. It is deliberately NOT overridden
+          # here: the previous `${{ github.event.inputs.env }}` override reached
+          # the guard as an empty string on a push and failed closed.
           GITHUB_REF: ${{ github.ref }}
         run: node scripts/ci/deploy-source-guard.mjs
 
@@ -94,10 +95,15 @@ jobs:
     # typed confirmation.
     if: github.event_name == 'push' || inputs.confirm == 'deploy'
     runs-on: ubuntu-latest
-    # MUST key off the resolved TARGET_ENV, not the raw input. On a push the
-    # input is empty, which would select the `production` environment and hand
-    # a staging deploy production's variables.
-    environment: ${{ env.TARGET_ENV == 'staging' && 'staging' || 'production' }}
+    # MUST resolve the same way TARGET_ENV does: on a push the dispatch input
+    # is empty, and keying off it would select the `production` environment and
+    # hand a staging deploy production's variables.
+    # The condition is spelled out from the `github` context rather than reusing
+    # `env.TARGET_ENV`, because the `env` context is NOT available in
+    # `jobs.<job_id>.environment` — referencing it there makes the whole
+    # workflow file invalid, and GitHub reports that as a 0-second run failure
+    # with no jobs rather than as a syntax error.
+    environment: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && 'staging' || 'production' }}
     timeout-minutes: 60
     steps:
       - name: Resolve env-specific values
