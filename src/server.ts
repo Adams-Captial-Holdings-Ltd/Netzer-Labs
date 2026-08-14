@@ -149,16 +149,9 @@ export function buildApp(env: Env): Hono {
     );
   });
 
-  app.get('/', (c) =>
-    c.text(
-      [
-        'Netzar OS Enterprise',
-        `env: ${env.NODE_ENV}`,
-        `region: ${env.AWS_REGION}`,
-        'See /health and /ready for status.',
-      ].join('\n'),
-    ),
-  );
+  // 302, not the 301 used above: a permanent redirect on the site root is
+  // cached indefinitely and could not be walked back if / is ever repurposed.
+  app.get('/', (c) => c.redirect('/dashboard', 302));
 
 
 

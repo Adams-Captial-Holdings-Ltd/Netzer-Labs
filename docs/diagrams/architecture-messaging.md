@@ -1,4 +1,4 @@
-<!-- drift-gate: verified against PR #104; mapped-source changes were dead-import removals only, no depicted flow changed. -->
+<!-- drift-gate: verified against the pgnos public-dashboard merge; no depicted flow changed. The compute-stack change adds an inbound HTTP edge (a cloudflared sidecar) and touches none of the async paths depicted here: the scheduler group, the scheduled-fire queue, the config SNS fan-out, and the nightly consolidation spawner are all unchanged. Prior verification: PR #104 — mapped-source changes were dead-import removals only. -->
 # Architecture, messaging view
 
 > Asynchronous work flows through two SQS pipelines: scheduled tasks fire from EventBridge Scheduler into the scheduled-fire queue, and config changes fan out from an SNS topic to per-task queues so every running orchestrator task hot-reloads. Each due scheduled task is a one-shot EventBridge schedule created at runtime inside the `claudeclaw` scheduler group. Memory consolidation is a separate nightly path: an EventBridge rule triggers a spawner Lambda that launches one Fargate worker task per agent-and-chat pair with pending memories.

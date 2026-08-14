@@ -72,7 +72,7 @@ export interface Brand {
 // unset we fall back to these exact values so the UI matches today's look.
 export const DEFAULT_PRIMARY = '#6366f1';
 export const DEFAULT_ACCENT = '#06b6d4';
-export const DEFAULT_COMPANY_NAME = 'ClaudeClaw';
+export const DEFAULT_COMPANY_NAME = 'Netzar OS';
 // The sidebar subtitle shown under the company name when a theme doesn't set its
 // own tagline. Matches the previously-hardcoded label so the default theme is
 // visually unchanged.

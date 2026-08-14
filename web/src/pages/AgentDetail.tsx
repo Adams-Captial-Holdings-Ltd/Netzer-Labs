@@ -722,7 +722,7 @@ function friendlySlackError(raw?: string): string {
 // to do, so the prompt is safe to run as-is.
 function buildSlackClaudePrompt(agentId: string, host: string, manifest: string): string {
   return [
-    `Set up a Slack app and connect it to my ClaudeClaw agent "${agentId}". Work in my browser. Do NOT type my tokens into any field or click Slack's "Allow" yourself, hand those two steps to me.`,
+    `Set up a Slack app and connect it to my Netzar OS agent "${agentId}". Work in my browser. Do NOT type my tokens into any field or click Slack's "Allow" yourself, hand those two steps to me.`,
     ``,
     `1. Go to https://api.slack.com/apps then Create New App, then From a manifest. Pick my workspace.`,
     `2. Paste this exact manifest and create the app:`,
@@ -737,7 +737,7 @@ function buildSlackClaudePrompt(agentId: string, host: string, manifest: string)
 
 function buildTelegramClaudePrompt(agentId: string, host: string): string {
   return [
-    `Connect a Telegram bot to my ClaudeClaw agent "${agentId}". Do NOT type my bot token into any field yourself, hand that step to me.`,
+    `Connect a Telegram bot to my Netzar OS agent "${agentId}". Do NOT type my bot token into any field yourself, hand that step to me.`,
     ``,
     `1. Open https://t.me/BotFather. Send /newbot and pick a name plus a username ending in "bot".`,
     `2. I copy the token BotFather replies with (looks like 123456:ABC-DEF...).`,
