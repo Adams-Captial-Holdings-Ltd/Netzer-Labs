@@ -1,144 +1,196 @@
-# Staging Environment
+# Staging environment
 
-Parallel deployment of every CDK stack with prefix `CCE-STAGING` and `CCE_TIER=1`, reachable at `staging.claudeclaw-enterprise.com`. Same AWS account, separate resources, separate surface tokens, lower cost cap.
+Staging is a second, complete copy of Netzar OS Enterprise running beside
+production **in the same AWS account**, isolated by resource naming rather than
+by account boundary. It exists so development and QA fixes can be exercised
+against real Bedrock, real DynamoDB, real IAM and real Fargate before anything
+reaches production.
 
-## Why a staging environment
+- **URL: <https://staging.pgnos.ai>** (production is `app.pgnos.ai`)
+- **Always on.** The ECS service runs 24/7 exactly like production's; visiting
+  the URL does not start anything. Deploys are rolling updates to a service
+  that is already running.
+- **Continuous.** Merging `qa → staging` deploys it. Nobody dispatches a
+  workflow.
+- **Tier 0**, roughly $81/month.
 
-- Test infra changes (new stacks, new IAM grants, new tier features) without touching prod.
-- Verify the deploy pipeline before promoting to prod.
-- Reproduce bugs without contaminating prod data.
+> Isolation comes from `CCE_NAME_SUFFIX=staging`, which renames every resource
+> to `claudeclaw-staging-*` and every stack to `CCE-STAGING-*`. Staging and
+> production share an AWS account and share account-level Bedrock inference
+> profiles; they share no table, bucket, queue, secret, cluster, or tunnel.
 
-## One-time setup (before the first deploy)
+---
 
-You only do this once per account. Everything below is **prerequisites you have to provide manually** — the deploy script can't create Slack/Telegram apps on your behalf.
+## What staging looks like
 
-### 1. Create a staging Slack app
+| | Staging | Production |
+|---|---|---|
+| Stacks | `CCE-STAGING-*` | `CCE-*` |
+| Resources | `claudeclaw-staging-*` | `claudeclaw-*` |
+| Tier | 0 (1 task, 512 CPU / 1024 MB) | 2 (3 tasks, autoscaled) |
+| Public URL | `staging.pgnos.ai` | `app.pgnos.ai` |
+| Cloudflare tunnel | `netzar-staging-public` | `netzar-production-public` |
+| Tunnel secret | `claudeclaw-staging-public-tunnel` | `claudeclaw-public-tunnel` |
+| Deploy trigger | push to `staging` | manual dispatch + typed `deploy` |
+| ALB | internal, not in the public path | internal, not in the public path |
 
-1. Go to https://api.slack.com/apps → "Create New App" → "From an app manifest"
-2. Pick the same workspace as prod
-3. Paste the manifest from the prod app, but rename the bot user to "ClaudeClaw Staging" (or similar)
-4. Set the event subscription request URL to `https://staging.claudeclaw-enterprise.com/slack/events` (Slack will reject it for now — that's expected; we'll come back after the first deploy)
-5. Capture: `SLACK_BOT_TOKEN` (xoxb-...), `SLACK_SIGNING_SECRET`, optional `SLACK_APP_TOKEN` (xapp-...)
+Both environments run `CCE_DEPLOY_MODE=infra-only`, so the ALB is synthesized
+**internal** with no public listener. The public path does not go through it:
 
-### 2. Create a staging Telegram bot
-
-1. DM `@BotFather` on Telegram → `/newbot`
-2. Pick a name + username (e.g. `claudeclaw_staging_bot`)
-3. BotFather returns a token; capture it
-4. The webhook URL we'll set later is `https://staging.claudeclaw-enterprise.com/tg/main/webhook`
-
-### 3. Generate fresh secrets
-
-Never reuse prod's dashboard token, security PIN, or encryption key in staging:
-
-```bash
-# Dashboard token (64 hex chars)
-openssl rand -hex 32
-
-# App encryption key (64 hex chars = 32 bytes — required for AES-256)
-openssl rand -hex 32
-
-# Security PIN hash — the app expects a SALTED value, salt:sha256(salt+pin);
-# a bare `shasum -a 256` will NOT verify. The setup wizard generates it
-# (scripts/lib/crypto.ts hashPin()); to reproduce it by hand:
-SALT=$(openssl rand -hex 8)
-printf '%s:%s\n' "$SALT" "$(printf '%s' "${SALT}123456" | shasum -a 256 | awk '{print $1}')"
+```
+browser -> Cloudflare (TLS terminates here)
+        -> Cloudflare Tunnel (remotely managed)
+        -> cloudflared sidecar INSIDE the Fargate task
+        -> orchestrator on http://localhost:3000
 ```
 
-### 4. Write `.env.staging`
+The connector dials out, so this adds no AWS ingress: no public task IP, no
+public listener, no security-group hole.
 
-Copy `.env.staging.example` → `.env.staging` and fill in:
+### There is no Route 53 hosted zone and no ACM certificate in this account
 
-- Bedrock model IDs (safe to reuse prod's account-level inference profile IDs)
-- The Slack and Telegram tokens from steps 1 & 2
-- The freshly generated dashboard / encryption / PIN values
-- Leave `CCE_DAILY_COST_CAP_USD=10` — staging shouldn't burn money
+`pgnos.ai` is a Cloudflare zone. **`DOMAIN_NAME` must stay empty for staging.**
+A non-empty value sends `infra/lib/compute-stack.ts` into
+`HostedZone.fromLookup` against a zone that does not exist, fails at synth, and
+would also flip the ALB internet-facing. Setting `HOSTED_ZONE_ID` does not
+rescue it — the certificate and alias record still need a real zone.
 
-The file is gitignored, so it stays on your machine.
-
-## First bootstrap deploy
-
-```bash
-npm run deploy -- --env=staging
-```
-
-Confirm at the "money gate" prompt. This will:
-
-1. Run pre-checks against the staging env
-2. Bootstrap CDK toolkit for the account+region (idempotent if prod already bootstrapped)
-3. Build the orchestrator image, tag it `claudeclaw-staging-orchestrator:<sha>`, push to the staging ECR repo
-4. Deploy the `CCE-STAGING-*` stacks: the 14 always-on stacks (Network, Storage, Guardrails, Secrets, Dynamo, Messaging, Iam, Compute, Observability, Security, Backup, Chaos, Extensions, CostGuardrails), plus the isolated PowerSwitch stack and the conditional CodeBuild / DemoReset stacks when their env flags are set
-5. Populate the staging Secrets Manager entries from `.env.staging`
-6. Auto-issue an ACM cert via Route 53 DNS validation for `staging.claudeclaw-enterprise.com`
-7. Add the A-record for the staging subdomain pointing at the staging ALB
-8. Poll `/health` until 200
-
-Expected time: ~15 min for the first deploy (cert issuance is the slow step).
-
-## Post-bootstrap manual steps
-
-### 1. Set the staging Slack event URL
-
-Now that the staging ALB has HTTPS, go back to `api.slack.com/apps`, paste `https://staging.claudeclaw-enterprise.com/slack/events` as the event subscription request URL. Slack should verify it (we respond to the URL verification challenge automatically).
-
-### 2. Set the staging Telegram webhook
-
-The deploy script offers to do this for you if `TELEGRAM_TOKENS_JSON` is set in `.env.staging`. Otherwise:
+Verify a staging template carries neither:
 
 ```bash
-curl -X POST "https://api.telegram.org/bot<STAGING_BOT_TOKEN>/setWebhook" \
-  -H 'Content-Type: application/json' \
-  -d "{\"url\": \"https://staging.claudeclaw-enterprise.com/tg/main/webhook\", \"secret_token\": \"<STAGING_TELEGRAM_WEBHOOK_SECRET>\", \"allowed_updates\": [\"message\", \"callback_query\", \"my_chat_member\"]}"
+grep -E 'CertificateManager::Certificate|Route53::RecordSet' cdk.out/CCE-STAGING-Compute.template.json
 ```
 
-### 3. Verify staging
+That must print nothing.
+
+---
+
+## Deploying to staging
+
+Merge the promotion PR. That is the whole procedure:
 
 ```bash
-curl https://staging.claudeclaw-enterprise.com/health
-# expect: {"status":"ok", ...}
-
-curl -H "Authorization: Bearer <STAGING_DASHBOARD_TOKEN>" https://staging.claudeclaw-enterprise.com/api/tier
-# expect: {"tier":1,"label":"Standard", ...}
+gh pr create --base staging --head qa --title "promote qa to staging"
 ```
 
-Then DM the staging Slack bot and the staging Telegram bot to confirm both surfaces work end-to-end.
+The push to `staging` triggers `.github/workflows/deploy.yml`, which builds the
+ARM64 image, deploys the `CCE-STAGING-*` stacks, forces an ECS rollout, waits
+for the service to stabilize, and smoke-tests `https://staging.pgnos.ai/health`.
 
-## CI deploys to staging
+`scripts/ci/deploy-source-guard.mjs` refuses any staging deploy whose ref is not
+`refs/heads/staging`, and staging ignores the workflow's `tier` input — it is
+pinned to Tier 0 so a careless dispatch cannot provision Enterprise tier.
 
-The `Deploy` GitHub workflow takes optional inputs:
+To deploy from a laptop instead (all 13 phases, including the deploy lock and
+rollback manifest):
 
 ```bash
-# manual dispatch via CLI
-gh workflow run deploy.yml -f confirm=deploy -f tier=1 -f env=staging
+npm run deploy -- --env=staging --tier=0
 ```
 
-(or pick `env=staging` in the Actions UI's "Run workflow" form). A GitHub Actions OIDC token carries exactly one `sub` claim, so the deploy role's trust policy lists the allowed subjects as separate `StringEquals` entries — the deploy refs (`repo:<org>/<repo>:ref:refs/heads/main` and `...:ref:refs/heads/staging`, from `CCE_GITHUB_DEPLOY_REFS`) and any configured deploy environments (`CCE_GITHUB_DEPLOY_ENVIRONMENTS`) — matched with OR semantics, not a ref-and-environment conjunction. A job is trusted when its single subject equals any one listed entry, so a `main`/`production` job can deploy prod and a `staging` job can deploy staging.
+Never hand-assemble a `cdk deploy` invocation; you lose preflight, the deploy
+lock, and the rollback manifest.
+
+---
+
+## First-time setup of the public URL
+
+Only needed once per environment, and already done for staging. Recorded here
+because the ordering is not obvious and getting it wrong crash-loops the task.
+
+The connector is an **essential** container that reads the `token` field of the
+tunnel secret. Attaching it before a real token exists means ECS cannot resolve
+the secret, the container never starts, and the rollout fails. So the secret and
+the sidecar arrive on **two separate deploys**.
+
+1. **Create the tunnel in Cloudflare** — remotely managed (`config_src`
+   `cloudflare`), named `netzar-staging-public`, with ingress
+   `staging.pgnos.ai -> http://localhost:3000` and an `http_status:404`
+   catch-all. Add a **proxied** CNAME `staging` pointing at
+   `<tunnel-id>.cfargotunnel.com`. A locally managed tunnel is not an option:
+   its credentials live in a file on one laptop and cannot survive a Fargate
+   task restart.
+2. **Set the GitHub `staging` environment variables**: `CCE_PUBLIC_ACCESS=1`,
+   `CCE_PUBLIC_HOSTNAME=staging.pgnos.ai`,
+   `CCE_DASHBOARD_URL=https://staging.pgnos.ai`.
+3. **Deploy once.** The readiness gate finds no token, so this deploy creates
+   the retained `claudeclaw-staging-public-tunnel` secret holding `REPLACE_ME`
+   and attaches no sidecar. This is the expected outcome, not a failure.
+4. **Write the token:**
+
+   ```bash
+   npm run public:setup -- --env=staging
+   ```
+
+   This reads the connector token through the `cloudflared` CLI and writes it
+   straight to Secrets Manager under the `CCE-PUBLIC-READY` version stage. The
+   token is never printed, never an argv element, never written to `.env`, and
+   never returned. It requires a one-time `cloudflared tunnel login` in a
+   browser and the tunnel from step 1 to already exist.
+5. **Deploy again.** The readiness gate now finds the stage, the sidecar joins
+   the task, and `staging.pgnos.ai` serves.
+
+`.env.staging` (gitignored) needs `CCE_NAME_SUFFIX=staging`,
+`CCE_DEPLOY_MODE=infra-only`, `CCE_PUBLIC_ACCESS=1`,
+`CCE_PUBLIC_HOSTNAME=staging.pgnos.ai`, plus `AWS_ACCOUNT_ID` and `AWS_REGION`.
+It holds **no Cloudflare credential** — the CLI's browser authorization covers
+that.
+
+---
+
+## Access and verification
+
+```bash
+curl https://staging.pgnos.ai/health          # {"status":"ok",...}
+curl -o /dev/null -w '%{http_code}\n' https://staging.pgnos.ai/api/agents   # 401
+```
+
+Sign in at `https://staging.pgnos.ai/dashboard/` with the staging
+`DASHBOARD_TOKEN`. Staging has its own dashboard token, encryption key, and
+security PIN; **no production credential works against staging and none of
+staging's work against production.**
+
+Break-glass access if the tunnel is down, using an SSM port-forward to the
+running task:
+
+```bash
+$env:AWS_PROFILE="netzer-process"
+npm run dashboard:tunnel     # then http://localhost:3000
+```
+
+After any deploy, confirm the app actually booted rather than trusting a green
+CloudFormation status:
+
+```bash
+aws logs tail /claudeclaw-staging/orchestrator --since 10m | Select-String "Refusing to start"
+```
+
+Secrets are created by CDK as `REPLACE_ME` placeholders **by design** and
+populated out of band; `cdk deploy` does not overwrite a populated secret. A
+container that logs `Refusing to start: required production config is missing or
+placeholder` means a secret was never populated, not that the deploy failed.
+
+---
 
 ## Cost
 
-A staging T1 deployment adds approximately (rates as of 2026-07):
+Tier 0 is about **$81/month**, dominated by the NAT gateway and one Fargate
+task. The daily cost cap comes only from `tier.dailyCostCapDefaultUsd` ($5/day
+at Tier 0) — `CCE_DAILY_COST_CAP_USD` in `.env.staging` is inert by design, so a
+stray shell variable cannot raise or lower it. Change it live through
+runtime-config `cost/daily_cap_usd`.
 
-| Resource | Monthly |
-|---|---|
-| 2x Fargate tasks (1 vCPU, 2GB, ARM64) | ~$60 |
-| ALB (low traffic) | ~$20 |
-| NAT Gateway (2 AZ) | ~$65 |
-| VPC interface endpoints (PrivateLink) | $0 by default, opt-in via `CCE_PRIVATE_ENDPOINTS=1`, then ~$175 (12 endpoints × 2 AZ × $0.01/AZ-hr) |
-| DDB on-demand, S3, KMS, Logs (idle) | ~$5–10 |
-| **Total fixed** | **~$150** (interface endpoints off; add ~$175 if enabled) |
+Never set `CCE_PRIVATE_ENDPOINTS=1` in staging: it adds roughly $175/month of
+VPC endpoints for no staging confidence.
 
-Plus Bedrock token spend if you actively use staging. The `CCE_DAILY_COST_CAP_USD=10` kill switch trips before runaway spend.
+Recalculate with `node scripts/cost-estimate.mjs`.
 
-## Teardown
+---
 
-If you ever need to delete the staging environment:
+## Deferred
 
-```bash
-# Reverse-order delete (compute before storage, etc.). CDK handles
-# dependency order if you use `cdk destroy CCE-STAGING-* --force`.
-cd /path/to/claudeclaw-enterprise   # your local repo root
-CCE_TIER=1 CDK_STACK_NAME=CCE-STAGING DOMAIN_NAME=staging.claudeclaw-enterprise.com \
-  npx cdk destroy "CCE-STAGING-*" --force
-```
-
-Retain-policy DDB tables and S3 buckets will survive the destroy and require manual deletion if you want a clean slate.
+- **Staging Slack and Telegram bots.** They need their own apps and webhook
+  secrets pointed at `staging.pgnos.ai`; until then those surfaces are
+  production-only and staging exercises the dashboard surface.
+- **NAT-free staging** (~$29.65/month saving) — touches shared networking that
+  production synthesizes from.

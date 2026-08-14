@@ -37,6 +37,7 @@ flowchart TD
 - Diamonds are operator decisions; the typed confirmation requires literally typing `destroy <account-id>` so a wrong-account teardown cannot happen on muscle memory.
 - The three bootstrap primitives (state bucket, deploy-lock table, private ECR repo) are owned by teardown, not `cdk destroy`, because they were created outside CDK.
 - KMS keys are treated as DEPENDENCIES, not leftovers: deleting a key before its encrypted data is exported is cryptographic erasure, so the gate defaults closed.
+- The SES `netzar-magic-link` configuration set and its ops-alerts event destination are created **out of band** (CLI, like the AgentCore gateways) and are not in the out-of-band catalog, so teardown neither inventories nor deletes them. They read the logs CMK via its `AllowSES` grant, so scheduling that key for deletion silently breaks bounce/complaint delivery before the config set itself is gone. Delete the event destination by hand, or expect it in the final-sweep residuals.
 - Break-glass exists so a lost state store never strands paid resources; deploy and rollback hard-require state, only teardown degrades.
 - Status: `scripts/teardown.ts` is fully implemented (with `scripts/lib/lifecycle/teardown-plan.ts` and `teardown-plan.test.ts` coverage); this diagram depicts the flow that code executes.
 - `npm run teardown -- --help` answers before any of this starts (`scripts/lib/help.ts`, shared by every lifecycle CLI): asking for help never reaches the inventory, the confirm, or any mutation.

@@ -1,10 +1,19 @@
 name: Deploy
 
-# Deploys are intentionally manual-only — click "Run workflow" in the
-# Actions tab, or use `gh workflow run deploy.yml`. This is the A5
+# PRODUCTION deploys are intentionally manual-only — click "Run workflow" in
+# the Actions tab, or use `gh workflow run deploy.yml`. This is the A5
 # approval gate: GitHub Free org plan does not allow required-reviewer
 # protection rules on private repos, so we substitute manual-dispatch.
+#
+# STAGING is continuous: a merge into `staging` deploys itself, so QA and
+# development fixes reach https://staging.pgnos.ai without a manual step. That
+# is safe to automate precisely because it is not production — the environment
+# is Tier 0, the ECS circuit breaker rolls a bad task back on its own, and the
+# source guard still refuses any staging deploy that is not from
+# refs/heads/staging. Production remains dispatch-plus-typed-confirmation.
 on:
+  push:
+    branches: [staging]
   workflow_dispatch:
     inputs:
       env:
@@ -16,7 +25,7 @@ on:
           - prod
           - staging
       tier:
-        description: 'Deploy tier (1/2/3) — must match env'
+        description: 'Deploy tier (0/1/2/3) — must match env. Ignored for staging, which is pinned to Tier 0.'
         required: false
         default: '3'
       confirm:
@@ -38,9 +47,14 @@ env:
   # Actions repository variable, never a tracked literal:
   #   gh variable set AWS_ACCOUNT_ID --body "<your-aws-account-id>"
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-  TARGET_ENV: ${{ github.event.inputs.env || 'prod' }}
+  # A push can only reach this workflow from `staging` (see the `on:` filter),
+  # so a push event is always a staging deploy. Dispatch keeps its old default.
+  TARGET_ENV: ${{ github.event_name == 'push' && 'staging' || github.event.inputs.env || 'prod' }}
   # env-specific values are resolved per-step from TARGET_ENV.
-  CCE_TIER: ${{ github.event.inputs.tier || '3' }}
+  # Staging is pinned to Tier 0 and ignores the `tier` input: the dispatch
+  # default is '3' (Enterprise, ~$306/mo), which a careless staging dispatch
+  # would otherwise provision. Production still honours the input.
+  CCE_TIER: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '0' || github.event.inputs.tier || '3' }}
 
 jobs:
   source-guard:
@@ -52,7 +66,10 @@ jobs:
 
       - name: Validate deployment source
         env:
-          TARGET_ENV: ${{ github.event.inputs.env }}
+          # TARGET_ENV is inherited from the workflow-level env block, which
+          # already resolves push -> staging. It is deliberately NOT overridden
+          # here: the previous `${{ github.event.inputs.env }}` override reached
+          # the guard as an empty string on a push and failed closed.
           GITHUB_REF: ${{ github.ref }}
         run: node scripts/ci/deploy-source-guard.mjs
 
@@ -74,9 +91,19 @@ jobs:
   deploy:
     name: Build + CDK Deploy + Smoke
     needs: [source-guard, verify]
-    if: inputs.confirm == 'deploy'
+    # A push to `staging` is its own approval; production still requires the
+    # typed confirmation.
+    if: github.event_name == 'push' || inputs.confirm == 'deploy'
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.env == 'staging' && 'staging' || 'production' }}
+    # MUST resolve the same way TARGET_ENV does: on a push the dispatch input
+    # is empty, and keying off it would select the `production` environment and
+    # hand a staging deploy production's variables.
+    # The condition is spelled out from the `github` context rather than reusing
+    # `env.TARGET_ENV`, because the `env` context is NOT available in
+    # `jobs.<job_id>.environment` — referencing it there makes the whole
+    # workflow file invalid, and GitHub reports that as a 0-second run failure
+    # with no jobs rather than as a syntax error.
+    environment: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && 'staging' || 'production' }}
     timeout-minutes: 60
     steps:
       - name: Resolve env-specific values
@@ -90,15 +117,27 @@ jobs:
             # already matches this shape via `claudeclaw-*-orchestrator`.
             echo "ecr_repo=claudeclaw-staging-orchestrator" >> "$GITHUB_OUTPUT"
             echo "stack_name=CCE-STAGING" >> "$GITHUB_OUTPUT"
-            echo "public_host=staging.claudeclaw-enterprise.com" >> "$GITHUB_OUTPUT"
+            # Staging is infra-only. DOMAIN_NAME MUST stay empty: there is no
+            # Route 53 hosted zone and no ACM certificate in this account, so a
+            # non-empty value sends compute-stack.ts into HostedZone.fromLookup
+            # and the deploy fails at synth. It would also flip the ALB
+            # internet-facing. staging.pgnos.ai is published by a Cloudflare
+            # Tunnel, never by the ALB.
+            echo "public_host=" >> "$GITHUB_OUTPUT"
             echo "cluster=claudeclaw-staging-cluster" >> "$GITHUB_OUTPUT"
             echo "service=claudeclaw-staging-service" >> "$GITHUB_OUTPUT"
+            # Suffix goes in the middle, matching buildPublicTunnelSecretName('staging').
+            echo "tunnel_secret=claudeclaw-staging-public-tunnel" >> "$GITHUB_OUTPUT"
           else
             echo "ecr_repo=claudeclaw-orchestrator" >> "$GITHUB_OUTPUT"
             echo "stack_name=CCE" >> "$GITHUB_OUTPUT"
-            echo "public_host=claudeclaw-enterprise.com" >> "$GITHUB_OUTPUT"
+            # Empty for the same reason as staging: no Route 53 zone and no ACM
+            # cert in this account. app.pgnos.ai is published by the Cloudflare
+            # Tunnel and the live prod ALB is `internal`.
+            echo "public_host=" >> "$GITHUB_OUTPUT"
             echo "cluster=claudeclaw-cluster" >> "$GITHUB_OUTPUT"
             echo "service=claudeclaw-service" >> "$GITHUB_OUTPUT"
+            echo "tunnel_secret=claudeclaw-public-tunnel" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout
@@ -181,11 +220,45 @@ jobs:
             -f Dockerfile \
             .
 
+      # Mirrors the readiness gate in scripts/deploy.ts. The cloudflared
+      # connector is an ESSENTIAL container that reads the `token` field of the
+      # tunnel secret, so attaching it before a real token exists means ECS
+      # cannot resolve the secret, the container never starts, and the rollout
+      # fails. First deploy therefore creates the secret alone; the connector
+      # joins on a later deploy, once `npm run public:setup` has written the
+      # token. Only the EXISTENCE of the ready stage is checked — never the
+      # value behind it. Any failure here (including AccessDenied) leaves the
+      # output empty, i.e. "not ready", which is the safe direction.
+      - name: Public connector readiness
+        id: pubready
+        if: vars.CCE_PUBLIC_ACCESS == '1'
+        env:
+          SECRET_ID: ${{ steps.cfg.outputs.tunnel_secret }}
+        run: |
+          set -uo pipefail
+          if aws secretsmanager describe-secret \
+               --secret-id "$SECRET_ID" \
+               --region "$AWS_REGION" \
+               --query VersionIdsToStages \
+               --output text 2>/dev/null | grep -q 'CCE-PUBLIC-READY'; then
+            echo "ready=1" >> "$GITHUB_OUTPUT"
+            echo "Connector token present: attaching the cloudflared sidecar."
+          else
+            echo "ready=" >> "$GITHUB_OUTPUT"
+            echo "No connector token yet for $SECRET_ID: deploying the secret only."
+            echo "Run 'npm run public:setup -- --env=staging', then re-run this deploy."
+          fi
+
       - name: CDK deploy
         env:
           CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
           DOMAIN_NAME: ${{ steps.cfg.outputs.public_host }}
+          # Both environments are infra-only: with a blank DOMAIN_NAME this
+          # resolves privateAccessOnly, so the ALB stays INTERNAL. Matches what
+          # prod already runs; blank here resolved to `chat` and would have
+          # flipped it.
+          CCE_DEPLOY_MODE: infra-only
           CDK_STACK_NAME: ${{ steps.cfg.outputs.stack_name }}
           DEPLOY_TIER: ${{ env.CCE_TIER }}
           CCE_TIER: ${{ env.CCE_TIER }}
@@ -196,6 +269,25 @@ jobs:
           # Pin the task definition to the image we just pushed (never `latest`).
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
           CCE_CICD_ENABLED: '1'
+          CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
+          # Must be forwarded or a CI deploy silently UNDOES the public
+          # dashboard: synth resolves the feature off, drops the cloudflared
+          # container so app.pgnos.ai stops serving, and removes the tunnel
+          # secret from the template. That secret is RETAIN with a fixed name,
+          # so it survives as an orphan and the next flagged deploy fails with
+          # "already exists". The smoke test would not catch it: it curls the
+          # ALB host, not the published hostname.
+          CCE_PUBLIC_ACCESS: ${{ vars.CCE_PUBLIC_ACCESS }}
+          CCE_PUBLIC_HOSTNAME: ${{ vars.CCE_PUBLIC_HOSTNAME }}
+          CCE_PUBLIC_CONNECTOR_READY: ${{ steps.pubready.outputs.ready }}
+          # Link base for magic-link emails; must match the published hostname.
+          CCE_DASHBOARD_URL: ${{ vars.CCE_DASHBOARD_URL }}
+          # Must be forwarded for the same reason as CCE_PUBLIC_ACCESS above:
+          # compute-stack.ts reads `process.env.X ?? ''`, and invite-email.ts
+          # treats a blank sender as skippedReason:'unconfigured'. Omitting
+          # these switches magic-link email OFF with every health check green.
+          CCE_EMAIL_FROM: ${{ vars.CCE_EMAIL_FROM }}
+          CCE_SES_CONFIG_SET: ${{ vars.CCE_SES_CONFIG_SET }}
           # OIDC trust is fail-closed: synth errors unless the repo identity
           # and the exact deploy subjects are explicit. Derived from the repo
           # running the workflow, never a hardcoded default.
@@ -227,9 +319,25 @@ jobs:
 
       - name: Smoke test (health)
         env:
-          PUBLIC_HOST: ${{ steps.cfg.outputs.public_host }}
+          # Once the connector is attached, the environment IS reachable by
+          # hostname even though DOMAIN_NAME is blank — Cloudflare publishes it,
+          # not the ALB. So curl the published hostname when the sidecar is
+          # live, and fall back to the ALB host (prod) or nothing (first
+          # staging deploy, before the token exists).
+          PUBLIC_HOST: ${{ steps.pubready.outputs.ready == '1' && vars.CCE_PUBLIC_HOSTNAME || steps.cfg.outputs.public_host }}
         run: |
           set -euo pipefail
+          # infra-only environments (staging) have no public hostname to curl.
+          # The ECS "wait services-stable" step above is the real gate: it only
+          # returns once the task passes its container health check and the
+          # target group reports healthy. Deeper checks go through the SSM
+          # tunnel (npm run dashboard:tunnel).
+          if [ -z "$PUBLIC_HOST" ]; then
+            echo "No public hostname for this environment (infra-only)."
+            echo "ECS service reached steady state; health verified via the"
+            echo "container health check and target group."
+            exit 0
+          fi
           echo "GET /health (with retry — CloudFront origin-header propagation can take ~60-90s after a Compute stack update)"
           attempts=0
           max_attempts=8

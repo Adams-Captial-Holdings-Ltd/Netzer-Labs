@@ -1059,21 +1059,36 @@ The table below is what those statements are resolved against.
 | `feature/*`, `fix/*`, `chore/*` | nothing | — | — | local only (this document) |
 | `development` | nothing | — | — | CI runs tests + hermetic `cdk synth`; no deploy |
 | `qa` | **nothing** | — | — | review gate only — there is no QA AWS environment |
-| `staging` | staging | `CCE-STAGING` | `claudeclaw-staging-*` | `deploy.yml`, manual dispatch, `env: staging` |
-| `production` | production | `CCE` | `claudeclaw-*` | `deploy.yml`, manual dispatch, `env: prod` |
+| `staging` | staging | `CCE-STAGING` | `claudeclaw-staging-*` | `deploy.yml`, **automatic on push to `staging`** (or manual dispatch, `env: staging`) |
+| `production` | production | `CCE` | `claudeclaw-*` | `deploy.yml`, manual dispatch only, `env: prod` |
 | `hotfix/*` | nothing until merged | — | — | branch from `production`, merge to `production`, then backport |
 
 Verified in `.github/workflows/deploy.yml` (the `env` input accepts only `prod`
 and `staging`; `CCE_NAME_SUFFIX` is `staging` or empty) and
-`infra/lib/constants.ts`. **Deployment is never automatic** — `deploy.yml` is
+`infra/lib/constants.ts`.
+
+**Production deployment is never automatic** — for `env: prod`, `deploy.yml` is
 `workflow_dispatch` only and requires typing `deploy` to confirm. A merge to
 `production` ships nothing on its own.
 
-Two consequences worth stating plainly, because both have surprised people:
+**Staging is continuous.** A push to `staging` (i.e. merging the `qa → staging`
+promotion PR) deploys staging on its own, so development and QA fixes reach
+`https://staging.pgnos.ai` without anyone dispatching a workflow. Automating
+this environment and not production is deliberate: staging is Tier 0, the ECS
+deployment circuit breaker rolls a failed task back without human action, and
+`scripts/ci/deploy-source-guard.mjs` still refuses any staging deploy whose ref
+is not `refs/heads/staging`. Staging also ignores the workflow's `tier` input
+and is pinned to Tier 0, so a careless dispatch cannot provision Enterprise
+tier.
+
+Three consequences worth stating plainly, because all three have surprised
+people:
 
 - `qa` is a code-promotion gate, not a deployment target. Work sitting on `qa`
   is not running anywhere.
 - Merging to `production` does not deploy. Someone must dispatch `deploy.yml`.
+- Merging to `staging` **does** deploy. Treat the `qa → staging` PR as the
+  release action for that environment, not as a bookkeeping step.
 
 ### Long-lived branches
 
@@ -1105,8 +1120,9 @@ Update this document in the same change whenever you alter:
 - authentication behaviour
 - testing procedures
 - the branch-to-environment mapping above (if a branch or AWS environment is
-  added or removed, update that table in the same change — a stale mapping is
-  worse than none, because handoffs are written against it)
+  added or removed, **or if what triggers a deploy changes**, update that table
+  in the same change — a stale mapping is worse than none, because handoffs are
+  written against it)
 
 The feature documentation rules themselves are **not** maintained here. They
 live in the [feature knowledge framework](docs/features/README.md); change them

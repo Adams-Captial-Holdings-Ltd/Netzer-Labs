@@ -1799,15 +1799,23 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           for (const k of [...kbConfirmations, ...acks]) {
             await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
           }
-          // Generated images: the browser renders the presigned URL directly
-          // (parity with Telegram sendPhoto / Slack file upload).
+          // Generated media: the browser renders the presigned URL directly
+          // (parity with Telegram sendPhoto / Slack file upload). Documents go
+          // out as a distinct `artifact` event so the Chat tab renders a
+          // download card rather than a broken <img> — and, critically, so the
+          // usable link never depends on the model reproducing it in its reply.
           for (const m of result.media ?? []) {
-            if (m.presignedUrl) {
-              await stream.writeSSE({
-                event: 'image',
-                data: JSON.stringify({ url: m.presignedUrl, caption: m.caption ?? '' }),
-              });
-            }
+            if (!m.presignedUrl) continue;
+            await stream.writeSSE({
+              event: m.kind === 'artifact' ? 'artifact' : 'image',
+              data: JSON.stringify({
+                url: m.presignedUrl,
+                caption: m.caption ?? '',
+                ...(m.kind === 'artifact'
+                  ? { name: m.caption ?? 'document', contentType: m.contentType }
+                  : {}),
+              }),
+            });
           }
         }
         // Guardrail-blocked exchanges are not persisted; a kept block notice
