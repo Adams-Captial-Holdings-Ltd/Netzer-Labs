@@ -131,7 +131,10 @@ jobs:
           else
             echo "ecr_repo=claudeclaw-orchestrator" >> "$GITHUB_OUTPUT"
             echo "stack_name=CCE" >> "$GITHUB_OUTPUT"
-            echo "public_host=claudeclaw-enterprise.com" >> "$GITHUB_OUTPUT"
+            # Empty for the same reason as staging: no Route 53 zone and no ACM
+            # cert in this account. app.pgnos.ai is published by the Cloudflare
+            # Tunnel and the live prod ALB is `internal`.
+            echo "public_host=" >> "$GITHUB_OUTPUT"
             echo "cluster=claudeclaw-cluster" >> "$GITHUB_OUTPUT"
             echo "service=claudeclaw-service" >> "$GITHUB_OUTPUT"
             echo "tunnel_secret=claudeclaw-public-tunnel" >> "$GITHUB_OUTPUT"
@@ -251,10 +254,11 @@ jobs:
           CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
           DOMAIN_NAME: ${{ steps.cfg.outputs.public_host }}
-          # Staging mirrors prod's posture: blank DOMAIN_NAME + infra-only
-          # resolves privateAccessOnly, so the ALB is synthesized INTERNAL in
-          # private subnets. Left blank for prod, which keeps today's behaviour.
-          CCE_DEPLOY_MODE: ${{ github.event.inputs.env == 'staging' && 'infra-only' || '' }}
+          # Both environments are infra-only: with a blank DOMAIN_NAME this
+          # resolves privateAccessOnly, so the ALB stays INTERNAL. Matches what
+          # prod already runs; blank here resolved to `chat` and would have
+          # flipped it.
+          CCE_DEPLOY_MODE: infra-only
           CDK_STACK_NAME: ${{ steps.cfg.outputs.stack_name }}
           DEPLOY_TIER: ${{ env.CCE_TIER }}
           CCE_TIER: ${{ env.CCE_TIER }}
@@ -278,6 +282,12 @@ jobs:
           CCE_PUBLIC_CONNECTOR_READY: ${{ steps.pubready.outputs.ready }}
           # Link base for magic-link emails; must match the published hostname.
           CCE_DASHBOARD_URL: ${{ vars.CCE_DASHBOARD_URL }}
+          # Must be forwarded for the same reason as CCE_PUBLIC_ACCESS above:
+          # compute-stack.ts reads `process.env.X ?? ''`, and invite-email.ts
+          # treats a blank sender as skippedReason:'unconfigured'. Omitting
+          # these switches magic-link email OFF with every health check green.
+          CCE_EMAIL_FROM: ${{ vars.CCE_EMAIL_FROM }}
+          CCE_SES_CONFIG_SET: ${{ vars.CCE_SES_CONFIG_SET }}
           # OIDC trust is fail-closed: synth errors unless the repo identity
           # and the exact deploy subjects are explicit. Derived from the repo
           # running the workflow, never a hardcoded default.

@@ -3,13 +3,22 @@ feature: pgnos-public-dashboard
 document_role: handoff
 status: current
 observed_at: 2026-08-14
-as_of_commit: cc905b6e88a27b15976e891f3e52bac5e7586f03
+as_of_commit: eaa9e61ad99284582beebcb82bab491182be1e3f
 ---
 
 # pgnos public dashboard handoff
 
-- Branch: `fix/staging-public-url`; merge target: `development`, then the
-  `development → qa → staging` ladder.
+- Branch: `fix/prod-deploy-domain-and-email`; merge target: `development`, then
+  the full `development → qa → staging → production` ladder.
+- **Production has never been deployed through `deploy.yml`.** `production` is
+  52 files behind `development`; every prior production deploy ran from a
+  laptop. Two `deploy.yml` defects blocked the CI path and are fixed on the
+  branch above: prod's `DOMAIN_NAME` was `claudeclaw-enterprise.com` (the
+  account has no Route 53 zone and no ACM certificate, and it would flip the
+  internal ALB), and `CCE_EMAIL_FROM` / `CCE_SES_CONFIG_SET` were not forwarded,
+  so a CI deploy would have gone green with magic-link email silently off.
+  `development`, `qa` and `staging` are content-identical; only the production
+  rung was broken.
 - Scope widened on 2026-08-14: this feature is no longer production-only. The
   same machinery now publishes **`staging.pgnos.ai`**, which required making
   every Cloudflare-facing name suffix-aware.
@@ -96,12 +105,12 @@ path-separator assertion in `rollback-classes.test.ts`).
 | Command | Result |
 |---|---|
 | `npm run typecheck` | pass |
-| `npm test` | **5 files / 1 test failed â€” identical to baseline**, 1975 passed |
+| `npm test` | **5 files / 1 test failed â€” identical to baseline**, 2010 passed |
 | `npm run build` | pass |
 | `npm --prefix web run typecheck` | pass |
-| `npm --prefix web run build` | pass (9.05s) |
-| integration suite vs Floci | **31/32**, the one documented `ListSecrets` emulator gap |
-| `node scripts/ci/docs-links.mjs` | pass (438 internal links) |
+| `npm --prefix web run build` | pass (11.52s) |
+| integration suite vs Floci | **38/39**, the one documented `ListSecrets` emulator gap |
+| `node scripts/ci/docs-links.mjs` | pass (494 internal links) |
 | `node scripts/ci/feature-knowledge.mjs` | pass |
 | `git diff --check` | clean |
 
@@ -115,20 +124,32 @@ was invoked instead.
 
 ## Smallest next action
 
-Promote `development → qa → staging`. The push to `staging` auto-deploys and
-creates `claudeclaw-staging-public-tunnel` holding `REPLACE_ME` with no sidecar
-(expected). Then run `npm run public:setup -- --env=staging` and let the next
-deploy attach the connector.
+Merge `fix/prod-deploy-domain-and-email` into `development`, then walk the full
+ladder. The `qa → staging` push auto-deploys and is the real proof that the
+fixed workflow works before production sees it: confirm the staging task
+definition comes back carrying `CCE_EMAIL_FROM` and `CCE_SES_CONFIG_SET`. Then
+`staging → production`, then dispatch `deploy.yml` with `env: prod`,
+**`tier: 2`** (the dispatch default is `3`), `confirm: deploy`.
 
-Separately, and unrelated to staging: reply to AWS support case
+After that deploy lands, create the SES event destination on the
+`netzar-magic-link` configuration set — it needs the `AllowSES` KMS grant from
+this branch to exist first — and subscribe an address to
+`claudeclaw-ops-alerts`, which has none.
+
+Separately, and blocking real invitations: reply to AWS support case
 `178661777600815` to appeal the SES sandbox denial. Until then, verify one
-recipient address in SES to exercise the invite flow.
+recipient address in SES to exercise the invite flow. Note `pgnos.ai` has **no
+MX record**, so no `@pgnos.ai` address can receive mail.
 
 ## Session index
 
 - [2026-08-14 — staging public URL](handoffs/2026-08-14-staging-public-url.md):
   pushed the feature branch, merged it through PR #46, made every
   Cloudflare-facing name suffix-aware, and made staging deploy on merge.
+- [2026-08-14 — production deploy ladder and SES email](handoffs/2026-08-14-prod-deploy-ladder-and-ses-email.md):
+  found and fixed the two `deploy.yml` defects that would have broken the first
+  CI production deploy, added the KMS grant SES needs for bounce telemetry, and
+  created the `netzar-magic-link` configuration set. Not deployed.
 
 Authorities: [README](README.md),
 [design spec](../../superpowers/specs/2026-08-11-netzar-os-pgnos-public-dashboard-email-design.md),

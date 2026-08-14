@@ -32,6 +32,7 @@ flowchart LR
   end
 
   CWLOGS["CloudWatch log groups + ops-alerts SNS topic (CCE-Observability)"]
+  SESEV["SES magic-link bounce/complaint events"]
 
   subgraph sm["Secrets Manager, /claudeclaw/*"]
     SURFSEC["surface secrets: slack, telegram, dashboard"]
@@ -48,11 +49,13 @@ flowchart LR
   DATAKEY --> SURFSEC
   CURATEDKEY --> CURATEDB
   LOGSKEY --> CWLOGS
+  SESEV -->|publishes via logs key| CWLOGS
 ```
 
 ## Legend
 
 - Arrows mean "encrypts". The data key is the broadest: DDB tables, the config/raw/vectors-staging buckets, the secrets, and the extensions stack all ride it. The curated key covers only the curated bucket; the logs key covers CloudWatch log groups and the ops-alerts SNS topic, NOT the logs bucket.
+- Because the ops-alerts topic is encrypted with the logs key, every service that publishes to it needs its own grant in that key's policy, not just permission on the topic. `storage-stack.ts` carries `AllowSNS` and `AllowSES`; the SES grant (scoped by `aws:SourceAccount`) is what lets the magic-link configuration set deliver bounce and complaint events. Without it `CreateConfigurationSetEventDestination` fails with "Access denied to KMS key for SNS topic", even though the topic policy already allows in-account publish.
 - The logs and audit-lock buckets both use S3-managed encryption (SSE-S3), not KMS, but for different reasons. The logs bucket is SSE-S3 because it is the server-access-log destination for the other buckets and S3 server-access-log delivery cannot write to SSE-KMS buckets (`storage-stack.ts` says so at the `LogsBucket` construct). The audit-lock bucket is not a server-access-log target; it is SSE-S3 so its WORM retention stays readable independently of the customer-managed KMS keys, which teardown can schedule for cryptographic erasure — a deleted data key must never render the immutable audit trail unreadable. Its Object Lock governance retention (2555 days) also makes it an intentional residual at teardown.
 - Vendor API keys (Tavily/Brave/Exa/Serper/Gemini) live in the `vendor-keys` secret, never in plain task-def env (IaC readiness item 5).
 - The state bucket and deploy-lock table are the bootstrap primitives from `scripts/lib/lifecycle/bootstrap-state.ts`; they exist before any CDK stack and are owned by teardown, not `cdk destroy`.
