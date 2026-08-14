@@ -1,7 +1,7 @@
-<!-- drift-gate: verified against PR #104; mapped-source changes were dead-import removals only, no depicted flow changed. -->
+<!-- drift-gate: verified against the pgnos public-dashboard merge; a depicted flow DID change and the diagram was updated: an opt-in `cloudflared` sidecar now shares the task network namespace and forwards a Cloudflare Tunnel to the orchestrator on localhost:3000, bypassing the ALB entirely. Prior verification: PR #104 — mapped-source changes were dead-import removals only. -->
 # Architecture, compute view
 
-> A user talks to the system through Slack, Telegram, or the browser dashboard, and every one of those paths lands on the same Application Load Balancer in front of a Fargate orchestrator service. At higher tiers, CloudFront and WAF sit in front of the ALB as the hardened edge; at Tier 3 the ALB only answers requests carrying CloudFront's secret origin header. The orchestrator runs the agent loop against Bedrock, and a separate consolidation worker task (same image, different command) is spawned nightly by a Lambda.
+> A user talks to the system through Slack, Telegram, or the browser dashboard. Those paths land either on the Application Load Balancer in front of a Fargate orchestrator service, or — in the opt-in public posture — on a Cloudflare Tunnel whose `cloudflared` sidecar runs inside the task itself and forwards to the orchestrator over localhost, never touching the ALB. At higher tiers, CloudFront and WAF sit in front of the ALB as the hardened edge; at Tier 3 the ALB only answers requests carrying CloudFront's secret origin header. The orchestrator runs the agent loop against Bedrock, and a separate consolidation worker task (same image, different command) is spawned nightly by a Lambda.
 
 ```mermaid
 flowchart TD
@@ -30,7 +30,10 @@ flowchart TD
   subgraph vpc["VPC (CCE-Network)"]
     ALB["ALB claudeclaw-alb, HTTPS 443"]
     ORIGIN{"T3: X-CloudFront-Origin header?"}
-    SVC["Fargate orchestrator service (Hono server, agent loop)"]
+    subgraph task["Fargate task (shared network namespace)"]
+      SIDECAR["cloudflared sidecar (opt-in, CCE_PUBLIC_ACCESS=1)"]
+      SVC["Fargate orchestrator service (Hono server, agent loop)"]
+    end
     WORKER["Consolidation worker task (same image, worker command)"]
   end
 
@@ -50,13 +53,19 @@ flowchart TD
 
   TUNNEL["infra-only mode: ALB is INTERNAL, access via SSM port-forward tunnel"]
   TUNNEL -.-> ALB
+
+  CFTUNNEL["Cloudflare Tunnel (remotely managed, e.g. app.pgnos.ai)"]
+  BROWSER -.->|"HTTPS, TLS terminates at Cloudflare"| CFTUNNEL
+  CFTUNNEL -.->|"outbound-only connector, no AWS ingress"| SIDECAR
+  SIDECAR -.->|"http://localhost:3000, never via the ALB"| SVC
 ```
 
 ## Legend
 
 - Solid arrows are the live request path; the dotted arrow marks the infra-only variant.
 - **Edge is tier-gated**: T0/T1 have no WAF or CloudFront (requests hit the ALB directly), T2 adds regional WAFv2, T3 adds CloudFront plus a CloudFront-scoped WAF. The `X-CloudFront-Origin` listener rule exists only at T3; at lower tiers the HTTPS listener forwards directly.
-- **infra-only variant** (`CCE_DEPLOY_MODE=infra-only`, no domain): the ALB is synthesized internal with no public listener, and the only access path is `npm run dashboard:tunnel` (SSM port-forward to the running task).
+- **infra-only variant** (`CCE_DEPLOY_MODE=infra-only`, no domain): the ALB is synthesized internal with no public listener, and the break-glass access path is `npm run dashboard:tunnel` (SSM port-forward to the running task).
+- **public variant** (`CCE_PUBLIC_ACCESS=1`, layered on infra-only): a `cloudflared` sidecar joins the task and dials out to a remotely managed Cloudflare Tunnel, which publishes the hostname in `CCE_PUBLIC_HOSTNAME`. Because the sidecar shares the task network namespace it reaches the orchestrator on `http://localhost:3000`, so **the ALB is not in the public request path at all** and no AWS ingress is added: no public task IP, no public listener, no security-group hole. The connector is `essential`, reads its token from the `token` field of the `<app>-public-tunnel` secret, and is attached only after that token exists (see the readiness gate in `scripts/deploy.ts`).
 - The orchestrator service and the consolidation worker share one ECR image; the worker runs `node dist/workers/consolidation-worker.js`. Task counts scale per tier (1 task at T0 up to 20 max at T3).
 - The task env carries one `TABLE_*` name per DynamoDB table (now including `TABLE_SPEND_LEDGER`, the atomic daily spend ledger); adding a table means a dynamo-stack construct + an iam-stack grant + a compute-stack env entry, all three in one PR.
 - Secrets inject at task start (ECS `secrets:` mapping): surface tokens, dashboard token, app encryption key, guardrail id/version, vendor keys, and the emergency kill phrase (`kill_phrase` field of the dashboard secret; any chat message containing it trips the panic freeze in `src/agent/agent-loop.ts`).
