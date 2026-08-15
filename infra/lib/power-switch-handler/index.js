@@ -80,6 +80,9 @@ const WAKE_DESIRED = parseInt(E.WAKE_DESIRED || '3', 10);
 const HOLD_MS = parseInt(E.HOLD_HOURS || '6', 10) * 3600 * 1000;
 const LEASE_MS = parseInt(E.LEASE_MINUTES || '15', 10) * 60 * 1000;
 const MUTED_ALARMS = (E.MUTED_ALARMS || '').split(',').map((s) => s.trim()).filter(Boolean);
+// Exact literal '1', matching every other flag in this system: a stray 'true'
+// or 'false' must not be able to authorise taking the connectors down.
+const AUTO_PAUSE_FORBIDDEN = E.AUTO_PAUSE_FORBIDDEN === '1';
 const HEALTH_URL = E.HEALTH_URL || '';
 const DASHBOARD_URL = E.DASHBOARD_URL || '';
 const COST_NOTE = E.COST_NOTE || '';
@@ -381,6 +384,17 @@ async function doHold(by, hours) {
   return { ok: true, keepAwakeUntil: until };
 }
 async function doAutoPause() {
+  // Refuse before reading any state. A pause sets desiredCount=0, which removes
+  // every cloudflared connector and makes the published hostname serve
+  // Cloudflare 1033 with no wake schedule to undo it. Production sets
+  // AUTO_PAUSE_FORBIDDEN=1, and this check is deliberately independent of the
+  // schedule's own DISABLED state so that console drift, a stale CloudFormation
+  // state, or a future code change re-arming the schedule still cannot take
+  // production offline. Manual pause through the Function URL is unaffected.
+  if (AUTO_PAUSE_FORBIDDEN) {
+    log({ msg: 'auto-pause refused', reason: 'AUTO_PAUSE_FORBIDDEN is set for this environment' });
+    return { ok: true, mode: 'refused', note: 'auto-pause is forbidden in this environment' };
+  }
   const s = await getState();
   if (s.mode === 'paused' || s.mode === 'pausing') return { ok: true, mode: s.mode, note: 'already paused' };
   if (s.keepAwakeUntil && Date.now() < s.keepAwakeUntil) {

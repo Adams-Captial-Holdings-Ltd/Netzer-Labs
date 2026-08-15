@@ -17,6 +17,7 @@ import { CodeBuildStack } from '../lib/codebuild-stack.js';
 import { CostGuardrailsStack } from '../lib/cost-guardrails-stack.js';
 import { PowerSwitchStack } from '../lib/power-switch-stack.js';
 import { DemoResetStack } from '../lib/demo-reset-stack.js';
+import { APP_NAME_SUFFIX } from '../lib/constants.js';
 import type { DeployTier } from '../lib/constants.js';
 
 const app = new App();
@@ -92,6 +93,12 @@ const observability = new ObservabilityStack(app, `${stackPrefix}-Observability`
   ...baseProps,
   logsKey: storage.logsKey,
   logsBucket: storage.logsBucket,
+  // Outside-in reachability probe. Same hostname the Cloudflare tunnel
+  // publishes, so the probe fails exactly when users see Error 1033.
+  publicHostname: process.env.CCE_PUBLIC_HOSTNAME?.trim() || undefined,
+  // Ops alert destination. The topic existed with zero subscribers until
+  // 2026-08-15, so every alarm published into a void.
+  opsAlertEmail: process.env.CCE_OPS_ALERT_EMAIL?.trim() || undefined,
 });
 
 // Security stack: WAFv2 only provisioned for tier >= 2 (otherwise the
@@ -195,6 +202,15 @@ const costGuardrails = new CostGuardrailsStack(app, `${stackPrefix}-CostGuardrai
 // cannot strand the very thing that brings prod back.
 const powerSwitch = new PowerSwitchStack(app, `${stackPrefix}-PowerSwitch`, {
   ...baseProps,
+  // Nightly auto-pause is OFF unless an environment explicitly arms it, and
+  // production can never arm it — PowerSwitchStack throws at synth if it tries.
+  // A pause sets desiredCount=0, which removes every cloudflared connector and
+  // serves Cloudflare 1033 until a human calls wake through the Function URL;
+  // there is no wake schedule. Staging may opt in with
+  // CCE_POWER_AUTO_PAUSE_ENABLED=1, matching the fail-closed convention used by
+  // CCE_CODEBUILD_ENABLED and CCE_DEMO_RESET_ENABLED below.
+  autoPauseEnabled:
+    APP_NAME_SUFFIX !== '' && process.env.CCE_POWER_AUTO_PAUSE_ENABLED === '1',
   // Prefix, not exact name: the CDK-generated alarm name carries a random
   // suffix. This alarm is treatMissingData=BREACHING, so it fires the whole
   // time the service is intentionally at 0 tasks — mute it during a pause.
