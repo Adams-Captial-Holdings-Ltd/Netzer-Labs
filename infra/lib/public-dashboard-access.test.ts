@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolvePublicDashboardAccess,
+  assertPublicEntrypointRenderable,
   PUBLIC_DEFAULT_HOSTNAME,
   PUBLIC_TUNNEL_NAME,
   buildPublicTunnelName,
@@ -213,5 +214,79 @@ describe('environment isolation', () => {
     const cfg = resolvePublicDashboardAccess({ ...on, CCE_NAME_SUFFIX: '' });
     expect(cfg.enabled).toBe(true);
     if (cfg.enabled) expect(cfg.hostname).toBe(PUBLIC_DEFAULT_HOSTNAME);
+  });
+});
+
+/**
+ * Regression cover for the 2026-08-14 outage.
+ *
+ * The two-phase gate (deploy #1 creates an empty secret, `public:setup` fills
+ * it, deploy #2 attaches the connector) is correct for a FIRST deploy and
+ * catastrophic for a LIVE one. On 2026-08-14 the CI readiness probe ran at
+ * 15:54:05 UTC — six minutes before the same deploy granted it
+ * `secretsmanager:DescribeSecret` at 16:00:04 — and `2>/dev/null` turned the
+ * resulting AccessDeniedException into "not ready". CloudFormation then removed
+ * the cloudflared sidecar from a healthy production task, reported
+ * UPDATE_COMPLETE, and app.pgnos.ai served Cloudflare 1033 for nine hours.
+ *
+ * The invariant locked down here: an environment that DECLARES a public
+ * hostname may synthesize without a connector only when a human has said so in
+ * as many words. An unreadable probe must stop the deploy, never quietly
+ * demolish the only public entrypoint.
+ */
+describe('assertPublicEntrypointRenderable', () => {
+  const on = {
+    CCE_PUBLIC_ACCESS: '1',
+    CCE_DEPLOY_MODE: 'infra-only',
+    DOMAIN_NAME: '',
+  };
+
+  it('is a no-op when the feature is off', () => {
+    const cfg = resolvePublicDashboardAccess({ CCE_PUBLIC_ACCESS: '0' });
+    expect(() => assertPublicEntrypointRenderable(cfg, {})).not.toThrow();
+  });
+
+  it('passes when the connector is ready', () => {
+    const cfg = resolvePublicDashboardAccess(on);
+    expect(() =>
+      assertPublicEntrypointRenderable(cfg, { ...on, CCE_PUBLIC_CONNECTOR_READY: '1' }),
+    ).not.toThrow();
+  });
+
+  it('THROWS when the feature is on but the connector is not ready', () => {
+    const cfg = resolvePublicDashboardAccess(on);
+    expect(() =>
+      assertPublicEntrypointRenderable(cfg, { ...on, CCE_PUBLIC_CONNECTOR_READY: '' }),
+    ).toThrow(/no connector/);
+  });
+
+  it('names the hostname it is refusing to take offline', () => {
+    const cfg = resolvePublicDashboardAccess({ ...on, CCE_PUBLIC_HOSTNAME: 'app.pgnos.ai' });
+    expect(() => assertPublicEntrypointRenderable(cfg, on)).toThrow(/app\.pgnos\.ai/);
+  });
+
+  it('allows the secret-only first deploy ONLY behind an explicit opt-in', () => {
+    const cfg = resolvePublicDashboardAccess(on);
+    expect(() =>
+      assertPublicEntrypointRenderable(cfg, { ...on, CCE_PUBLIC_BOOTSTRAP: '1' }),
+    ).not.toThrow();
+  });
+
+  it('treats the bootstrap opt-in as an exact literal, like every other flag here', () => {
+    const cfg = resolvePublicDashboardAccess(on);
+    for (const value of ['true', 'yes', '0', ' 1', '']) {
+      expect(() =>
+        assertPublicEntrypointRenderable(cfg, { ...on, CCE_PUBLIC_BOOTSTRAP: value }),
+      ).toThrow();
+    }
+  });
+
+  it('does not accept a ready flag that is merely truthy', () => {
+    const cfg = resolvePublicDashboardAccess(on);
+    for (const value of ['true', 'yes', ' 1']) {
+      expect(() =>
+        assertPublicEntrypointRenderable(cfg, { ...on, CCE_PUBLIC_CONNECTOR_READY: value }),
+      ).toThrow();
+    }
   });
 });
