@@ -1253,6 +1253,13 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // connector may only join the task once its token actually exists.
     CCE_PUBLIC_CONNECTOR_READY: env.CCE_PUBLIC_CONNECTOR_READY ?? '',
     CCE_WARP_PRIVATE_HOSTNAME: env.CCE_WARP_PRIVATE_HOSTNAME ?? '',
+    // Ops alert destination. This bag is an ALLOWLIST, so a variable that is
+    // set in .env but missing here never reaches synth. That is exactly what
+    // happened on the 2026-08-15 staging deploy: CCE_OPS_ALERT_EMAIL was set
+    // in .env.staging, the deploy succeeded, every outage alarm was created —
+    // and the SNS topic still had zero subscribers, because the value never
+    // crossed into the cdk child process.
+    CCE_OPS_ALERT_EMAIL: env.CCE_OPS_ALERT_EMAIL ?? '',
     CCE_CICD_ENABLED: env.CCE_CICD_ENABLED ?? '',
     CCE_CODEBUILD_ENABLED: env.CCE_CODEBUILD_ENABLED ?? '',
     // Opt-in IAM-copilot write grant (default off). Set CCE_IAM_COPILOT_WRITE=1
