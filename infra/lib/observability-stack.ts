@@ -2,6 +2,11 @@ import { Stack, RemovalPolicy, Duration, CfnOutput } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { LogGroup, RetentionDays, MetricFilter, FilterPattern } from 'aws-cdk-lib/aws-logs';
 import { Topic } from 'aws-cdk-lib/aws-sns';
+import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
+import { Function, Runtime, Code } from 'aws-cdk-lib/aws-lambda';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
+import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { Alarm, ComparisonOperator, TreatMissingData, Metric } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { Trail, ReadWriteType } from 'aws-cdk-lib/aws-cloudtrail';
@@ -18,11 +23,36 @@ import {
   LogQueryWidget,
   LogQueryVisualizationType,
 } from 'aws-cdk-lib/aws-cloudwatch';
-// aws-events kept out — see canary note below.
+// aws-events is used by the outside-in public endpoint probe below. The older
+// note here said it was kept out on purpose: that applied to the in-process
+// application canary (src/agent/canary.ts), which still runs inside the task.
+// This probe answers a different question — "can a user reach us at all" —
+// and by construction cannot live inside the thing it is testing.
+
+/** Namespace for probe metrics; scoped in the probe's IAM condition. */
+const PROBE_NAMESPACE = 'ClaudeClaw/Uptime';
 
 export interface ObservabilityStackProps extends BaseStackProps {
   logsKey: IKey;
   logsBucket: IBucket;
+  /**
+   * Public hostname to probe from OUTSIDE the cluster (e.g. app.pgnos.ai).
+   * Unset = no uptime probe, which is correct for an environment that has no
+   * public edge. See PublicEndpointProbe below for why this matters.
+   */
+  publicHostname?: string;
+  /**
+   * Address subscribed to the ops alert topic, following the
+   * CCE_COST_ALERT_EMAIL precedent in cost-guardrails-stack.ts. AWS emails a
+   * confirmation link a human must click; until then the subscription sits in
+   * PendingConfirmation and delivers nothing.
+   */
+  opsAlertEmail?: string;
+  /**
+   * Minimum healthy ECS tasks before the connector-capacity alarm fires. Every
+   * task carries a cloudflared sidecar, so this IS the connector floor.
+   */
+  minHealthyTasks?: number;
 }
 
 /**
@@ -367,6 +397,68 @@ export class ObservabilityStack extends Stack implements ObservabilityOutputs {
     });
     canaryErrorAlarm.addAlarmAction(new SnsAction(this.alertTopic));
 
+    // ── connector capacity ───────────────────────────────────────────
+    // Every task carries a cloudflared sidecar, so RunningTaskCount IS the
+    // connector count. Dimensioned by the same name constants ComputeStack
+    // registers with — taking `compute.service` as a prop instead would invert
+    // the existing compute→observability dependency edge (app.ts) and fail synth.
+    //
+    // BREACHING on missing data: ContainerInsights stops publishing entirely
+    // when a service reaches zero tasks, so "no data" is exactly the outage
+    // this alarm exists to catch.
+    // Explicit floor, NOT tier.fargateMinTasks. Deriving it from the tier makes
+    // the threshold equal the desired count at T3, so a single task being
+    // replaced — the normal, self-healing case — would page someone. Two is the
+    // number that matters: below it, one AZ failure takes the hostname dark.
+    const minHealthyTasks = props.minHealthyTasks ?? 2;
+    const connectorCapacityAlarm = new Alarm(this, 'ConnectorCapacityAlarm', {
+      alarmName: `${APP}-connector-capacity`,
+      metric: new Metric({
+        namespace: 'ECS/ContainerInsights',
+        metricName: 'RunningTaskCount',
+        dimensionsMap: {
+          ClusterName: RESOURCE_NAMES.ecsCluster,
+          ServiceName: RESOURCE_NAMES.fargateService,
+        },
+        statistic: 'Minimum',
+        period: Duration.minutes(1),
+      }),
+      threshold: minHealthyTasks,
+      evaluationPeriods: 3,
+      comparisonOperator: ComparisonOperator.LESS_THAN_THRESHOLD,
+      treatMissingData: TreatMissingData.BREACHING,
+      alarmDescription:
+        `Fewer than ${minHealthyTasks} running tasks — each task carries a cloudflared ` +
+        'connector, so the published hostname is losing tunnel capacity.',
+    });
+    connectorCapacityAlarm.addAlarmAction(new SnsAction(this.alertTopic));
+
+    // ── public endpoint reachability (Layer C) ───────────────────────
+    // The failure that matters is "users get Cloudflare 1033", and nothing in
+    // AWS could see it before this: the orchestrator was healthy, ECS was
+    // healthy, the ALB targets were healthy, and app.pgnos.ai was dark for ten
+    // hours on 2026-08-14 because the connector had been removed from the task.
+    //
+    // So probe the way a user does — from outside, over the real hostname,
+    // through Cloudflare. That single check covers 1033, 530, 5xx, a revoked
+    // token, a Cloudflare-side ingress edit, DNS failure, TLS failure, and the
+    // blind spot the container health check cannot see: cloudflared alive but
+    // its tunnel registration dead.
+    //
+    // Deliberately NOT in the VPC. A probe that shares the network path it is
+    // testing cannot report on that path failing, and staying out of the VPC
+    // also keeps it off the NAT bill.
+    const publicEndpointAlarm = props.publicHostname
+      ? this.addPublicEndpointProbe(props.publicHostname)
+      : undefined;
+
+    // ── human alerting ───────────────────────────────────────────────
+    // Every alarm above already routed here; until 2026-08-15 the topic had
+    // zero subscribers, so all of it went nowhere. Subscription is IaC now.
+    if (props.opsAlertEmail) {
+      this.alertTopic.addSubscription(new EmailSubscription(props.opsAlertEmail));
+    }
+
     dashboard.addWidgets(
       new SingleValueWidget({
         title: "Today's Bedrock spend (USD)",
@@ -494,7 +586,19 @@ export class ObservabilityStack extends Stack implements ObservabilityOutputs {
     dashboard.addWidgets(
       new AlarmStatusWidget({
         title: 'Alarm status',
-        alarms: [errorAlarm, fatalAlarm, bedrockThrottleAlarm, bedrockServerErrorAlarm, killSwitchAlarm, canaryErrorAlarm, schedulerStalledAlarm, authFailedAlarm, costSpikeAlarm],
+        alarms: [
+          ...(publicEndpointAlarm ? [publicEndpointAlarm] : []),
+          connectorCapacityAlarm,
+          errorAlarm,
+          fatalAlarm,
+          bedrockThrottleAlarm,
+          bedrockServerErrorAlarm,
+          killSwitchAlarm,
+          canaryErrorAlarm,
+          schedulerStalledAlarm,
+          authFailedAlarm,
+          costSpikeAlarm,
+        ],
         width: 24,
         height: 4,
       }),
@@ -513,6 +617,118 @@ export class ObservabilityStack extends Stack implements ObservabilityOutputs {
     new CfnOutput(this, 'MissionControlDashboardName', {
       value: dashboard.dashboardName,
     });
+    if (publicEndpointAlarm) {
+      new CfnOutput(this, 'PublicEndpointAlarmName', {
+        value: publicEndpointAlarm.alarmName,
+      });
+    }
+  }
+
+  /**
+   * Probes `https://<hostname>/health` once a minute from outside the VPC and
+   * alarms when it stops answering correctly.
+   *
+   * Health is deliberately stricter than "HTTP 200": Cloudflare returns 200 for
+   * plenty of pages that are not this application, so the body must also parse
+   * as JSON with `status: "ok"`. A 530/1033 page, a Cloudflare error page, a
+   * TLS failure and a DNS failure all land in the same 0 datapoint.
+   *
+   * Runs at 128 MB with a 10s timeout on the Lambda and a 5s abort on the
+   * fetch, so a hung origin cannot hold the invocation open.
+   */
+  private addPublicEndpointProbe(hostname: string): Alarm {
+    const probe = new Function(this, 'PublicEndpointProbe', {
+      functionName: `${APP}-public-endpoint-probe`,
+      runtime: Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      timeout: Duration.seconds(10),
+      memorySize: 128,
+      // No vpc: on purpose — see the call site.
+      environment: {
+        PROBE_URL: `https://${hostname}/health`,
+        PROBE_HOSTNAME: hostname,
+        METRIC_NAMESPACE: PROBE_NAMESPACE,
+      },
+      description: `Outside-in reachability probe for https://${hostname}/health`,
+      code: Code.fromInline(`
+const { CloudWatchClient, PutMetricDataCommand } = require('@aws-sdk/client-cloudwatch');
+const cw = new CloudWatchClient({});
+
+exports.handler = async () => {
+  const url = process.env.PROBE_URL;
+  let healthy = 0;
+  let detail = '';
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 5000);
+  try {
+    const res = await fetch(url, { signal: ac.signal, redirect: 'manual' });
+    const body = await res.text();
+    if (res.status !== 200) {
+      // Cloudflare surfaces tunnel failures as 530; the numeric 1033 is in the body.
+      detail = 'http ' + res.status + (body.includes('1033') ? ' (cloudflare 1033)' : '');
+    } else {
+      try {
+        healthy = JSON.parse(body).status === 'ok' ? 1 : 0;
+        if (!healthy) detail = 'unexpected health body';
+      } catch { detail = 'health body was not JSON'; }
+    }
+  } catch (err) {
+    detail = err && err.name === 'AbortError' ? 'timeout after 5s' : String(err && err.message || err);
+  } finally {
+    clearTimeout(t);
+  }
+  if (!healthy) console.error(JSON.stringify({ msg: 'public endpoint unhealthy', url, detail }));
+  await cw.send(new PutMetricDataCommand({
+    Namespace: process.env.METRIC_NAMESPACE,
+    MetricData: [{
+      MetricName: 'PublicEndpointHealthy',
+      Dimensions: [{ Name: 'Hostname', Value: process.env.PROBE_HOSTNAME }],
+      Value: healthy,
+      Unit: 'None',
+    }],
+  }));
+  return { healthy, detail };
+};
+`),
+    });
+    probe.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['cloudwatch:PutMetricData'],
+        // PutMetricData takes no resource ARN; scope by namespace instead.
+        resources: ['*'],
+        conditions: { StringEquals: { 'cloudwatch:namespace': PROBE_NAMESPACE } },
+      }),
+    );
+
+    new Rule(this, 'PublicEndpointProbeSchedule', {
+      ruleName: `${APP}-public-endpoint-probe`,
+      schedule: Schedule.rate(Duration.minutes(1)),
+      targets: [new LambdaFunction(probe)],
+      description: `Run the ${hostname} reachability probe every minute`,
+    });
+
+    // Three consecutive misses, not one: a single 1-minute blip during a normal
+    // rolling deploy is not an outage, and paging on it trains people to ignore
+    // the alarm. Three minutes of a dark hostname is.
+    const alarm = new Alarm(this, 'PublicEndpointDownAlarm', {
+      alarmName: `${APP}-public-endpoint-down`,
+      metric: new Metric({
+        namespace: PROBE_NAMESPACE,
+        metricName: 'PublicEndpointHealthy',
+        dimensionsMap: { Hostname: hostname },
+        statistic: 'Minimum',
+        period: Duration.minutes(1),
+      }),
+      threshold: 1,
+      evaluationPeriods: 3,
+      datapointsToAlarm: 3,
+      comparisonOperator: ComparisonOperator.LESS_THAN_THRESHOLD,
+      // No datapoints means the probe itself stopped running — also an outage.
+      treatMissingData: TreatMissingData.BREACHING,
+      alarmDescription: `https://${hostname}/health has not answered correctly for 3 minutes`,
+    });
+    alarm.addAlarmAction(new SnsAction(this.alertTopic));
+    return alarm;
   }
 }
 

@@ -227,8 +227,14 @@ jobs:
       # fails. First deploy therefore creates the secret alone; the connector
       # joins on a later deploy, once `npm run public:setup` has written the
       # token. Only the EXISTENCE of the ready stage is checked — never the
-      # value behind it. Any failure here (including AccessDenied) leaves the
-      # output empty, i.e. "not ready", which is the safe direction.
+      # value behind it.
+      #
+      # This block used to end "any failure here (including AccessDenied) leaves
+      # the output empty, i.e. 'not ready', which is the safe direction." That
+      # was only safe against ONE risk — attaching a connector to an empty token
+      # — and catastrophic against the other, which is tearing the connector out
+      # of an environment that is already serving traffic on it. Both directions
+      # have to be safe, so an unreadable probe is now a hard failure.
       - name: Public connector readiness
         id: pubready
         if: vars.CCE_PUBLIC_ACCESS == '1'
@@ -236,17 +242,39 @@ jobs:
           SECRET_ID: ${{ steps.cfg.outputs.tunnel_secret }}
         run: |
           set -uo pipefail
-          if aws secretsmanager describe-secret \
-               --secret-id "$SECRET_ID" \
-               --region "$AWS_REGION" \
-               --query VersionIdsToStages \
-               --output text 2>/dev/null | grep -q 'CCE-PUBLIC-READY'; then
+          # "Not ready" and "I could not find out" must not be the same answer.
+          # On 2026-08-14 this step ran at 15:54:05Z, six minutes BEFORE the same
+          # deploy granted the role secretsmanager:DescribeSecret at 16:00:04Z.
+          # `2>/dev/null` swallowed the AccessDeniedException, the probe said
+          # "not ready", CDK emitted a task definition with no cloudflared
+          # sidecar, CloudFormation applied it to a healthy production service,
+          # the run went green, and app.pgnos.ai served Cloudflare 1033 for nine
+          # hours. Capture the error and stop instead of guessing.
+          set +e
+          stages=$(aws secretsmanager describe-secret \
+                     --secret-id "$SECRET_ID" \
+                     --region "$AWS_REGION" \
+                     --query VersionIdsToStages \
+                     --output text 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Could not read $SECRET_ID (exit $rc); refusing to guess readiness."
+            echo "$stages" >&2
+            echo "An unreadable probe is what removed the cloudflared sidecar from" >&2
+            echo "production on 2026-08-14. Grant the deploy role" >&2
+            echo "secretsmanager:DescribeSecret on $SECRET_ID and re-run." >&2
+            exit 1
+          fi
+          if printf '%s' "$stages" | grep -q 'CCE-PUBLIC-READY'; then
             echo "ready=1" >> "$GITHUB_OUTPUT"
             echo "Connector token present: attaching the cloudflared sidecar."
           else
             echo "ready=" >> "$GITHUB_OUTPUT"
             echo "No connector token yet for $SECRET_ID: deploying the secret only."
-            echo "Run 'npm run public:setup -- --env=staging', then re-run this deploy."
+            echo "Run 'npm run public:setup -- --env=${TARGET_ENV}', then re-run this deploy."
+            echo "That path drops the public entrypoint, so synth will also demand"
+            echo "CCE_PUBLIC_BOOTSTRAP=1 (see assertPublicEntrypointRenderable)."
           fi
 
       - name: CDK deploy
@@ -321,10 +349,20 @@ jobs:
         env:
           # Once the connector is attached, the environment IS reachable by
           # hostname even though DOMAIN_NAME is blank — Cloudflare publishes it,
-          # not the ALB. So curl the published hostname when the sidecar is
-          # live, and fall back to the ALB host (prod) or nothing (first
-          # staging deploy, before the token exists).
-          PUBLIC_HOST: ${{ steps.pubready.outputs.ready == '1' && vars.CCE_PUBLIC_HOSTNAME || steps.cfg.outputs.public_host }}
+          # not the ALB.
+          #
+          # This used to key off `steps.pubready.outputs.ready`, which made the
+          # check self-blinding: the single condition that caused the sidecar to
+          # be dropped ALSO emptied PUBLIC_HOST, so the smoke test short-circuited
+          # with "no public hostname for this environment" and the run went green
+          # while app.pgnos.ai was dark. A test must not be disabled by the fault
+          # it exists to catch.
+          #
+          # So the question is now "does this environment DECLARE a public
+          # hostname", not "did we just attach a connector". The one exception is
+          # a deliberate bootstrap deploy, where the hostname is not live yet by
+          # definition — and that has to be stated with CCE_PUBLIC_BOOTSTRAP=1.
+          PUBLIC_HOST: ${{ (vars.CCE_PUBLIC_ACCESS == '1' && vars.CCE_PUBLIC_BOOTSTRAP != '1') && vars.CCE_PUBLIC_HOSTNAME || steps.cfg.outputs.public_host }}
         run: |
           set -euo pipefail
           # infra-only environments (staging) have no public hostname to curl.

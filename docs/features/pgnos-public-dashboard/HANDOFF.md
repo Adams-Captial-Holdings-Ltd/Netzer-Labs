@@ -10,10 +10,15 @@ as_of_commit: eaa9e61ad99284582beebcb82bab491182be1e3f
 
 - Branch: `fix/prod-deploy-domain-and-email`; merge target: `development`, then
   the full `development → qa → staging → production` ladder.
-- **Production has never been deployed through `deploy.yml`.** `production` is
-  52 files behind `development`; every prior production deploy ran from a
-  laptop. Two `deploy.yml` defects blocked the CI path and are fixed on the
-  branch above: prod's `DOMAIN_NAME` was `claudeclaw-enterprise.com` (the
+- ~~**Production has never been deployed through `deploy.yml`.**~~ **No longer
+  true as of 2026-08-14 15:41:48 UTC**, when run `31815756998`
+  (`workflow_dispatch`, `env=prod`) deployed production from `origin/production`
+  @ `bb2898b` — the commit whose short sha is the running image tag. It reported
+  `success` and removed the cloudflared sidecar; see the
+  [2026-08-15 handoff](handoffs/2026-08-15-public-entrypoint-outage-guards.md).
+  The two `deploy.yml` defects below were real and are fixed; they were simply
+  not the only ones. Historical context follows: prod's `DOMAIN_NAME` was
+  `claudeclaw-enterprise.com` (the
   account has no Route 53 zone and no ACM certificate, and it would flip the
   internal ALB), and `CCE_EMAIL_FROM` / `CCE_SES_CONFIG_SET` were not forwarded,
   so a CI deploy would have gone green with magic-link email silently off.
@@ -150,6 +155,15 @@ MX record**, so no `@pgnos.ai` address can receive mail.
   found and fixed the two `deploy.yml` defects that would have broken the first
   CI production deploy, added the KMS grant SES needs for bounce telemetry, and
   created the `netzar-magic-link` configuration set. Not deployed.
+- [2026-08-15 — public entrypoint outage and guards](handoffs/2026-08-15-public-entrypoint-outage-guards.md):
+  **both hostnames served Error 1033 from 2026-08-14 15:32/16:03 UTC.** The
+  readiness probe ran six minutes before the same deploy granted it
+  `secretsmanager:DescribeSecret`, `2>/dev/null` turned the AccessDenied into
+  "not ready", CloudFormation removed the connector from a live production task,
+  and the run reported success. Made dropping a declared public entrypoint fail
+  the synth, decoupled the tunnel-secret grant from the sidecar so re-attaching
+  cannot fail on AccessDenied, and stopped the smoke test being disabled by the
+  fault it exists to catch. Not deployed.
 
 Authorities: [README](README.md),
 [design spec](../../superpowers/specs/2026-08-11-netzar-os-pgnos-public-dashboard-email-design.md),
