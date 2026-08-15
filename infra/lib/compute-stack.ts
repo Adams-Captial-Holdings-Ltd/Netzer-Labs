@@ -64,6 +64,7 @@ import {
 import { resolveDeployMode } from './deploy-mode.js';
 import {
   resolvePublicDashboardAccess,
+  assertPublicEntrypointRenderable,
   PUBLIC_TUNNEL_SECRET_NAME,
 } from './public-dashboard-access.js';
 import type {
@@ -563,6 +564,27 @@ export class ComputeStack extends Stack implements ComputeOutputs {
           removalPolicy: RemovalPolicy.RETAIN,
         })
       : undefined;
+
+    // Granted unconditionally, NOT as a side effect of attaching the sidecar.
+    // `EcsSecret.fromSecretsManager` auto-grants read to the execution role, so
+    // when the 2026-08-14 deploy dropped the container it dropped this grant in
+    // the same changeset (CCE-Compute TaskExecutionRoleDefaultPolicy,
+    // UPDATE_COMPLETE 16:00:47Z). The hand-rolled recovery 33 minutes later then
+    // failed with AccessDeniedException on GetSecretValue and the circuit
+    // breaker rolled back to a connector-less revision — the outage outlived the
+    // fix attempt purely because the permission had gone with the container.
+    // Holding the grant open costs nothing while the sidecar is absent and makes
+    // re-attaching it a one-step operation instead of two.
+    if (publicTunnelSecret) {
+      publicTunnelSecret.grantRead(taskDef.obtainExecutionRole());
+    }
+
+    // Fail the synth rather than silently emit a task definition with no public
+    // entrypoint. See assertPublicEntrypointRenderable for the incident this
+    // encodes: without it, an unreadable readiness probe is indistinguishable
+    // from "not ready yet", and the deploy that demolishes the only public path
+    // reports success.
+    assertPublicEntrypointRenderable(publicAccess, process.env);
 
     // Two-phase on purpose. The secret above is created and left EMPTY; the
     // connector is added only once the setup lifecycle has actually written a

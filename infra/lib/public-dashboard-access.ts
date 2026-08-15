@@ -183,3 +183,44 @@ export function resolvePublicDashboardAccess(
     service: PUBLIC_TUNNEL_SERVICE,
   };
 }
+
+/**
+ * Refuse to synthesize a stack that would take an already-published hostname
+ * offline.
+ *
+ * The two-phase gate below (`CCE_PUBLIC_CONNECTOR_READY`) is right for a FIRST
+ * deploy and catastrophic for a LIVE one, because "not ready" and "I could not
+ * find out" are the same value. On 2026-08-14 the CI readiness probe ran at
+ * 15:54:05 UTC, six minutes BEFORE the same deploy granted it
+ * `secretsmanager:DescribeSecret` at 16:00:04. `2>/dev/null` swallowed the
+ * AccessDeniedException, the probe reported "not ready", CloudFormation removed
+ * the cloudflared sidecar from a healthy production task and reported
+ * UPDATE_COMPLETE, and `app.pgnos.ai` served Cloudflare 1033 for nine hours.
+ * Nothing failed. That is the whole problem: losing the only public entrypoint
+ * was a green deploy.
+ *
+ * So the bootstrap case now has to be stated, not inferred. If the secret is
+ * genuinely still empty, say so once with `CCE_PUBLIC_BOOTSTRAP=1`; every other
+ * path where the connector is not provably ready stops the deploy before it can
+ * touch the environment. Exact-literal '1' throughout, matching every other
+ * flag in this module — a probe that emits `true`, `yes` or a stray space must
+ * not be able to authorise a teardown.
+ */
+export function assertPublicEntrypointRenderable(
+  access: PublicDashboardAccessConfig,
+  env: PublicDashboardAccessEnv = process.env,
+): void {
+  if (!access.enabled) return;
+  if (env.CCE_PUBLIC_CONNECTOR_READY === '1') return;
+  if (env.CCE_PUBLIC_BOOTSTRAP === '1') return;
+
+  const secretName = buildPublicTunnelSecretName((env.CCE_NAME_SUFFIX ?? '').trim());
+  throw new Error(
+    `CCE_PUBLIC_ACCESS=1 declares ${access.hostname}, but CCE_PUBLIC_CONNECTOR_READY is ` +
+      `not "1". Synthesizing now would emit a task definition with no connector and take ` +
+      `${access.hostname} offline. If the readiness probe errored, fix the probe rather ` +
+      `than deploying past it. If ${secretName} is genuinely still empty (first deploy), ` +
+      `set CCE_PUBLIC_BOOTSTRAP=1 for that one deploy, run ` +
+      `\`npm run public:setup -- --env=<env>\`, then deploy again without it.`,
+  );
+}
