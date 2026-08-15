@@ -40,8 +40,15 @@ import {
   ManagedPolicy,
 } from 'aws-cdk-lib/aws-iam';
 import { CfnSchedule } from 'aws-cdk-lib/aws-scheduler';
-import { APP, TAGS, RESOURCE_NAMES } from './constants.js';
+import { APP, APP_NAME_SUFFIX, TAGS, RESOURCE_NAMES } from './constants.js';
 import type { BaseStackProps } from './interfaces.js';
+
+/**
+ * Minimum simultaneous cloudflared connectors production must keep. Two is the
+ * floor for surviving the loss of one Availability Zone without the published
+ * hostname going dark.
+ */
+export const PRODUCTION_MIN_CONNECTORS = 2;
 
 export interface PowerSwitchStackProps extends BaseStackProps {
   /** ECS cluster/service to pause. Defaults to the prod names. */
@@ -56,6 +63,19 @@ export interface PowerSwitchStackProps extends BaseStackProps {
   /** Nightly auto-pause cron + timezone. */
   autoPauseCron?: string;
   autoPauseTimezone?: string;
+  /**
+   * Whether the nightly auto-pause schedule is armed. Defaults to FALSE.
+   *
+   * Pausing sets the autoscaling target to (0,0) and desiredCount to 0, which
+   * removes every cloudflared connector from the task and makes the published
+   * hostname serve Cloudflare Error 1033 — and nothing wakes it again, because
+   * there is no wake schedule (wake is only reachable through the Function
+   * URL). That is survivable on staging and unacceptable on production, so the
+   * default is off and arming it is a deliberate per-environment act.
+   *
+   * Production may never set this to true; the constructor throws instead.
+   */
+  autoPauseEnabled?: boolean;
   /**
    * Service-down alarms to mute while paused. Entries are NAME PREFIXES
    * (CDK-generated alarm names carry random suffixes); the handler resolves
@@ -92,6 +112,34 @@ export class PowerSwitchStack extends Stack {
   constructor(scope: Construct, id: string, props: PowerSwitchStackProps) {
     super(scope, id, props);
     Object.entries(TAGS).forEach(([k, v]) => this.tags.setTag(k, v));
+
+    // ── production connector-availability boundary ──────────────────
+    // APP_NAME_SUFFIX is '' for production and 'staging' for staging
+    // (constants.ts), so an empty suffix IS production. props.tier is not a
+    // usable discriminator here: CI passes tier 3 to both environments.
+    //
+    // These throw at synth rather than warn, so an invalid production
+    // configuration fails the deploy instead of being applied. On 2026-08-14
+    // production served Cloudflare 1033 for ten hours after a deploy silently
+    // removed its connectors; a scheduled pause would do the same thing every
+    // night, on purpose, with no wake path.
+    const isProduction = APP_NAME_SUFFIX === '';
+    const autoPauseEnabled = props.autoPauseEnabled ?? false;
+    const wakeMin = props.wakeMin ?? 3;
+
+    if (isProduction && autoPauseEnabled) {
+      throw new Error(
+        'production must never arm the nightly auto-pause: it sets desiredCount=0, ' +
+          'which removes every cloudflared connector and serves Cloudflare 1033 until ' +
+          'a human calls wake through the Function URL. Leave autoPauseEnabled unset for prod.',
+      );
+    }
+    if (isProduction && wakeMin < PRODUCTION_MIN_CONNECTORS) {
+      throw new Error(
+        `production connector floor must be >= ${PRODUCTION_MIN_CONNECTORS} for multi-AZ ` +
+          `tunnel redundancy (got wakeMin=${wakeMin}).`,
+      );
+    }
 
     const region = this.region;
     const account = this.account;
@@ -289,10 +337,19 @@ export class PowerSwitchStack extends Stack {
         APP_TAG_VALUE: TAGS.Application,
         APP_PREFIX: APP,
         STACK_PREFIX: stackPrefix,
-        AUTO_PAUSE_LABEL: describeAutoPause(
-          props.autoPauseCron ?? 'cron(0 6 * * ? *)',
-          props.autoPauseTimezone ?? 'America/Toronto',
-        ),
+        AUTO_PAUSE_LABEL: autoPauseEnabled
+          ? describeAutoPause(
+              props.autoPauseCron ?? 'cron(0 6 * * ? *)',
+              props.autoPauseTimezone ?? 'America/Toronto',
+            )
+          : 'disabled',
+        // Second, independent guard. The DISABLED schedule above is the first;
+        // this one makes the handler itself refuse an auto-pause, so a schedule
+        // re-armed by console drift, a stale CloudFormation state, or a future
+        // code change still cannot take the connectors down. Manual pause via
+        // the Function URL is deliberately unaffected — that is the emergency
+        // control, and only the unattended trigger is the hazard.
+        AUTO_PAUSE_FORBIDDEN: autoPauseEnabled ? '' : '1',
       },
       description: 'CCE demo pause/wake control plane (Phase B)',
     });
@@ -306,9 +363,18 @@ export class PowerSwitchStack extends Stack {
     });
     fn.grantInvoke(schedulerRole);
 
+    // The schedule is always CREATED, never conditionally omitted: setting
+    // `state` mutates the existing AWS::Scheduler::Schedule in place, so the
+    // resource stays visible and auditable in the console and re-arming
+    // staging is a one-key change. Dropping the resource instead would delete
+    // it, orphan AutoPauseSchedulerRole, and hide the control entirely.
+    //
+    // Until 2026-08-15 this block set no `state` at all, so CloudFormation
+    // defaulted it to ENABLED on both environments.
     new CfnSchedule(this, 'AutoPauseSchedule', {
       name: `${APP}-power-auto-pause`,
       groupName: 'default',
+      state: autoPauseEnabled ? 'ENABLED' : 'DISABLED',
       flexibleTimeWindow: { mode: 'OFF' },
       scheduleExpression: props.autoPauseCron ?? 'cron(0 6 * * ? *)',
       scheduleExpressionTimezone: props.autoPauseTimezone ?? 'America/Toronto',
@@ -317,7 +383,9 @@ export class PowerSwitchStack extends Stack {
         roleArn: schedulerRole.roleArn,
         input: JSON.stringify({ source: 'cce.power.scheduler', action: 'auto-pause' }),
       },
-      description: 'Nightly safety pause; no-ops if already paused or within a keep-awake hold',
+      description: autoPauseEnabled
+        ? 'Nightly safety pause; no-ops if already paused or within a keep-awake hold'
+        : 'Nightly safety pause — DISABLED for this environment (see autoPauseEnabled)',
     });
 
     // ── outputs (URL only; the token is NEVER emitted) ────────────
