@@ -316,6 +316,12 @@ jobs:
           # these switches magic-link email OFF with every health check green.
           CCE_EMAIL_FROM: ${{ vars.CCE_EMAIL_FROM }}
           CCE_SES_CONFIG_SET: ${{ vars.CCE_SES_CONFIG_SET }}
+          # Ops alert destination. Same failure shape as the two above: unset
+          # means observability-stack creates every outage alarm and subscribes
+          # nobody, which is precisely the state the account was in until
+          # 2026-08-15 — 32 alarms, a topic with zero subscribers, and a
+          # ten-hour production outage found by a human loading the page.
+          CCE_OPS_ALERT_EMAIL: ${{ vars.CCE_OPS_ALERT_EMAIL }}
           # OIDC trust is fail-closed: synth errors unless the repo identity
           # and the exact deploy subjects are explicit. Derived from the repo
           # running the workflow, never a hardcoded default.
