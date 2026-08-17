@@ -17,7 +17,6 @@ import { CodeBuildStack } from '../lib/codebuild-stack.js';
 import { CostGuardrailsStack } from '../lib/cost-guardrails-stack.js';
 import { PowerSwitchStack } from '../lib/power-switch-stack.js';
 import { DemoResetStack } from '../lib/demo-reset-stack.js';
-import { APP_NAME_SUFFIX } from '../lib/constants.js';
 import type { DeployTier } from '../lib/constants.js';
 
 const app = new App();
@@ -202,15 +201,6 @@ const costGuardrails = new CostGuardrailsStack(app, `${stackPrefix}-CostGuardrai
 // cannot strand the very thing that brings prod back.
 const powerSwitch = new PowerSwitchStack(app, `${stackPrefix}-PowerSwitch`, {
   ...baseProps,
-  // Nightly auto-pause is OFF unless an environment explicitly arms it, and
-  // production can never arm it — PowerSwitchStack throws at synth if it tries.
-  // A pause sets desiredCount=0, which removes every cloudflared connector and
-  // serves Cloudflare 1033 until a human calls wake through the Function URL;
-  // there is no wake schedule. Staging may opt in with
-  // CCE_POWER_AUTO_PAUSE_ENABLED=1, matching the fail-closed convention used by
-  // CCE_CODEBUILD_ENABLED and CCE_DEMO_RESET_ENABLED below.
-  autoPauseEnabled:
-    APP_NAME_SUFFIX !== '' && process.env.CCE_POWER_AUTO_PAUSE_ENABLED === '1',
   // Prefix, not exact name: the CDK-generated alarm name carries a random
   // suffix. This alarm is treatMissingData=BREACHING, so it fires the whole
   // time the service is intentionally at 0 tasks — mute it during a pause.

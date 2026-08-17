@@ -1,14 +1,10 @@
 'use strict';
 /**
  * CCE power-switch Lambda (Phase B). Pause/wake CCE prod from outside the system
- * it controls. Two entry shapes:
+ * it controls through its Function URL:
  *
  *   - HTTP (Function URL): POST /pause | /wake | /status | /hold, gated by the
  *     X-Power-Token header (compared in constant time to a Secrets Manager value).
- *   - Direct invoke (EventBridge Scheduler): { source:'cce.power.scheduler',
- *     action:'auto-pause' }. Authorised purely by IAM — only the scheduler role is
- *     granted lambda:InvokeFunction on this function — and the handler rejects any
- *     direct event that does not match the exact contract.
  *
  * Safety machinery (mirrors the hardened plan):
  *   - A DynamoDB lease lock (acquire on attribute_not_exists OR expiresAt<now,
@@ -80,17 +76,13 @@ const WAKE_DESIRED = parseInt(E.WAKE_DESIRED || '3', 10);
 const HOLD_MS = parseInt(E.HOLD_HOURS || '6', 10) * 3600 * 1000;
 const LEASE_MS = parseInt(E.LEASE_MINUTES || '15', 10) * 60 * 1000;
 const MUTED_ALARMS = (E.MUTED_ALARMS || '').split(',').map((s) => s.trim()).filter(Boolean);
-// Exact literal '1', matching every other flag in this system: a stray 'true'
-// or 'false' must not be able to authorise taking the connectors down.
-const AUTO_PAUSE_FORBIDDEN = E.AUTO_PAUSE_FORBIDDEN === '1';
 const HEALTH_URL = E.HEALTH_URL || '';
 const DASHBOARD_URL = E.DASHBOARD_URL || '';
 const COST_NOTE = E.COST_NOTE || '';
-const AUTO_PAUSE_LABEL = E.AUTO_PAUSE_LABEL || '';
 const APP_TAG_VALUE = E.APP_TAG_VALUE || 'claudeclaw-enterprise';
 const APP_PREFIX = E.APP_PREFIX || 'claudeclaw';
 const STACK_PREFIX = E.STACK_PREFIX || 'CCE';
-const ACTIONS = new Set(['pause', 'wake', 'status', 'hold', 'costs', 'auto-pause']);
+const ACTIONS = new Set(['pause', 'wake', 'status', 'hold', 'costs']);
 
 const ecs = new ECSClient({ region: REGION });
 const ec2 = new EC2Client({ region: REGION });
@@ -383,26 +375,6 @@ async function doHold(by, hours) {
   await putState({ ...s, keepAwakeUntil: until, by });
   return { ok: true, keepAwakeUntil: until };
 }
-async function doAutoPause() {
-  // Refuse before reading any state. A pause sets desiredCount=0, which removes
-  // every cloudflared connector and makes the published hostname serve
-  // Cloudflare 1033 with no wake schedule to undo it. Production sets
-  // AUTO_PAUSE_FORBIDDEN=1, and this check is deliberately independent of the
-  // schedule's own DISABLED state so that console drift, a stale CloudFormation
-  // state, or a future code change re-arming the schedule still cannot take
-  // production offline. Manual pause through the Function URL is unaffected.
-  if (AUTO_PAUSE_FORBIDDEN) {
-    log({ msg: 'auto-pause refused', reason: 'AUTO_PAUSE_FORBIDDEN is set for this environment' });
-    return { ok: true, mode: 'refused', note: 'auto-pause is forbidden in this environment' };
-  }
-  const s = await getState();
-  if (s.mode === 'paused' || s.mode === 'pausing') return { ok: true, mode: s.mode, note: 'already paused' };
-  if (s.keepAwakeUntil && Date.now() < s.keepAwakeUntil) {
-    log({ msg: 'auto-pause held', keepAwakeUntil: s.keepAwakeUntil });
-    return { ok: true, mode: 'held', note: 'within keep-awake window' };
-  }
-  return doPause('scheduler');
-}
 // End-to-end app probe: does the dashboard actually answer through the front
 // door? This is what turns "marker says awake" into "everything is restored".
 // No IAM needed — HEALTH_URL is the public /health route. Skipped (null) when
@@ -469,7 +441,7 @@ async function doStatus() {
     wakeTarget: WAKE_DESIRED,
     dashboardUrl: DASHBOARD_URL || null,
     costNote: COST_NOTE || null,
-    autoPause: AUTO_PAUSE_LABEL || null,
+    autoPause: 'disabled',
   };
 }
 
@@ -657,7 +629,6 @@ async function route(action, by, event) {
     case 'status': return doStatus();
     case 'hold': return doHold(by, event && event.hours);
     case 'costs': return doCosts();
-    case 'auto-pause': return doAutoPause();
     default: return { ok: false, code: 400, error: 'unknown action: ' + action };
   }
 }
@@ -674,16 +645,9 @@ exports.handler = async (event) => {
     if (method !== 'POST') return resp(405, { error: 'POST only' });
     if (!(await validToken(event))) return resp(401, { error: 'unauthorized' });
     const path = (event.requestContext.http.path || '/status').replace(/^\/+/, '') || 'status';
-    if (!ACTIONS.has(path) || path === 'auto-pause') return resp(404, { error: 'unknown route: /' + path });
+    if (!ACTIONS.has(path)) return resp(404, { error: 'unknown route: /' + path });
     const r = await route(path, 'http', event);
     return resp(r.ok ? 200 : r.code || 500, r);
   }
-  // Direct invoke (EventBridge Scheduler). IAM-gated to the scheduler role, and
-  // the ONLY scheduled contract is auto-pause. Reject any other direct action
-  // (e.g. a forged wake/pause) so a stray same-account InvokeFunction can never
-  // skip the Function URL token to control prod.
-  if (!event || event.source !== 'cce.power.scheduler' || event.action !== 'auto-pause') {
-    return { ok: false, code: 400, error: 'bad direct event' };
-  }
-  return route('auto-pause', 'scheduler', event);
+  return { ok: false, code: 400, error: 'unsupported event' };
 };
