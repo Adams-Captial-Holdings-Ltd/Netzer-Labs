@@ -79,15 +79,6 @@ export interface PowerSwitchStackProps extends BaseStackProps {
   reservedConcurrency?: number;
 }
 
-/** Human label for the panel, derived from the auto-pause cron. */
-function describeAutoPause(cron: string, timezone: string): string {
-  const m = /^cron\((\d+)\s+(\d+)\s/.exec(cron);
-  if (!m) return `on schedule (${timezone})`;
-  const hh = String(parseInt(m[2], 10)).padStart(2, '0');
-  const mm = String(parseInt(m[1], 10)).padStart(2, '0');
-  return `nightly at ${hh}:${mm} (${timezone})`;
-}
-
 export class PowerSwitchStack extends Stack {
   constructor(scope: Construct, id: string, props: PowerSwitchStackProps) {
     super(scope, id, props);
@@ -289,10 +280,13 @@ export class PowerSwitchStack extends Stack {
         APP_TAG_VALUE: TAGS.Application,
         APP_PREFIX: APP,
         STACK_PREFIX: stackPrefix,
-        AUTO_PAUSE_LABEL: describeAutoPause(
-          props.autoPauseCron ?? 'cron(0 6 * * ? *)',
-          props.autoPauseTimezone ?? 'America/Toronto',
-        ),
+        AUTO_PAUSE_LABEL: 'disabled',
+        // Second lever, independent of the schedule's own state. The schedule was
+        // once re-enabled by hand in the console; CloudFormation would not correct
+        // that until the next deploy, and the handler refusal closes that window.
+        // Manual pause through the Function URL is deliberately unaffected — that
+        // is the emergency control; only the unattended trigger is the hazard.
+        AUTO_PAUSE_FORBIDDEN: '1',
       },
       description: 'CCE demo pause/wake control plane (Phase B)',
     });
@@ -306,9 +300,18 @@ export class PowerSwitchStack extends Stack {
     });
     fn.grantInvoke(schedulerRole);
 
+    // Permanently DISABLED, in every environment, with no prop and no environment
+    // variable that can turn it on. Until 2026-08-15 this block set no `state` at
+    // all, so CloudFormation defaulted it to ENABLED: on 2026-08-10 it fired and
+    // took production to zero tasks — and therefore zero cloudflared connectors —
+    // for 5.5 hours. A pause sets desiredCount=0 and there is no wake schedule, so
+    // the published hostname serves Cloudflare 1033 until a human calls wake.
+    // The resource is disabled rather than deleted so it stays auditable and the
+    // scheduler role is not orphaned.
     new CfnSchedule(this, 'AutoPauseSchedule', {
       name: `${APP}-power-auto-pause`,
       groupName: 'default',
+      state: 'DISABLED',
       flexibleTimeWindow: { mode: 'OFF' },
       scheduleExpression: props.autoPauseCron ?? 'cron(0 6 * * ? *)',
       scheduleExpressionTimezone: props.autoPauseTimezone ?? 'America/Toronto',
@@ -317,7 +320,7 @@ export class PowerSwitchStack extends Stack {
         roleArn: schedulerRole.roleArn,
         input: JSON.stringify({ source: 'cce.power.scheduler', action: 'auto-pause' }),
       },
-      description: 'Nightly safety pause; no-ops if already paused or within a keep-awake hold',
+      description: 'Nightly safety pause — permanently DISABLED; this environment stays running',
     });
 
     // ── outputs (URL only; the token is NEVER emitted) ────────────

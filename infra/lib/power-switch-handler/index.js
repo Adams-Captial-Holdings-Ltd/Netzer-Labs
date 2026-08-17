@@ -84,6 +84,9 @@ const HEALTH_URL = E.HEALTH_URL || '';
 const DASHBOARD_URL = E.DASHBOARD_URL || '';
 const COST_NOTE = E.COST_NOTE || '';
 const AUTO_PAUSE_LABEL = E.AUTO_PAUSE_LABEL || '';
+// Exact literal '1', matching the convention used by every other feature flag:
+// a stray 'true' or 'false' must not be able to authorise taking the connectors down.
+const AUTO_PAUSE_FORBIDDEN = E.AUTO_PAUSE_FORBIDDEN === '1';
 const APP_TAG_VALUE = E.APP_TAG_VALUE || 'claudeclaw-enterprise';
 const APP_PREFIX = E.APP_PREFIX || 'claudeclaw';
 const STACK_PREFIX = E.STACK_PREFIX || 'CCE';
@@ -381,6 +384,13 @@ async function doHold(by, hours) {
   return { ok: true, keepAwakeUntil: until };
 }
 async function doAutoPause() {
+  // Refuse before reading any state, so a stale or missing power-state record is
+  // never what keeps the environment online. The schedule that invokes this is
+  // itself DISABLED in IaC; this is what survives an out-of-band re-enable.
+  if (AUTO_PAUSE_FORBIDDEN) {
+    log({ msg: 'auto-pause refused', reason: 'AUTO_PAUSE_FORBIDDEN is set for this environment' });
+    return { ok: true, mode: 'refused', note: 'auto-pause is forbidden in this environment' };
+  }
   const s = await getState();
   if (s.mode === 'paused' || s.mode === 'pausing') return { ok: true, mode: s.mode, note: 'already paused' };
   if (s.keepAwakeUntil && Date.now() < s.keepAwakeUntil) {

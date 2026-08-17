@@ -81,6 +81,28 @@ describe('PowerSwitchStack', () => {
     });
   });
 
+  // The nightly pause sets desiredCount=0, which removes every cloudflared
+  // connector; there is no wake schedule. It fired on 2026-08-10 and took
+  // production dark for 5.5 hours. These two assertions are the regression.
+  it('the auto-pause schedule is DISABLED, and no input can arm it', () => {
+    t.hasResourceProperties('AWS::Scheduler::Schedule', { State: 'DISABLED' });
+
+    // Not merely disabled by default: there is no prop and no environment
+    // variable that produces an ENABLED schedule.
+    process.env.CCE_POWER_AUTO_PAUSE_ENABLED = '1';
+    try {
+      synth().hasResourceProperties('AWS::Scheduler::Schedule', { State: 'DISABLED' });
+    } finally {
+      delete process.env.CCE_POWER_AUTO_PAUSE_ENABLED;
+    }
+  });
+
+  it('the handler refuses auto-pause regardless of the schedule state', () => {
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: Match.objectLike({ AUTO_PAUSE_FORBIDDEN: '1' }) },
+    });
+  });
+
   it('DynamoDB power-state table is on-demand and retained', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'claudeclaw-power-state',
@@ -130,7 +152,7 @@ describe('PowerSwitchStack', () => {
           DASHBOARD_URL: 'https://dash.example.com',
           COST_NOTE: 'Paused about $150/mo. Awake about $700/mo.',
           MUTED_ALARMS: 'CCE-Observability-SchedulerStalledAlarm',
-          AUTO_PAUSE_LABEL: Match.stringLikeRegexp('nightly at 06:00'),
+          AUTO_PAUSE_LABEL: 'disabled',
           APP_TAG_VALUE: 'claudeclaw-enterprise',
           APP_PREFIX: 'claudeclaw',
         }),
