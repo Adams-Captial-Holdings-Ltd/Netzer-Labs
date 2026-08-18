@@ -12,7 +12,9 @@ services:
       retries: 30
 
   paperclip:
-    image: ghcr.io/paperclipai/paperclip:2026.722.0@sha256:6b9daa3c7b0659cce1ddb1f35454162342bc48bb5682123043fcd4d44aea237c
+    # Pinned digest + committed updatedSince patch; see vendor/paperclip/.
+    build: ./vendor/paperclip
+    image: netzer-paperclip:2026.722.0-netzar.1
     ports:
       - "3100:3100"
     environment:
