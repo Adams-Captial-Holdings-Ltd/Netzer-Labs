@@ -16,13 +16,13 @@ services:
     ports:
       - "3100:3100"
     environment:
-      DATABASE_URL: postgresql://paperclip:paperclip@paperclip-db:5432/paperclip
+      DATABASE_URL: postgres://paperclip:paperclip@paperclip-db:5432/paperclip
       PORT: "3100"
       SERVE_UI: "false"
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
       PAPERCLIP_MIGRATION_AUTO_APPLY: "true"
-      BETTER_AUTH_SECRET: ${PAPERCLIP_TEST_AUTH_SECRET:?PAPERCLIP_TEST_AUTH_SECRET must be set}
+      BETTER_AUTH_SECRET: ${PAPERCLIP_TEST_AUTH_SECRET:?set in CI env}
     depends_on:
       paperclip-db:
         condition: service_healthy
