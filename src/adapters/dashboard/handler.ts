@@ -89,6 +89,7 @@ import { InFlightGate } from '../../lib/concurrency/bounded.js';
 import {
   appendTurns,
   getSession,
+  deleteSession,
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
@@ -3001,6 +3002,59 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
     const session = await getSession(agentId, chatId);
     return c.json({ turns: session?.turns ?? [] });
+  });
+
+  // Delete ONE conversation. Narrower than DELETE /export below, which is the
+  // admin-only GDPR purge (memories + scheduled tasks + inbox + session); this
+  // removes exactly the session row the Chat sidebar lists. Because `turns` is
+  // an attribute ARRAY on that row rather than a child table, the single
+  // DeleteItem takes the conversation and every stored message atomically —
+  // there is no cascade to perform and no orphan to sweep.
+  router.delete('/sessions', async (c) => {
+    // Destructive mutation, so agents:write — the operator-tier capability this
+    // repo already uses for every per-tab delete (scheduled-task delete, vector
+    // delete; see permissions.ts). requiredRole() independently rates a non-GET
+    // /sessions as 'operator', so the two gates agree and no new capability or
+    // profile change is needed.
+    if (!(await hasCapability(c, 'agents:write'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
+    }
+    const agentId = c.req.query('agentId') ?? 'main';
+    const chatId = c.req.query('chatId');
+    if (!chatId) return c.json({ error: 'chatId_required' }, 400);
+
+    // Ownership is resolved HERE, from the STORED row against the authenticated
+    // principal. Nothing the client sends can assert who owns a chat: the
+    // identity comes from the bearer token via dashboardIdentity(), and the
+    // owner comes from the persisted `userId` that appendTurns stamped. A
+    // hand-edited chatId therefore cannot reach another user's conversation.
+    //
+    // Not-yours and does-not-exist deliberately return the SAME 404, so the
+    // route cannot be used to enumerate other users' chat ids (the same
+    // reasoning validateMagicToken applies to magic-link lookups above).
+    const session = await getSession(agentId, chatId);
+    const me = dashboardIdentity(c);
+    const owned = session?.userId !== undefined && session.userId === me;
+    // Admin/owner-tier principals may remove any conversation on the agent —
+    // the same tier that already holds the GDPR purge. Rows written before the
+    // dashboard stamped `userId` (or by Telegram/Slack) have no owner to match,
+    // so they are reachable only through this override.
+    const isAdmin = await hasCapability(c, 'security:write');
+    if (!session || (!owned && !isAdmin)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+
+    await deleteSession(agentId, chatId);
+    // Fire-and-forget, matching purgeChatData: an audit outage must never fail a
+    // delete the database has already committed.
+    void writeAudit({
+      action: 'data_purged',
+      agentId,
+      chatId,
+      detail: { scope: 'session', requestedBy: me, viaAdminOverride: !owned },
+      result: 'ok',
+    });
+    return c.json({ deleted: true, agentId, chatId });
   });
 
   router.get('/export', async (c) => {
