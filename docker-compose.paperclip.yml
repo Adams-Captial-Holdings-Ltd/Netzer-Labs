@@ -1,0 +1,34 @@
+services:
+  paperclip-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: paperclip
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  paperclip:
+    image: ghcr.io/paperclipai/paperclip:2026.722.0
+    ports:
+      - "3100:3100"
+    environment:
+      DATABASE_URL: postgresql://paperclip:paperclip@paperclip-db:5432/paperclip
+      PORT: "3100"
+      SERVE_UI: "false"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_MIGRATION_AUTO_APPLY: "true"
+      BETTER_AUTH_SECRET: ${PAPERCLIP_TEST_AUTH_SECRET:?PAPERCLIP_TEST_AUTH_SECRET must be set}
+    depends_on:
+      paperclip-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
