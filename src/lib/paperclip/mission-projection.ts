@@ -16,7 +16,7 @@ export interface PaperclipIssueView {
   id: string;
   identifier: string;
   title: string;
-  description: string;
+  description: string | null;
   status: PaperclipIssueStatus;
   priority: PriorityBand;
   assigneeAgentId: string | null;
@@ -33,11 +33,11 @@ export interface AgentIdMap {
 
 export interface CreateIssueBody {
   title: string;
-  description: string;
-  assigneeAgentId: string;
-  priority: PriorityBand;
-  status: PaperclipIssueStatus;
-  idempotencyKey: string;
+  description?: string;
+  assigneeAgentId?: string;
+  priority?: PriorityBand;
+  status?: PaperclipIssueStatus;
+  idempotencyKey?: string;
 }
 
 /** A Mission view augmented with the identifiers Paperclip supplies. */
@@ -159,6 +159,7 @@ export function missionToIssueCreate(
 
 export function issueToMission(issue: PaperclipIssueView, agents: AgentIdMap): ProjectedMission {
   if (!issue.assigneeAgentId) throw new UnassignedIssueError();
+  const body = issue.description ?? '';
 
   return {
     id: issue.id,
@@ -169,12 +170,12 @@ export function issueToMission(issue: PaperclipIssueView, agents: AgentIdMap): P
     createdByAgent: issue.createdByAgentId ? slugForUuid(issue.createdByAgentId, agents) : 'paperclip',
     createdByChat: 'paperclip',
     title: issue.title,
-    body: issue.description,
+    body,
     priority: toPriorityScore(issue.priority),
     status: toMissionStatus(issue.status),
     createdAt: issue.createdAt,
     updatedAt: issue.updatedAt,
-    bodyTruncated: issue.description.length >= 1200,
+    bodyTruncated: body.length >= 1200,
   };
 }
 
