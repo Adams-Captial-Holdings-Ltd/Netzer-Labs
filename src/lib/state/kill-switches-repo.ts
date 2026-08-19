@@ -104,7 +104,9 @@ export type KillSwitchName =
   | 'video_processing_disabled'
   // in-app OAuth connect flows + the Salesforce tool surface
   | 'oauth_connect_disabled'
-  | 'salesforce_disabled';
+  | 'salesforce_disabled'
+  // Paperclip missions integration
+  | 'paperclip_disabled';
 
 export const ALL_KILL_SWITCHES: readonly KillSwitchName[] = [
   'bedrock_global',
@@ -147,6 +149,7 @@ export const ALL_KILL_SWITCHES: readonly KillSwitchName[] = [
   'video_processing_disabled',
   'oauth_connect_disabled',
   'salesforce_disabled',
+  'paperclip_disabled',
 ];
 
 interface CacheEntry {
@@ -293,6 +296,7 @@ export const KILL_SWITCH_META: Record<KillSwitchName, KillSwitchMeta> = {
   chat_kb_ingest_disabled: { description: 'Stop auto-ingesting chat-dropped documents into the knowledge base. Inline analysis still works.', category: 'Integrations' },
   oauth_connect_disabled: { description: 'Disable the in-app OAuth Connect flows (start + callback refuse).', category: 'Integrations' },
   salesforce_disabled: { description: 'Disable the Salesforce query/record tools.', category: 'Integrations' },
+  paperclip_disabled: { description: 'Disable the Paperclip integration.', category: 'Integrations' },
   video_processing_disabled: { description: 'Disable video understanding (transcript + keyframes) for chat-uploaded videos. Files are still stored.', category: 'Integrations' },
   image_gen_disabled: { description: 'Disable image generation add-on.', category: 'Integrations' },
   tts_disabled: { description: 'Disable text-to-speech add-on.', category: 'Integrations' },

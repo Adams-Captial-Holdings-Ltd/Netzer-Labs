@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { App } from 'aws-cdk-lib';
 import { NetworkStack } from '../lib/network-stack.js';
+import { DatabaseStack } from '../lib/database-stack.js';
+import { FilesystemStack } from '../lib/filesystem-stack.js';
 import { StorageStack } from '../lib/storage-stack.js';
 import { SecretsStack } from '../lib/secrets-stack.js';
 import { DynamoStack } from '../lib/dynamo-stack.js';
@@ -47,6 +49,24 @@ const baseProps = { env, tier };
 const network = new NetworkStack(app, `${stackPrefix}-Network`, baseProps);
 const storage = new StorageStack(app, `${stackPrefix}-Storage`, baseProps);
 const guardrails = new GuardrailsStack(app, `${stackPrefix}-Guardrails`, baseProps);
+
+// Paperclip work engine substrate (ADR 0010): Aurora + EFS/log group.
+// Foundation-phase stacks (scripts/deploy.ts phase a); no Paperclip
+// service yet — that arrives in a later phase.
+const database = new DatabaseStack(app, `${stackPrefix}-Database`, {
+  ...baseProps,
+  vpc: network.vpc,
+  paperclipSecurityGroup: network.paperclipSecurityGroup,
+});
+database.addDependency(network);
+const filesystem = new FilesystemStack(app, `${stackPrefix}-Filesystem`, {
+  ...baseProps,
+  vpc: network.vpc,
+  paperclipSecurityGroup: network.paperclipSecurityGroup,
+});
+filesystem.addDependency(network);
+void database;
+void filesystem;
 
 // Depends on storage (for KMS keys)
 const secrets = new SecretsStack(app, `${stackPrefix}-Secrets`, {

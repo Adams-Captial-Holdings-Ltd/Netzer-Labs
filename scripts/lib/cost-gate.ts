@@ -31,6 +31,9 @@ export function resourceSummary(tierId: DeployTier, privateEndpoints: boolean): 
   const parts = ['ALB', `NAT x${shape.natGatewayCount}`];
   if (privateEndpoints) parts.push('VPC interface endpoints');
   parts.push('DynamoDB', 'KMS', `Fargate x${shape.fargateMinTasks}`);
+  // Paperclip work engine substrate (ADR 0010): always-on Aurora min-ACU
+  // floor + EFS. Deployed by phase a at every tier.
+  parts.push('Aurora Serverless v2 (Paperclip)', 'EFS');
   if (shape.wafEnabled) parts.push('WAF');
   if (shape.cloudFrontEnabled) parts.push('CloudFront');
   return parts.join(' + ');
@@ -42,11 +45,15 @@ export function resourceSummary(tierId: DeployTier, privateEndpoints: boolean): 
  * only when the estimator spawn fails; endpoints are priced separately below
  * because the ranges assume the default CCE_PRIVATE_ENDPOINTS off.
  */
+// Ranges include the Paperclip substrate added by ADR 0010 Phase 1
+// (Aurora Serverless v2 min-ACU ~$45/mo + EFS; the Paperclip Fargate task
+// arrives in a later phase). Estimated, not verified against pricing APIs
+// — re-derive from scripts/cost-estimate.mjs once a deployment exists.
 export const FALLBACK_RANGES: Record<DeployTier, string> = {
-  0: '$65 to $95',
-  1: '$130 to $180',
-  2: '$230 to $400',
-  3: '$300 to $800',
+  0: '$110 to $150',
+  1: '$175 to $235',
+  2: '$275 to $455',
+  3: '$345 to $855',
 };
 
 /**
