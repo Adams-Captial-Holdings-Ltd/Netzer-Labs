@@ -116,26 +116,20 @@ is fail-closed in [../infra/lib/github-oidc.ts](../infra/lib/github-oidc.ts):
 - The trust also requires
   `token.actions.githubusercontent.com:aud == sts.amazonaws.com`, so a token
   minted for some other audience cannot assume the role.
-- Some organisations and enterprises mint **immutable subject claims**, which
-  carry the numeric owner and repository ids —
+- Some orgs mint **immutable subject claims** carrying the numeric ids —
   `repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:staging` — instead of
-  the classic form above. The two are not interchangeable: because the trust
-  is `StringEquals`, a policy written in the wrong form matches nothing and
-  every deploy fails at `Not authorized to perform
-  sts:AssumeRoleWithWebIdentity`, which looks like an AWS permissions problem
-  and is not one. Set `CCE_GITHUB_OWNER_ID` and `CCE_GITHUB_REPO_ID` (both, or
-  neither) to generate the id-bearing form. Find out which form your
-  repository gets by reading `sub_claim_prefix` from:
+  the classic form above. Under `StringEquals` the wrong form matches nothing,
+  and the deploy fails at `sts:AssumeRoleWithWebIdentity`, which looks like an
+  AWS permissions problem and is not one. Set `CCE_GITHUB_OWNER_ID` and
+  `CCE_GITHUB_REPO_ID` for that form; `deploy.yml` does it when the
+  `CCE_GITHUB_IMMUTABLE_SUBJECT` variable is `1`. Which form you get:
 
   ```bash
   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
   ```
 
-  In `deploy.yml` this is opt-in through the `CCE_GITHUB_IMMUTABLE_SUBJECT`
-  Actions variable, because a fork whose org still mints the classic form
-  needs the classic subjects. Set it **before** the first green deploy: `cdk
-  deploy` rewrites the trust policy, so hand-patching IAM without also setting
-  the variable buys exactly one deploy and then locks CI out again.
+  Set the variable **before** the first green deploy — `cdk deploy` rewrites
+  the trust policy, so an IAM hand-fix alone survives exactly one deploy.
 
 Exact trust scope: only a workflow run in your named repo, on a ref or
 GitHub Environment you listed, can assume the role. A pull-request context,
