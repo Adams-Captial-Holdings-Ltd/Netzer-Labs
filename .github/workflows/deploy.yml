@@ -297,6 +297,10 @@ jobs:
           # Pin the task definition to the image we just pushed (never `latest`).
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
           CCE_CICD_ENABLED: '1'
+          # Paperclip Aurora/EFS substrate, off unless the variable says 1.
+          # Forwarded so arming it is `gh variable set CCE_PAPERCLIP_ENABLED
+          # --body 1` plus a redeploy, not a code change and a ladder trip.
+          CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
           CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
           # Must be forwarded or a CI deploy silently UNDOES the public
           # dashboard: synth resolves the feature off, drops the cloudflared
