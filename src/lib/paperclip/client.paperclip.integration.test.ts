@@ -51,7 +51,14 @@ async function createAssignedIssue(
   );
 }
 
-describe('Paperclip pinned-image contracts', () => {
+// These contracts need the disposable Paperclip harness (docker-compose.
+// paperclip.yml) and PAPERCLIP_TEST_AUTH_SECRET in the process environment —
+// the same variable Compose itself refuses to start without. The shared
+// LocalStack integration lane (CI and `npm run test:integration`) has
+// neither, so gate on the secret: armed harness runs the contracts for real
+// (`npm run test:paperclip:all`), everything else skips them visibly instead
+// of failing inside the fixture's docker invocation.
+describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image contracts', () => {
   let fixture: PaperclipBootstrap;
 
   beforeAll(async () => {
