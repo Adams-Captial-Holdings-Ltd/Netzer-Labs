@@ -80,3 +80,71 @@ describe('resolveGithubOidcTrust (fail-closed OIDC deploy trust)', () => {
     ).toThrow(/fully-qualified/);
   });
 });
+
+describe('immutable subject claims (owner/repo IDs in the sub)', () => {
+  const base = {
+    CCE_GITHUB_OWNER: 'acme',
+    CCE_GITHUB_REPO: 'cce-fork',
+    CCE_GITHUB_DEPLOY_REFS: 'refs/heads/staging',
+    CCE_GITHUB_DEPLOY_ENVIRONMENTS: 'staging',
+  };
+
+  it('embeds the numeric ids in every subject when both are given', () => {
+    const trust = resolveGithubOidcTrust({
+      ...base,
+      CCE_GITHUB_OWNER_ID: '318461635',
+      CCE_GITHUB_REPO_ID: '1324639154',
+    });
+    expect(trust.subjects).toEqual([
+      'repo:acme@318461635/cce-fork@1324639154:ref:refs/heads/staging',
+      'repo:acme@318461635/cce-fork@1324639154:environment:staging',
+    ]);
+    // Still exact-match, still audience-pinned.
+    expect(Object.keys(trust.conditions)).toEqual(['StringEquals']);
+    expect(trust.conditions.StringEquals['token.actions.githubusercontent.com:aud']).toBe(
+      'sts.amazonaws.com',
+    );
+  });
+
+  it('omits the ids entirely when neither is given', () => {
+    const trust = resolveGithubOidcTrust(base);
+    expect(trust.subjects).toEqual([
+      'repo:acme/cce-fork:ref:refs/heads/staging',
+      'repo:acme/cce-fork:environment:staging',
+    ]);
+  });
+
+  it('fails closed when only one id is given', () => {
+    // A half-set pair would silently build a subject that matches no token —
+    // exactly the outage this option exists to prevent.
+    expect(() =>
+      resolveGithubOidcTrust({ ...base, CCE_GITHUB_OWNER_ID: '318461635' }),
+    ).toThrow(/both CCE_GITHUB_OWNER_ID and CCE_GITHUB_REPO_ID/);
+    expect(() =>
+      resolveGithubOidcTrust({ ...base, CCE_GITHUB_REPO_ID: '1324639154' }),
+    ).toThrow(/both CCE_GITHUB_OWNER_ID and CCE_GITHUB_REPO_ID/);
+  });
+
+  it('rejects a non-numeric id', () => {
+    // Catches an un-interpolated workflow expression, which would otherwise
+    // be baked into the trust policy verbatim.
+    expect(() =>
+      resolveGithubOidcTrust({
+        ...base,
+        CCE_GITHUB_OWNER_ID: '318461635',
+        CCE_GITHUB_REPO_ID: '${{ github.repository_id }}',
+      }),
+    ).toThrow(/must be a numeric GitHub id/);
+  });
+
+  it('rejects an id-bearing owner or repo, pointing at the id inputs', () => {
+    // Hand-jamming the "@id" into the name would work by accident and hide
+    // where the value came from. One way to express this, not two.
+    expect(() =>
+      resolveGithubOidcTrust({ ...base, CCE_GITHUB_OWNER: 'acme@318461635' }),
+    ).toThrow(/CCE_GITHUB_OWNER_ID/);
+    expect(() =>
+      resolveGithubOidcTrust({ ...base, CCE_GITHUB_REPO: 'cce-fork@1324639154' }),
+    ).toThrow(/CCE_GITHUB_REPO_ID/);
+  });
+});

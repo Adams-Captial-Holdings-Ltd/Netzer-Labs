@@ -327,6 +327,27 @@ jobs:
           # running the workflow, never a hardcoded default.
           CCE_GITHUB_OWNER: ${{ github.repository_owner }}
           CCE_GITHUB_REPO: ${{ github.event.repository.name }}
+          # Some orgs and enterprises mint OIDC subjects that carry the numeric
+          # owner and repository ids —
+          #   repo:my-org@318461635/my-fork@1324639154:environment:staging
+          # — instead of the classic `repo:my-org/my-fork:environment:staging`.
+          # This organisation is one of them. The trust is StringEquals, so a
+          # policy generated in the other form matches nothing and EVERY deploy
+          # dies at "Not authorized to perform sts:AssumeRoleWithWebIdentity",
+          # which reads like an AWS permissions fault and is not one.
+          #
+          # Opt-in per repository rather than always-on: a fork whose org still
+          # mints the classic form needs the classic subjects, and sending ids
+          # unconditionally would lock that fork out the same way. Check which
+          # form you get, then set the variable to '1' if the prefix has ids:
+          #   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+          #   gh variable set CCE_GITHUB_IMMUTABLE_SUBJECT --body 1
+          #
+          # Set this BEFORE the first green deploy. `cdk deploy` rewrites the
+          # role's trust policy, so a hand-patched policy plus an unset variable
+          # buys exactly one deploy and then locks CI out again.
+          CCE_GITHUB_OWNER_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_owner_id || '' }}
+          CCE_GITHUB_REPO_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_id || '' }}
           CCE_GITHUB_DEPLOY_REFS: refs/heads/production,refs/heads/staging
           CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
         run: |
