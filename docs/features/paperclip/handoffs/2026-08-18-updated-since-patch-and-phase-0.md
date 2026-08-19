@@ -21,8 +21,8 @@ supersedes: none
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `7a2e733254a6a353dd30e2056cf6aabc0704d8c2` |
 | Commit at session end | see the Phase 0 docs commit that follows `a7ab7a325487c6ea06a3158f88d8cd45b73e0b53` |
-| Pushed | no |
-| PR | none |
+| Pushed | yes — branch pushed 2026-08-18 |
+| PR | #72 into development |
 | Deployed | no |
 
 ## 2. Current state summary
