@@ -95,8 +95,12 @@ written. Left off at: Phase 0 validation + commit.
 
 - [x] Milestone 1D — `paperclip_disabled` + mission authz pin (`4552445`, `483f5a7`)
 - [x] I3 blocker resolution via user-approved artifact patch (`527512d`, `a7ab7a3`)
-- [x] Phase 0 — ADR 0010, ADR 0009 superseding note, this feature folder
-- [ ] Phase 0 validation + commit — in progress at time of writing; real results in §7
+- [x] Phase 0 — ADR 0010, ADR 0009 superseding note, this feature folder (`227feca`)
+- [x] Phase 1 code (user said "go Phase 1") — DatabaseStack, FilesystemStack,
+  PaperclipSg, paperclip secret, second ECR ensure, cost floor, 9 CDK
+  assertion tests (`44aad84`). Steps 6–8 (deploy, ARM64 buildx answer, image
+  push) are NOT done — they touch the real AWS account and wait for an
+  explicit deploy go-ahead.
 
 ### 4.2 Files modified
 
@@ -121,6 +125,9 @@ written. Left off at: Phase 0 validation + commit.
 | `>= watermark + 1ms` not naive `>` | Bare `>`; `date_trunc` in SQL | Correct at ms resolution against microsecond storage, index-friendly |
 | Offset-required ISO validation | Accept anything `new Date` parses | A bare local time silently shifts a watermark by the server TZ — data-loss class |
 | Pin the coarse 403 envelope in the authz matrix | Assert the capability envelope | The legacy middleware fires first; the route swap must reproduce both layers |
+| Phase 1: leave `TIERS.dailyCostCapDefaultUsd` unchanged, despite plan §22.9 listing it | Raise it per the plan's letter | That value gates *Bedrock daily spend* at runtime (`cost_cap_per_day`); Aurora/EFS never flow through it, so raising it loosens a spend guardrail while modeling nothing. One-time decision per the process's exception table. |
+| Phase 1: endpoints-SG ingress for PaperclipSg added unconditionally, not gated on `CCE_PRIVATE_ENDPOINTS` | Plan's letter: add only when armed | Matches the repo's own convention (the Fargate 443 rule is unconditional; the endpoints themselves are gated) and avoids SG churn on flag flips, which the AlbSg comment explicitly warns about. Rule is inert without endpoints. |
+| Phase 1: log group created in FilesystemStack, not ObservabilityStack | ObservabilityStack (where the orchestrator's lives) | The plan's files-affected list does not touch ObservabilityStack; keeping the Paperclip substrate inside the two Paperclip stacks keeps `cdk destroy` rollback self-contained. |
 
 Durable items are in [ADR 0010](../../../adr/0010-paperclip-work-engine.md).
 
@@ -211,15 +218,18 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ### 6.1 Smallest next action
 
-Commit the Phase 0 documentation set (ADR 0010, ADR 0009 note, this folder,
-missions HANDOFF update) after both docs gates pass.
+Get the user's explicit go for Phase 1 steps 6–8: `cdk diff` against the
+real account (read every line), deploy the foundation stacks, answer the
+ARM64 question with one `docker buildx build --platform linux/arm64`
+against the Paperclip checkout, and push the patched image to the new ECR
+repo — recording the ARM64 answer in the feature HANDOFF.
 
 ### 6.2 Immediate next steps
 
-1. Run Phase 0 validation (docs gates, typecheck, full `npm test`) and commit.
-2. Start the plan's Paperclip client (C1): typed HTTP transport with the
-   `paperclip_disabled` gate at invoke, modelled on `src/lib/salesforce/client.ts`.
-3. Decide with the user when to push and open the PR into `development`.
+1. Phase 1 steps 6–8 (deploy-gated, above), then Phase 2 (Paperclip service
+   online) per the plan.
+2. Decide with the user when to push the branch and open the PR into
+   `development` (full pre-push validation list owed then).
 
 ### 6.3 Blockers and open questions
 
@@ -258,6 +268,15 @@ set (see A9), none new. Note the `scripts/ci/docs-links.test.ts` and
 `feature-knowledge.test.ts` *vitest* files are part of that environmental
 parser-failure set on Windows — the `.mjs` gates themselves (what Docs CI
 executes) ran green directly, as recorded above.
+
+Phase 1 verification (same session, after `44aad84`'s content): the 9 new
+CDK assertion tests pass; `npm run typecheck` clean; `npm run synth` clean
+with `CCE-Database` and `CCE-Filesystem` in the stack list; synthesized
+`CCE-Compute.template.json` contains **zero** `aperclip` matches (the
+orchestrator regression proxy — a real `cdk diff` against the account is
+still owed at deploy time); full `npm test` 185 files / 2108 tests passed,
+same 6 environmental failures. `cdk diff` was NOT run — it needs AWS
+credentials this session deliberately never used.
 
 ## 8. Environment state
 
