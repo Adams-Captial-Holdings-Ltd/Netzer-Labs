@@ -35,7 +35,9 @@ export class CostGuardrailsStack extends Stack {
     super(scope, id, props);
 
     const email = process.env.CCE_COST_ALERT_EMAIL?.trim();
-    const monthlyBudgetUsd = Number(process.env.CCE_MONTHLY_BUDGET_USD ?? '600');
+    // Default raised 600 → 650 for the Paperclip substrate (ADR 0010:
+    // Aurora min-ACU floor + EFS bill continuously from Phase 1).
+    const monthlyBudgetUsd = Number(process.env.CCE_MONTHLY_BUDGET_USD ?? '650');
     const anomalyMinUsd = Number(process.env.CCE_ANOMALY_MIN_USD ?? '25');
 
     // ── Cost Anomaly Detection ────────────────────────────────────────

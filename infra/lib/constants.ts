@@ -47,6 +47,9 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
   return {
     // ECR
     ecrRepo: `${app}-orchestrator`,
+    // Paperclip work engine (ADR 0010). Second repo so the pinned+patched
+    // Paperclip image never shares a tag namespace with the orchestrator.
+    paperclipEcrRepo: `${app}-paperclip`,
 
     // S3 buckets (suffixed with account+region at provision time for global uniqueness)
     configBucket: `${app}-config`,
@@ -133,6 +136,11 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
       // EcsSecret.fromSecretsManager. Retained on stack removal so a redeploy
       // never has to re-authorize the tunnel.
       cloudflareTunnel: `/${app}/cloudflare-tunnel`,
+      // Paperclip work engine (ADR 0010): operator-populated fields
+      // (better_auth_secret, reconciler_key, agent_keys, dispatch_secret).
+      // The Aurora-generated DB credentials live in their own secret below.
+      paperclip: `/${app}/paperclip`,
+      paperclipDb: `/${app}/paperclip-db`,
     },
 
     // Bedrock guardrail
@@ -141,6 +149,12 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
     // CloudWatch
     logGroupOrchestrator: `/${app}/orchestrator`,
     logGroupAlb: `/${app}/alb-access`,
+    paperclipLogGroup: `/${app}/paperclip`,
+
+    // Paperclip work engine (ADR 0010): Aurora cluster identifier + EFS
+    // name tag. Suffix-aware so CCE_NAME_SUFFIX staging keeps working.
+    paperclipDbCluster: `${app}-paperclip-db`,
+    paperclipEfs: `${app}-paperclip-efs`,
     alertTopic: `${app}-ops-alerts`,
     cloudTrailName: `${app}-audit`,
 
