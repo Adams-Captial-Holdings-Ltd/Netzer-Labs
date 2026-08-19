@@ -1,0 +1,4 @@
+# The Paperclip patch is applied with patch(1) inside a Linux container; a
+# CRLF checkout on Windows would make it fail against the image's LF sources.
+vendor/paperclip/updated-since.patch text eol=lf
+vendor/paperclip/Dockerfile text eol=lf

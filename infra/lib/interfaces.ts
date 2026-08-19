@@ -11,6 +11,9 @@ import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { IRole } from 'aws-cdk-lib/aws-iam';
 import type { ITopic } from 'aws-cdk-lib/aws-sns';
+import type { IDatabaseCluster } from 'aws-cdk-lib/aws-rds';
+import type { IFileSystem, IAccessPoint } from 'aws-cdk-lib/aws-efs';
+import type { ILogGroup } from 'aws-cdk-lib/aws-logs';
 import type { DeployTier } from './constants.js';
 
 /**
@@ -28,6 +31,8 @@ export interface NetworkOutputs {
   albSecurityGroup: SecurityGroup;
   fargateSecurityGroup: SecurityGroup;
   endpointsSecurityGroup: SecurityGroup;
+  /** Paperclip server task SG (ADR 0010) — single-node, stateful; port 3100. */
+  paperclipSecurityGroup: SecurityGroup;
 }
 
 /**
@@ -61,6 +66,27 @@ export interface SecretsOutputs {
   dbEncryptionSecret: ISecret;
   bedrockGuardrailsSecret: ISecret;
   vendorKeysSecret: ISecret;
+  /** Paperclip work engine (ADR 0010): operator-populated integration keys. */
+  paperclipSecret: ISecret;
+}
+
+/**
+ * DatabaseStack exports (Paperclip work engine, ADR 0010).
+ * The generated DB credentials secret is re-imported by ARN downstream
+ * (compute-stack.ts:200-226 pattern) to avoid cross-stack cycles.
+ */
+export interface DatabaseOutputs {
+  paperclipDbCluster: IDatabaseCluster;
+  paperclipDbSecret: ISecret;
+}
+
+/**
+ * FilesystemStack exports (Paperclip work engine, ADR 0010).
+ */
+export interface FilesystemOutputs {
+  paperclipFileSystem: IFileSystem;
+  paperclipAccessPoint: IAccessPoint;
+  paperclipLogGroup: ILogGroup;
 }
 
 /**

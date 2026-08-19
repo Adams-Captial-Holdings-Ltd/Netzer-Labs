@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { ALL_KILL_SWITCHES, KILL_SWITCH_META, type KillSwitchName } from './kill-switches-repo.js';
 
 describe('kill switches inventory', () => {
-  it('exports all 40 named switches (the two signature-check bypass switches were REMOVED in Wave A: an unsigned webhook forges the sender principal)', () => {
-    expect(ALL_KILL_SWITCHES.length).toBe(40);
+  it('exports all 41 named switches (the two signature-check bypass switches were REMOVED in Wave A: an unsigned webhook forges the sender principal)', () => {
+    expect(ALL_KILL_SWITCHES.length).toBe(41);
   });
 
   it('includes the oauth + salesforce switches', () => {

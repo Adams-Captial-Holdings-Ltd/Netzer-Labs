@@ -2,6 +2,17 @@
 
 **Status:** Accepted (2026-08, Missions v2 design)
 
+> **Superseding note (2026-08-18).** [ADR 0010](0010-paperclip-work-engine.md)
+> supersedes this ADR's **storage and execution model**: Paperclip becomes the
+> system of record for work items, and the Mission/MissionTask/MissionEvent row
+> design in `claudeclaw-mission-tasks` retires when the integration plan's ACL
+> cutover and retirement stage complete. The `/api/missions*` wire contract,
+> the capability model, and the coordinator/approval roles defined here remain
+> authoritative. Backlog items MISSION-011 … MISSION-034 in the
+> [missions v2 backlog](../missions-v2-backlog.md) evaporate under ADR 0010 and
+> close with a pointer to it at retirement; this ADR's status flips to
+> Superseded in that same change, not before.
+
 ## Context
 
 Netzer already has four agent-collaboration primitives, and every one of them is

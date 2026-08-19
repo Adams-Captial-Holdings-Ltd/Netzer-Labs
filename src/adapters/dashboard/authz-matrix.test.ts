@@ -71,6 +71,13 @@ vi.mock('../../lib/state/kill-switches-repo.js', async (importActual) => {
   };
 });
 
+// Mission storage: allowed reads return an empty board without touching DDB.
+// Mutations omit a body and stop at validation after the authorization gate.
+vi.mock('../../lib/state/mission-tasks-repo.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../lib/state/mission-tasks-repo.js')>();
+  return { ...actual, listMissionsForAgent: () => Promise.resolve([]) };
+});
+
 // Audit is fire-and-forget everywhere; stub so nothing reaches DDB.
 vi.mock('../../lib/audit/audit-writer.js', () => ({
   writeAudit: () => Promise.resolve(),
@@ -453,6 +460,68 @@ describe('authorization matrix — handler routes', () => {
     });
   }
 
+  const MISSION_ROUTES: Array<{
+    name: string;
+    path: string;
+    method: string;
+    capability: 'missions:read' | 'agents:write';
+    minTier: Tier;
+  }> = [
+    {
+      name: 'Mission list (GET /missions)',
+      path: '/missions',
+      method: 'GET',
+      capability: 'missions:read',
+      minTier: 'viewer',
+    },
+    {
+      name: 'Mission create (POST /missions)',
+      path: '/missions',
+      method: 'POST',
+      capability: 'agents:write',
+      minTier: 'operator',
+    },
+    {
+      name: 'Mission status (POST /missions/:owner/:id/status)',
+      path: '/missions/main/m1/status',
+      method: 'POST',
+      capability: 'agents:write',
+      minTier: 'operator',
+    },
+    {
+      name: 'Mission reassign (POST /missions/:owner/:id/reassign)',
+      path: '/missions/main/m1/reassign',
+      method: 'POST',
+      capability: 'agents:write',
+      minTier: 'operator',
+    },
+  ];
+  for (const route of MISSION_ROUTES) {
+    describe(`${route.name} — ${route.capability}`, () => {
+      for (const tier of ALL_TIERS) {
+        const allowed = TIER_INDEX[tier] >= TIER_INDEX[route.minTier];
+        it(`${tier} is ${allowed ? 'ALLOWED' : 'DENIED'}`, async () => {
+          const res = await dash(route.path, route.method, tier);
+          if (allowed) {
+            expectAllowed(res);
+          } else {
+            // viewer is stopped by the coarse legacy requiredRole='operator'
+            // middleware before the route's capability gate; pin that exact
+            // envelope so any route swap must reproduce it. The capability
+            // decision itself (agents:write / missions:read) is pinned at the
+            // decision level below.
+            expect(res.status).toBe(403);
+            expect(await res.json()).toEqual({
+              error: 'forbidden',
+              requiredRole: 'operator',
+              yourRole: tier,
+            });
+          }
+        });
+      }
+    });
+  }
+
   describe('Kill switch trip (POST /kill-switches) — security:write', () => {
     for (const tier of ALL_TIERS) {
       const allowed = TIER_INDEX[tier] >= TIER_INDEX.admin;
@@ -513,6 +582,46 @@ import {
   TEMPLATED_PROFILES,
   type Capability,
 } from '../../lib/auth/permissions.js';
+import {
+  ALL_KILL_SWITCHES,
+  KILL_SWITCH_META,
+} from '../../lib/state/kill-switches-repo.js';
+
+describe('Paperclip kill-switch inventory', () => {
+  it('registers paperclip_disabled with integration metadata', () => {
+    expect(ALL_KILL_SWITCHES).toContain('paperclip_disabled');
+    expect((KILL_SWITCH_META as Record<string, unknown>).paperclip_disabled).toEqual({
+      description: 'Disable the Paperclip integration.',
+      category: 'Integrations',
+    });
+  });
+});
+
+describe('mission capability gates (defense in depth)', () => {
+  it('denies a custom operator-rank profile with agents:write stripped on mutation', () => {
+    const stripped: Capability[] = TEMPLATED_PROFILES.operator.filter((c) => c !== 'agents:write');
+    const custom = {
+      profileId: 'custom-op-no-mission-write',
+      label: 'Operator without mission mutations',
+      capabilities: stripped,
+      createdBy: 'test',
+      createdAt: '2026-01-01',
+    };
+    expect(requireCapability(custom.profileId, 'agents:write', custom).allowed).toBe(false);
+  });
+
+  it('denies a custom viewer-rank profile with missions:read stripped on read', () => {
+    const stripped: Capability[] = TEMPLATED_PROFILES.viewer.filter((c) => c !== 'missions:read');
+    const custom = {
+      profileId: 'custom-viewer-no-mission-read',
+      label: 'Viewer without mission reads',
+      capabilities: stripped,
+      createdBy: 'test',
+      createdAt: '2026-01-01',
+    };
+    expect(requireCapability(custom.profileId, 'missions:read', custom).allowed).toBe(false);
+  });
+});
 
 describe('kill-switch capability gate (defense in depth)', () => {
   it('denies a custom admin-rank profile with security:write stripped', () => {

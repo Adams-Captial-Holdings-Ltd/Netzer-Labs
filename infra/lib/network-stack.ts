@@ -31,6 +31,7 @@ export class NetworkStack extends Stack implements NetworkOutputs {
   public readonly albSecurityGroup: SecurityGroup;
   public readonly fargateSecurityGroup: SecurityGroup;
   public readonly endpointsSecurityGroup: SecurityGroup;
+  public readonly paperclipSecurityGroup: SecurityGroup;
   public readonly endpoints: { [name: string]: InterfaceVpcEndpoint | GatewayVpcEndpoint } = {};
 
   constructor(scope: Construct, id: string, props: BaseStackProps) {
@@ -107,6 +108,24 @@ export class NetworkStack extends Stack implements NetworkOutputs {
       'ALB to Fargate port',
     );
 
+    // Paperclip work engine (ADR 0010): its own SG on its own port (3100),
+    // NOT PORT=3000 reuse — distinct in flow logs, metrics, and SG audits.
+    this.paperclipSecurityGroup = new SecurityGroup(this, 'PaperclipSg', {
+      vpc: this.vpc,
+      description: 'Paperclip server task (single-node, stateful)',
+      allowAllOutbound: true, // needs NAT egress for npm-installed agent CLIs
+    });
+    this.paperclipSecurityGroup.addIngressRule(
+      this.albSecurityGroup,
+      Port.tcp(3100),
+      'ALB to Paperclip',
+    );
+    this.albSecurityGroup.addEgressRule(
+      this.paperclipSecurityGroup,
+      Port.tcp(3100),
+      'ALB to Paperclip',
+    );
+
     this.endpointsSecurityGroup = new SecurityGroup(this, 'EndpointsSg', {
       vpc: this.vpc,
       description: 'VPC interface endpoints',
@@ -116,6 +135,14 @@ export class NetworkStack extends Stack implements NetworkOutputs {
       this.fargateSecurityGroup,
       Port.tcp(443),
       'Fargate to VPC endpoints',
+    );
+    // Paperclip tasks reach AWS APIs through the same PrivateLink endpoints
+    // when the opt-in flag is armed (matches the Fargate rule above; harmless
+    // otherwise because the endpoints themselves are gated below).
+    this.endpointsSecurityGroup.addIngressRule(
+      this.paperclipSecurityGroup,
+      Port.tcp(443),
+      'Paperclip to VPC endpoints',
     );
 
     // ── Gateway endpoints (free, no hourly charge) ─────────────────
