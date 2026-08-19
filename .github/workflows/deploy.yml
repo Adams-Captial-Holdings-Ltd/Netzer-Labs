@@ -330,9 +330,11 @@ jobs:
           # This org mints OIDC subjects carrying the numeric ids
           # (repo:owner@318461635/repo@1324639154:...). Opt-in, because a fork
           # whose org still mints the classic form needs the classic subjects.
-          # Set it BEFORE the first green deploy: `cdk deploy` rewrites this
-          # role's own trust policy, so a hand-patched IAM fix with the variable
-          # unset buys one deploy and then locks CI out again.
+          # Set it BEFORE the next PRODUCTION deploy: only the prod IAM stack
+          # creates this role (iam-stack.ts gates on !isStagingDeploy), so a
+          # prod deploy with the variable unset rewrites a hand-patched trust
+          # policy back to the classic form and locks CI out. Staging deploys
+          # never touch it.
           #   gh variable set CCE_GITHUB_IMMUTABLE_SUBJECT --body 1
           CCE_GITHUB_OWNER_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_owner_id || '' }}
           CCE_GITHUB_REPO_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_id || '' }}

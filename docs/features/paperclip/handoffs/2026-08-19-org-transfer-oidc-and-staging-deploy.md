@@ -79,8 +79,11 @@ verified by this session to match what the fixed CDK emits — so the next
   reads as an AWS permissions fault and is a GitHub-side format change.
 - **`cdk deploy` rewrites the deploy role's own trust policy.** `IamStack`
   builds `ClaudeClawGitHubDeploy` from `resolveGithubOidcTrust(process.env)`
-  whenever `CCE_CICD_ENABLED=1` and `CCE_NAME_SUFFIX` is empty. An IAM hand-fix
-  without the matching generator change therefore survives exactly one deploy.
+  whenever `CCE_CICD_ENABLED=1` and `CCE_NAME_SUFFIX` is empty — i.e. on a
+  **production** deploy only. Staging sets the suffix, so `isStagingDeploy` is
+  true and a staging deploy never touches the trust policy. An IAM hand-fix
+  therefore survives any number of staging deploys, and is undone by the next
+  production one unless the generator matches.
 - `DatabaseStack` and `FilesystemStack` (Phase 1) are wired unconditionally in
   `infra/bin/app.ts` — **no tier gate, no feature flag**. A Tier 0 staging
   `cdk deploy --all` provisions the same Aurora Serverless v2 PG17 cluster as
@@ -257,12 +260,12 @@ Short pointers only. The owning document has the detail; do not copy it here.
 |---|---|---|
 | M16 | After the org transfer, the trust policy was updated to the new **repo path** and the deploy still failed — a second session lost to an `AssumeRoleWithWebIdentity` error that reads like an AWS permissions problem. | An org transfer can change the claim **format**, not merely its contents. Decode the token's real `sub` before touching IAM. RESOLVED (this session). |
 | M17 | This session committed with explicit `git add <paths>`, believing that scoped the commit — but a concurrent agent had staged its own work into the **shared index**, and `git commit` committed the index, sweeping ~900 KB of another session's docs into a commit whose message described a small refactor. | `git add <paths>` scopes what *you* add, not what the commit contains. When another process may share the working tree, verify with `git status`/`git diff --cached` immediately before committing, or use `git commit <paths>`. Corrected by splitting the commit in two. RESOLVED (this session). |
-| P13 | Set `CCE_GITHUB_IMMUTABLE_SUBJECT` **before** the first green deploy, never after. A hand-patched IAM trust with the variable unset buys exactly one deploy, because that deploy rewrites the policy back to the classic form. | The fix has two halves with a required order; reversing it re-creates the outage and looks like a regression. |
+| P13 | Set `CCE_GITHUB_IMMUTABLE_SUBJECT` **before the next production deploy**. Only the prod IAM stack creates this role (`iam-stack.ts` gates on `!isStagingDeploy`), so a prod deploy with the variable unset rewrites a hand-patched trust policy back to the classic form. Staging deploys never touch it. | The fix has two halves with a required order; reversing it re-creates the outage and looks like a regression. First stated here without the prod-only qualifier — corrected against the code, per **P5**. |
 | P14 | When an OIDC assume-role fails, decode the token's real `sub` before changing IAM. | The error names AWS; the cause was on GitHub's side. |
 | A11 | `Adams-Captial-Holdings-Ltd/Netzer-Labs` mints **immutable** OIDC subjects: `repo:Adams-Captial-Holdings-Ltd@318461635/Netzer-Labs@1324639154:...`. | Verified twice on 2026-08-19 — a decoded token from run `32280530601`, and `sub_claim_prefix` from the OIDC customization API. Re-verify if the repo moves again. |
 | A12 | The deploy workflow needs no repository or environment **secrets**; it reads only `vars`, all of which survived the transfer. | Verified with `gh variable list` and the per-environment variables/secrets API. `CDK_DIFF_ROLE_ARN` is still absent and still only affects the scheduled drift workflow. |
 | A13 | The live `ClaudeClawGitHubDeploy` trust policy now lists the four id-bearing subjects and matches the fixed generator's output exactly. | Verified with `aws iam get-role` against the regenerated policy on 2026-08-19, so the next `cdk deploy` is a no-op on the trust rather than a flip-back. |
-| Trap | A `cdk deploy` rewrites `ClaudeClawGitHubDeploy`'s own trust policy, so an IAM hand-fix alone survives exactly one deploy. | [github-to-aws.md](../../../github-to-aws.md), `.github/workflows/deploy.yml` |
+| Trap | A **production** `cdk deploy` rewrites `ClaudeClawGitHubDeploy`'s own trust policy; staging deploys skip the role entirely (`iam-stack.ts` gates on `!isStagingDeploy`). | [github-to-aws.md](../../../github-to-aws.md), `infra/lib/iam-stack.ts` |
 | Trap | Phase 1's Aurora and EFS stacks have **no tier gate**, so Tier 0 staging provisions the same retained, deletion-protected cluster as production. | `infra/bin/app.ts`, `infra/lib/database-stack.ts` |
 | Trap | The Paperclip bootstrap fixture aborts on a **stale** stack (`Active Paperclip integration keys exist without the in-memory credential cache`), not only a missing one. Reset the disposable stack per run rather than reusing one a previous session left up. | `tests/fixtures/paperclip-bootstrap.ts`, [README §8](../README.md) |
 

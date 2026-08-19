@@ -128,8 +128,10 @@ is fail-closed in [../infra/lib/github-oidc.ts](../infra/lib/github-oidc.ts):
   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
   ```
 
-  Set the variable **before** the first green deploy — `cdk deploy` rewrites
-  the trust policy, so an IAM hand-fix alone survives exactly one deploy.
+  Set the variable **before** the next production deploy: the role is created
+  only by the prod IAM stack (`iam-stack.ts` gates on `!isStagingDeploy`), so a
+  prod deploy regenerates this trust policy and would undo an IAM hand-fix.
+  Staging deploys never touch it.
 
 Exact trust scope: only a workflow run in your named repo, on a ref or
 GitHub Environment you listed, can assume the role. A pull-request context,
