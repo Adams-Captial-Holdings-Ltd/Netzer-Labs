@@ -155,6 +155,17 @@ session log is not an accepted decision.
 |---|---|---|
 | | `docs/features/<slug>/README.md` / ADR / `development.md` | yes / no — if no, say why |
 
+### 4.5 Errors encountered this session
+
+| Error / symptom | Cause | Resolution | Status |
+|---|---|---|---|
+| Exact error text or observed failure | Root cause, if known | What fixed it, or what was attempted | resolved / open |
+
+Include the exact error text — it is what the next session greps for. This
+table is the session-local record; an error whose lesson will recur belongs
+**also** in section 5.2 as a mistake with its correction, and its guard in
+section 5.1. The ledger is what travels; this table is what happened here.
+
 ## 5. Carried-forward mistakes, assumptions and precautions
 
 > Copied forward from the previous session handoff, then appended to. Nothing is
