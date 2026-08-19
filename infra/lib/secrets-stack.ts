@@ -27,6 +27,7 @@ export class SecretsStack extends Stack implements SecretsOutputs {
   public readonly dbEncryptionSecret: Secret;
   public readonly bedrockGuardrailsSecret: Secret;
   public readonly vendorKeysSecret: Secret;
+  public readonly paperclipSecret: Secret;
 
   constructor(scope: Construct, id: string, props: SecretsStackProps) {
     super(scope, id, props);
@@ -104,6 +105,16 @@ export class SecretsStack extends Stack implements SecretsOutputs {
         'serper_api_key',
         'google_gemini_api_key',
       ],
+    );
+    // Paperclip work engine (ADR 0010). The Aurora-generated DB credentials
+    // live in the DatabaseStack's own secret; this one carries the
+    // integration keys phase b populates (better_auth_secret is generated,
+    // reconciler/agent keys are minted against the running instance later).
+    this.paperclipSecret = makeSecret(
+      'SecretPaperclip',
+      RESOURCE_NAMES.secrets.paperclip,
+      'Paperclip work engine: auth secret + bridge API keys',
+      ['better_auth_secret', 'reconciler_key', 'agent_keys', 'dispatch_secret'],
     );
   }
 }

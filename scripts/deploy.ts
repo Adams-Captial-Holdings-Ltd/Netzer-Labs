@@ -331,6 +331,7 @@ async function main(): Promise<void> {
       imageTag =
         (await currentGitShaShort()) ?? new Date().toISOString().replace(/[:.]/g, '-');
       await ensureEcrRepo(env);
+      await ensureEcrRepo(env, paperclipEcrRepoName(env));
       await runCloudBuild({
         region: env.AWS_REGION,
         accountId: env.AWS_ACCOUNT_ID,
@@ -436,6 +437,9 @@ async function main(): Promise<void> {
       `${prefix}-Secrets`,
       `${prefix}-Dynamo`,
       `${prefix}-Messaging`,
+      // Paperclip work engine substrate (ADR 0010): Aurora + EFS/log group.
+      `${prefix}-Database`,
+      `${prefix}-Filesystem`,
     ];
     const foundationOutputs = await cdkDeployStacks(env, imageTag, {
       stacks: foundationStacks,
@@ -918,23 +922,23 @@ function ecrHostOf(env: EnvBag): string {
 }
 
 /** Idempotent ECR repo create, shared by the local and cloud build paths. */
-async function ensureEcrRepo(env: EnvBag): Promise<void> {
+async function ensureEcrRepo(env: EnvBag, repoName: string = env.ECR_REPO_NAME): Promise<void> {
   const desc = await capture('aws', [
     'ecr',
     'describe-repositories',
     '--repository-names',
-    env.ECR_REPO_NAME,
+    repoName,
     '--region',
     env.AWS_REGION,
   ]);
   if (desc.code !== 0) {
     // eslint-disable-next-line no-console
-    console.log(info(`creating ECR repo ${env.ECR_REPO_NAME}`));
+    console.log(info(`creating ECR repo ${repoName}`));
     const created = await run('aws', [
       'ecr',
       'create-repository',
       '--repository-name',
-      env.ECR_REPO_NAME,
+      repoName,
       '--image-scanning-configuration',
       'scanOnPush=true',
       '--region',
@@ -946,11 +950,21 @@ async function ensureEcrRepo(env: EnvBag): Promise<void> {
   }
 }
 
+/**
+ * Paperclip work engine (ADR 0010): second ECR repo, derived from the
+ * operator-configured orchestrator repo name so the CCE_NAME_SUFFIX shape
+ * carries over (`claudeclaw[-suffix]-orchestrator` → `…-paperclip`).
+ */
+function paperclipEcrRepoName(env: EnvBag): string {
+  return env.ECR_REPO_NAME.replace(/-orchestrator$/, '-paperclip');
+}
+
 async function ecrLoginAndPush(env: EnvBag, tag: string): Promise<void> {
   section('ECR push');
   const ecrHost = ecrHostOf(env);
 
   await ensureEcrRepo(env);
+  await ensureEcrRepo(env, paperclipEcrRepoName(env));
 
   // Login
   const loginCode = await pipe(

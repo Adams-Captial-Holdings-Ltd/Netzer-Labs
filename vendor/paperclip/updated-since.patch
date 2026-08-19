@@ -1,0 +1,100 @@
+diff --git a/server/src/routes/issues.ts b/server/src/routes/issues.ts
+index 3138619..c553b18 100644
+--- a/server/src/routes/issues.ts
++++ b/server/src/routes/issues.ts
+@@ -4671,6 +4671,7 @@ export function issueRoutes(
+     const attention = req.query.attention as string | undefined;
+     const sortField = req.query.sortField as string | undefined;
+     const sortDir = req.query.sortDir as string | undefined;
++    const rawUpdatedSince = req.query.updatedSince as string | undefined;
+     const view = req.query.view as string | undefined;
+     const compactView = view === "compact";
+     const hasPlanDocument = parseOptionalBooleanQuery(req.query.hasPlanDocument);
+@@ -4718,6 +4719,21 @@ export function issueRoutes(
+       res.status(400).json({ error: "sortDir must be 'asc' or 'desc' when provided" });
+       return;
+     }
++    let updatedSince: Date | undefined;
++    if (rawUpdatedSince !== undefined) {
++      // Require an explicit UTC offset: a bare local time would silently shift
++      // a watermark by the server's timezone, making a sync poller skip rows.
++      // Four-digit years also keep watermark+1ms inside the ECMAScript range.
++      const isoWithOffset = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
++      const parsed = typeof rawUpdatedSince === "string" && isoWithOffset.test(rawUpdatedSince)
++        ? new Date(rawUpdatedSince)
++        : new Date(Number.NaN);
++      if (Number.isNaN(parsed.getTime())) {
++        res.status(400).json({ error: "updatedSince must be an ISO 8601 timestamp with an explicit UTC offset when provided" });
++        return;
++      }
++      updatedSince = parsed;
++    }
+     if (hasPlanDocument === null) {
+       res.status(400).json({ error: "hasPlanDocument must be true or false when provided" });
+       return;
+@@ -4779,12 +4795,16 @@ export function issueRoutes(
+       offset,
+       sortField: sortField === "updated" ? "updated" : undefined,
+       sortDir: sortDir === "asc" || sortDir === "desc" ? sortDir : undefined,
++      updatedSince,
+     };
+     const requestKey = issueListRequestKey({
+       req,
+       companyId,
+       normalizedQuery: {
+         ...listFilters,
++        // A Date would normalize to {} in the cache key, coalescing distinct
++        // watermarks into one in-flight compute; key on the ISO string instead.
++        updatedSince: updatedSince?.toISOString(),
+         view: compactView ? "compact" : undefined,
+       },
+     });
+diff --git a/server/src/services/issues.ts b/server/src/services/issues.ts
+index e128102..7616727 100644
+--- a/server/src/services/issues.ts
++++ b/server/src/services/issues.ts
+@@ -513,6 +513,14 @@ export interface IssueFilters {
+   offset?: number;
+   sortField?: "updated";
+   sortDir?: "asc" | "desc";
++  /**
++   * Only issues whose updatedAt is strictly newer than this watermark, at
++   * millisecond resolution. Compiled as `updated_at >= watermark + 1ms` because
++   * updated_at stores microseconds while API callers only ever observe
++   * millisecond-truncated values; a plain `>` would re-return a row at its own
++   * watermark. Served by issues_company_updated_idx.
++   */
++  updatedSince?: Date;
+ }
+ 
+ type IssueRow = typeof issues.$inferSelect;
+@@ -3588,6 +3596,9 @@ async function blockedInboxIssueConditions(
+   if (filters?.excludeRoutineExecutions && !filters?.originKind && !filters?.originId) {
+     conditions.push(ne(issues.originKind, "routine_execution"));
+   }
++  if (filters?.updatedSince) {
++    conditions.push(gte(issues.updatedAt, new Date(filters.updatedSince.getTime() + 1)));
++  }
+ 
+   return { conditions, contextUserId };
+ }
+@@ -4856,6 +4867,9 @@ export function issueService(db: Db) {
+       if (filters?.excludeRoutineExecutions && !filters?.originKind && !filters?.originId) {
+         conditions.push(ne(issues.originKind, "routine_execution"));
+       }
++      if (filters?.updatedSince) {
++        conditions.push(gte(issues.updatedAt, new Date(filters.updatedSince.getTime() + 1)));
++      }
+       const priorityOrder = sql`CASE ${issues.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
+       const searchOrder = sql<number>`
+         CASE
+@@ -5011,6 +5025,9 @@ export function issueService(db: Db) {
+         conditions.push(hasPlanDocumentCondition(companyId, filters.hasPlanDocument));
+       }
+       if (!shouldIncludePluginOperationIssues(filters)) conditions.push(nonPluginOperationIssueCondition());
++      if (filters?.updatedSince) {
++        conditions.push(gte(issues.updatedAt, new Date(filters.updatedSince.getTime() + 1)));
++      }
+       const [row] = await db
+         .select({ count: sql<number>`count(*)` })
+         .from(issues)
