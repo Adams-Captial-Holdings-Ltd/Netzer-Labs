@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { Trash2 } from 'lucide-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
@@ -9,6 +10,7 @@ import { EmptyState } from '../components/EmptyState';
 import { EmptyChat } from '../components/Icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { InfoTooltip } from '../components/InfoTooltip';
+import { toast } from '../components/Toast';
 
 interface Agent { id: string; displayName: string; status: string }
 // `error` marks an assistant turn the stream failed mid-flight. It renders in a
@@ -148,6 +150,17 @@ export function Chat() {
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // The conversation the delete dialog is armed for (null = dialog closed).
+  const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
+  // `deleting` drives the button label; `deletingRef` is what actually guards
+  // against duplicate requests. State is NOT enough on its own: setDeleting(true)
+  // does not apply until the next render, so a fast double-click runs both
+  // handlers against the same stale `deleting === false` closure and fires two
+  // DELETEs. Verified: three synchronous clicks produced three requests (one
+  // 200 plus two 404s, so the user saw a success toast and two error toasts for
+  // one action). A ref updates synchronously, which closes that window.
+  const [deleting, setDeleting] = useState(false);
+  const deletingRef = useRef(false);
   // Files staged for the next send (uploaded via presigned PUT on send, which
   // bypasses the CloudFront WAF 8KB body cap — same pattern as Knowledge).
   const [files, setFiles] = useState<File[]>([]);
@@ -251,6 +264,59 @@ export function Chat() {
     rememberChatId(agentId, id);
     setMessages([]);
     setStreamText('');
+  }
+
+  // Permanently delete a conversation. The row IS the conversation (turns are an
+  // attribute array on it), so the single DELETE removes the chat and its
+  // messages together — there is nothing to clean up client-side beyond state.
+  //
+  // Optimistic: the row leaves the sidebar immediately, and is put back if the
+  // server refuses. Ownership is NOT checked here — the server is the only
+  // authority on that (a client-side check would be advisory at best).
+  async function confirmDelete() {
+    const target = pendingDelete;
+    // Ref first, and set synchronously: this is the guard that actually holds
+    // against a double-click (see deletingRef above).
+    if (!target || deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleting(true);
+
+    // Snapshot INSIDE the updater rather than reading `conversations` from the
+    // enclosing closure: a refreshConversations() landing between opening the
+    // dialog and confirming would otherwise make the rollback restore a stale
+    // list and resurrect rows that are legitimately gone.
+    let snapshot: Conversation[] = [];
+    setConversations((prev) => {
+      snapshot = prev;
+      return prev.filter((x) => x.chatId !== target.chatId);
+    });
+
+    try {
+      await api.del(
+        `/sessions?agentId=${encodeURIComponent(target.agentId)}` +
+          `&chatId=${encodeURIComponent(target.chatId)}`,
+      );
+      // Only once the server has confirmed: if the deleted chat was the one on
+      // screen, fall back to the same empty state "New chat" produces, which
+      // also rewrites the sessionStorage pointer so a reload cannot restore a
+      // deleted chatId.
+      if (target.chatId === chatId) startNewChat();
+      clearApiCache(); // /sessions is cached for 60s; a stale list would re-show it
+      setPendingDelete(null);
+      toast('Chat deleted', 'success');
+    } catch (e) {
+      // Never navigate and never leave the row hidden on failure. Restore the
+      // snapshot, then reconcile against the server: a 404 means EITHER already
+      // deleted OR not owned by this principal, and only the server can say
+      // which — so refetch rather than guess.
+      console.error('Chat: delete failed', e);
+      setConversations(snapshot);
+      clearApiCache();
+      void refreshConversations(target.agentId);
+      toast('Could not delete that chat. Please try again.', 'error');
+    }
+    deletingRef.current = false;
+    setDeleting(false);
   }
 
   // Switching the selected agent must NOT carry the previous agent's chatId.
@@ -484,13 +550,13 @@ export function Chat() {
         {conversations.map((c) => {
           const active = c.chatId === chatId;
           return (
-            <li key={c.chatId}>
+            <li key={c.chatId} class="group relative">
               <button
                 type="button"
                 disabled={streaming}
                 onClick={() => void openConversation(c.chatId)}
                 aria-current={active ? 'true' : undefined}
-                class={`w-full text-left rounded-lg px-2 py-2 transition-colors duration-fast disabled:opacity-50 ${
+                class={`w-full text-left rounded-lg pl-2 pr-9 py-2 transition-colors duration-fast disabled:opacity-50 ${
                   active ? 'bg-surface-hover border border-border' : 'hover:bg-surface-hover border border-transparent'
                 }`}
               >
@@ -499,6 +565,24 @@ export function Chat() {
                   {relativeAge(c.updatedAt)}
                   {c.messageCount ? ` · ${c.messageCount} msg` : ''}
                 </span>
+              </button>
+              {/* A SIBLING of the row button, never nested inside it: a <button>
+                  within a <button> is invalid HTML, and nesting would make one
+                  click both open and delete the conversation. Hidden until
+                  hover/focus so the sidebar stays uncluttered, but always
+                  reachable by keyboard. */}
+              <button
+                type="button"
+                disabled={streaming || deleting}
+                onClick={(e) => { e.stopPropagation(); setPendingDelete(c); }}
+                aria-label={`Delete chat: ${conversationTitle(c)}`}
+                title="Delete chat"
+                class="absolute right-1 top-2 p-1 rounded text-muted opacity-0
+                  group-hover:opacity-100 focus-visible:opacity-100 hover:text-danger
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger
+                  disabled:opacity-0 disabled:pointer-events-none transition-colors duration-fast"
+              >
+                <Trash2 size={14} />
               </button>
             </li>
           );
@@ -733,6 +817,20 @@ export function Chat() {
         confirmLabel="Start new chat"
         onConfirm={() => { startNewChat(); setNewChatOpen(false); }}
         onCancel={() => setNewChatOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete chat?"
+        message="This will permanently delete this chat and its messages. This action cannot be undone."
+        confirmPhrase="DELETE"
+        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+        danger
+        onConfirm={() => { void confirmDelete(); }}
+        // Ignore Cancel/Escape/overlay while a delete is in flight, so the
+        // dialog cannot be dismissed out from under a request that is still
+        // deciding whether to roll back.
+        onCancel={() => { if (!deletingRef.current) setPendingDelete(null); }}
       />
       </div>
     </div>
