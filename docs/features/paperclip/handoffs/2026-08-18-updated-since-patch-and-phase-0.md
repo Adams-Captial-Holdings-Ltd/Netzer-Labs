@@ -252,10 +252,10 @@ a false `pass` is not.
 | `npm run typecheck` | clean (prior session) | clean (run twice this session, after 1D and after the count fix) |
 | `npm test` | at `4bdbf08`: 181 files / 2019 tests passed; 7 files / 20 failed; 6 skipped (environmental) | 182 files / 2098 passed; 7 files / 8 failed — kill-switch count regression found and fixed (`483f5a7`); remaining 6 failing files are the recorded environmental set |
 | Paperclip live gate (I3 + FI-4, focused vitest integration run) | I3 red by design (server lacked `updatedSince`) | green ×3: fresh stack, accumulated DB, second cached-credential process |
-| `npm run build` | not run | not run — no push this session; owed at push time |
-| `npm --prefix web run typecheck` | not run | not run — no web changes; owed at push time |
-| `npm --prefix web run build` | not run | not run — owed at push time |
-| `npm run local:test:integration` | not run | not run — Floci stack not brought up this session; owed at push time |
+| `npm run build` | not run | clean (exit 0) |
+| `npm --prefix web run typecheck` | not run | clean (exit 0) |
+| `npm --prefix web run build` | not run | clean; bundle built in 14.7s |
+| `npm run local:test:integration` | recorded gap: 1 known Floci failure | 9/10 files, 40/41 tests; the only failure is the documented `destroy.integration.test.ts > checkSecrets … schedule-deleted` Floci gap; Paperclip I3+FI-4 pass inside the suite (needs `PAPERCLIP_TEST_AUTH_SECRET` set — see P10) |
 | `node scripts/ci/docs-links.mjs` | not run | **OK** — 89 files, 605 internal links checked |
 | `node scripts/ci/feature-knowledge.mjs` | not run | **OK** |
 | `git diff --check` | not run | clean (working tree and staged) |
@@ -285,7 +285,9 @@ credentials this session deliberately never used.
 - **Active processes**: disposable Paperclip stack left **running and
   healthy** (`netzer-labs-paperclip-1` on the patched image,
   `netzer-labs-paperclip-db-1`); stop with `npm run test:paperclip:down`
-  (requires `PAPERCLIP_TEST_AUTH_SECRET` set and Docker on `PATH`).
+  (requires `PAPERCLIP_TEST_AUTH_SECRET` set and Docker on `PATH`). Floci
+  (`netzer-os-floci`) also left running for the integration suite; stop with
+  `npm run local:down`.
 - **Environment variables**: `PAPERCLIP_TEST_AUTH_SECRET`,
   `PAPERCLIP_TEST_BASE_URL` (optional), `DOCKER_BIN` (optional),
   `LOCALAPPDATA`. Names only; values were generated per-process and never
