@@ -314,8 +314,11 @@ environment variables and read every line (§6.3).
 
 - Paperclip ECS service, client, reconciler, ACL, tools, UI — later plan
   phases, in order.
-- Gating the Paperclip Aurora/EFS stacks behind a flag — offered and not
-  chosen; the user opted for `cdk diff` review instead.
+- ~~Gating the Paperclip Aurora/EFS stacks behind a flag~~ — offered early,
+  declined in favour of `cdk diff`, then **adopted** after the stacks failed a
+  real deploy and orphaned a retained EFS. `CCE_PAPERCLIP_ENABLED=1` now arms
+  them; default off. Verified by synth: 15 staging templates with the flag off
+  and no Database/Filesystem, 17 with it on.
 
 ## 7. Verification actually performed
 
