@@ -3205,7 +3205,7 @@ sequenceDiagram
     participant AD as PAPERCLIP adapters/http/execute.ts
     participant DISP as NETZAR (NEW) /api/paperclip/dispatch
     participant W as NETZAR (NEW) executePaperclipWork
-    participant LOOP as NETZAR src/agent/agent-loop.ts runAgentTurn
+    participant AGL as NETZAR src/agent/agent-loop.ts runAgentTurn
     participant PCL as NETZAR (NEW) src/lib/paperclip/client.ts
     participant API as PAPERCLIP routes/issues.ts
 
@@ -3230,9 +3230,9 @@ sequenceDiagram
     PCL->>API: GET /api/issues/{id}, GET /api/issues/{id}/comments
     API-->>W: title, description, thread
 
-    W->>LOOP: runAgentTurn({ agentId, chatId:"paperclip:"+issueId,<br/>userText, history, surface:"system" })
-    Note over LOOP: admitTurnSpend → kill switches → guardrail<br/>→ Converse tool loop → scanOutboundReply
-    LOOP-->>W: AgentTurnResponse { text, costUsd, blocked? }
+    W->>AGL: runAgentTurn({ agentId, chatId:"paperclip:"+issueId,<br/>userText, history, surface:"system" })
+    Note over AGL: admitTurnSpend → kill switches → guardrail<br/>→ Converse tool loop → scanOutboundReply
+    AGL-->>W: AgentTurnResponse { text, costUsd, blocked? }
 
     alt result.blocked
         W->>PCL: addComment(issueId, "guardrail intervened")
