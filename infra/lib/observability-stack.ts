@@ -406,11 +406,18 @@ export class ObservabilityStack extends Stack implements ObservabilityOutputs {
     // BREACHING on missing data: ContainerInsights stops publishing entirely
     // when a service reaches zero tasks, so "no data" is exactly the outage
     // this alarm exists to catch.
-    // Explicit floor, NOT tier.fargateMinTasks. Deriving it from the tier makes
-    // the threshold equal the desired count at T3, so a single task being
-    // replaced — the normal, self-healing case — would page someone. Two is the
-    // number that matters: below it, one AZ failure takes the hostname dark.
-    const minHealthyTasks = props.minHealthyTasks ?? 2;
+    // Capped at 2, and never above what the tier actually runs.
+    //
+    // Two ways to get this wrong, and the first draft hit both. Taking
+    // tier.fargateMinTasks straight makes the threshold equal the desired count
+    // at T3, so a single task being replaced — the normal, self-healing case —
+    // pages someone. Hardcoding 2 instead fires permanently on Tier 0, which
+    // legitimately runs one task: the 2026-08-15 staging deploy came up healthy
+    // with claudeclaw-staging-connector-capacity stuck in ALARM.
+    //
+    // So: 2 where there are at least 2 tasks to lose (below that, one AZ
+    // failure takes the hostname dark), and the tier floor where there are not.
+    const minHealthyTasks = props.minHealthyTasks ?? Math.min(2, tier.fargateMinTasks);
     const connectorCapacityAlarm = new Alarm(this, 'ConnectorCapacityAlarm', {
       alarmName: `${APP}-connector-capacity`,
       metric: new Metric({
