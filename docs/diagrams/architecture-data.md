@@ -37,16 +37,13 @@ flowchart LR
 
   subgraph sm["Secrets Manager, /claudeclaw/*"]
     SURFSEC["surface secrets: slack, telegram, dashboard"]
-    INTSEC["internal: db-encryption, bedrock-guardrails"]
+    INTSEC["internal: db-encryption, bedrock-guardrails, paperclip bridge keys"]
     VENDSEC["vendor-keys: search + Gemini API keys"]
-    PCSEC["paperclip: better-auth secret + bridge API keys"]
-    PCDBSEC["paperclip-db: Aurora-generated credentials (AWS-managed key)"]
   end
 
   subgraph paperclip["Paperclip work engine substrate (CCE-Database + CCE-Filesystem, ADR 0010)"]
     AURORA["Aurora Serverless v2 PG17: paperclip DB (RETAIN, deletion-protected, 14d PITR)"]
     PCEFS["EFS: PAPERCLIP_HOME worktrees + secrets master key file (RETAIN, AWS Backup ON)"]
-    PCLOGS["log group /claudeclaw/paperclip"]
   end
 
   DATAKEY --> CONVO
@@ -56,7 +53,6 @@ flowchart LR
   DATAKEY --> RAWB
   DATAKEY --> VECSTAGE
   DATAKEY --> SURFSEC
-  DATAKEY --> PCSEC
   CURATEDKEY --> CURATEDB
   LOGSKEY --> CWLOGS
   SESEV -->|publishes via logs key| CWLOGS
@@ -70,5 +66,5 @@ flowchart LR
 - Vendor API keys (Tavily/Brave/Exa/Serper/Gemini) live in the `vendor-keys` secret, never in plain task-def env (IaC readiness item 5).
 - The state bucket and deploy-lock table are the bootstrap primitives from `scripts/lib/lifecycle/bootstrap-state.ts`; they exist before any CDK stack and are owned by teardown, not `cdk destroy`.
 - Table names are `claudeclaw-*` (or `claudeclaw-<suffix>-*` when `CCE_NAME_SUFFIX` is set); the full list is in `infra/lib/constants.ts`.
-- **Paperclip substrate (ADR 0010)**: Aurora storage encryption and EFS encryption use AWS-managed keys, deliberately NOT the three CMKs — the cluster/filesystem are RETAIN so teardown's CMK erasure must never brick them. The `paperclip-db` secret is minted by RDS credential generation (AWS-managed key); only `/claudeclaw/paperclip` rides the data key like the other `makeSecret` entries. `issues.checkout_run_id` and the rest of the work-item schema live inside the Aurora `paperclip` database, owned by Paperclip's own migrations — Netzar never touches that schema (DL-2).
+- **Paperclip substrate (ADR 0010)**: Aurora storage encryption and EFS encryption use AWS-managed keys, deliberately NOT the three CMKs — the cluster/filesystem are RETAIN so teardown's CMK erasure must never brick them. Two secrets ride along (kept out of the drawing for the node budget): `/claudeclaw/paperclip` (bridge keys, in the internal-secrets node, data-key encrypted) and `/claudeclaw/paperclip-db` (Aurora-generated credentials, AWS-managed key). The `/claudeclaw/paperclip` CloudWatch log group is created by CCE-Filesystem. The work-item schema inside the Aurora `paperclip` database is owned by Paperclip's own migrations — Netzar never touches it (DL-2).
 - Sources: `infra/lib/storage-stack.ts`, `infra/lib/dynamo-stack.ts`, `infra/lib/secrets-stack.ts`, `infra/lib/database-stack.ts`, `infra/lib/filesystem-stack.ts`, `infra/lib/extensions-stack.ts`, `infra/lib/constants.ts`.
