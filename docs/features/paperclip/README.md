@@ -3,7 +3,7 @@ feature: paperclip
 document_role: index
 status: current
 observed_at: 2026-08-19
-as_of_commit: bfe870724dc38ee8cd470b4a44ce95e121e22f21
+as_of_commit: f1d602278035252a6579f40a5c3b84b41ec2814e
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/state/kill-switches-repo.ts
@@ -94,12 +94,17 @@ Verified and in `development`:
   hand-maintained places in `src/lib/state/kill-switches-repo.ts` (registry now
   41), plus a pinned four-route mission authorization matrix guarding the future
   route swap.
-- **Phase 1 infrastructure, as code only**: `CCE-Database` (Aurora Serverless v2
-  PG 17) and `CCE-Filesystem` (encrypted EFS + log group), a dedicated
-  `PaperclipSg` on port 3100, the `/claudeclaw/paperclip` secret with
-  `REPLACE_ME` placeholders, a second ECR repository, and an adjusted cost
-  floor. `cdk synth` is clean and `CCE-Compute` has **zero** Paperclip
-  references.
+- **Phase 1 infrastructure, as code only, and gated off**: `CCE-Database`
+  (Aurora Serverless v2 PG 17) and `CCE-Filesystem` (encrypted EFS + log group)
+  are synthesized **only when `CCE_PAPERCLIP_ENABLED=1`**, which is unset
+  everywhere. `cdk ls` returns 15 stacks with the flag off and 17 with it on.
+  Ungated and therefore present in every environment: the `PaperclipSg` on port
+  3100 and the `/claudeclaw/paperclip` secret with `REPLACE_ME` placeholders —
+  both already deployed to staging, both `RETAIN` with fixed names, so removing
+  them from the template now would orphan them (see the Phase 1 audit session
+  log, **P16**). No second ECR repository is created any more, and the cost gate
+  prices the substrate only when it is armed. `cdk synth` is clean and
+  `CCE-Compute` has **zero** Paperclip references.
 
 It is **not yet**: a Paperclip client, a reconciler, an ACL over
 `/api/missions*`, agent tools, or any Missions UI change. **Nothing is
@@ -109,8 +114,9 @@ has changed.
 ## 3. Current status and current source commit
 
 **Source evidence only.** Verified at commit
-`bfe870724dc38ee8cd470b4a44ce95e121e22f21` — the merge of PR #72 into
-`development` on 2026-08-19.
+`f1d602278035252a6579f40a5c3b84b41ec2814e` on
+`fix/paperclip-phase1-arming` — the Phase 1 over-engineering audit and its
+fixes, cut from `development` at `747cf8b`.
 
 Deployment evidence **does not exist**. The Phase 1 stacks have never been
 `cdk diff`ed or deployed against the real account; those steps are deliberately
@@ -118,8 +124,9 @@ gated on an explicit user go-ahead because they create billable resources.
 Source evidence and deployment evidence are not the same thing and are not
 conflated anywhere in this folder.
 
-Phases complete: §33 first milestone (1A–1D), Phase 0, Phase 1 **code**.
-Phase 1 steps 6–8 and Phases 2–10 are unstarted.
+Phases complete: §33 first milestone (1A–1D), Phase 0, Phase 1 **code**
+(audited and corrected 2026-08-19). Phase 1 steps **5–8** and Phases 2–10 are
+unstarted; step 5 is the `cdk diff` the plan lists before the deploy.
 
 ## 4. Source of truth
 
@@ -155,7 +162,7 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Filesystem substrate | `infra/lib/filesystem-stack.ts` | Encrypted EFS with automatic backups, access point pinned to posix 1000:1000 at `/paperclip`, the `/claudeclaw/paperclip` log group |
 | Network | `infra/lib/network-stack.ts` | `PaperclipSg` on port 3100 from the ALB — its own port, not a `PORT=3000` reuse — without touching the Fargate SG |
 | Secrets and names | `infra/lib/secrets-stack.ts`, `infra/lib/constants.ts` | `/claudeclaw/paperclip` secret with `REPLACE_ME` placeholders; suffix-aware names via `buildResourceNames()` |
-| Deploy and cost | `scripts/deploy.ts`, `scripts/lib/cost-gate.ts` | Both stacks join deploy phase a; second ECR repo ensured; cost gate and budget default reflect the new floor |
+| Deploy and cost | `scripts/deploy.ts`, `scripts/lib/cost-gate.ts` | Both stacks join deploy phase a **only when `CCE_PAPERCLIP_ENABLED=1`**, which `cdkEnvBag` forwards and `SYNTH_INPUT_ALLOWLIST` replays; no Paperclip ECR repo is created (Phase 2 creates it beside the image push); the cost gate lists and prices the substrate only when armed, and the budget default is back to 600 |
 
 ## 6. Current business/state rules
 

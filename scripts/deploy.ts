@@ -331,7 +331,6 @@ async function main(): Promise<void> {
       imageTag =
         (await currentGitShaShort()) ?? new Date().toISOString().replace(/[:.]/g, '-');
       await ensureEcrRepo(env);
-      await ensureEcrRepo(env, paperclipEcrRepoName(env));
       await runCloudBuild({
         region: env.AWS_REGION,
         accountId: env.AWS_ACCOUNT_ID,
@@ -430,6 +429,7 @@ async function main(): Promise<void> {
     // ── PHASE a — foundation stacks ──────────────────────────────────
     section('Phase a · foundation stacks');
     const prefix = env.CDK_STACK_NAME;
+    const paperclipEnabled = env.CCE_PAPERCLIP_ENABLED === '1';
     const foundationStacks = [
       `${prefix}-Network`,
       `${prefix}-Storage`,
@@ -438,8 +438,12 @@ async function main(): Promise<void> {
       `${prefix}-Dynamo`,
       `${prefix}-Messaging`,
       // Paperclip work engine substrate (ADR 0010): Aurora + EFS/log group.
-      `${prefix}-Database`,
-      `${prefix}-Filesystem`,
+      // Gated on the SAME flag infra/bin/app.ts reads. Naming them
+      // unconditionally does not fail loudly: `cdk deploy` errors only when
+      // NO pattern matches, and the six names above always match, so an
+      // unsynthesized CCE-Database is dropped SILENTLY and the deploy
+      // reports success having created no Aurora and no EFS.
+      ...(paperclipEnabled ? [`${prefix}-Database`, `${prefix}-Filesystem`] : []),
     ];
     const foundationOutputs = await cdkDeployStacks(env, imageTag, {
       stacks: foundationStacks,
@@ -922,7 +926,8 @@ function ecrHostOf(env: EnvBag): string {
 }
 
 /** Idempotent ECR repo create, shared by the local and cloud build paths. */
-async function ensureEcrRepo(env: EnvBag, repoName: string = env.ECR_REPO_NAME): Promise<void> {
+async function ensureEcrRepo(env: EnvBag): Promise<void> {
+  const repoName = env.ECR_REPO_NAME;
   const desc = await capture('aws', [
     'ecr',
     'describe-repositories',
@@ -950,21 +955,15 @@ async function ensureEcrRepo(env: EnvBag, repoName: string = env.ECR_REPO_NAME):
   }
 }
 
-/**
- * Paperclip work engine (ADR 0010): second ECR repo, derived from the
- * operator-configured orchestrator repo name so the CCE_NAME_SUFFIX shape
- * carries over (`claudeclaw[-suffix]-orchestrator` → `…-paperclip`).
- */
-function paperclipEcrRepoName(env: EnvBag): string {
-  return env.ECR_REPO_NAME.replace(/-orchestrator$/, '-paperclip');
-}
-
 async function ecrLoginAndPush(env: EnvBag, tag: string): Promise<void> {
   section('ECR push');
   const ecrHost = ecrHostOf(env);
 
+  // Orchestrator repo only. The Paperclip repo is created by whatever phase
+  // first PUSHES a Paperclip image (ADR 0010 Phase 2) — creating it here left
+  // an empty, uncatalogued repo on every deploy that teardown never removed.
+  // Use `buildResourceNames(nameSuffix).paperclipEcrRepo` when that lands.
   await ensureEcrRepo(env);
-  await ensureEcrRepo(env, paperclipEcrRepoName(env));
 
   // Login
   const loginCode = await pipe(
@@ -1128,6 +1127,7 @@ async function confirmationGate(env: EnvBag, skipConfirm: boolean): Promise<void
   section('Confirmation · this is the money gate');
   const tierId = clampTier(env.DEPLOY_TIER);
   const privateEndpoints = env.CCE_PRIVATE_ENDPOINTS === '1';
+  const paperclipEnabled = env.CCE_PAPERCLIP_ENABLED === '1';
   // The dollar figure comes from the repo's recalculable estimator so the
   // gate can never drift from docs/cost-guide.md. Fail-soft: a broken spawn
   // falls back to the static per-tier range inside estimateLine.
@@ -1156,8 +1156,8 @@ async function confirmationGate(env: EnvBag, skipConfirm: boolean): Promise<void
   console.log(
     '\n' +
       yellow(
-        `  A first deploy at tier ${tierId} creates ${resourceSummary(tierId, privateEndpoints)}.\n` +
-          `  Approximate monthly cost: ${estimateLine(estimatorJson, tierId, privateEndpoints)}.\n` +
+        `  A first deploy at tier ${tierId} creates ${resourceSummary(tierId, privateEndpoints, paperclipEnabled)}.\n` +
+          `  Approximate monthly cost: ${estimateLine(estimatorJson, tierId, privateEndpoints, paperclipEnabled)}.\n` +
           '  Resources are RETAINED on stack destroy and require manual deletion.',
       ),
   );
@@ -1230,6 +1230,15 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // the zone override above: without this forward, setting it in .env did
     // nothing and only an inline export worked.
     CCE_PRIVATE_ENDPOINTS: env.CCE_PRIVATE_ENDPOINTS ?? '',
+    // Paperclip Aurora/EFS substrate (ADR 0010), read by infra/bin/app.ts.
+    // Same allowlist trap as the three above, and it bit hardest here:
+    // without this forward, CCE_PAPERCLIP_ENABLED=1 in .env armed NOTHING —
+    // synth never saw the flag so the stacks were omitted, while phase a
+    // still named them, and `cdk deploy` drops unmatched names silently when
+    // other names match. The deploy reported green having created no Aurora
+    // and no EFS. Normalized to '1'/'' so this and the phase-a list can never
+    // disagree with app.ts's strict `=== '1'`.
+    CCE_PAPERCLIP_ENABLED: env.CCE_PAPERCLIP_ENABLED === '1' ? '1' : '',
     // Magic-link email config + Jarvis greeting. compute-stack reads these
     // from process.env (CCE_EMAIL_FROM/CCE_DASHBOARD_URL/CCE_SES_CONFIG_SET
     // default to '', JARVIS_GREETING to a generic line). Without forwarding

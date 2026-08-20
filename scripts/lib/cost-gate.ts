@@ -26,14 +26,21 @@ export function clampTier(raw: string | undefined): DeployTier {
  * What a first deploy at this tier actually creates. Interface endpoints are
  * opt-in and only listed when the flag is set; WAF/CloudFront are tier-gated.
  */
-export function resourceSummary(tierId: DeployTier, privateEndpoints: boolean): string {
+export function resourceSummary(
+  tierId: DeployTier,
+  privateEndpoints: boolean,
+  paperclip = false,
+): string {
   const shape = TIERS[tierId];
   const parts = ['ALB', `NAT x${shape.natGatewayCount}`];
   if (privateEndpoints) parts.push('VPC interface endpoints');
   parts.push('DynamoDB', 'KMS', `Fargate x${shape.fargateMinTasks}`);
   // Paperclip work engine substrate (ADR 0010): always-on Aurora min-ACU
-  // floor + EFS. Deployed by phase a at every tier.
-  parts.push('Aurora Serverless v2 (Paperclip)', 'EFS');
+  // floor + EFS. Opt-in like the endpoints above — infra/bin/app.ts
+  // synthesizes the two stacks only when CCE_PAPERCLIP_ENABLED=1, so listing
+  // them unconditionally told every operator that a routine deploy was
+  // creating an Aurora cluster it never creates.
+  if (paperclip) parts.push('Aurora Serverless v2 (Paperclip)', 'EFS');
   if (shape.wafEnabled) parts.push('WAF');
   if (shape.cloudFrontEnabled) parts.push('CloudFront');
   return parts.join(' + ');
@@ -42,18 +49,15 @@ export function resourceSummary(tierId: DeployTier, privateEndpoints: boolean): 
 /**
  * Honest fixed-floor ranges per tier, lifted from docs/cost-guide.md (which
  * derives them from the estimator plus real-deployment observation). Used
- * only when the estimator spawn fails; endpoints are priced separately below
- * because the ranges assume the default CCE_PRIVATE_ENDPOINTS off.
+ * only when the estimator spawn fails; endpoints and the Paperclip substrate
+ * are priced separately below because the ranges assume both defaults off
+ * (CCE_PRIVATE_ENDPOINTS and CCE_PAPERCLIP_ENABLED).
  */
-// Ranges include the Paperclip substrate added by ADR 0010 Phase 1
-// (Aurora Serverless v2 min-ACU ~$45/mo + EFS; the Paperclip Fargate task
-// arrives in a later phase). Estimated, not verified against pricing APIs
-// — re-derive from scripts/cost-estimate.mjs once a deployment exists.
 export const FALLBACK_RANGES: Record<DeployTier, string> = {
-  0: '$110 to $150',
-  1: '$175 to $235',
-  2: '$275 to $455',
-  3: '$345 to $855',
+  0: '$65 to $95',
+  1: '$130 to $180',
+  2: '$230 to $400',
+  3: '$300 to $800',
 };
 
 /**
@@ -65,7 +69,18 @@ export function estimateLine(
   estimatorStdout: string | null,
   tierId: DeployTier,
   privateEndpoints: boolean,
+  paperclip = false,
 ): string {
+  // Appended to BOTH branches, unlike the endpoints clause below. Neither
+  // branch prices the Paperclip substrate on its own: the ranges above are
+  // pre-Paperclip, and scripts/cost-estimate.mjs carries no Aurora/EFS line
+  // item at all. Adding it only to the fallback would hide the cost on the
+  // path that normally runs. Fold it into the estimator in Phase 2, when the
+  // Paperclip Fargate task lands and the figure is real.
+  const paperclipNote = paperclip
+    ? ', plus roughly $50/mo for the Paperclip Aurora min-ACU floor and EFS ' +
+      '(estimated, not verified against pricing APIs)'
+    : '';
   if (estimatorStdout) {
     try {
       const parsed = JSON.parse(estimatorStdout) as {
@@ -76,8 +91,8 @@ export function estimateLine(
       if (row && typeof row.fixedMonthlyUsd === 'number' && Number.isFinite(row.fixedMonthlyUsd)) {
         return (
           `~$${Math.round(row.fixedMonthlyUsd)}/mo fixed floor ` +
-          `(scripts/cost-estimate.mjs, unit prices as of ${parsed.asOf ?? 'unknown'}) ` +
-          `+ Bedrock token spend`
+          `(scripts/cost-estimate.mjs, unit prices as of ${parsed.asOf ?? 'unknown'})` +
+          `${paperclipNote} + Bedrock token spend`
         );
       }
     } catch {
@@ -87,5 +102,5 @@ export function estimateLine(
   const endpoints = privateEndpoints
     ? ', plus roughly $220/mo for the opt-in VPC interface endpoints'
     : '';
-  return `${FALLBACK_RANGES[tierId]}/mo fixed floor (docs/cost-guide.md)${endpoints} + Bedrock token spend`;
+  return `${FALLBACK_RANGES[tierId]}/mo fixed floor (docs/cost-guide.md)${endpoints}${paperclipNote} + Bedrock token spend`;
 }
