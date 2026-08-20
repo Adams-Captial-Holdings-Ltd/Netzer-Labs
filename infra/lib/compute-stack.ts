@@ -39,6 +39,7 @@ import {
   ListenerAction,
   ListenerCertificate,
   ListenerCondition,
+  type ApplicationListener,
 } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Certificate, CertificateValidation } from 'aws-cdk-lib/aws-certificatemanager';
 import { HostedZone, ARecord, RecordTarget } from 'aws-cdk-lib/aws-route53';
@@ -105,6 +106,22 @@ export class ComputeStack extends Stack implements ComputeOutputs {
   public readonly cluster: Cluster;
   public readonly service: FargateService;
   public readonly loadBalancer: ApplicationLoadBalancer;
+  /**
+   * The HTTPS:443 listener, for stacks that need to attach their own rule
+   * to it (the Paperclip service, ADR 0010 Phase 2).
+   *
+   * OPTIONAL ON PURPOSE, and callers must handle undefined: the listener is
+   * only created when DOMAIN_NAME is set, because it needs an ACM cert on a
+   * hosted zone. A tier with no domain has NO HTTPS listener at all.
+   *
+   * Two traps for anyone adding a rule:
+   *  - when tier.cloudFrontEnabled, the listener's DEFAULT action is a 403
+   *    and only rules matching the CloudFront origin header or the host
+   *    header forward, so a new rule needs its own explicit condition;
+   *  - priorities 1 and 2 are already taken (CloudFrontOnly, DirectHost).
+   *    Start at 3.
+   */
+  public readonly httpsListener?: ApplicationListener;
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
@@ -1043,6 +1060,8 @@ exports.handler = async () => {
             })
           : ListenerAction.forward([targetGroup]),
       });
+      this.httpsListener = httpsListener;
+
       if (tier.cloudFrontEnabled) {
         const cfOriginSecret = cloudFrontOriginSecret(this.account, this.region);
         httpsListener.addAction('CloudFrontOnly', {
