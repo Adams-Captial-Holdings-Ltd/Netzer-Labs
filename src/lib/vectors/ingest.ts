@@ -22,6 +22,7 @@ import { embedMany } from './embedder.js';
 import { chunkText, htmlToText, markdownToText, type Chunk } from './chunker.js';
 import {
   deleteDocument,
+  normalizeScope,
   putDocument,
   type VectorMetadata,
   type VectorRow,
@@ -89,7 +90,7 @@ export async function ingestDocument(
   onProgress?: (ev: IngestProgress) => void,
 ): Promise<IngestResult> {
   const docId = (req.docId ?? randomUUID()).replace(/[^A-Za-z0-9._-]/g, '_');
-  const scope = (req.scope ?? 'default').replace(/[^A-Za-z0-9_-]/g, '_');
+  const scope = normalizeScope(req.scope ?? 'default');
   const format = req.format ?? detectFormat(req.source);
   onProgress?.({ stage: 'extract' });
   let text: string;
