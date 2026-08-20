@@ -9,7 +9,8 @@ as_of_commit: f1d602278035252a6579f40a5c3b84b41ec2814e
 # Paperclip integration handoff
 
 - **Branch: `fix/paperclip-phase1-arming`**, cut from `development` at
-  `747cf8b`, three commits, **not yet pushed and no PR open**. Merge target
+  `747cf8b`, four commits, pushed, open as
+  [PR #81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81) →
   `development`, per [CONTRIBUTING.md](../../../CONTRIBUTING.md). It reaches no
   AWS environment — see the
   [branch-to-environment mapping](../../../development.md#branch-to-environment-mapping).
@@ -60,10 +61,11 @@ as_of_commit: f1d602278035252a6579f40a5c3b84b41ec2814e
   `diagrams-drift.mjs` (forced into PR context) all OK. `git diff --check`
   clean. `cdk diff` **not run** — it needs AWS credentials this session
   deliberately never used.
-- **Smallest next action:** push the branch and open the PR.
+- **Smallest next action:** read CI on PR #81, starting with the Mermaid job —
+  the local renderer is unusable on this machine, so CI is its only signal.
 
   ```bash
-  git push -u origin fix/paperclip-phase1-arming
+  gh pr checks 81 --repo Adams-Captial-Holdings-Ltd/Netzer-Labs
   ```
 
 ## Session log index

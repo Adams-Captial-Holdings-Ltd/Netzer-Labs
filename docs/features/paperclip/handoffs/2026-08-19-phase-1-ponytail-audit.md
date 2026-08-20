@@ -20,9 +20,9 @@ supersedes: 2026-08-19-staging-deploy-green
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `747cf8b` (`development`) |
-| Commit at session end | `f1d602278035252a6579f40a5c3b84b41ec2814e` |
-| Pushed | see §6.1 |
-| PRs | none opened yet |
+| Commit at session end | `1b206c6` (docs); `f1d602278035252a6579f40a5c3b84b41ec2814e` is the final **code** state and what `as_of_commit` names |
+| Pushed | yes |
+| PRs | [#81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81) → `development`, open |
 | Deployed | **no.** Nothing was deployed and no AWS resource was created or changed. |
 
 ## 2. Current state summary
@@ -329,18 +329,19 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ### 6.1 Smallest next action
 
-Push the branch and open the PR:
+Read CI on [PR #81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81):
 
 ```bash
-git push -u origin fix/paperclip-phase1-arming
+gh pr checks 81 --repo Adams-Captial-Holdings-Ltd/Netzer-Labs
 ```
 
-Then open one PR to `development`. Nothing here deploys.
+The Mermaid job is the one to look at first — the local renderer is unusable on
+this machine (**M21**), so CI is the only signal for it. Nothing here deploys.
 
 ### 6.2 Immediate next steps
 
-1. PR `fix/paperclip-phase1-arming` -> `development`, and read CI's Mermaid and
-   diagrams-drift results — the local mermaid renderer is unusable here (**M21**).
+1. Merge [#81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81)
+   into `development` once CI is green, then delete the branch (**P7**).
 2. Resolve the **ECR gap** carried in §6.3 before Phase 2, since Phase 2 cannot
    start without an image in ECR and CI still has no step that creates the
    Paperclip repository.
