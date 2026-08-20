@@ -53,6 +53,12 @@ rather than by work.
 - **`ComputeStack` exports its HTTPS listener** so Phase 2's listener rule has
   something to attach to. Optional by design: it is only built when
   `DOMAIN_NAME` is set.
+- **The CI deploy path creates the repo too.** CI does **not** run
+  `scripts/deploy.ts`; it runs `npx cdk deploy --all` and mirrors the phased
+  driver with its own steps. The phase-a fix above would therefore never have
+  executed on the path that reaches staging — the same shape as **M22**, one
+  layer up. `.github/workflows/deploy.yml` now ensures both repos, gated.
+- **Aurora's ceiling is tier-gated** (see decision 2 below).
 
 ## Ready for Phase 2?
 
@@ -71,10 +77,11 @@ rather than by work.
 `dispatch_secret` spelling wins, `agent_keys_json` / `dispatch_token` must not
 be used. Recorded in the audit; the plan text is left alone per **A10**.
 
-## Decisions taken 2026-08-20, not yet implemented
+## Decisions taken 2026-08-20
 
 Both were taken because Paperclip has to install into a **customer's own AWS
-account** as part of a Netzar OS install, not only into ours.
+account** as part of a Netzar OS install, not only into ours. The second is
+already built; the first is not.
 
 1. **The patched image will be built by CodeBuild in the customer's own
    account**, extending the existing Docker-free path in
@@ -83,13 +90,16 @@ account** as part of a Netzar OS install, not only into ours.
    precisely because local Docker was "the heaviest prerequisite in the whole
    install"; requiring it again for Paperclip would undo that. Not built yet —
    this is the remaining Phase 2 image blocker.
-2. **Aurora will be tier-gated on capacity, keeping its protection.**
-   `infra/lib/database-stack.ts` today has **zero** references to `TIERS` or
-   `props.tier`, so a Tier 0 "Hobby" install provisions the same always-on
-   Aurora Serverless v2 (0.5–4 ACU) as production — a permanent cost floor on
-   every customer install. `serverlessV2MinCapacity` / `MaxCapacity` become
-   tier-driven; `deletionProtection: true` and `RemovalPolicy.RETAIN` stay, so
-   the guards **P17** and **M19** exist for are untouched. Not built yet.
+2. **Aurora is tier-gated on capacity, protection kept — BUILT 2026-08-20.**
+   `TierShape.paperclipAuroraMaxAcu` drives `serverlessV2MaxCapacity`: Tier 0
+   **1 ACU**, Tier 1 2, Tier 2 4 (the value previously hardcoded for every
+   tier), Tier 3 8. `deletionProtection` and `RemovalPolicy.RETAIN` untouched,
+   so **P17** and **M19** still hold.
+
+   **This caps burst, it does not remove the floor.** The continuous cost is
+   `serverlessV2MinCapacity`, still 0.5 on every tier because 0.5 is the lowest
+   non-zero ACU. Cutting that means scale-to-zero, a runtime behaviour change
+   and a separate decision — deliberately not taken here.
 
 ## Blockers
 
@@ -102,7 +112,16 @@ account** as part of a Netzar OS install, not only into ours.
    contradictions need an author decision. §30's rollout and §25/§27's cutover
    were written to different premises and cannot both be executed. See
    [plan-audit.md](plan-audit.md) P1-C6 and P1-C7.
-4. `2026-08-19-staging-deploy-green.md` is still unmerged on
+4. **A staging deploy will very likely fail on an existing orphan.** **M19**
+   records that the 2026-08-19 `CCE-STAGING-Filesystem` rollback abandoned
+   EFS `fs-08f70326911d2ae49` and log group `/claudeclaw-staging/paperclip`
+   as `RETAIN` leftovers. `filesystem-stack.ts:71` creates that log group with
+   a **fixed name**, and CloudFormation cannot create a fixed-name log group
+   that already exists. Delete the orphan log group before arming
+   `CCE_PAPERCLIP_ENABLED` in staging, or the stack rolls back at exactly the
+   point it did last time. The orphan EFS will not block (its name is a tag,
+   not a key) but a retry creates a **second** filesystem and bills for both.
+5. `2026-08-19-staging-deploy-green.md` is still unmerged on
    `docs/staging-deploy-green-handoff`, so the session index below has an
    unlinkable row. Against its own merge-base it adds **one file and touches no
    code**, so merging it is safe and reverts nothing.
@@ -122,9 +141,16 @@ before any edit (**P1**) and by failing file **name**, never count (**A9**):
   and the listener export did not disturb synth.
 - `cdk diff` and any deploy: **not run.** This session made no AWS call.
 
-**Smallest next action:** open a PR for `fix/paperclip-phase2-readiness` → 
+**Smallest next action:** open a PR for `fix/paperclip-phase2-readiness` →
 `development`, and merge `docs/staging-deploy-green-handoff` to restore the
 session-index link.
+
+**How staging actually deploys.** `.github/workflows/deploy.yml` carries
+`on: push: branches: [staging]`, so **staging deploys automatically on a push
+to `staging`** — it is not `workflow_dispatch`-only. **A4** says otherwise and
+is correct only for production. Arming Paperclip there is
+`gh variable set CCE_PAPERCLIP_ENABLED --body 1` plus a push, and it creates
+billable Aurora and EFS. Clear the orphan in blocker 4 first.
 
 ## Session log index
 

@@ -172,7 +172,8 @@ Commits: `be6a89e`, `be807dd`, `8b65800`, `4a0fa98`, `baf39c9`, `c696a29`,
 | **`httpsListener` exported as optional** | Non-optional; pass the listener as a prop into `PaperclipStack` | It genuinely does not exist without `DOMAIN_NAME`; a non-optional field would lie. `ComputeOutputs` left alone — it declares `albDnsName` only and three public fields already sit outside it. |
 | **P1-C4 recorded in `plan-audit.md` only** | Also edit `implementation-plan.md` §15.5 | The plan is a vendored historical artifact (**A10**) and the audit is already its correction layer, by the audit's own rule 3. |
 | **Image build will ride `cloud-build.ts`** | Publish a prebuilt image with cross-account pull; require local Docker | Keeps everything in the customer's account and preserves the Docker-free install. Not yet built. |
-| **Aurora tier-gated on capacity only** | Also tier-gate `deletionProtection`/`RemovalPolicy` | Cuts the Tier 0 cost floor without weakening the guards **P17** and **M19** exist for. Not yet built. |
+| **Aurora ceiling tier-gated, floor left alone** | Also tier-gate `deletionProtection`/`RemovalPolicy`; also drop the Tier 0 floor to 0 (scale-to-zero) | Built. `TierShape.paperclipAuroraMaxAcu` drives `serverlessV2MaxCapacity` (T0 1, T1 2, T2 4 = the old hardcoded value, T3 8). Protection kept, so **P17**/**M19** hold. The floor stays 0.5 everywhere because 0.5 is the lowest non-zero ACU: this caps burst but does **not** remove the continuous cost, and removing it means scale-to-zero, a runtime behaviour change rather than a size knob. Stated plainly rather than claimed as a cost fix. |
+| **Mirror the ECR create into `.github/workflows/deploy.yml`** | Leave CI alone; treat the local path as sufficient | CI never runs `scripts/deploy.ts`, so leaving it would have shipped a fix that cannot execute in staging (**M27**). |
 | **No `compute-stack.test.ts` created** | Add a synth test for the exported listener | No such file exists; one test asserting a field assignment is over-engineering. Typecheck covers it and Phase 2's stack test will exercise it. |
 
 ### 4.4 Durable facts promoted out of this log
@@ -335,6 +336,10 @@ Short pointers only. The owning document has the detail; do not copy it here.
 | P19 | `PutSecretValue` replaces the **whole** `SecretString`. A secret whose fields are owned by different phases needs `mergeExisting`, not a plain plan. | `/claudeclaw/paperclip` has one deploy-owned field and three minted against the running instance later. Before adding any secret plan, ask which phase owns each field. |
 | P20 | `scripts/ci/diagrams-drift.mjs` diffs `origin/<base>...HEAD` — **committed** changes only. Editing a diagram without committing it does not clear the gate. | Costs a confusing re-run otherwise. Also: `compute-stack.ts` is mapped to **three** diagrams, so one source edit can require three notes. |
 | Trap | `git commit -- <paths> -m "<msg>"` fails: everything after `--` is a pathspec. | Use `git commit -m "<msg>" -- <paths>`. |
+| M27 | The Paperclip ECR create was added to `scripts/deploy.ts` phase a only. **CI does not run `scripts/deploy.ts`** — it runs `npx cdk deploy --all` and mirrors the phased driver with its own steps, so the fix would not have executed on the path that reaches staging. | The deploy driver has **two homes**, exactly as a feature flag has five (**M22**). The CI step's own comment already recorded the previous round of this: "scripts/deploy.ts does this for local deploys; the CI workflow never did, so the first staging deploy hit a 403". Grep `.github/workflows/deploy.yml` for anything you add to `deploy.ts`. RESOLVED (`c6d491f`). |
+| A25 | **Staging deploys automatically on a push to the `staging` branch** (`on: push: branches: [staging]`). It is not `workflow_dispatch`-only. | **A4** says deployment "is `workflow_dispatch` only and requires typing `deploy`". That is correct for **production** and wrong for staging. Merging to `staging` IS a deploy. |
+| A26 | **CI populates no secrets at all.** `put-secret-value` appears **zero** times in `.github/workflows/deploy.yml`, so `populateSecretsV2` never runs on the CI path — for any secret, not just Paperclip. | A staging deploy therefore leaves `/claudeclaw-staging/paperclip` at `REPLACE_ME` regardless of the phase-b plan. Pre-existing and architectural. Phase 2 needs a decision on how staging gets `better_auth_secret`. |
+| P21 | Before re-deploying a `RETAIN`-bearing stack that previously rolled back, **check for orphans with FIXED names first**. | `filesystem-stack.ts:71` creates `/claudeclaw-staging/paperclip` with an explicit `logGroupName`, and **M19** says the 2026-08-19 rollback abandoned exactly that log group. CloudFormation cannot create a fixed-name log group that already exists, so the stack rolls back at the same point again. A tag-named resource like EFS fails differently and worse: it succeeds, and you pay twice. |
 
 ## 6. Pending work
 
@@ -366,10 +371,18 @@ Nothing here deploys.
 - [ ] **Nothing builds or pushes the Paperclip image.** The repo now exists and
   the base image is confirmed arm64-capable, but `vendor/paperclip/Dockerfile`
   is invoked by nothing. Decided home: `cloud-build.ts`. Not built.
-- [ ] **Aurora is untiered** (`database-stack.ts` has zero `TIERS` references),
-  so a Tier 0 customer install provisions the production cluster. Decided fix:
-  tier-gate `serverlessV2Min/MaxCapacity`, keep `deletionProtection` and
-  `RETAIN`. Not built.
+- [x] ~~Aurora is untiered~~ **BUILT.** The ceiling is tier-driven (T0 1 ACU).
+  The floor is still 0.5 on every tier and deliberately so — see §4.3.
+- [ ] **A staging deploy will very likely fail on an existing orphan.** **M19**
+  abandoned log group `/claudeclaw-staging/paperclip`, and
+  `filesystem-stack.ts:71` creates it with a **fixed name**. Delete the orphan
+  before arming `CCE_PAPERCLIP_ENABLED` in staging, or the stack rolls back at
+  the same point as last time. The orphan EFS `fs-08f70326911d2ae49` will not
+  block but will be billed alongside a second filesystem. **P21.**
+- [ ] **Nothing gives staging a `better_auth_secret`.** CI populates no
+  secrets (**A26**), so the phase-b plan never runs there. Needs a decision
+  before Phase 2: a CI step reading a GitHub secret, or a one-off manual
+  `put-secret-value`.
 - [ ] **Uninstall is not clean for a customer.** Aurora is
   `deletionProtection: true` + `RETAIN`, so teardown cannot remove it. This was
   a deliberate choice (**P17**, **M19**) and the user chose to keep it, so it
