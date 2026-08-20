@@ -107,19 +107,10 @@ export class ComputeStack extends Stack implements ComputeOutputs {
   public readonly service: FargateService;
   public readonly loadBalancer: ApplicationLoadBalancer;
   /**
-   * The HTTPS:443 listener, for stacks that need to attach their own rule
-   * to it (the Paperclip service, ADR 0010 Phase 2).
-   *
-   * OPTIONAL ON PURPOSE, and callers must handle undefined: the listener is
-   * only created when DOMAIN_NAME is set, because it needs an ACM cert on a
-   * hosted zone. A tier with no domain has NO HTTPS listener at all.
-   *
-   * Two traps for anyone adding a rule:
-   *  - when tier.cloudFrontEnabled, the listener's DEFAULT action is a 403
-   *    and only rules matching the CloudFront origin header or the host
-   *    header forward, so a new rule needs its own explicit condition;
-   *  - priorities 1 and 2 are already taken (CloudFrontOnly, DirectHost).
-   *    Start at 3.
+   * HTTPS:443 listener, so another stack can attach a rule (Paperclip, ADR
+   * 0010 Phase 2). Undefined when DOMAIN_NAME is unset: no cert, no listener.
+   * Adding a rule: priorities 1-2 are taken, and at cloudFrontEnabled tiers
+   * the default action is 403, so a new rule needs its own condition.
    */
   public readonly httpsListener?: ApplicationListener;
 

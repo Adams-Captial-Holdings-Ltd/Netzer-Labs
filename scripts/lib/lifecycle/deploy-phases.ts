@@ -120,19 +120,14 @@ export interface SecretWritePlan {
  * live value degrades to the planned value rather than failing the deploy.
  */
 export function mergeSecretValue(existing: string | undefined, planned: string): string {
-  const next = JSON.parse(planned) as Record<string, unknown>;
-  let base: Record<string, unknown> = {};
-  if (existing !== undefined && existing !== '') {
-    try {
-      const parsed: unknown = JSON.parse(existing);
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        base = parsed as Record<string, unknown>;
-      }
-    } catch {
-      base = {};
-    }
+  let live: unknown;
+  try {
+    live = JSON.parse(existing ?? '');
+  } catch {
+    live = null;
   }
-  return JSON.stringify({ ...base, ...next });
+  const base = live !== null && typeof live === 'object' && !Array.isArray(live) ? live : {};
+  return JSON.stringify({ ...base, ...(JSON.parse(planned) as object) });
 }
 
 /**
