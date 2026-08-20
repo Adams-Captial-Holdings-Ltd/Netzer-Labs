@@ -37,6 +37,23 @@ export interface IamStackProps extends BaseStackProps {
  * KMS, S3, Secrets, and DDB rely on their default account-root key/resource
  * policies to permit IAM-based access in conjunction with our role policy.
  */
+/**
+ * `ecr:RepositoryName` patterns the CI deploy role may create.
+ *
+ * Every ECR repo name the deploy can bootstrap MUST match one of these, or the
+ * run dies with AccessDeniedException at the image-build phase — before
+ * `cdk deploy`, so it cannot apply its own fix. `iam-ecr-create.test.ts` checks
+ * this list against `buildResourceNames()` for a range of `CCE_NAME_SUFFIX`
+ * values, so adding a repo to `constants.ts` without adding it here fails the
+ * build rather than a deploy.
+ */
+export const ECR_CREATE_NAME_PATTERNS = [
+  'claudeclaw-orchestrator',
+  'claudeclaw-*-orchestrator',
+  'claudeclaw-paperclip',
+  'claudeclaw-*-paperclip',
+];
+
 export class IamStack extends Stack implements IamOutputs {
   public readonly taskRole: Role;
 
@@ -765,20 +782,25 @@ export class IamStack extends Stack implements IamOutputs {
       // requires `resources: ['*']` because the repo ARN doesn't exist yet
       // when the create call is made; the API itself does not accept an
       // ARN-scoped Resource for Create. We narrow blast radius with a
-      // resource-name condition on the orchestrator naming pattern, so
-      // this role cannot create arbitrary ECR repositories.
+      // resource-name condition on the app's repo naming patterns, so this
+      // role cannot create arbitrary ECR repositories.
+      //
+      // BOTH app repos must be listed. Paperclip (ADR 0010) introduced a
+      // second repo, `claudeclaw[-suffix]-paperclip`, created by the same
+      // deploy phase; while this condition named only the orchestrator, an
+      // armed deploy died with AccessDeniedException on CreateRepository.
+      // That failure is unrecoverable in-run: the create happens during the
+      // image-build phase, BEFORE `cdk deploy`, so the run can never apply
+      // its own IAM fix. Adding a third repo means adding it here too.
       cicdRole.addToPolicy(
         new PolicyStatement({
-          sid: 'EcrCreateOrchestratorRepo',
+          sid: 'EcrCreateAppRepos',
           effect: Effect.ALLOW,
           actions: ['ecr:CreateRepository'],
           resources: ['*'],
           conditions: {
             StringLike: {
-              'ecr:RepositoryName': [
-                'claudeclaw-orchestrator',
-                'claudeclaw-*-orchestrator',
-              ],
+              'ecr:RepositoryName': ECR_CREATE_NAME_PATTERNS,
             },
           },
         }),
