@@ -27,6 +27,15 @@
   "notes": "Bootstrap primitive 3 of 3: the private ECR repo (release-image import needs it before Compute synth, plan item 41). Teardown deletes all images (immutable per-deploy tags included) then the repository. ECR repos cost by stored image bytes, so leftover images are listed in the costed retained summary."
  },
  {
+  "id": "paperclip-ecr-repo",
+  "kind": "ecr-repository",
+  "nameOrPattern": "claudeclaw<suffix>-paperclip",
+  "createdBy": "deploy-script",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Paperclip work engine (ADR 0010): the repo holding the pinned+patched Paperclip image built from vendor/paperclip/Dockerfile. Created idempotently by deploy phase a (scripts/deploy.ts, next to ensureSchedulerGroup) ONLY when CCE_PAPERCLIP_ENABLED=1, so it is absent on installs that never armed the substrate. Kept out of CDK for the same reason as the orchestrator repo: the image must exist before Compute synth. Named from buildResourceNames().paperclipEcrRepo so it tracks CCE_NAME_SUFFIX. Teardown deletes it with --force in the final sweep, tolerating not-found."
+ },
+ {
   "id": "agentcore-mcp-gateways",
   "kind": "bedrock-agentcore-gateway",
   "nameOrPattern": "cce-mcp-gateway-* (plus per-gateway service roles and targets)",

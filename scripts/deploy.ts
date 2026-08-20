@@ -451,6 +451,17 @@ async function main(): Promise<void> {
     });
     await journal('foundation-complete', { stacks: foundationStacks });
     await ensureSchedulerGroup(env, nameSuffix);
+    // Paperclip work engine (ADR 0010): the ECR repo the pinned+patched
+    // image is pushed to in Phase 2. Gated on the SAME flag as the two
+    // stacks above, so an unarmed deploy creates nothing - the previous
+    // ungated version left an empty, uncatalogued repo on every deploy
+    // (M23). Named from buildResourceNames so it tracks CCE_NAME_SUFFIX,
+    // never a regex over ECR_REPO_NAME. Catalogued as paperclip-ecr-repo
+    // and deleted in scripts/teardown.ts's final sweep -- note the catalog
+    // only REPORTS, so a row there without that delete would orphan it.
+    if (paperclipEnabled) {
+      await ensureEcrRepo(env, buildResourceNames(nameSuffix).paperclipEcrRepo);
+    }
 
     // ── PHASE b — populate + validate secrets ────────────────────────
     section('Phase b · populate secrets (per-deploy staging labels)');
@@ -926,8 +937,10 @@ function ecrHostOf(env: EnvBag): string {
 }
 
 /** Idempotent ECR repo create, shared by the local and cloud build paths. */
-async function ensureEcrRepo(env: EnvBag): Promise<void> {
-  const repoName = env.ECR_REPO_NAME;
+async function ensureEcrRepo(
+  env: EnvBag,
+  repoName: string = env.ECR_REPO_NAME,
+): Promise<void> {
   const desc = await capture('aws', [
     'ecr',
     'describe-repositories',
@@ -959,10 +972,9 @@ async function ecrLoginAndPush(env: EnvBag, tag: string): Promise<void> {
   section('ECR push');
   const ecrHost = ecrHostOf(env);
 
-  // Orchestrator repo only. The Paperclip repo is created by whatever phase
-  // first PUSHES a Paperclip image (ADR 0010 Phase 2) — creating it here left
-  // an empty, uncatalogued repo on every deploy that teardown never removed.
-  // Use `buildResourceNames(nameSuffix).paperclipEcrRepo` when that lands.
+  // Orchestrator repo only. The Paperclip repo is created in phase a,
+  // gated on CCE_PAPERCLIP_ENABLED, because it belongs with the substrate
+  // it serves rather than with the orchestrator's image push.
   await ensureEcrRepo(env);
 
   // Login
