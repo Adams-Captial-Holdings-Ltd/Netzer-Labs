@@ -45,10 +45,37 @@ function ingressRules(template: Template): IngressProps[] {
   ).map((r) => r.Properties as IngressProps);
 }
 
+function auroraMaxAcuAt(tier: 0 | 1 | 2 | 3): number {
+  const app = new App();
+  const network = new NetworkStack(app, 'CCE-Network', { tier, env: ENV });
+  const db = new DatabaseStack(app, 'CCE-Database', {
+    tier,
+    env: ENV,
+    vpc: network.vpc,
+    paperclipSecurityGroup: network.paperclipSecurityGroup,
+  });
+  const cluster = Object.values(
+    Template.fromStack(db).findResources('AWS::RDS::DBCluster'),
+  )[0] as { Properties: { ServerlessV2ScalingConfiguration: { MaxCapacity: number } } };
+  return cluster.Properties.ServerlessV2ScalingConfiguration.MaxCapacity;
+}
+
 const { network, database } = synth();
 const dbJson = JSON.stringify(database.toJSON());
 
 describe('DatabaseStack (Paperclip Aurora)', () => {
+  it('tiers the Aurora ceiling but never the floor', () => {
+    // A Hobby install must not be able to burst to a production-sized bill.
+    expect(auroraMaxAcuAt(0)).toBe(1);
+    expect(auroraMaxAcuAt(1)).toBe(2);
+    // Tier 2 keeps the value that used to be hardcoded for every tier.
+    expect(auroraMaxAcuAt(2)).toBe(4);
+    expect(auroraMaxAcuAt(3)).toBe(8);
+    // The FLOOR stays untiered at 0.5, pinned by the case above: it is the
+    // lowest non-zero ACU, so every tier carries the same continuous cost.
+    // Cutting it means scale-to-zero, a behaviour change and a separate call.
+  });
+
   it('admits 5432 from the Paperclip SG only — never the Fargate SG', () => {
     const rules = ingressRules(database);
     expect(rules).toHaveLength(1);
@@ -68,7 +95,8 @@ describe('DatabaseStack (Paperclip Aurora)', () => {
       Engine: 'aurora-postgresql',
       EngineVersion: '17.4',
       DatabaseName: 'paperclip',
-      ServerlessV2ScalingConfiguration: { MinCapacity: 0.5, MaxCapacity: 4 },
+      // Floor is untiered; the ceiling is (this harness synths at tier 1).
+      ServerlessV2ScalingConfiguration: { MinCapacity: 0.5, MaxCapacity: 2 },
       StorageEncrypted: true,
       BackupRetentionPeriod: 14,
       DeletionProtection: true,
@@ -109,11 +137,18 @@ describe('NetworkStack regression (orchestrator untouched by Paperclip)', () => 
     // EC2 rejects GroupDescription outside ASCII ("Character sets beyond
     // ASCII are not supported"), and this repo writes em dashes everywhere
     // else. One slipped in and rolled back a staging deploy.
-    // ponytail: covers this stack only; a whole-app synth check would catch
-    // every stack, at the cost of a slow test. Add if a third one regresses.
-    for (const sg of Object.values(database.findResources('AWS::EC2::SecurityGroup'))) {
-      const d = sg.Properties?.GroupDescription;
-      if (typeof d === 'string') expect(d).toMatch(/^[ -~]*$/);
+    // NetworkStack is checked here too: it owns PaperclipSg, the one
+    // Paperclip security group that is actually deployed, and this guard
+    // previously asserted on `database` inside a describe block named for
+    // NetworkStack — so nothing covered it.
+    // ponytail: covers these two stacks plus FilesystemStack's own copy; a
+    // whole-app synth check would catch every stack, at the cost of a slow
+    // test. Add if a stack outside these three regresses.
+    for (const template of [network, database]) {
+      for (const sg of Object.values(template.findResources('AWS::EC2::SecurityGroup'))) {
+        const d = sg.Properties?.GroupDescription;
+        if (typeof d === 'string') expect(d).toMatch(/^[ -~]*$/);
+      }
     }
   });
 });

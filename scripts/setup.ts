@@ -92,6 +92,7 @@ interface SetupState {
   manifestBucket?: string;
   configDir?: string;
   appEncryptionKey?: string;
+  paperclipBetterAuthSecret?: string;
   telegramWebhookSecret?: string;
   /** Deployment mode (IaC readiness item 12). */
   deployMode?: 'chat' | 'infra-only';
@@ -253,6 +254,7 @@ function loadStateFromEnv(): SetupState {
     manifestBucket: env.DEPLOY_MANIFEST_BUCKET,
     configDir: env.CLAUDECLAW_CONFIG,
     appEncryptionKey: env.APP_ENCRYPTION_KEY,
+    paperclipBetterAuthSecret: env.PAPERCLIP_BETTER_AUTH_SECRET,
     telegramWebhookSecret: env.TELEGRAM_WEBHOOK_SECRET,
     deployMode:
       env.CCE_DEPLOY_MODE === 'infra-only' ? 'infra-only' : env.CCE_DEPLOY_MODE === 'chat' ? 'chat' : undefined,
@@ -720,6 +722,13 @@ async function q9Dashboard(state: SetupState): Promise<void> {
   );
 
   state.appEncryptionKey = state.appEncryptionKey ?? generateHexToken(32);
+  // Paperclip work engine (ADR 0010). Generated ONCE and kept in .env, the
+  // same generate-if-absent shape as the encryption key above, because
+  // deploy phase b rewrites this secret on EVERY deploy: minting it there
+  // would rotate it every deploy and invalidate every Paperclip session.
+  // Written whether or not Paperclip is armed, so arming it later needs no
+  // second setup run. Harmless when unused.
+  state.paperclipBetterAuthSecret = state.paperclipBetterAuthSecret ?? generateHexToken(32);
   // eslint-disable-next-line no-console
   console.log(ok('application encryption key generated'));
 }
@@ -977,6 +986,7 @@ async function q12WriteArtifacts(state: SetupState): Promise<void> {
     CLAUDECLAW_CONFIG: state.configDir ?? '',
     DASHBOARD_TOKEN: state.dashboardToken ?? '',
     APP_ENCRYPTION_KEY: state.appEncryptionKey ?? '',
+    PAPERCLIP_BETTER_AUTH_SECRET: state.paperclipBetterAuthSecret ?? '',
     EMERGENCY_KILL_PHRASE: state.emergencyKillPhrase ?? '',
   };
   if (state.securityPinHash) updated.SECURITY_PIN_HASH = state.securityPinHash;

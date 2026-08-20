@@ -230,6 +230,13 @@ export interface TierShape {
   natGatewayCount: 1 | 2;
   configCacheTtlSec: number;
   logRetentionDays: 7 | 30 | 90 | 365;
+  /**
+   * Aurora Serverless v2 ceiling for the Paperclip cluster (ADR 0010).
+   * Only the CEILING is tiered. The floor stays 0.5 on every tier because
+   * min ACU is what bills continuously, and lowering it further means
+   * scale-to-zero, which is a runtime behaviour change, not a size knob.
+   */
+  paperclipAuroraMaxAcu: number;
   wafEnabled: boolean;
   cloudFrontEnabled: boolean;
   flowLogsEnabled: boolean;
@@ -248,6 +255,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     natGatewayCount: 1,
     configCacheTtlSec: 300,
     logRetentionDays: 7,
+    paperclipAuroraMaxAcu: 1,
     wafEnabled: false,
     cloudFrontEnabled: false,
     flowLogsEnabled: false,
@@ -264,6 +272,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     natGatewayCount: 2,
     configCacheTtlSec: 300,
     logRetentionDays: 30,
+    paperclipAuroraMaxAcu: 2,
     wafEnabled: false,
     cloudFrontEnabled: false,
     flowLogsEnabled: true,
@@ -284,6 +293,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     natGatewayCount: 2,
     configCacheTtlSec: 300,
     logRetentionDays: 90,
+    paperclipAuroraMaxAcu: 4,
     wafEnabled: true,
     cloudFrontEnabled: false,
     flowLogsEnabled: true,
@@ -300,6 +310,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     natGatewayCount: 2,
     configCacheTtlSec: 300,
     logRetentionDays: 365,
+    paperclipAuroraMaxAcu: 8,
     wafEnabled: true,
     cloudFrontEnabled: true,
     flowLogsEnabled: true,

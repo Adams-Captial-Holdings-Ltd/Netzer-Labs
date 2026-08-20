@@ -77,7 +77,11 @@ export class ObservabilityStack extends Stack implements ObservabilityOutputs {
 
     this.orchestratorLogGroup = new LogGroup(this, 'OrchestratorLogGroup', {
       logGroupName: RESOURCE_NAMES.logGroupOrchestrator,
-      retention: retentionFromDays(tier.logRetentionDays),
+      // RetentionDays is a numeric enum whose members ARE day counts
+      // (ONE_WEEK = 7 ... ONE_YEAR = 365) and TierShape.logRetentionDays is
+      // typed `7 | 30 | 90 | 365`, so the tier value is already a valid
+      // member. The mapping helper this replaced was an identity function.
+      retention: tier.logRetentionDays as RetentionDays,
       encryptionKey: props.logsKey,
       removalPolicy: RemovalPolicy.RETAIN, // never auto-delete logs
     });
@@ -737,12 +741,4 @@ exports.handler = async () => {
     alarm.addAlarmAction(new SnsAction(this.alertTopic));
     return alarm;
   }
-}
-
-function retentionFromDays(days: number): RetentionDays {
-  if (days <= 7) return RetentionDays.ONE_WEEK;
-  if (days <= 30) return RetentionDays.ONE_MONTH;
-  if (days <= 90) return RetentionDays.THREE_MONTHS;
-  if (days <= 365) return RetentionDays.ONE_YEAR;
-  return RetentionDays.TWO_YEARS;
 }

@@ -143,9 +143,10 @@ export function classifyCatalog(entries: CatalogEntry[]): {
 
 /**
  * Stack suffixes the CURRENT app would synthesize, mirroring
- * infra/bin/app.ts (CodeBuild is the one opt-in stack today). Used ONLY
- * to choose cdk-destroy vs direct DeleteStack — never to decide WHAT to
- * destroy. The destroy set comes from live CFN + the manifest.
+ * infra/bin/app.ts (CodeBuild and the Paperclip substrate are the opt-in
+ * stacks today). Used ONLY to choose cdk-destroy vs direct DeleteStack —
+ * never to decide WHAT to destroy. The destroy set comes from live CFN +
+ * the manifest.
  */
 export const ALWAYS_ON_STACK_SUFFIXES: readonly string[] = [
   'Network',
@@ -170,6 +171,13 @@ export function currentAppStackNames(
 ): string[] {
   const names = ALWAYS_ON_STACK_SUFFIXES.map((s) => `${stackPrefix}-${s}`);
   if (env.CCE_CODEBUILD_ENABLED === '1') names.push(`${stackPrefix}-CodeBuild`);
+  // Paperclip substrate (ADR 0010), gated in infra/bin/app.ts. Worth
+  // mirroring rather than leaving out: the Aurora cluster carries
+  // deletionProtection, and the direct-DeleteStack path this choice selects
+  // cannot delete it.
+  if (env.CCE_PAPERCLIP_ENABLED === '1') {
+    names.push(`${stackPrefix}-Database`, `${stackPrefix}-Filesystem`);
+  }
   return names;
 }
 

@@ -35,9 +35,12 @@ export class CostGuardrailsStack extends Stack {
     super(scope, id, props);
 
     const email = process.env.CCE_COST_ALERT_EMAIL?.trim();
-    // Default raised 600 → 650 for the Paperclip substrate (ADR 0010:
-    // Aurora min-ACU floor + EFS bill continuously from Phase 1).
-    const monthlyBudgetUsd = Number(process.env.CCE_MONTHLY_BUDGET_USD ?? '650');
+    // Back to 600. It was raised to 650 for the Paperclip substrate, which is
+    // opt-in (CCE_PAPERCLIP_ENABLED) and off by default, so the raise loosened
+    // this alarm by $50 for every deployment that has no Aurora and no EFS.
+    // Anyone arming the substrate early can set CCE_MONTHLY_BUDGET_USD; raise
+    // the default when the gate's default flips in ADR 0010 Phase 2.
+    const monthlyBudgetUsd = Number(process.env.CCE_MONTHLY_BUDGET_USD ?? '600');
     const anomalyMinUsd = Number(process.env.CCE_ANOMALY_MIN_USD ?? '25');
 
     // ── Cost Anomaly Detection ────────────────────────────────────────

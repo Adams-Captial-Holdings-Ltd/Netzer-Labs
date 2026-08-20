@@ -803,6 +803,20 @@ async function main(): Promise<void> {
       if (r.code !== 0) throw new Error(r.stderr);
     });
   }
+  // Paperclip work engine (ADR 0010): a SECOND repo, created by deploy
+  // phase a only when CCE_PAPERCLIP_ENABLED=1, so it is absent on most
+  // installs. It has to be deleted explicitly here: the out-of-band
+  // catalog is a REPORT (printed above), not an executor, so a catalog
+  // row alone would leave an armed install paying for an orphan repo.
+  {
+    const paperclipRepo = buildResourceNames(suffix).paperclipEcrRepo;
+    await runner.mutate(`ecr:DeleteRepository ${paperclipRepo} --force (if present)`, async () => {
+      const r = await capture('aws', [
+        'ecr', 'delete-repository', '--repository-name', paperclipRepo, '--force', '--region', region,
+      ]);
+      if (r.code !== 0 && !/RepositoryNotFound/i.test(r.stderr)) throw new Error(r.stderr);
+    });
+  }
   // App DDB tables not deleted by stacks (RETAIN'd) — direct deletes.
   for (const t of inv.tables) {
     if (t === names.lockTable) continue;

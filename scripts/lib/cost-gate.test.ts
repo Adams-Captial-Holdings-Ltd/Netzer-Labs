@@ -38,6 +38,16 @@ describe('resourceSummary', () => {
     expect(resourceSummary(1, true)).toContain('VPC interface endpoints');
   });
 
+  it('lists the Paperclip substrate only when it is armed', () => {
+    // Default off: infra/bin/app.ts synthesizes CCE-Database/CCE-Filesystem
+    // only when CCE_PAPERCLIP_ENABLED=1, so the gate must not promise an
+    // Aurora cluster a routine deploy never creates.
+    expect(resourceSummary(1, false)).not.toContain('Aurora');
+    expect(resourceSummary(1, false)).not.toContain('EFS');
+    expect(resourceSummary(1, false, true)).toContain('Aurora Serverless v2 (Paperclip)');
+    expect(resourceSummary(1, false, true)).toContain('EFS');
+  });
+
   it('tier 2 adds WAF, tier 3 adds WAF + CloudFront', () => {
     expect(resourceSummary(2, false)).toContain('WAF');
     expect(resourceSummary(2, false)).not.toContain('CloudFront');
@@ -76,5 +86,16 @@ describe('estimateLine', () => {
   it('fallback mentions the endpoint cost only when the flag is set', () => {
     expect(estimateLine(null, 1, true)).toContain('VPC interface endpoints');
     expect(estimateLine(null, 1, false)).not.toContain('VPC interface endpoints');
+  });
+
+  it('prices the Paperclip substrate in BOTH branches, only when armed', () => {
+    // The endpoints clause above reaches only the fallback: the estimator
+    // branch returns before it is built. The Paperclip note must not inherit
+    // that bug, because the estimator branch is the one that normally runs
+    // and scripts/cost-estimate.mjs has no Aurora/EFS line item.
+    expect(estimateLine(estimatorJson, 1, false, true)).toContain('Paperclip');
+    expect(estimateLine(null, 1, false, true)).toContain('Paperclip');
+    expect(estimateLine(estimatorJson, 1, false)).not.toContain('Paperclip');
+    expect(estimateLine(null, 1, false)).not.toContain('Paperclip');
   });
 });
