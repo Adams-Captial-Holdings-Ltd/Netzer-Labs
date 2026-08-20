@@ -297,6 +297,10 @@ jobs:
           # Pin the task definition to the image we just pushed (never `latest`).
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
           CCE_CICD_ENABLED: '1'
+          # Paperclip Aurora/EFS substrate, off unless the variable says 1.
+          # Forwarded so arming it is `gh variable set CCE_PAPERCLIP_ENABLED
+          # --body 1` plus a redeploy, not a code change and a ladder trip.
+          CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
           CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
           # Must be forwarded or a CI deploy silently UNDOES the public
           # dashboard: synth resolves the feature off, drops the cloudflared
@@ -327,6 +331,17 @@ jobs:
           # running the workflow, never a hardcoded default.
           CCE_GITHUB_OWNER: ${{ github.repository_owner }}
           CCE_GITHUB_REPO: ${{ github.event.repository.name }}
+          # This org mints OIDC subjects carrying the numeric ids
+          # (repo:owner@318461635/repo@1324639154:...). Opt-in, because a fork
+          # whose org still mints the classic form needs the classic subjects.
+          # Set it BEFORE the next PRODUCTION deploy: only the prod IAM stack
+          # creates this role (iam-stack.ts gates on !isStagingDeploy), so a
+          # prod deploy with the variable unset rewrites a hand-patched trust
+          # policy back to the classic form and locks CI out. Staging deploys
+          # never touch it.
+          #   gh variable set CCE_GITHUB_IMMUTABLE_SUBJECT --body 1
+          CCE_GITHUB_OWNER_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_owner_id || '' }}
+          CCE_GITHUB_REPO_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_id || '' }}
           CCE_GITHUB_DEPLOY_REFS: refs/heads/production,refs/heads/staging
           CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
         run: |

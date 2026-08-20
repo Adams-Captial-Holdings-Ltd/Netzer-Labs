@@ -105,4 +105,15 @@ describe('NetworkStack regression (orchestrator untouched by Paperclip)', () => 
     expect(paperclipRules[0].ToPort).toBe(3100);
     expect(paperclipRules[0].Description).toBe('ALB to Paperclip');
   });
+  it('keeps every security group description ASCII', () => {
+    // EC2 rejects GroupDescription outside ASCII ("Character sets beyond
+    // ASCII are not supported"), and this repo writes em dashes everywhere
+    // else. One slipped in and rolled back a staging deploy.
+    // ponytail: covers this stack only; a whole-app synth check would catch
+    // every stack, at the cost of a slow test. Add if a third one regresses.
+    for (const sg of Object.values(database.findResources('AWS::EC2::SecurityGroup'))) {
+      const d = sg.Properties?.GroupDescription;
+      if (typeof d === 'string') expect(d).toMatch(/^[ -~]*$/);
+    }
+  });
 });
