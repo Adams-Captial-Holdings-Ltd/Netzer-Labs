@@ -37,7 +37,7 @@ export class FilesystemStack extends Stack implements FilesystemOutputs {
 
     this.paperclipEfsSecurityGroup = new SecurityGroup(this, 'PaperclipEfsSg', {
       vpc: props.vpc,
-      description: 'Paperclip EFS — NFS ingress from the Paperclip task SG only',
+      description: 'Paperclip EFS - NFS ingress from the Paperclip task SG only',
       allowAllOutbound: false,
     });
     this.paperclipEfsSecurityGroup.addIngressRule(

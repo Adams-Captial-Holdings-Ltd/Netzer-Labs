@@ -41,7 +41,7 @@ export class DatabaseStack extends Stack implements DatabaseOutputs {
 
     this.paperclipDbSecurityGroup = new SecurityGroup(this, 'PaperclipDbSg', {
       vpc: props.vpc,
-      description: 'Paperclip Aurora — ingress from the Paperclip task SG only',
+      description: 'Paperclip Aurora - ingress from the Paperclip task SG only',
       allowAllOutbound: false,
     });
     this.paperclipDbSecurityGroup.addIngressRule(

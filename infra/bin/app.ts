@@ -53,20 +53,27 @@ const guardrails = new GuardrailsStack(app, `${stackPrefix}-Guardrails`, basePro
 // Paperclip work engine substrate (ADR 0010): Aurora + EFS/log group.
 // Foundation-phase stacks (scripts/deploy.ts phase a); no Paperclip
 // service yet — that arrives in a later phase.
-const database = new DatabaseStack(app, `${stackPrefix}-Database`, {
-  ...baseProps,
-  vpc: network.vpc,
-  paperclipSecurityGroup: network.paperclipSecurityGroup,
-});
-database.addDependency(network);
-const filesystem = new FilesystemStack(app, `${stackPrefix}-Filesystem`, {
-  ...baseProps,
-  vpc: network.vpc,
-  paperclipSecurityGroup: network.paperclipSecurityGroup,
-});
-filesystem.addDependency(network);
-void database;
-void filesystem;
+//
+// Off by default. Nothing consumes these stacks yet, but ungated they put
+// first-time Aurora and EFS creation on the path of every routine app deploy:
+// on 2026-08-19 that failed staging and orphaned a retained EFS while the
+// orchestrator itself had shipped fine. Arm it deliberately, when someone is
+// watching, with CCE_PAPERCLIP_ENABLED=1. Phase 2 wires the service and can
+// flip the default.
+if (process.env.CCE_PAPERCLIP_ENABLED === '1') {
+  const database = new DatabaseStack(app, `${stackPrefix}-Database`, {
+    ...baseProps,
+    vpc: network.vpc,
+    paperclipSecurityGroup: network.paperclipSecurityGroup,
+  });
+  database.addDependency(network);
+  const filesystem = new FilesystemStack(app, `${stackPrefix}-Filesystem`, {
+    ...baseProps,
+    vpc: network.vpc,
+    paperclipSecurityGroup: network.paperclipSecurityGroup,
+  });
+  filesystem.addDependency(network);
+}
 
 // Depends on storage (for KMS keys)
 const secrets = new SecretsStack(app, `${stackPrefix}-Secrets`, {

@@ -5,7 +5,7 @@ status: current
 observed_at: 2026-08-18
 as_of_commit: a7ab7a325487c6ea06a3158f88d8cd45b73e0b53
 session_slug: updated-since-patch-and-phase-0
-supersedes: none
+supersedes: 2026-08-18-codex-review
 ---
 
 # Session handoff: finish Milestone 1D, resolve the I3 blocker, Phase 0 docs
