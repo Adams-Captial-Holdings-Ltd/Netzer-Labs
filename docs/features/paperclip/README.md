@@ -3,7 +3,7 @@ feature: paperclip
 document_role: index
 status: current
 observed_at: 2026-08-20
-as_of_commit: 6996f64efaace96bb4b19246e4a870be341290c1
+as_of_commit: 5e6325b
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/state/kill-switches-repo.ts

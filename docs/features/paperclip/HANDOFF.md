@@ -3,13 +3,13 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-08-20
-as_of_commit: 6996f64efaace96bb4b19246e4a870be341290c1
+as_of_commit: 5e6325b
 ---
 
 # Paperclip integration handoff
 
 - **Branch: `fix/paperclip-phase2-readiness`**, cut from `development` at
-  `5418497`, seven commits, per
+  `5418497`, ten commits, per
   [CONTRIBUTING.md](../../../CONTRIBUTING.md). It reaches no AWS environment —
   see the
   [branch-to-environment mapping](../../../development.md#branch-to-environment-mapping).
@@ -128,12 +128,12 @@ already built; the first is not.
 
 ## Last required checks
 
-2026-08-20, at `6996f64`, compared to a baseline taken on the untouched branch
+2026-08-20, at `5e6325b` (final code commit), compared to a baseline taken on the untouched branch
 before any edit (**P1**) and by failing file **name**, never count (**A9**):
 
-- Full `npm test`: 192 files, 2134 tests. **6 files / 7 tests failed — the same
+- Full `npm test`: 192 files, 2135 tests. **6 files / 7 tests failed — the same
   names as the baseline**, all in the documented Windows environmental set.
-  Passing rose 2116 → 2121, exactly the five cases added.
+  Passing rose 2116 → 2122, exactly the six cases added.
 - `npm run typecheck`, `npm run build`: clean.
 - `docs-links.mjs`, `feature-knowledge.mjs`, `diagrams-drift.mjs` (forced into
   PR context): all OK. `git diff --check`: clean.

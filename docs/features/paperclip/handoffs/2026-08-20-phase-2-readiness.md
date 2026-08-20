@@ -452,7 +452,7 @@ failing file **name**, never count (**A9**).
 
 | Command | Baseline | After changes |
 |---|---|---|
-| `npm test` | 192 files: 6 failed / 185 passed / 1 skipped; 2129 tests: 7 failed / 2116 passed / 6 skipped | 192 files: 6 failed / 185 passed / 1 skipped; 2134 tests: 7 failed / **2121** passed / 6 skipped. **Same six file names and same seven test names as baseline.** +5 tests / +5 passing are exactly the five cases added. **No new failures.** |
+| `npm test` | 192 files: 6 failed / 185 passed / 1 skipped; 2129 tests: 7 failed / 2116 passed / 6 skipped | 192 files: 6 failed / 185 passed / 1 skipped; 2135 tests: 7 failed / **2122** passed / 6 skipped. **Same six file names and same seven test names as baseline.** +6 tests / +6 passing are exactly the six cases added. **No new failures.** |
 | `npm run typecheck` | not run separately | **clean** |
 | `npm run build` | not run | **clean** |
 | `npx vitest run scripts/lib/lifecycle/deploy-phases.test.ts` | 33 tests | **38 passed** |
