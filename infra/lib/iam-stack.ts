@@ -112,6 +112,7 @@ export class IamStack extends Stack implements IamOutputs {
       props.storage.rawBucket.bucketArn,
       props.storage.curatedBucket.bucketArn,
       props.storage.vectorsStagingBucket.bucketArn,
+      props.storage.vectorsBucket.bucketArn,
     ];
     const kmsKeyArns = [
       props.storage.dataKey.keyArn,
@@ -284,6 +285,7 @@ export class IamStack extends Stack implements IamOutputs {
           `${props.storage.rawBucket.bucketArn}/*`,
           `${props.storage.curatedBucket.bucketArn}/*`,
           `${props.storage.vectorsStagingBucket.bucketArn}/*`,
+          `${props.storage.vectorsBucket.bucketArn}/*`,
         ],
       }),
     );
