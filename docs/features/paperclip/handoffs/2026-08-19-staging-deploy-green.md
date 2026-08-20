@@ -343,6 +343,20 @@ the same cluster production would.
 
 ### 6.3 Blockers and open questions
 
+- [ ] **GAP — TO BE VERIFIED: CI never creates the Paperclip ECR repository.**
+  `paperclipEcrRepo` (`claudeclaw[-suffix]-paperclip`) is created only by
+  `scripts/deploy.ts` (`:334`, `:967`, via `paperclipEcrRepoName()` at
+  `:958`) — the **local** deploy path. `.github/workflows/deploy.yml` contains
+  zero occurrences of "paperclip": its "Ensure ECR repo exists" step handles
+  only `steps.cfg.outputs.ecr_repo`, the orchestrator. Confirmed against the
+  account on 2026-08-19: the only repositories are
+  `claudeclaw-orchestrator`, `claudeclaw-staging-orchestrator` and the CDK
+  assets repo — **no Paperclip repo exists in either environment**.
+  Phase 1 step 8 (push the patched Paperclip image) and Phase 2 (which
+  requires "the image is in ECR") therefore have nothing to push to from CI.
+  *To verify:* re-read both paths and decide whether CI should gain a second
+  ensure-step or whether the image push is deliberately a local-only operation.
+  Do this before starting Phase 2.
 - [ ] Question: should the `updatedSince` patch be offered upstream? — user
   approved "patch our copy" only; upstreaming is optional follow-up.
 - [ ] Open: `npm run setup` (Q11c) writes the GitHub OIDC variables into `.env`
@@ -363,6 +377,78 @@ the same cluster production would.
 - A whole-app synth check for non-ASCII SG descriptions — the current guard
   covers the two Paperclip stacks only, marked with a `ponytail:` comment in
   both test files. Add if a third stack regresses.
+
+### 6.5 What Phase 2 needs built
+
+Source: [implementation plan](../implementation-plan.md) §"Phase 2 — Paperclip
+service online". Read the plan section itself before starting; this is the
+index, not a replacement. Note **A10**: the plan is historical, and ADR 0010's
+amendment plus `plan-audit.md` outrank it where they disagree.
+
+**Goal.** `GET /api/health` returns 200 through the ALB, backed by the Aurora
+cluster with the full Paperclip schema applied.
+
+**Blocked until all four hold.** None of these are true today:
+
+| Precondition | State on 2026-08-19 |
+|---|---|
+| Phase 1 deployed (Aurora, EFS, log group) | **no** — code exists, gated off behind `CCE_PAPERCLIP_ENABLED` |
+| The patched Paperclip image is in ECR | **no** — and see the ECR gap in §6.3 |
+| The ARM64 question answered | **no** — Phase 1 step 7, one `docker buildx build --platform linux/arm64` |
+| `/claudeclaw[-suffix]/paperclip` secret populated | secret **exists** (deployed 2026-08-19) but carries `REPLACE_ME` placeholders |
+
+**New files.**
+
+| File | What |
+|---|---|
+| `infra/lib/paperclip-stack.ts` | Task definition (family `paperclip-server`, cpu 2048 / mem 4096, EFS volume mounted at `/paperclip`), pinned tag+digest image, task + execution roles, the service (copy plan §22.6 **verbatim, comments included** — they explain why the settings are inverted), target group (port 3100, health `/api/health`), listener rule, log group |
+| `infra/lib/paperclip-stack.test.ts` | The guardrail assertions below |
+| `buildspec.paperclip.yml` | **Only if** building in-account rather than consuming the upstream image (§22.8). Prefer not to need it. |
+
+**Files changed.**
+
+| File | Change |
+|---|---|
+| `infra/bin/app.ts` | Instantiate `PaperclipStack` — inside the `CCE_PAPERCLIP_ENABLED` block added this session, and that flag is the natural place to flip the default once the service exists |
+| `infra/lib/compute-stack.ts` | Export the ALB HTTPS listener, or accept it as a prop, so the listener rule can attach |
+| `scripts/deploy.ts` | Add phase b.5 — the one-shot migration `RunTask` (§22.7) between the secrets population (`:487`) and the runtime-config seed (`:488`), with a `journal(...)` checkpoint |
+| `development.md:344` | "**Migrations**: none." becomes false — update it |
+| `buildspec.yml` | **Leave alone.** Stays orchestrator-only. |
+
+**Sequence.** Write the stack → set the task-def environment from §23.2 Table A,
+confirming `PAPERCLIP_MIGRATION_AUTO_APPLY` is **absent** on the service → wire
+`DATABASE_URL` from the Aurora secret and `BETTER_AUTH_SECRET` from
+`/claudeclaw/paperclip`, omitting all vendor API keys → add phase b.5
+(`RunTask` on a `paperclip-migrate` task def: same image, migration command
+override, **no EFS mount**, wait for exit 0, abort the deploy on non-zero) →
+deploy and watch the migration stream to completion **before** the service rolls
+→ verify the target goes healthy → from an orchestrator task, `curl` the
+Paperclip health endpoint over the internal path to prove the route end to end.
+
+**Tests that matter.** Write these as *explicit* CDK assertions — the plan calls
+them the guardrails against a well-meaning future "consistency" refactor:
+
+- `DesiredCount` is **1**
+- **no** `ScalableTarget` or `ScalingPolicy` resource exists for this service
+- `MinimumHealthyPercent` **0**, `MaximumPercent` **100**
+- target group health-check path `/api/health`, port **3100**
+
+Plus `npm run typecheck`, full `npm test`, `npm run synth`, and manually that
+`GET /api/health` returns 200 reporting the expected `commit` (fed by
+`PAPERCLIP_BUILD_COMMIT`).
+
+**Acceptance.** Health green for 24 h; a forced service roll completes with
+exactly one task at all times, never two; the migration job is idempotent.
+
+**Risks named by the plan.** Migration failure mid-run is transactional per
+migration, so a failure commits the applied prefix and leaves the rest pending —
+fix and re-run, snapshot first. EFS mount failure is almost always the missing
+2049 ingress rule or a posix uid/gid mismatch on the access point. Slow cold
+start on a populated EFS tree: raise the grace period, never lower the
+health-check threshold.
+
+**Rollback.** `desiredCount: 0`, or remove the listener rule. Database and
+filesystem persist, so re-enabling is instant.
 
 ## 7. Verification actually performed
 
