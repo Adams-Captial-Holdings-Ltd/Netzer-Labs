@@ -10,7 +10,7 @@ import {
   Credentials,
 } from 'aws-cdk-lib/aws-rds';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
-import { RESOURCE_NAMES, TAGS } from './constants.js';
+import { RESOURCE_NAMES, TAGS, TIERS } from './constants.js';
 import type { BaseStackProps, DatabaseOutputs } from './interfaces.js';
 
 export interface DatabaseStackProps extends BaseStackProps {
@@ -63,9 +63,14 @@ export class DatabaseStack extends Stack implements DatabaseOutputs {
       writer: ClusterInstance.serverlessV2('Writer'),
       // Min ACU is the dominant fixed cost (bills continuously). Keep the
       // floor at the lowest supported setting until observed load says
-      // otherwise; the anomaly monitor watches the first weeks.
+      // otherwise; the anomaly monitor watches the first weeks. It is NOT
+      // tiered: 0.5 is already the lowest non-zero setting, so a Tier 0
+      // install carries the same floor as production. Removing that floor
+      // means scale-to-zero, a behaviour change, not a size change.
       serverlessV2MinCapacity: 0.5,
-      serverlessV2MaxCapacity: 4,
+      // The CEILING is tiered, so a Hobby install cannot burst to a
+      // production-sized bill. Tier 2 keeps the previous hardcoded 4.
+      serverlessV2MaxCapacity: TIERS[props.tier].paperclipAuroraMaxAcu,
       defaultDatabaseName: 'paperclip',
       credentials: Credentials.fromGeneratedSecret('paperclip', {
         secretName: RESOURCE_NAMES.secrets.paperclipDb,

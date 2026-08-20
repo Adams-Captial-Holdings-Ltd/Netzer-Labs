@@ -103,6 +103,11 @@ export const SYNTH_INPUT_ALLOWLIST: readonly string[] = [
   'HOSTED_ZONE_NAME',
   'CCE_ANOMALY_MONITOR_ARN',
   'CCE_PRIVATE_ENDPOINTS',
+  // Paperclip Aurora/EFS substrate opt-in (ADR 0010). Changes what synth
+  // produces — infra/bin/app.ts omits both stacks unless it is '1' — so a
+  // rollback that re-synths from this manifest must replay it or it would
+  // quietly drop a deployed Aurora cluster and EFS from the assembly.
+  'CCE_PAPERCLIP_ENABLED',
   // Private WARP access opt-in + hostname. Both change what synth produces
   // (cloudflared sidecar, Route 53 private zone, ALB ingress shape), so a
   // rollback that re-synths from this manifest must replay them or it would

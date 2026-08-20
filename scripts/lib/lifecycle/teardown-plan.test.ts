@@ -121,6 +121,24 @@ describe('stack plan: live + manifest, not a fresh synth', () => {
     expect(plan.find((s) => s.name === 'CCE-Network')?.method).toBe('cdk-destroy');
   });
 
+  it('mirrors the Paperclip gate so a live Aurora stack takes the cdk-destroy path', () => {
+    // The Aurora cluster carries deletionProtection. If the substrate is
+    // armed but this list omits CCE-Database, the stack is classified as
+    // "not in the current app" and routed to direct DeleteStack, which
+    // cannot delete a deletion-protected cluster.
+    expect(currentAppStackNames('CCE', {})).not.toContain('CCE-Database');
+    const armed = currentAppStackNames('CCE', { CCE_PAPERCLIP_ENABLED: '1' });
+    expect(armed).toContain('CCE-Database');
+    expect(armed).toContain('CCE-Filesystem');
+
+    const plan = planStacks({
+      liveStackNames: ['CCE-Network', 'CCE-Database'],
+      manifestStacks: ['CCE-Network', 'CCE-Database'],
+      currentAppStacks: armed,
+    });
+    expect(plan.find((s) => s.name === 'CCE-Database')?.method).toBe('cdk-destroy');
+  });
+
   it('unions manifest-only stacks (already-deleted ones are skipped, not lost)', () => {
     const plan = planStacks({
       liveStackNames: ['CCE-Network'],

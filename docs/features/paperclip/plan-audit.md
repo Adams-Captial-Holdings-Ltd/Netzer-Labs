@@ -123,6 +123,22 @@ CAVEAT ON SCOPE. The Paperclip repository is not present on this machine, so PAP
 
 **P1-C4.** SECRET FIELD NAMES — §15.5 credential inventory (s5.md:327-329) names the fields `reconciler_key`, `agent_keys_json`, `dispatch_token`. §23.3 (s6.md) and §27.2's secrets-stack row name them `reconciler_key`, `agent_keys`, `dispatch_secret`, and §23.4's concrete code block reads `EcsSecret.fromSecretsManager(paperclipSecret, 'agent_keys')` / `'dispatch_secret'`. A `fromSecretsManager` field-name mismatch produces a task that cannot start.
 
+> **SETTLED 2026-08-20 — the shipped spelling wins.** Per rule 3 above and
+> **P5**, the code decides: `infra/lib/secrets-stack.ts:117` creates
+> `/claudeclaw[-suffix]/paperclip` with the fields `better_auth_secret`,
+> `reconciler_key`, `agent_keys`, `dispatch_secret`, each seeded `REPLACE_ME`
+> via `secretObjectValue`. `scripts/lib/lifecycle/deploy-phases.ts` now writes
+> `better_auth_secret` into that same field set on deploy.
+>
+> **§15.5's `agent_keys_json` / `dispatch_token` is the WRONG pair. Do not use
+> it.** §23.3, §23.4 and §27.2 already agree with the code. When Phase 2 writes
+> `EcsSecret.fromSecretsManager`, use `agent_keys` and `dispatch_secret` — a
+> field-name mismatch there produces a task that cannot start, which is the
+> failure this finding was raised to prevent.
+>
+> The plan text is left unedited: it is a vendored historical artifact (**A10**)
+> and this audit is the correction layer, exactly as stated above.
+
 **P1-C5.** ENV VAR NAMES FOR THE SAME VALUES — §29.4 POC config table (s7.md:616-623) uses `PAPERCLIP_AGENT_KEYS`, `PAPERCLIP_DISPATCH_TOKEN`, `PAPERCLIP_AGENT_ID_MAP`, `PAPERCLIP_TIMEOUT_MS`, `PAPERCLIP_ENABLED`. §23.3 / §27.1 use `PAPERCLIP_AGENT_KEYS_JSON` and `PAPERCLIP_DISPATCH_SECRET`, and list no `PAPERCLIP_ENABLED`, `PAPERCLIP_AGENT_ID_MAP` or `PAPERCLIP_TIMEOUT_MS` at all.
 
 **P1-C6.** DUAL-WRITE — DIRECT REVERSAL. §25.4 (s6.md:812-836) is titled "Dual-read / dual-write: not needed" and states "**Do not do it here**" with four numbered reasons, concluding "What replaces dual-write: a **shadow read**". §12.8/§13 (s4.md:418) reinforces: "**Do not fall back to `claudeclaw-mission-tasks`** — a dual-write fallback creates split-brain state that the cutover was designed to avoid." But §30 Stage 4 (s7.md:770-772) prescribes exactly that: "A **dual-write probe**: every legacy mission write also creates a Paperclip issue (idempotency-keyed `netzar-mission:<id>`), and a periodic comparator logs any divergence" — and makes "Projection divergence (dual-write comparator) | zero unexplained" a go/no-go gate metric. Stage 4 cannot be executed without violating §25.4.

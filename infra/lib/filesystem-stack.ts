@@ -69,15 +69,12 @@ export class FilesystemStack extends Stack implements FilesystemOutputs {
     // stays inside the two Paperclip stacks.
     this.paperclipLogGroup = new LogGroup(this, 'PaperclipLogGroup', {
       logGroupName: RESOURCE_NAMES.paperclipLogGroup,
-      retention: retentionFromDays(TIERS[props.tier].logRetentionDays),
+      // RetentionDays is a numeric enum whose members ARE day counts
+      // (ONE_WEEK = 7 ... ONE_YEAR = 365) and TierShape.logRetentionDays is
+      // typed `7 | 30 | 90 | 365`, so the tier value is already a valid
+      // member. The mapping helper this replaced was an identity function.
+      retention: TIERS[props.tier].logRetentionDays as RetentionDays,
       removalPolicy: RemovalPolicy.RETAIN,
     });
   }
-}
-
-function retentionFromDays(days: number): RetentionDays {
-  if (days <= 7) return RetentionDays.ONE_WEEK;
-  if (days <= 30) return RetentionDays.ONE_MONTH;
-  if (days <= 90) return RetentionDays.THREE_MONTHS;
-  return RetentionDays.ONE_YEAR;
 }
