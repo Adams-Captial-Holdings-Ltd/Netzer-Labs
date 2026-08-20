@@ -116,6 +116,22 @@ is fail-closed in [../infra/lib/github-oidc.ts](../infra/lib/github-oidc.ts):
 - The trust also requires
   `token.actions.githubusercontent.com:aud == sts.amazonaws.com`, so a token
   minted for some other audience cannot assume the role.
+- Some orgs mint **immutable subject claims** carrying the numeric ids —
+  `repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:staging` — instead of
+  the classic form above. Under `StringEquals` the wrong form matches nothing,
+  and the deploy fails at `sts:AssumeRoleWithWebIdentity`, which looks like an
+  AWS permissions problem and is not one. Set `CCE_GITHUB_OWNER_ID` and
+  `CCE_GITHUB_REPO_ID` for that form; `deploy.yml` does it when the
+  `CCE_GITHUB_IMMUTABLE_SUBJECT` variable is `1`. Which form you get:
+
+  ```bash
+  gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+  ```
+
+  Set the variable **before** the next production deploy: the role is created
+  only by the prod IAM stack (`iam-stack.ts` gates on `!isStagingDeploy`), so a
+  prod deploy regenerates this trust policy and would undo an IAM hand-fix.
+  Staging deploys never touch it.
 
 Exact trust scope: only a workflow run in your named repo, on a ref or
 GitHub Environment you listed, can assume the role. A pull-request context,

@@ -80,3 +80,39 @@ describe('resolveGithubOidcTrust (fail-closed OIDC deploy trust)', () => {
     ).toThrow(/fully-qualified/);
   });
 });
+
+describe('immutable subject claims (owner/repo ids in the sub)', () => {
+  const base = {
+    CCE_GITHUB_OWNER: 'acme',
+    CCE_GITHUB_REPO: 'cce-fork',
+    CCE_GITHUB_DEPLOY_REFS: 'refs/heads/staging',
+    CCE_GITHUB_DEPLOY_ENVIRONMENTS: 'staging',
+  };
+
+  it('embeds the ids in every subject when both are given', () => {
+    const trust = resolveGithubOidcTrust({
+      ...base,
+      CCE_GITHUB_OWNER_ID: '318461635',
+      CCE_GITHUB_REPO_ID: '1324639154',
+    });
+    expect(trust.subjects).toEqual([
+      'repo:acme@318461635/cce-fork@1324639154:ref:refs/heads/staging',
+      'repo:acme@318461635/cce-fork@1324639154:environment:staging',
+    ]);
+  });
+
+  it('keeps the classic form when they are absent', () => {
+    expect(resolveGithubOidcTrust(base).subjects).toEqual([
+      'repo:acme/cce-fork:ref:refs/heads/staging',
+      'repo:acme/cce-fork:environment:staging',
+    ]);
+  });
+
+  it('rejects a non-numeric id', () => {
+    // An un-interpolated workflow expression would otherwise be baked into
+    // the trust policy verbatim.
+    expect(() =>
+      resolveGithubOidcTrust({ ...base, CCE_GITHUB_REPO_ID: '${{ github.repository_id }}' }),
+    ).toThrow(/numeric GitHub id/);
+  });
+});

@@ -26,6 +26,11 @@ its [ADR](./adr/0009-mission-container-model.md) governing durable decisions,
 its [backlog](./missions-v2-backlog.md) owning approved work, and its
 [audit](./missions-v2-audit.md) preserving historical evidence.
 
+[Paperclip](./features/paperclip/README.md) — making self-hosted Paperclip the
+work engine behind Missions — is the largest feature folder: it carries the full
+[implementation plan](./features/paperclip/implementation-plan.md) and its
+[audit](./features/paperclip/plan-audit.md) alongside the usual README and HANDOFF.
+
 ---
 
 ## I want to deploy this
