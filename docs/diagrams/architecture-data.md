@@ -1,4 +1,10 @@
-<!-- drift-gate: verified against the Paperclip Phase 1 foundations (ADR 0010); new DATA STORES were added and are now drawn. The Paperclip work engine substrate arrives as its own subgraph: an Aurora Serverless v2 PostgreSQL 17 cluster (CCE-Database — the future system of record for work items; RETAIN + deletion protection + 14-day PITR) and an encrypted EFS filesystem with AWS Backup (CCE-Filesystem — PAPERCLIP_HOME: reconstructible worktrees plus the NON-reconstructible secrets master key file, which is why backups stay on). Secrets Manager gains two entries: `/claudeclaw/paperclip` (operator-populated bridge keys, data-key encrypted like the other makeSecret entries) and `/claudeclaw/paperclip-db` (Aurora-generated credentials, AWS-managed key). Aurora storage and EFS use AWS-managed keys, NOT the three CMKs — recorded in the legend so nobody "fixes" an arrow that was never missing. `infra/lib/secrets-stack.ts` and `constants.ts` are the changed owners; sources updated. -->
+<!-- drift-gate: verified against the knowledge-durability split. The vector index moved OUT of
+vectors-staging into its own `vectors` bucket: versioned, and carrying no lifecycle rule that can
+expire a current object, because it is the only copy of ingested knowledge and nothing re-derives it.
+vectors-staging keeps its 7-day expiry, now scoped to the `uploads/` prefix. Both ride the data key.
+Owners changed: infra/lib/storage-stack.ts, infra/lib/constants.ts. See
+docs/features/knowledge-durability/README.md. Previously: verified against the Paperclip Phase 1
+foundations (ADR 0010); new DATA STORES were added and are now drawn. The Paperclip work engine substrate arrives as its own subgraph: an Aurora Serverless v2 PostgreSQL 17 cluster (CCE-Database — the future system of record for work items; RETAIN + deletion protection + 14-day PITR) and an encrypted EFS filesystem with AWS Backup (CCE-Filesystem — PAPERCLIP_HOME: reconstructible worktrees plus the NON-reconstructible secrets master key file, which is why backups stay on). Secrets Manager gains two entries: `/claudeclaw/paperclip` (operator-populated bridge keys, data-key encrypted like the other makeSecret entries) and `/claudeclaw/paperclip-db` (Aurora-generated credentials, AWS-managed key). Aurora storage and EFS use AWS-managed keys, NOT the three CMKs — recorded in the legend so nobody "fixes" an arrow that was never missing. `infra/lib/secrets-stack.ts` and `constants.ts` are the changed owners; sources updated. -->
 # Architecture, data view
 
 > All durable state lives in S3 buckets, DynamoDB tables, and Secrets Manager, encrypted with three customer-managed KMS keys. The roughly 30 DynamoDB tables are shown grouped by purpose rather than enumerated, because the grouping is what matters for reasoning about blast radius and backup. The state bucket and deploy-lock table are bootstrap primitives created by the deploy script outside CDK.
@@ -9,7 +15,8 @@ flowchart LR
     CONFIGB["config: agent prompts, agents/id/CLAUDE.md"]
     RAWB["raw: generated files + media"]
     CURATEDB["curated: cleaned knowledge docs"]
-    VECSTAGE["vectors-staging: browser-PUT upload staging"]
+    VECTORS["vectors: durable index/scope/docId.jsonl (versioned, NO expiry)"]
+    VECSTAGE["vectors-staging: browser-PUT upload staging (uploads/ expires 7d)"]
     LOGSB["logs: ALB/flow logs + DDB exports, Glacier after 90d"]
     AUDITB["audit-lock: WORM Object Lock, 2555d governance"]
     EXTB["extensions: signed extension bundles"]
@@ -51,6 +58,7 @@ flowchart LR
   DATAKEY --> WORK
   DATAKEY --> CONFIGB
   DATAKEY --> RAWB
+  DATAKEY --> VECTORS
   DATAKEY --> VECSTAGE
   DATAKEY --> SURFSEC
   CURATEDKEY --> CURATEDB
@@ -60,7 +68,7 @@ flowchart LR
 
 ## Legend
 
-- Arrows mean "encrypts". The data key is the broadest: DDB tables, the config/raw/vectors-staging buckets, the secrets, and the extensions stack all ride it. The curated key covers only the curated bucket; the logs key covers CloudWatch log groups and the ops-alerts SNS topic, NOT the logs bucket.
+- Arrows mean "encrypts". The data key is the broadest: DDB tables, the config/raw/vectors/vectors-staging buckets, the secrets, and the extensions stack all ride it. The curated key covers only the curated bucket; the logs key covers CloudWatch log groups and the ops-alerts SNS topic, NOT the logs bucket.
 - Because the ops-alerts topic is encrypted with the logs key, every service that publishes to it needs its own grant in that key's policy, not just permission on the topic. `storage-stack.ts` carries `AllowSNS` and `AllowSES`; the SES grant (scoped by `aws:SourceAccount`) is what lets the magic-link configuration set deliver bounce and complaint events. Without it `CreateConfigurationSetEventDestination` fails with "Access denied to KMS key for SNS topic", even though the topic policy already allows in-account publish.
 - The logs and audit-lock buckets both use S3-managed encryption (SSE-S3), not KMS, but for different reasons. The logs bucket is SSE-S3 because it is the server-access-log destination for the other buckets and S3 server-access-log delivery cannot write to SSE-KMS buckets (`storage-stack.ts` says so at the `LogsBucket` construct). The audit-lock bucket is not a server-access-log target; it is SSE-S3 so its WORM retention stays readable independently of the customer-managed KMS keys, which teardown can schedule for cryptographic erasure — a deleted data key must never render the immutable audit trail unreadable. Its Object Lock governance retention (2555 days) also makes it an intentional residual at teardown.
 - Vendor API keys (Tavily/Brave/Exa/Serper/Gemini) live in the `vendor-keys` secret, never in plain task-def env (IaC readiness item 5).
