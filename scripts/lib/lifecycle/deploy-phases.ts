@@ -28,6 +28,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   DescribeSecretCommand,
+  GetSecretValueCommand,
   PutSecretValueCommand,
   UpdateSecretVersionStageCommand,
 } from '@aws-sdk/client-secrets-manager';
@@ -96,6 +97,42 @@ export interface SecretWritePlan {
   configured: boolean;
   /** Placeholder-valued JSON shape used in the printed recovery command. */
   placeholderShape: string;
+  /**
+   * Read the live value and merge this plan's fields over it, instead of
+   * replacing the secret wholesale. For secrets this deploy only PARTLY
+   * owns. See mergeSecretValue.
+   */
+  mergeExisting?: boolean;
+}
+
+/**
+ * Merge a planned secret value over the live one, for plans that do not own
+ * every field.
+ *
+ * PutSecretValue replaces the WHOLE SecretString. Paperclip's secret holds
+ * one field this deploy owns (better_auth_secret, generated once by
+ * `npm run setup`) and three minted against the RUNNING instance in a later
+ * phase (reconciler_key, agent_keys, dispatch_secret). Without this merge the
+ * next routine deploy would overwrite those minted credentials with the
+ * placeholders CDK seeded.
+ *
+ * Planned fields win; every other live field survives. A missing or malformed
+ * live value degrades to the planned value rather than failing the deploy.
+ */
+export function mergeSecretValue(existing: string | undefined, planned: string): string {
+  const next = JSON.parse(planned) as Record<string, unknown>;
+  let base: Record<string, unknown> = {};
+  if (existing !== undefined && existing !== '') {
+    try {
+      const parsed: unknown = JSON.parse(existing);
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        base = parsed as Record<string, unknown>;
+      }
+    } catch {
+      base = {};
+    }
+  }
+  return JSON.stringify({ ...base, ...next });
 }
 
 /**
@@ -204,6 +241,36 @@ export function planSecretWrites(
         serper_api_key: '<key-or-REPLACE_ME>',
         google_gemini_api_key: '<key-or-REPLACE_ME>',
       }),
+    });
+  }
+
+  // Paperclip work engine (ADR 0010). ONLY better_auth_secret is written
+  // here. reconciler_key / agent_keys / dispatch_secret are minted against
+  // the RUNNING Paperclip instance in a later phase, and CDK already seeds
+  // all four as REPLACE_ME (infra/lib/secrets-stack.ts), so this plan MERGES
+  // instead of replacing: PutSecretValue swaps the whole string and would
+  // otherwise wipe those minted keys on the next routine deploy.
+  //
+  // `better_auth_secret` is the SHIPPED field spelling. The plan's
+  // `agent_keys_json` / `dispatch_token` variant is the wrong one
+  // (plan-audit P1-C4; the code wins, per P5). A fromSecretsManager field
+  // mismatch produces a task that cannot start.
+  //
+  // The value is generated ONCE by `npm run setup` and carried in .env. It
+  // is deliberately NOT minted here: planSecretWrites runs on EVERY deploy,
+  // so generating at this point would rotate the auth secret every deploy
+  // and invalidate every Paperclip session.
+  if (env.PAPERCLIP_BETTER_AUTH_SECRET) {
+    plans.push({
+      leaf: 'paperclip',
+      secretId: `${secretBase}/paperclip`,
+      label: 'Paperclip',
+      value: JSON.stringify({ better_auth_secret: env.PAPERCLIP_BETTER_AUTH_SECRET }),
+      mergeExisting: true,
+      // Not a configured surface until the Paperclip service exists: a
+      // deploy with CCE_PAPERCLIP_ENABLED unset must not fail on this.
+      configured: false,
+      placeholderShape: JSON.stringify({ better_auth_secret: '<generated-by-npm-run-setup>' }),
     });
   }
 
@@ -356,13 +423,32 @@ export async function populateSecretsV2(
       continue;
     }
 
+    // 1b. Merge plans read the live value first, so fields this deploy does
+    // not own are carried forward instead of being replaced.
+    let valueToWrite = plan.value;
+    if (plan.mergeExisting) {
+      try {
+        const cur = (await opts.client.send(
+          new GetSecretValueCommand({ SecretId: plan.secretId }),
+        )) as { SecretString?: string };
+        valueToWrite = mergeSecretValue(cur.SecretString, plan.value);
+      } catch (err) {
+        const message = `${plan.label} secret (${plan.secretId}): GetSecretValue failed: ${errMessage(err)}`;
+        if (plan.configured) {
+          throw new SecretWriteFailure(message, plan.secretId, recoveryCommand(plan, opts.region));
+        }
+        warnings.push(message);
+        continue;
+      }
+    }
+
     // 2. PutSecretValue with the per-deploy label.
     let versionId: string;
     try {
       const put = (await opts.client.send(
         new PutSecretValueCommand({
           SecretId: plan.secretId,
-          SecretString: plan.value,
+          SecretString: valueToWrite,
           ClientRequestToken: uuid(),
           VersionStages: ['AWSCURRENT', label],
         }),
