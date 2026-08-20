@@ -116,6 +116,7 @@ jobs:
             # middle, not at the end). IAM grant in iam-stack.ts
             # already matches this shape via `claudeclaw-*-orchestrator`.
             echo "ecr_repo=claudeclaw-staging-orchestrator" >> "$GITHUB_OUTPUT"
+            echo "paperclip_ecr_repo=claudeclaw-staging-paperclip" >> "$GITHUB_OUTPUT"
             echo "stack_name=CCE-STAGING" >> "$GITHUB_OUTPUT"
             # Staging is infra-only. DOMAIN_NAME MUST stay empty: there is no
             # Route 53 hosted zone and no ACM certificate in this account, so a
@@ -130,6 +131,7 @@ jobs:
             echo "tunnel_secret=claudeclaw-staging-public-tunnel" >> "$GITHUB_OUTPUT"
           else
             echo "ecr_repo=claudeclaw-orchestrator" >> "$GITHUB_OUTPUT"
+            echo "paperclip_ecr_repo=claudeclaw-paperclip" >> "$GITHUB_OUTPUT"
             echo "stack_name=CCE" >> "$GITHUB_OUTPUT"
             # Empty for the same reason as staging: no Route 53 zone and no ACM
             # cert in this account. app.pgnos.ai is published by the Cloudflare
@@ -169,23 +171,29 @@ jobs:
       - name: Ensure ECR repo exists
         env:
           ECR_REPO: ${{ steps.cfg.outputs.ecr_repo }}
+          PAPERCLIP_ECR_REPO: ${{ steps.cfg.outputs.paperclip_ecr_repo }}
+          CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
         run: |
           # scripts/deploy.ts does this for local deploys; the CI
           # workflow never did, so the first staging deploy hit a 403
           # trying to push to a non-existent repo. Idempotent.
-          if ! aws ecr describe-repositories \
-              --repository-names "$ECR_REPO" \
-              --region "$AWS_REGION" \
-              --no-cli-pager >/dev/null 2>&1; then
-            echo "Creating ECR repository: $ECR_REPO"
-            aws ecr create-repository \
-              --repository-name "$ECR_REPO" \
-              --image-scanning-configuration scanOnPush=true \
-              --image-tag-mutability MUTABLE \
-              --region "$AWS_REGION" \
-              --no-cli-pager
-          else
-            echo "ECR repository already exists: $ECR_REPO"
+          #
+          # CI does NOT run scripts/deploy.ts, it runs `cdk deploy --all`
+          # directly, so the deploy driver has TWO homes. A repo created in
+          # only one of them is absent on the path that reaches staging.
+          ensure_repo() {
+            if aws ecr describe-repositories --repository-names "$1" --region "$AWS_REGION" --no-cli-pager >/dev/null 2>&1; then
+              echo "ECR repository already exists: $1"
+            else
+              echo "Creating ECR repository: $1"
+              aws ecr create-repository --repository-name "$1" --image-scanning-configuration scanOnPush=true --image-tag-mutability MUTABLE --region "$AWS_REGION" --no-cli-pager
+            fi
+          }
+          ensure_repo "$ECR_REPO"
+          # Paperclip work engine (ADR 0010): same gate as the substrate
+          # stacks, so an unarmed deploy still creates nothing.
+          if [ "$CCE_PAPERCLIP_ENABLED" = "1" ]; then
+            ensure_repo "$PAPERCLIP_ECR_REPO"
           fi
 
       - name: Compute image tag
