@@ -61,11 +61,13 @@ as_of_commit: f1d602278035252a6579f40a5c3b84b41ec2814e
   `diagrams-drift.mjs` (forced into PR context) all OK. `git diff --check`
   clean. `cdk diff` **not run** — it needs AWS credentials this session
   deliberately never used.
-- **Smallest next action:** read CI on PR #81, starting with the Mermaid job —
-  the local renderer is unusable on this machine, so CI is its only signal.
+- **CI on #81 is green on all 9 checks**, including the pinned Mermaid renderer
+  and the Linux unit-test job — the latter passing clean confirms the six local
+  Windows failures are environmental, not code.
+- **Smallest next action:** merge #81 and delete the branch (**P7**).
 
   ```bash
-  gh pr checks 81 --repo Adams-Captial-Holdings-Ltd/Netzer-Labs
+  gh pr merge 81 --repo Adams-Captial-Holdings-Ltd/Netzer-Labs --squash --delete-branch
   ```
 
 ## Session log index

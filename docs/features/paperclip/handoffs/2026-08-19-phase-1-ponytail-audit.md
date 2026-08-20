@@ -329,19 +329,19 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ### 6.1 Smallest next action
 
-Read CI on [PR #81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81):
+CI on [PR #81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81)
+is **green on all 9 checks**, Mermaid included. Merge it:
 
 ```bash
-gh pr checks 81 --repo Adams-Captial-Holdings-Ltd/Netzer-Labs
+gh pr merge 81 --repo Adams-Captial-Holdings-Ltd/Netzer-Labs --squash --delete-branch
 ```
 
-The Mermaid job is the one to look at first — the local renderer is unusable on
-this machine (**M21**), so CI is the only signal for it. Nothing here deploys.
+Deleting the branch on merge satisfies **P7**. Nothing here deploys.
 
 ### 6.2 Immediate next steps
 
 1. Merge [#81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81)
-   into `development` once CI is green, then delete the branch (**P7**).
+   into `development` and delete the branch (**P7**).
 2. Resolve the **ECR gap** carried in §6.3 before Phase 2, since Phase 2 cannot
    start without an image in ECR and CI still has no step that creates the
    Paperclip repository.
@@ -468,6 +468,8 @@ Additional proof beyond the documented list:
 | `npx cdk ls CCE-Network CCE-Database`, flag unset | **exit 0**, `CCE-Database` silently absent — the defect, demonstrated |
 | Targeted suites after the change (`cost-gate`, `teardown-plan`, `manifest`, `database-stack`, `filesystem-stack`) | **5 files / 62 tests passed**, up from 59 (3 new cases) |
 | Repo-wide grep for `paperclipEcrRepoName` / `ensureEcrRepo(env,` | **0 matches** |
+| CI on [#81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81) | **all 9 checks pass** — Typecheck + Unit Tests, Hermetic CDK Synth, Integration Tests (LocalStack), Rollback Dry-Run, Secret Scan, Internal links, diagrams.map drift gate, Docs asset size, and **Mermaid render check (pinned renderer, 1m12s)** — the one this machine cannot run at all (**M21**) |
+| CI's unit-test job vs. the local run | CI passes **clean** on Linux, where none of the six local failures occur. That is independent confirmation that the **A9** set is environmental, not code. |
 
 Not run, and why: `cdk diff` and any deploy — they need AWS credentials and
 create or read billable state, and this session was explicitly not a deploy.
