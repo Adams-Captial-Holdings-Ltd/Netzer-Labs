@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: index
 status: current
-observed_at: 2026-08-19
-as_of_commit: f1d602278035252a6579f40a5c3b84b41ec2814e
+observed_at: 2026-08-20
+as_of_commit: 5e6325b
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/state/kill-switches-repo.ts
@@ -17,7 +17,9 @@ implemented_by:
   - infra/lib/secrets-stack.ts
   - infra/lib/constants.ts
   - scripts/deploy.ts
+  - scripts/teardown.ts
   - scripts/lib/cost-gate.ts
+  - scripts/lib/lifecycle/deploy-phases.ts
 tested_by:
   - src/lib/paperclip/mission-projection.test.ts
   - src/lib/paperclip/client.paperclip.integration.test.ts
@@ -102,8 +104,11 @@ Verified and in `development`:
   3100 and the `/claudeclaw/paperclip` secret with `REPLACE_ME` placeholders —
   both already deployed to staging, both `RETAIN` with fixed names, so removing
   them from the template now would orphan them (see the Phase 1 audit session
-  log, **P16**). No second ECR repository is created any more, and the cost gate
-  prices the substrate only when it is armed. `cdk synth` is clean and
+  log, **P16**). The `better_auth_secret` field is populated by deploy phase b
+  when `PAPERCLIP_BETTER_AUTH_SECRET` is set; the other three stay `REPLACE_ME`
+  until a later phase mints them against the running instance. The second ECR
+  repository is created in deploy phase a **only when armed**, and deleted by
+  teardown. The cost gate prices the substrate only when it is armed. `cdk synth` is clean and
   `CCE-Compute` has **zero** Paperclip references.
 
 It is **not yet**: a Paperclip client, a reconciler, an ACL over
@@ -114,9 +119,11 @@ has changed.
 ## 3. Current status and current source commit
 
 **Source evidence only.** Verified at commit
-`f1d602278035252a6579f40a5c3b84b41ec2814e` on
-`fix/paperclip-phase1-arming` — the Phase 1 over-engineering audit and its
-fixes, cut from `development` at `747cf8b`.
+`6996f64efaace96bb4b19246e4a870be341290c1` on
+`fix/paperclip-phase2-readiness` — the Phase 2 readiness fixes, cut from
+`development` at `5418497` (the squash-merge of
+[PR #81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81),
+the Phase 1 over-engineering audit).
 
 Deployment evidence **does not exist**. The Phase 1 stacks have never been
 `cdk diff`ed or deployed against the real account; those steps are deliberately
@@ -125,8 +132,11 @@ Source evidence and deployment evidence are not the same thing and are not
 conflated anywhere in this folder.
 
 Phases complete: §33 first milestone (1A–1D), Phase 0, Phase 1 **code**
-(audited and corrected 2026-08-19). Phase 1 steps **5–8** and Phases 2–10 are
-unstarted; step 5 is the `cdk diff` the plan lists before the deploy.
+(audited and corrected 2026-08-19; Phase 2 code blockers cleared 2026-08-20).
+Phase 1 steps **5–8** and Phases 2–10 are unstarted; step 5 is the `cdk diff`
+the plan lists before the deploy. **Step 7, the ARM64 question, is already
+answered** — the pinned digest is a multi-arch index carrying `linux/arm64`,
+so no `docker buildx` run is owed. See [HANDOFF](HANDOFF.md).
 
 ## 4. Source of truth
 
@@ -161,8 +171,8 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Database substrate | `infra/lib/database-stack.ts` | Aurora Serverless v2 PG 17, min 0.5 ACU, deletion-protected, RETAIN, 14-day backups, generated credentials at `/claudeclaw/paperclip-db`; 5432 admitted from `PaperclipSg` **only** |
 | Filesystem substrate | `infra/lib/filesystem-stack.ts` | Encrypted EFS with automatic backups, access point pinned to posix 1000:1000 at `/paperclip`, the `/claudeclaw/paperclip` log group |
 | Network | `infra/lib/network-stack.ts` | `PaperclipSg` on port 3100 from the ALB — its own port, not a `PORT=3000` reuse — without touching the Fargate SG |
-| Secrets and names | `infra/lib/secrets-stack.ts`, `infra/lib/constants.ts` | `/claudeclaw/paperclip` secret with `REPLACE_ME` placeholders; suffix-aware names via `buildResourceNames()` |
-| Deploy and cost | `scripts/deploy.ts`, `scripts/lib/cost-gate.ts` | Both stacks join deploy phase a **only when `CCE_PAPERCLIP_ENABLED=1`**, which `cdkEnvBag` forwards and `SYNTH_INPUT_ALLOWLIST` replays; no Paperclip ECR repo is created (Phase 2 creates it beside the image push); the cost gate lists and prices the substrate only when armed, and the budget default is back to 600 |
+| Secrets and names | `infra/lib/secrets-stack.ts`, `infra/lib/constants.ts`, `scripts/lib/lifecycle/deploy-phases.ts` | `/claudeclaw/paperclip` seeded `REPLACE_ME` by CDK; deploy phase b **merges** a real `better_auth_secret` in (generated once by `npm run setup`) without disturbing the three keys minted later; suffix-aware names via `buildResourceNames()` |
+| Deploy and cost | `scripts/deploy.ts`, `scripts/lib/cost-gate.ts` | Both stacks join deploy phase a **only when `CCE_PAPERCLIP_ENABLED=1`**, which `cdkEnvBag` forwards and `SYNTH_INPUT_ALLOWLIST` replays; the Paperclip ECR repo is created in phase a when armed and deleted by `scripts/teardown.ts` (the out-of-band catalog only **reports**, it never deletes); the cost gate lists and prices the substrate only when armed, and the budget default is back to 600 |
 
 ## 6. Current business/state rules
 
@@ -186,7 +196,9 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Risk | Evidence | Approved next work |
 |---|---|---|
 | Phase 1 stacks have never been `cdk diff`ed against the real account | [HANDOFF](HANDOFF.md) — synth-only evidence | Phase 1 steps 6–8, gated on an explicit user deploy go-ahead |
-| ARM64 buildability of the patched image is unanswered | [HANDOFF](HANDOFF.md) | One `docker buildx build --platform linux/arm64`, result recorded in the HANDOFF |
+| ~~ARM64 buildability of the patched image is unanswered~~ **RESOLVED 2026-08-20** | The pinned digest is an OCI image index carrying `linux/arm64` (`sha256:6ab3c816…`), read from GHCR | None. The base image is multi-arch, and the whole compute plane is ARM64 already (`compute-stack.ts` `CpuArchitecture.ARM64`) |
+| **Nothing builds or pushes the patched Paperclip image** | `.github/workflows/deploy.yml` has no build step; `vendor/paperclip/Dockerfile` is never invoked | Extend `scripts/lib/lifecycle/cloud-build.ts` (the Docker-free CodeBuild path) to build it in the operator's own account — decided 2026-08-20, not yet built |
+| **Aurora is untiered: a Tier 0 install provisions the production cluster** | `infra/lib/database-stack.ts` has zero `TIERS`/`props.tier` references | Tier-gate `serverlessV2Min/MaxCapacity`; keep `deletionProtection` and `RETAIN` (**P17**, **M19**) — decided 2026-08-20, not yet built |
 | The patch must be re-evaluated on every artifact re-pin | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Drop the patch the release upstream ships `updatedSince` |
 | Node-vs-Postgres clock skew can stamp an update at or before an observed watermark | [Session handoff §3.1](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | Reconciler must overlap polls rather than trust exact watermarks; owned by the client/reconciler phase |
 | **The plan contradicts itself on dual-write and on the `PAPERCLIP_ENABLED` fall-through** | [plan-audit.md](plan-audit.md) P1-C6, P1-C7 | An author decision is required **before** Phase 4. Rollout (§30) and cutover (§25/§27) were written to different premises. |

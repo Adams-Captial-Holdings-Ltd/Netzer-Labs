@@ -9,6 +9,7 @@ import {
   imageInspectHasArm64,
   imageJsonHasArm64,
   KEEP_DEPLOY_LABELS,
+  mergeSecretValue,
   planSecretWrites,
   populateSecretsV2,
   pruneDeployLabels,
@@ -36,6 +37,8 @@ const REGION = 'us-east-1';
 interface FakeSecretState {
   /** versionId → staging labels */
   versions: Map<string, string[]>;
+  /** Live AWSCURRENT SecretString, for GetSecretValue and merge plans. */
+  value?: string;
 }
 
 interface FakeOptions {
@@ -75,6 +78,15 @@ function fakeSecretsClient(secretIds: string[], opts: FakeOptions = {}) {
           ),
         };
       }
+      if (name === 'GetSecretValueCommand') {
+        const s = secrets.get(secretId);
+        if (!s) {
+          const err = new Error(`Secrets Manager can't find the specified secret. (${secretId})`);
+          err.name = 'ResourceNotFoundException';
+          throw err;
+        }
+        return { SecretString: s.value };
+      }
       if (name === 'PutSecretValueCommand') {
         if (opts.failPutFor?.has(secretId)) {
           throw new Error(`AccessDeniedException: put denied for ${secretId}`);
@@ -92,6 +104,7 @@ function fakeSecretsClient(secretIds: string[], opts: FakeOptions = {}) {
           }
         }
         s.versions.set(newVersionId, [...(input.VersionStages as string[])]);
+        s.value = String(input.SecretString);
         return { VersionId: newVersionId };
       }
       if (name === 'UpdateSecretVersionStageCommand') {
@@ -121,6 +134,7 @@ const ALL_SECRET_IDS = [
   `${BASE}/db-encryption`,
   `${BASE}/vendor-keys`,
   `${BASE}/bedrock-guardrails`,
+  `${BASE}/paperclip`,
 ];
 
 const MINIMAL_ENV: Record<string, string> = {
@@ -170,6 +184,63 @@ describe('planSecretWrites', () => {
     const value = JSON.parse(plans.find((p) => p.leaf === 'bedrock-guardrails')!.value);
     expect(value).toEqual({ guardrail_id: 'gr-123', guardrail_version: 'DRAFT' });
   });
+
+  it('plans paperclip ONLY when PAPERCLIP_BETTER_AUTH_SECRET is set', () => {
+    expect(planSecretWrites({}, BASE, GUARDRAILS).map((p) => p.leaf)).not.toContain('paperclip');
+    const plans = planSecretWrites({ PAPERCLIP_BETTER_AUTH_SECRET: 's3cret' }, BASE, GUARDRAILS);
+    expect(plans.map((p) => p.leaf)).toContain('paperclip');
+  });
+
+  it('paperclip writes only better_auth_secret, merged, and is never configured', () => {
+    const plan = planSecretWrites({ PAPERCLIP_BETTER_AUTH_SECRET: 's3cret' }, BASE, GUARDRAILS).find(
+      (p) => p.leaf === 'paperclip',
+    )!;
+    // The SHIPPED field spelling (infra/lib/secrets-stack.ts), NOT the plan's
+    // agent_keys_json / dispatch_token variant. plan-audit P1-C4, code wins.
+    expect(JSON.parse(plan.value)).toEqual({ better_auth_secret: 's3cret' });
+    // Merge, or the next deploy wipes reconciler_key / agent_keys /
+    // dispatch_secret, which are minted against the RUNNING instance.
+    expect(plan.mergeExisting).toBe(true);
+    // A deploy with CCE_PAPERCLIP_ENABLED unset must not fail on this write.
+    expect(plan.configured).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// mergeSecretValue
+// ─────────────────────────────────────────────────────────────────────
+
+describe('mergeSecretValue', () => {
+  it('keeps live fields the plan does not name', () => {
+    // The exact Paperclip case: deploy owns better_auth_secret; the other
+    // three were minted against the running instance and must survive.
+    const live = JSON.stringify({
+      better_auth_secret: 'old',
+      reconciler_key: 'minted-1',
+      agent_keys: 'minted-2',
+      dispatch_secret: 'minted-3',
+    });
+    const merged = JSON.parse(
+      mergeSecretValue(live, JSON.stringify({ better_auth_secret: 'new' })),
+    );
+    expect(merged).toEqual({
+      better_auth_secret: 'new',
+      reconciler_key: 'minted-1',
+      agent_keys: 'minted-2',
+      dispatch_secret: 'minted-3',
+    });
+  });
+
+  it('degrades to the planned value when the live one is absent or malformed', () => {
+    const planned = JSON.stringify({ better_auth_secret: 'new' });
+    const only = { better_auth_secret: 'new' };
+    expect(JSON.parse(mergeSecretValue(undefined, planned))).toEqual(only);
+    expect(JSON.parse(mergeSecretValue('', planned))).toEqual(only);
+    expect(JSON.parse(mergeSecretValue('not json at all', planned))).toEqual(only);
+    // A JSON array parses but is not a field map.
+    expect(JSON.parse(mergeSecretValue('[1,2]', planned))).toEqual(only);
+    expect(JSON.parse(mergeSecretValue('null', planned))).toEqual(only);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -177,6 +248,34 @@ describe('planSecretWrites', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('populateSecretsV2', () => {
+  it('a merge plan preserves the Paperclip keys minted against the instance', async () => {
+    const client = fakeSecretsClient(ALL_SECRET_IDS);
+    // What the running instance left behind: CDK seeded four REPLACE_ME
+    // fields and a later phase minted three of them for real.
+    client.secrets.get(`${BASE}/paperclip`)!.value = JSON.stringify({
+      better_auth_secret: 'REPLACE_ME',
+      reconciler_key: 'minted-1',
+      agent_keys: 'minted-2',
+      dispatch_secret: 'minted-3',
+    });
+    await populateSecretsV2({
+      client,
+      env: { ...MINIMAL_ENV, PAPERCLIP_BETTER_AUTH_SECRET: 'from-dot-env' },
+      secretBase: BASE,
+      deployId: DEPLOY_ID,
+      region: REGION,
+      guardrails: GUARDRAILS,
+    });
+    // Without mergeExisting this write would have replaced the whole string
+    // and destroyed all three minted credentials.
+    expect(JSON.parse(client.secrets.get(`${BASE}/paperclip`)!.value!)).toEqual({
+      better_auth_secret: 'from-dot-env',
+      reconciler_key: 'minted-1',
+      agent_keys: 'minted-2',
+      dispatch_secret: 'minted-3',
+    });
+  });
+
   it('a configured-surface write failure is fatal with the exact recovery command', async () => {
     const client = fakeSecretsClient(ALL_SECRET_IDS, {
       failPutFor: new Set([`${BASE}/dashboard`]),
