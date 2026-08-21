@@ -121,12 +121,21 @@ export function toPriorityBand(score: number): PriorityBand {
   return 'low';
 }
 
+/**
+ * Total: the `default` is not dead code, it is the A2-17 guarantee. `priority`
+ * is typed `PriorityBand`, but it arrives off a wire row, and without this rung
+ * a band outside the four returns `undefined` from a function declared
+ * `number` — which then flows into a `Mission.priority` and silently breaks
+ * every comparison downstream. 50 is `medium`, the same value the missions repo
+ * defaults to.
+ */
 export function toPriorityScore(priority: PriorityBand): number {
   switch (priority) {
     case 'critical': return 95;
     case 'high': return 80;
     case 'medium': return 50;
     case 'low': return 20;
+    default: return 50;
   }
 }
 
@@ -147,12 +156,34 @@ export function missionToIssueCreate(
   agents: AgentIdMap,
   idGenerator: () => string,
 ): CreateIssueBody {
+  // A1-13: `status` is DELIBERATELY OMITTED so the server default applies.
+  //
+  // WHAT IS OBSERVED. The probe "A1-17 (CHARACTERIZATION): boardMutationGuard
+  // across all five write shapes with an agent key" posts a create body with no
+  // `status` and records `boardMutationGuard["POST /api/companies/{companyId}
+  // /issues"] = 201`; the unassigned row that same probe creates is then
+  // checked out with `expectedStatuses: ['todo','backlog']` and recorded 200.
+  // So omitting `status` is accepted, and an unassigned, status-omitted create
+  // lands in ONE OF todo or backlog.
+  //
+  // WHAT IS UNVERIFIED. WHICH of the two, and what an ASSIGNED create defaults
+  // to - the only branch this function ever takes, since `assigneeAgentId` is
+  // mandatory below. No probe reads `.status` off a created row, and `backlog`
+  // appears zero times in tests/contract/artifact-characterization.json. The
+  // bar's "todo with an assignee, backlog without" is transcription, not
+  // measurement; do not repeat it as fact. Producing it needs one probe that
+  // asserts `createdIssue(...).status` and `createdUnassignedIssue(...).status`.
+  //
+  // Omitting is still the right call either way: no probe has ever SENT
+  // `status` on a create, and the `listFilterValidation` characterization shows
+  // an unrecognized status is a silent 200 rather than a 400 - so a wrong value
+  // would not announce itself, and `project(created.id)` would report the
+  // silently wrong state back as truth.
   return {
     title: mission.title,
     description: mission.body,
     assigneeAgentId: uuidForSlug(mission.ownerAgent, agents),
     priority: toPriorityBand(mission.priority),
-    status: toIssueStatus(mission.status, true),
     idempotencyKey: `netzar-mission:${idGenerator()}`,
   };
 }

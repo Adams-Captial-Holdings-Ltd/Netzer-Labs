@@ -271,6 +271,47 @@ const envSchema = z.object({
   // interpreted by src/lib/jarvis/jarvis-flags.ts.
   JARVIS_LAUNCH_ENABLED: z.string().optional(),
   NOVA_HTTP2_TIMEOUT_MS: z.coerce.number().int().min(1000).default(470_000),
+
+  // ── Paperclip (ADR 0010) ────────────────────────────────────────
+  // Nine keys, all optional and all read through src/lib/paperclip/config.ts,
+  // which turns "unset" into a typed PaperclipDisabledError naming the
+  // remediation location rather than letting a request reach `undefined/api/…`.
+  //
+  // WHY EVERY ONE IS optionalNonPlaceholder() AND NOT z.coerce.number() OR
+  // z.string().default(): `node --env-file` turns a bare `KEY=` into the empty
+  // string, `.env.example` ships 58 such lines, and infra/lib/compute-stack.ts
+  // builds the container environment with `process.env.X ?? 'default'` — which
+  // `??` does NOT rescue from ''. Against a coerced number an empty value makes
+  // loadEnv() THROW at startup (Number('') === 0 fails a .min()); against a
+  // .default() it silently defeats the default. optionalNonPlaceholder() maps
+  // both '' and Secrets Manager's REPLACE_ME to undefined, which is the only
+  // declaration in this file that is safe on all three paths. The two numeric
+  // keys are therefore parsed, with a finite-and-positive guard, in config.ts.
+  //
+  // Three arrive as ECS secret fields and their SPELLINGS ARE LOAD-BEARING
+  // (C-19): `agent_keys` → PAPERCLIP_AGENT_KEYS_JSON (a JSON string, because
+  // one secret field injects as one env var), `dispatch_secret` →
+  // PAPERCLIP_DISPATCH_SECRET, `reconciler_key` → PAPERCLIP_RECONCILER_KEY.
+  // `agent_keys_json` / `dispatch_token` are the plan's wrong variants and a
+  // field mismatch is a task that cannot START.
+  /** String-flag convention ("1"/"true"). The seventh home of a flag that had six. */
+  CCE_PAPERCLIP_ENABLED: optionalNonPlaceholder(),
+  /** Origin only, no path. Runtime-config `paperclip/base_url` wins over this. */
+  PAPERCLIP_BASE_URL: optionalNonPlaceholder(),
+  /** The single tenant's company uuid; what company-id pinning compares against. */
+  PAPERCLIP_COMPANY_ID: optionalNonPlaceholder(),
+  /** JSON object, agent slug → agent API key. Secret field `agent_keys`. */
+  PAPERCLIP_AGENT_KEYS_JSON: optionalNonPlaceholder(),
+  /** Secret field `reconciler_key`. A second key on the same agent, not a distinct actor class. */
+  PAPERCLIP_RECONCILER_KEY: optionalNonPlaceholder(),
+  /** Secret field `dispatch_secret`; the shared secret C-17 settled on for the dispatch route. */
+  PAPERCLIP_DISPATCH_SECRET: optionalNonPlaceholder(),
+  /** Agent slug signing requests that name no actor. Defaults to `main`. */
+  PAPERCLIP_DEFAULT_AGENT: optionalNonPlaceholder(),
+  /** Milliseconds. Overrides the 10 s read timeout (A2-11's divergence from Linear). */
+  PAPERCLIP_READ_TIMEOUT_MS: optionalNonPlaceholder(),
+  /** Milliseconds. Overrides the 20 s write timeout. */
+  PAPERCLIP_WRITE_TIMEOUT_MS: optionalNonPlaceholder(),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -174,6 +174,83 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Secrets and names | `infra/lib/secrets-stack.ts`, `infra/lib/constants.ts`, `scripts/lib/lifecycle/deploy-phases.ts` | `/claudeclaw/paperclip` seeded `REPLACE_ME` by CDK; deploy phase b **merges** a real `better_auth_secret` in (generated once by `npm run setup`) without disturbing the three keys minted later; suffix-aware names via `buildResourceNames()` |
 | Deploy and cost | `scripts/deploy.ts`, `scripts/lib/cost-gate.ts` | Both stacks join deploy phase a **only when `CCE_PAPERCLIP_ENABLED=1`**, which `cdkEnvBag` forwards and `SYNTH_INPUT_ALLOWLIST` replays; the Paperclip ECR repo is created in phase a when armed and deleted by `scripts/teardown.ts` (the out-of-band catalog only **reports**, it never deletes); the cost gate lists and prices the substrate only when armed, and the budget default is back to 600 |
 
+## 5b. Using the client (`src/lib/paperclip/client.ts`)
+
+Every fenced block in this section is **executed** by
+`src/lib/paperclip/readme.test.ts`, which also asserts the block is byte-identical
+to the code it runs. Editing one without the other fails the suite, so these
+snippets cannot silently rot.
+
+**Constructing one.** In a deployed task use `paperclipClientFromEnvironment()`,
+which reads env plus the `paperclip/base_url` runtime-config key. Everywhere
+else, hand the constructor the four values directly. Construction is
+**synchronous and total**: a missing base URL, company or agent key throws
+`PaperclipDisabledError` here, naming the remediation, rather than becoming a
+request to `undefined/api/…`.
+
+<!-- CODE_SECTION: construct -->
+```ts
+const paperclip = new PaperclipClient({
+  baseUrl: 'https://paperclip.internal',
+  companyId: '00000000-0000-4000-8000-000000000001',
+  agentKeys: { main: 'agent-key-for-main' },
+  defaultActor: 'main',
+});
+```
+
+**Reading a board.** The issue list answers a **bare array** — no envelope, no
+`total`, no `nextOffset` — so a sweep pages until an empty page. `paginateAll()`
+walks serially on purpose: identical concurrent reads coalesce, but *distinct*
+concurrent reads for one actor are what trip `429 Too many concurrent
+issue-list requests`. Reaching its page bound with rows still on the board
+raises `PaperclipPaginationTruncatedError` rather than returning a short array —
+this surface has no totals endpoint to catch an undercount against.
+
+<!-- CODE_SECTION: paginate -->
+```ts
+const page = await paperclip.listIssues({
+  updatedSince: '2026-08-20T00:00:00.000Z',
+  sortField: 'updated',
+  limit: 2,
+});
+const everything = await page.paginateAll();
+```
+
+The filters above survive to page 2 without being repeated: the page holds a
+refetch closure captured at construction, and `fetchNext()` merges the cursor
+over it.
+
+**Catching a failure.** Every failure is a `PaperclipError` with a `type`
+discriminant, the HTTP `status`, the parsed `body`, the `request` context and the
+untouched original on `raw`. Rate limits carry the whole budget, and
+`advertisedWaitMs()` is the wait the server actually asked for — never `NaN`,
+even when the header is not a number.
+
+<!-- CODE_SECTION: errors -->
+```ts
+try {
+  await paperclip.getIssue('a1b2c3d4-0000-4000-8000-000000000001');
+} catch (err) {
+  if (err instanceof PaperclipRatelimitedError) {
+    await sleep(err.advertisedWaitMs() ?? 1_000);
+  } else if (err instanceof PaperclipError) {
+    logger.warn({ type: err.type, status: err.status, path: err.request?.path }, err.message);
+  }
+}
+```
+
+**When the integration is switched off.** The `paperclip_disabled` kill switch is
+checked inside the transport at **every** invoke and *before* the circuit
+breaker, so no caller can bypass it and a deliberately disabled integration never
+looks like an outage.
+
+<!-- CODE_SECTION: killswitch -->
+```ts
+const failure = await paperclip.getHealth().catch((err: unknown) => err);
+// PaperclipDisabledError, not PaperclipUnavailableError:
+// "paperclip_disabled kill switch active: …"
+```
+
 ## 6. Current business/state rules
 
 - One Netzar deployment maps to one Paperclip company (DL-5).

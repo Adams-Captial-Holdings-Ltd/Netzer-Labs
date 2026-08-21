@@ -90,10 +90,19 @@ describe('priority projection', () => {
 });
 
 describe('field projection', () => {
-  it('maps Mission body to create description and creates a deterministic idempotency key', () => {
+  it('A1-13: the create body omits status so the server default applies, and keys deterministically', () => {
     const body = missionToIssueCreate(mission(), agentMap, () => 'request-uuid');
-    expect(body).toEqual({ title: 'Ship projection', description: 'mission body', assigneeAgentId: 'agent-haiku', priority: 'high', status: 'todo', idempotencyKey: 'netzar-mission:request-uuid' });
-    expect(missionToIssueCreate(mission(), agentMap, () => 'request-uuid').idempotencyKey).toBe('netzar-mission:request-uuid');
+    // `toEqual` is the assertion: an extra key fails it, which is what keeps
+    // `status` off the wire. A1-13 omits it so the server picks the default; no
+    // probe has ever SENT `status` on a create, and WHICH status an omitted
+    // create lands in is UNVERIFIED - the A1-17 characterization only entitles
+    // "todo or backlog", via a 200 checkout with `expectedStatuses:
+    // ['todo','backlog']` on an unassigned row. This test pins the body shape,
+    // not the server's default.
+    expect(body).toEqual({ title: 'Ship projection', description: 'mission body', assigneeAgentId: 'agent-haiku', priority: 'high', idempotencyKey: 'netzar-mission:request-uuid' });
+    expect(body).not.toHaveProperty('status');
+    // Deterministic, never random: the server retains keys for 7 days.
+    expect(missionToIssueCreate(mission({ status: 'done' }), agentMap, () => 'request-uuid')).toEqual(body);
   });
 
   it('rejects unknown Mission owners with the slug and known choices', () => {
