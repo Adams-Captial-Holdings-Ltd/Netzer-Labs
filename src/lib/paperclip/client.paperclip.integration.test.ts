@@ -5,6 +5,7 @@ import {
   readPaperclipLogsSince,
   type PaperclipBootstrap,
 } from '../../../tests/fixtures/paperclip-bootstrap.js';
+import { PAPERCLIP_RUN_ID_HEADER } from './types.js';
 
 interface PaperclipIssue {
   id: string;
@@ -31,9 +32,10 @@ async function requestJson<T>(
   return await response.json() as T;
 }
 
-async function createAssignedIssue(
+async function createIssue(
   fixture: PaperclipBootstrap,
   title: string,
+  extra: Record<string, unknown> = {},
 ): Promise<PaperclipIssue> {
   return requestJson<PaperclipIssue>(
     fixture,
@@ -44,11 +46,19 @@ async function createAssignedIssue(
       body: JSON.stringify({
         title,
         description: 'Paperclip integration contract probe',
-        assigneeAgentId: fixture.agents.main.id,
         priority: 'medium',
+        ...extra,
       }),
     },
   );
+}
+
+async function createAssignedIssue(
+  fixture: PaperclipBootstrap,
+  title: string,
+  extra: Record<string, unknown> = {},
+): Promise<PaperclipIssue> {
+  return createIssue(fixture, title, { assigneeAgentId: fixture.agents.main.id, ...extra });
 }
 
 // These contracts need the disposable Paperclip harness (docker-compose.
@@ -66,12 +76,23 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image
   }, 120_000);
 
   it('I3: updatedSince is a strict greater-than watermark', async () => {
-    const issue = await createAssignedIssue(fixture, `I3 strict watermark ${Date.now()}`);
+    // Both assertions below are EXACT SETS - zero rows, then one specific row -
+    // so they only hold while nothing else on this board moves inside the
+    // window. The board is shared: `tests/contract/paperclip-routes.paperclip.
+    // integration.test.ts` writes dozens of issues and fires real wakeups
+    // against the same company, and a background heartbeat landing here would
+    // turn an exact-set assertion red for a reason that has nothing to do with
+    // the watermark. Scope the read to a throwaway parent, the way the contract
+    // suite's own offset probe does, so the set is this test's rows and no
+    // others.
+    const parent = await createIssue(fixture, `I3 watermark scope ${Date.now()}`);
+    const issue = await createAssignedIssue(fixture, `I3 strict watermark ${Date.now()}`, { parentId: parent.id });
     const updatedAt = new Date(issue.updatedAt);
     expect(Number.isNaN(updatedAt.getTime())).toBe(false);
 
     const listFrom = async (watermark: string): Promise<PaperclipIssue[]> => {
       const query = new URLSearchParams({
+        parentId: parent.id,
         updatedSince: watermark,
         sortField: 'updated',
         sortDir: 'asc',
@@ -101,7 +122,9 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image
       headers: {
         authorization: `Bearer ${fixture.agents.main.key}`,
         'content-type': 'application/json',
-        'x-paperclip-run-id': fabricatedRunId,
+        // A1-3: the spelling is pinned once, in `types.ts`. Hard-coding the
+        // literal here is the one place a header rename would go unnoticed.
+        [PAPERCLIP_RUN_ID_HEADER]: fabricatedRunId,
       },
       body: JSON.stringify({
         agentId: fixture.agents.main.id,
@@ -122,12 +145,28 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image
     expect(evidence).toContain('issues_checkout_run_id_heartbeat_runs_id_fk');
     expect(evidence).toContain(fabricatedRunId);
 
+    // The live-source assertions, all three over the same walk of every
+    // non-test module in this directory.
+    //
+    // A1-3 names `randomUUID()` AND `uuid()`: a fabricated run id passes the
+    // header guard and dies at the write with the 23503 above rather than a
+    // clean 4xx, so neither spelling may exist here.
+    //
+    // A1-14 asks for a test that `onBehalfOfUserId` never appears in a
+    // serialized body. Attribution spoofing is audited server-side, and the
+    // string appearing nowhere in this directory is the whole of the contract -
+    // there is no body-builder to inspect at runtime that this scan does not
+    // already cover, and the guard is what keeps the absence true.
     const sourceDirectory = new URL('./', import.meta.url);
     const paperclipSources = (await readdir(sourceDirectory))
       .filter((name) => name.endsWith('.ts') && !name.includes('.test.'));
+    expect(paperclipSources.length, 'the source scan matched no files, so all three assertions below are vacuous')
+      .toBeGreaterThan(0);
     for (const sourceName of paperclipSources) {
       const source = await readFile(new URL(sourceName, sourceDirectory), 'utf8');
       expect(source, `${sourceName} must never synthesize a Paperclip run id`).not.toMatch(/\brandomUUID\b/);
+      expect(source, `${sourceName} must never synthesize a Paperclip run id`).not.toMatch(/\buuid\s*\(/i);
+      expect(source, `A1-14: ${sourceName} must never serialize onBehalfOfUserId`).not.toMatch(/onBehalfOfUserId/);
     }
   });
 });

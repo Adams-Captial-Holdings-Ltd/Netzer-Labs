@@ -22,6 +22,6 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src/**/*", "infra/**/*", "scripts/**/*", "vitest.config.ts"],
+  "include": ["src/**/*", "infra/**/*", "scripts/**/*", "tests/contract/**/*", "vitest.config.ts"],
   "exclude": ["node_modules", "dist", "cdk.out", "web"]
 }
