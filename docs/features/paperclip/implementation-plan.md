@@ -10487,3 +10487,64 @@ run — never in advance, and never from a plan.
 - [The bar and phase decomposition](bar-and-phases.md) — carries the phases that implement this section
 - [ADR 0010](../../adr/0010-paperclip-work-engine.md) and its amendment
 - [The plan audit](plan-audit.md)
+
+## 35.6 What has actually landed
+
+Appended 2026-08-21. **This section records only work that is merged and whose
+verification actually ran.** Anything in flight is named as in flight. Nothing
+here is a plan.
+
+### Merged to `development` — [PR #88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88), 9/9 CI checks green
+
+| Phase | Commit | What it is | Verified by |
+|---|---|---|---|
+| **1 — contract probes and wire types** | `b0f6979` | `src/lib/paperclip/types.ts` (the single wire-shape file), `tests/contract/paperclip-routes.paperclip.integration.test.ts`, the real 475-path `openapi.snapshot.json`, and `artifact-characterization.json` | **21/21 live probes** against `netzer-paperclip:2026.722.0-netzar.1` on a reset harness |
+| **1.5 — the image pipeline** | `7e17a7c` | `scripts/ci/paperclip-image.ts`, a parameterised `cloud-build.ts`, content-addressed tagging, teardown of all four CodeBuild resources, and the **staging** IAM grants | `npm run typecheck`, `npx cdk ls` 15 flag-off / 17 flag-on, `paperclip-image-pipeline.test.ts` |
+| **docs** | `78715f6`, `45a96a8` | `bar-and-phases.md`, §35 of this document, the session handoff, and the deploy-pipeline diagram split | `docs-links`, `feature-knowledge`, `docs-mermaid`, `diagrams-drift` all OK |
+
+Both build phases were rejected **four times** by an independent critic with
+fresh context and signed off blind on the fifth.
+
+### Not deployed
+
+**No AWS resource has been created.** `development` deploys nothing; the
+`qa → staging` promotion is deliberately being held until the Paperclip service
+exists, so there is exactly one deploy rather than an invisible substrate-only
+one. `CCE_PAPERCLIP_ENABLED=1` is already set at repo level and staging deploys
+automatically on push to `staging`, so **that merge is the deploy** and it
+creates a retained, deletion-protected Aurora cluster billing from creation.
+
+### In flight, NOT merged
+
+**Phase 4 + 4.5 — the Paperclip service and its UI.** Written and typechecking,
+with 27 new CDK assertions passing, but **rejected by its critic and not
+signed off**. Files exist uncommitted: `infra/lib/paperclip-stack.ts`,
+`infra/lib/paperclip-stack.test.ts`, `scripts/paperclip-bootstrap.ts`,
+`scripts/lib/paperclip/bootstrap-core.ts`, plus edits to `infra/bin/app.ts`,
+`compute-stack.ts`, `deploy.ts` and `vendor/paperclip/Dockerfile`.
+
+The blocking finding is worth carrying forward on its own merits — see **M33**
+in the session handoff. The service's *existence* was recomputed on every
+deploy from `cdk-outputs.json`, which is **gitignored and machine-local**, and
+the failure default was **DELETE**. On CI — the only path that reaches staging —
+the probe can never succeed, so `cdk deploy --all` would have torn down a
+running Paperclip service and its listener rule, printed "re-run the deploy",
+and **exited 0**. That is the cloudflared post-mortem repeating: a readiness
+gate that is safe in one direction and catastrophic in the other.
+
+### Corrections this work forced on documents
+
+Each was asserted from a document and disproved by running the artifact.
+
+| Claim | What the artifact does |
+|---|---|
+| `/wakeup` skip is discriminated by `'status' in response` | **Both** branches carry `status`; every success classified as a skip. Discriminate on `reason === 'wakeup_skipped'` |
+| `/issues/count` is a totals endpoint | `400` unless `attention=blocked` |
+| `X-RateLimit` rides every response | A validation-rejected search never reaches the limiter |
+| Avoid parallel **identical** list reads | Identical reads **coalesce to 200**; **distinct** keys in flight trip the 429 — the stated mitigation was backwards |
+| §16.6: rebuild the board in Preact | The pinned image ships the **built** UI at `/app/ui/dist`; the server looks at `../ui-dist`. One symlink plus `SERVE_UI=true` serves the real SPA — verified, `GET /` 200 with a 6,484,747-byte bundle |
+| ADR 0010: `updated_at >= watermark + 1ms` | Lossy under millisecond truncation. Superseded by `>= maxUpdatedAt − poll_overlap_ms` with `(id, updatedAt)` dedupe, proven by a same-millisecond probe |
+
+**A1-16 stands and was reinforced:** never cite a Paperclip source line number
+as authority. This work showed status codes are as unreliable as line numbers
+when read from a 400 KB route module at scale.

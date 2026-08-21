@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: session-handoff
 status: current
-observed_at: 2026-08-20
-as_of_commit: 87a8fa8072008ece181d6226c0c989ab89d0e884
+observed_at: 2026-08-21
+as_of_commit: 45a96a8
 session_slug: paperclip-end-to-end
 supersedes: 2026-08-20-image-pipeline-and-phase-2
 ---
@@ -14,15 +14,15 @@ supersedes: 2026-08-20-image-pipeline-and-phase-2
 
 | Field | Value |
 |---|---|
-| Session started | 2026-08-20 |
+| Session started | 2026-08-20, closed 2026-08-21 |
 | Feature folder | `docs/features/paperclip/` |
 | Branch worked on | `feature/paperclip-phase-1-5` |
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
-| Commit at session start | `87a8fa8072008ece181d6226c0c989ab89d0e884` |
-| Commit at session end | TBD |
-| Pushed | TBD |
-| PRs | TBD |
+| Commit at session start | `87a8fa8` |
+| Commit at session end | `45a96a8` |
+| Pushed | yes |
+| PRs | [#88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88) — **merged**, squashed, 9/9 CI green |
 | Deployed | **nothing** — no AWS call was made in this session |
 
 ## 2. Current state summary
@@ -95,7 +95,33 @@ Facts established against the pinned artifact rather than against a document:
 
 ### 4.2 Files modified
 
-TBD — recorded per phase as each lands.
+**Merged in [PR #88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88).**
+
+Phase 1 (`b0f6979`) — `src/lib/paperclip/types.ts` (new, the single wire-shape
+file), `tests/contract/paperclip-routes.paperclip.integration.test.ts` (new, 21
+probes), `tests/contract/openapi.snapshot.json` (the real 475-path document),
+`tests/contract/artifact-characterization.json` (new), plus the
+`tests/contract/**` includes in `tsconfig.json` and
+`vitest.integration.config.ts`, and an exported admin-session helper on
+`tests/fixtures/paperclip-bootstrap.ts`.
+
+Phase 1.5 (`7e17a7c`) — `scripts/ci/paperclip-image.ts` (new),
+`scripts/lib/lifecycle/cloud-build.ts` (parameterised, content-addressed),
+`deploy-phases.ts`, `manifest.ts`, `rollback-classes.ts`,
+`paperclip-image-pipeline.test.ts` (new), `scripts/deploy.ts`,
+`scripts/teardown.ts`, `infra/lib/iam-stack.ts` (the staging grants),
+`.github/workflows/deploy.yml`, `docs/out-of-band-catalog.json` and four
+diagrams.
+
+Docs (`78715f6`, `45a96a8`) — `bar-and-phases.md` (new), §35 and §35.6 of the
+implementation plan (append-only), this handoff, and the deploy-pipeline
+diagram split.
+
+**Written but NOT merged** — Phase 4 + 4.5, rejected by its critic:
+`infra/lib/paperclip-stack.ts`, `infra/lib/paperclip-stack.test.ts`,
+`scripts/paperclip-bootstrap.ts`, `scripts/lib/paperclip/bootstrap-core.ts`,
+and edits to `infra/bin/app.ts`, `compute-stack.ts`, `deploy.ts` and
+`vendor/paperclip/Dockerfile`.
 
 ### 4.3 Decisions made
 
@@ -305,6 +331,20 @@ are the facts that run produced, and several of them correct a document.
 | A34 | **A1-8 is green against the patched artifact**: `updatedSince` one hour in the future returns `[]`. **C-2 is green**: an overlap-and-dedupe read sees same-millisecond writes exactly once. | These are the two blocking probes. A34 is the first end-to-end proof that the vendored patch does what ADR 0010's amendment claims, and that the C-2 predicate (`>= maxUpdatedAt − poll_overlap_ms` with `(id, updatedAt)` dedupe) is lossless where the ADR's `+1ms` is not. The reconciler may now be built on it. |
 | P24 | **Reset the disposable stack before every probe run**, not just when one looks stale. | The fixture fails closed with `Active Paperclip integration keys exist without the in-memory credential cache` whenever a previous bootstrap left keys behind — and its credential cache is in `/dev/shm`, which **does not exist on Windows**, so on this platform the cache never survives a process boundary and the second run in a session always trips it. `npm run test:paperclip:down && :up` between runs. This broadens the existing Trap from "a stale stack" to "any second run on Windows". |
 
+### 5.13 Appended at session close (2026-08-21)
+
+| # | Entry | Detail |
+|---|---|---|
+| M33 | **A readiness gate can be catastrophic in the direction nobody checked.** Phase 4 made the Paperclip service's *existence* depend on a probe reading `cdk-outputs.json` — a **gitignored, machine-local** file — with a failure default of **omit the service**. On CI, a fresh clone, or a second engineer's machine the probe can never succeed, so `cdk deploy --all` would **delete a running Paperclip service and its listener rule**, print "re-run the deploy", and **exit 0**. | This is the cloudflared post-mortem repeating, whose own conclusion is quoted in `.github/workflows/deploy.yml`: *"Both directions have to be safe."* A gate that protects against starting a container against an unpopulated secret must not create a silent-delete path going the other way. When adding a readiness gate, write down what happens when the probe fails **on the resource that already exists**. |
+| M34 | The five Paperclip CodeBuild IAM grants were written onto `cicdRole`, which `iam-stack.ts` creates **only** in the `!isStagingDeploy` branch — making a staging arm depend on a **production** IAM deploy. Verified against the live `ClaudeClawGitHubDeploy` role: every ECR grant was orchestrator-scoped and there were zero Paperclip statements, so an armed staging run would have failed `AccessDenied` at the ECR repo create **after Aurora already existed**. | Third instance of the shape **M22** and **M27** record. Fixed by mirroring into the staging branch with `Role.fromRoleName(...).addToPrincipalPolicy(...)` — the pattern `PublicTunnelReadinessStaging` already proves live in this account — narrowed to `claudeclaw-staging-paperclip*`. **Before granting anything to CI, read the LIVE role; the code is a plan, the role is the fact.** |
+| M35 | Every one of the eight critic rejections across Phases 1 and 1.5 was the same defect class: **a claim no probe supported.** A wrong discriminator, a wrong status code, a wrong endpoint purpose, a fabricated `retryAfterSeconds` comment, a placeholder snapshot presented as a contract. | The remedy that finally worked was making "an honest `UNVERIFIED` marker beats a claim no probe supports" an explicit instruction. `ISSUE_LIST_DEFAULT_LIMIT` and friends now carry that marker, because the harness board is smaller than the thresholds and no probe can distinguish 500 from 5000. |
+| A35 | **The pinned image ships its built UI and it serves.** `/app/ui/dist` (13 MB, with `index.html`) exists; the server resolves `../ui-dist`, which does not. With a symlink and `SERVE_UI=true`, `GET /` answers 200 `text/html` and `/assets/index-*.js` answers 200 with **6,484,747 bytes**. Runtime branding hooks exist (`PAPERCLIP_LOGO_SVG`, favicon markers). | Amends plan §16.6, which ruled "rebuild in Netzar". Its four reasons still hold but argue for controlling **access**, not rewriting. Re-verify on every re-pin: this is a path convention, not a supported contract — and §33 records upstream saying branding must not be counted on. |
+| A36 | **Delegation needs no Paperclip change**, and the turn budget survives: `POST /api/issues/{id}/children` takes an **array** with per-child `assigneeAgentId`, so a fan-out to five agents costs **one** tool turn, not five. `wakeup` takes an `idempotencyKey`, so retries are safe. | But `suggest_tasks` is a trap: it looks ideal and its `/accept` is **board-only**, so an agent calling it stalls until a human clicks. And **co-owned projects have no model at all** — `leadAgentId` is a single uuid, zero hits for participant/watcher/collaborator across 475 paths, and `checkout` is an exclusive lock. Co-ownership must be one parent + N assigned sibling children, a Netzar convention. |
+| A37 | `GET /api/companies/{cid}/timeline` is the **only fully-typed response schema** in the delegation area and returns `edges[]` with `kind: delegation\|assignment\|mention` — an **observed** collaboration graph, filterable by project. | Better than the org chart for the client-facing "see how agents work together" goal: `reportsTo` is hand-set and rots, the timeline is self-maintaining. Lead with the timeline, scoped by project. |
+| A38 | **Open self-registration.** Probed live: `POST /api/auth/sign-up/email` returns **200 with no credential** even under `PAPERCLIP_DEPLOYMENT_MODE=authenticated`. | Matters the moment the board is reachable. Must be closed or fronted before any Netzar user can reach the UI. |
+| P25 | Run one gauntlet per working tree. Two concurrent builder/critic loops sharing a checkout produced a red typecheck attributed to the wrong phase. | No damage — the builder proved attribution before proceeding — but it costs a confusing round. Serialize phases that share a tree, or give each a worktree. |
+| P26 | `node scripts/ci/docs-mermaid.mjs --extract-only` runs the **node-budget** check WITHOUT rendering, so it is trustworthy on this machine despite **M21**. | M21 says local mermaid output is not signal. That applies to the *renderer* only. The budget check caught a 41-vs-40 failure locally in one second that would otherwise have cost a CI round trip. |
+
 ## 6. Pending work
 
 Phases 2 through 9 of [the decomposition](../bar-and-phases.md). In order:
@@ -336,7 +376,10 @@ actually ran.
 | Phase 1 contract probes, live against the pinned artifact | **Ran.** 13 probes: **11 passed, 2 failed.** Both blocking probes (A1-8, C-2) passed. The two failures are probe defects, not artifact defects — A1-9 sent a malformed key-scope payload (**A32**), and A1-12 asserted a status code the artifact does not use (**M32**). |
 | `GET /api/openapi.json` snapshot | **Ran.** 475 paths, 704 KB, fetched unauthenticated from the running artifact (**A31**). |
 | `npm run typecheck`, `npm run build`, web typecheck/build, `npm run local:test:integration`, `docs-links.mjs`, `feature-knowledge.mjs`, `git diff --check` | Run at the end of each phase, before any push. Results recorded per phase. |
-| `cdk diff`, `cdk deploy`, any AWS call | **Not run.** No AWS call was made in this session. |
+| Full pre-push suite, at `45a96a8` | **Ran.** `npm test` 193 files / 2187 tests — 5 files / 1 test fail, **identical file names to the baseline** (rule A9); passing rose 2128 -> 2178. `typecheck`, `build`, web `typecheck`, web `build` all clean. `npx cdk ls` 15 flag-off / 17 flag-on. `docs-links`, `feature-knowledge`, `docs-mermaid`, `diagrams-drift` OK. `git diff --check` clean. |
+| PR #88 CI | **Ran. 9/9 green.** One check failed on the first push — the mermaid **node budget** (41 > 40), not a render error — fixed by splitting the `--image-only` fast path into its own diagram, then green. |
+| Live probes, final | **Ran. 21/21** on a reset harness. |
+| `cdk diff`, `cdk deploy`, any AWS **mutation** | **Not run.** Every AWS call this session was read-only: `sts get-caller-identity`, `logs describe-log-groups`, `efs describe-file-systems`, `cloudformation describe-stacks`, `ecr describe-repositories`, `iam list-role-policies` / `get-role-policy`. **No resource was created, modified or deleted.** |
 
 ## 8. Environment state
 
