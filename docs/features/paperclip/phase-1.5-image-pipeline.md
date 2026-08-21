@@ -50,7 +50,7 @@ in the operator's ECR, and a teardown removes every resource that path created.
 | Thing | State | Where |
 |---|---|---|
 | The Dockerfile | **Works.** `docker-compose.paperclip.yml:16` builds it today for the integration harness, so the recipe is exercised, not theoretical. | `vendor/paperclip/Dockerfile` |
-| ARM64 support | **Confirmed.** The pinned base digest is an OCI image *index* carrying `linux/arm64` (`sha256:6ab3c816…`). No experiment owed. | **A22** |
+| ARM64 support | **Confirmed.** The pinned base digest `sha256:6b9daa3c…` is an OCI image *index*; its `linux/arm64` child manifest is `sha256:6ab3c816…`. The Dockerfile pins the **index**, which is what lets an ARM64 builder select that child. The two digests differing is correct, not a mismatch. No experiment owed. | **A22** |
 | The ECR repository | **Created, gated**, on *both* deploy drivers as of [#82](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/82). Proven in CI: the step ran during the 2026-08-20 staging deploy and correctly created nothing with the flag off. | `scripts/deploy.ts` phase a, `.github/workflows/deploy.yml` |
 | The whole Docker-free build path | **Exists for the orchestrator**: git-archive the source to the operator's state bucket, one-shot CodeBuild project on a **native ARM64** container, push to their ECR, resolve the digest. Its buildspec already self-verifies `test "$ARCH" = "arm64"`. | `scripts/lib/lifecycle/cloud-build.ts` |
 
@@ -104,6 +104,38 @@ Each of these is a trap this repository has already paid for once.
    `docs/out-of-band-catalog.json` beside `paperclip-ecr-repo`. Remember the
    catalog **reports**; requirement 1 is what actually deletes.
 
+8. **One build mechanism, not two.** Requirement 2 says the step must exist on
+   both drivers; this says it must be the *same build*. The first version of
+   this phase satisfied 2 and violated 8: CI cross-built
+   `vendor/paperclip/Dockerfile` with QEMU-emulated `docker buildx` on the
+   amd64 runner while `scripts/deploy.ts` used native ARM64 CodeBuild. Same
+   Dockerfile, two mechanisms, so the arm64 self-check (requirement 6), the
+   base-image pull and the build environment all differed between the path
+   that gets exercised locally and the path that reaches staging and
+   production — and the emulated one ran an `apt-get` plus a full `tsc` over
+   the whole Paperclip server at 5-20x, uncached and untimed. CI now runs
+   `scripts/ci/paperclip-image.ts`, a thin CLI over the same
+   `scripts/lib/lifecycle/cloud-build.ts`, so the content tag, the
+   skip-if-present probe, `pushLatest: false` and the arm64 gate each have
+   exactly one implementation.
+
+9. **A skip has to be honest.** The content tag is `git rev-parse
+   HEAD:vendor/paperclip` — HEAD, never the working tree, because that is
+   exactly what `git archive HEAD` ships to CodeBuild. That makes the skip
+   correct about the *tag* and silent about the *operator*: edit
+   `vendor/paperclip/updated-since.patch` (step 6's own instruction), skip the
+   commit, deploy, and the tag still names the old content, that image is
+   already in ECR, no build runs, the old digest is recorded as this deploy's
+   Paperclip image, and the deploy reports success. The only "tracked,
+   committed files only" warning in the module lives in `packageSource`, which
+   the skip path never reaches. So both drivers call
+   `staleContentTagReason()` before adopting an existing digest and act on a
+   non-null answer — a clean `DeployAbort` locally, a `::error::` in CI. It
+   **refuses** rather than warning: on the build path an artifact matching its
+   tag is still produced, on the skip path nothing is built and the one line
+   printed would assert that ECR is current. It is scoped to the build context,
+   so an ordinary dirty app tree does not block a Paperclip skip.
+
 ## 5. Verification
 
 - `npm run typecheck`, full `npm test` (**P4** — never a scoped run), compared
@@ -119,6 +151,87 @@ Each of these is a trap this repository has already paid for once.
   `docker manifest inspect` confirms as `linux/arm64`.
 - Teardown dry-run lists the Paperclip CodeBuild project, its role and its log
   group as things it will delete.
+- The step 9 guard is provable **without AWS**: `staleContentTagReason()` is
+  exercised against a throwaway git repo in
+  `scripts/lib/lifecycle/paperclip-image-pipeline.test.ts` — clean tree returns
+  null, a modified tracked file refuses, an untracked file in the context
+  refuses, an edit outside the context does not, and a non-git directory
+  returns null. The same suite pins both drivers to that one function rather
+  than to a path-scoped `git status` of their own.
+
+### 5.1 Arming order on the CI driver — do this before setting the flag
+
+The CI deploy role `ClaudeClawGitHubDeploy` (`cicdRole`,
+`infra/lib/iam-stack.ts`) had **three** ECR statements, all scoped to
+`claudeclaw-orchestrator` / `claudeclaw-*-orchestrator`.
+`claudeclaw-staging-paperclip` matches neither, so before this change the CI
+Paperclip step could not describe, create or push that repo at all. That is
+why a **green flag-off CI run is not evidence the CI path works**: with the
+flag unset the step never runs, so the run proves the `if` guard and says
+nothing about the grant behind it.
+
+The grants now cover both patterns (`EcrPushAppImages`, `EcrCreateAppRepos`).
+The ordering constraint is the same shape as the 2026-08-14 connector incident
+the workflow documents inline:
+
+1. The grant is applied by the **`CDK deploy` step later in the same job**, so
+   it cannot help the ECR steps that run before it. It must land in a prior,
+   **unarmed** deploy.
+2. `cicdRole` is created only by the **PROD** IAM stack (a staging deploy skips
+   it to avoid `EntityAlreadyExists`). So arming Paperclip in **staging**
+   requires a **production** IAM deploy to have run first.
+
+Both ECR probes in the workflow now fail loudly on `AccessDenied` instead of
+reading it as "not built yet", so getting this order wrong costs seconds
+rather than a whole ARM build. `paperclip-image-pipeline.test.ts`
+synthesizes the IAM stack and matches the emitted ARN patterns and
+`ecr:RepositoryName` conditions against the repo names `buildResourceNames`
+really produces.
+
+The same ordering applies to the **CodeBuild** grants requirement 8 needs, and
+they are new in this change:
+
+| Sid | What the CI step does with it |
+| --- | --- |
+| `PaperclipCloudBuildSource` | `s3:PutObject` under `cloud-build/` in `claudeclaw[-suffix]-deploy-<account>-<region>` (the source zip), plus `s3:ListBucket` for the head-bucket preflight |
+| `PaperclipCloudBuildProject` | create / update / start / read `claudeclaw[-suffix]-paperclip-cloud-build` |
+| `PaperclipCloudBuildRole` | get / create / put-policy / tag `claudeclaw[-suffix]-paperclip-cloud-build-role` |
+| `PaperclipCloudBuildPassRole` | `iam:PassRole` on that one role, conditioned on `iam:PassedToService=codebuild.amazonaws.com` |
+| `PaperclipCloudBuildLogs` | read-only log tail of a **failed** build |
+
+These are not an escalation: `cicdRole` already assumes the four
+`cdk-hnb659fds-*` bootstrap roles, which between them create any principal in
+the account. Each is pinned by a synth-level test that also asserts the
+negative (no arbitrary project, no arbitrary role, no write outside the
+`cloud-build/` prefix, no log writes).
+
+**Second CI precondition, and it is not IAM.** The cloud build stages its
+source in the environment's **state bucket**, which is a *bootstrap primitive*
+created by `npm run bootstrap` / a local `npm run deploy` — never by the
+workflow, which runs `npx cdk deploy --all` and no lifecycle bootstrap. If
+that bucket does not exist for the target environment, the CI step fails in
+its first seconds with the remedy in the message rather than partway through a
+build. **Staging has never run `scripts/deploy.ts`**, so verify
+`aws s3api head-bucket --bucket claudeclaw-staging-deploy-<account>-us-east-1`
+before arming the flag there.
+
+### 5.2 What "done" does NOT cover
+
+- **§2 item 3 (digest in the deploy manifest) is satisfied on the
+  `scripts/deploy.ts` driver only.** CI writes no deploy manifest at all — not
+  for Paperclip and not for the orchestrator either — so on staging and
+  production the digest is recorded in the run log, not in a manifest a
+  rollback can read. This is pre-existing and not a regression, but the CI path
+  must not be read as meeting item 3.
+- **`npm run deploy:cloud` does not rebuild the Paperclip image.** The
+  image-only path returns before phase a, and the Paperclip build lives inside
+  phase a. Bumping `vendor/paperclip` therefore needs a full `npm run deploy`
+  (or a CI deploy with the flag armed). See the Deploy section of `CLAUDE.md`.
+- **The manifest's `taskFamily` and `containerName` are Phase 4 predictions.**
+  `paperclip-image-pipeline.test.ts` carries two assertions that stay skipped
+  until `infra/lib/paperclip-stack.ts` exists and then fire: one that Phase 4
+  chose the predicted names, one that the `collectPrivateEcrDigests` skip is
+  removed once Paperclip has a service of its own to roll back.
 
 ## 6. Out of scope
 
