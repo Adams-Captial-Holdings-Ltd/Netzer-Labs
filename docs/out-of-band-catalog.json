@@ -36,6 +36,15 @@
   "notes": "Paperclip work engine (ADR 0010): the repo holding the pinned+patched Paperclip image built from vendor/paperclip/Dockerfile. Created idempotently by deploy phase a (scripts/deploy.ts, next to ensureSchedulerGroup) ONLY when CCE_PAPERCLIP_ENABLED=1, so it is absent on installs that never armed the substrate. Kept out of CDK for the same reason as the orchestrator repo: the image must exist before Compute synth. Named from buildResourceNames().paperclipEcrRepo so it tracks CCE_NAME_SUFFIX. Teardown deletes it with --force in the final sweep, tolerating not-found."
  },
  {
+  "id": "paperclip-cloud-build",
+  "kind": "codebuild-project",
+  "nameOrPattern": "claudeclaw<suffix>-paperclip-cloud-build (plus role claudeclaw<suffix>-paperclip-cloud-build-role, its inline policy claudeclaw<suffix>-paperclip-cloud-build-policy, and log group /aws/codebuild/claudeclaw<suffix>-paperclip-cloud-build)",
+  "createdBy": "deploy-script",
+  "ownership": "app-owned",
+  "teardown": "delete",
+  "notes": "Phase 1.5 of the Paperclip work engine (ADR 0010): the one-shot CodeBuild project that builds vendor/paperclip/Dockerfile on a native ARM64 host and pushes the result to claudeclaw<suffix>-paperclip. Created by scripts/lib/lifecycle/cloud-build.ts (runCloudBuild with dockerfile/buildContext pointed at vendor/paperclip) from deploy phase a, ONLY when CCE_PAPERCLIP_ENABLED=1 - so it is absent on installs that never armed the substrate. BOTH deploy drivers create it, and by the SAME code: the CI workflow step 'Build + Push Paperclip (native ARM64 CodeBuild)' runs scripts/ci/paperclip-image.ts, a thin CLI over that same module, so an armed environment has these four resources whether it was deployed locally or by CI. (Before that change CI cross-built the image with QEMU + buildx on the runner and made no project at all - one artifact by two mechanisms, which is why the arm64 self-check and the build environment differed between the path exercised locally and the path that reached staging.) The CI path additionally needs cicdRole's PaperclipCloudBuild* grants (infra/lib/iam-stack.ts) and an existing state bucket to stage its source zip in. It is a SECOND cloud build beside the orchestrator's; teardown's final sweep loops over both ECR repo names and deletes the project, the role, the role policy and the log group. This row only REPORTS that; the delete lives in scripts/teardown.ts."
+ },
+ {
   "id": "agentcore-mcp-gateways",
   "kind": "bedrock-agentcore-gateway",
   "nameOrPattern": "cce-mcp-gateway-* (plus per-gateway service roles and targets)",

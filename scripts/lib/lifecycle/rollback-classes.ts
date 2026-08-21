@@ -65,7 +65,7 @@ import {
   manifestKey,
   s3BodyToString,
 } from './journal.js';
-import { parseManifest, type DeployManifest } from './manifest.js';
+import { parseManifest, PAPERCLIP_CONTAINER_NAME, type DeployManifest } from './manifest.js';
 import { resolveStateNames, type StateNames } from './bootstrap-state.js';
 import { buildResourceNames } from '../../../infra/lib/constants.js';
 
@@ -289,6 +289,19 @@ export function collectPrivateEcrDigests(
   };
   if (manifest.imageDigest) add(privateRepoName, manifest.imageDigest);
   for (const img of manifest.images ?? []) {
+    if (img.containerName === PAPERCLIP_CONTAINER_NAME) {
+      // The image rollback class re-points ONE service, the orchestrator
+      // (see runRollback: it plans `targets.cluster/targets.service` from the
+      // record whose containerName is 'orchestrator'). The Paperclip image
+      // is recorded so a future rollback can resolve it, but verifying it
+      // here would abort an orchestrator rollback because a digest in a
+      // DIFFERENT repo - one teardown deletes with --force and one Phase 9
+      // will churn - is no longer present. Failing a rollback of a running
+      // service over an image no service consumes yet is the wrong trade.
+      // Phase 4 gives Paperclip a service; whoever adds its rollback must
+      // verify this digest on THAT path rather than deleting this skip.
+      continue;
+    }
     if (img.repo.includes('.dkr.ecr.')) {
       // URI form: <acct>.dkr.ecr.<region>.amazonaws.com/<repo-name>
       const name = img.repo.split('/').slice(1).join('/') || privateRepoName;
