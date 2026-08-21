@@ -123,6 +123,28 @@ export const SYNTH_INPUT_ALLOWLIST: readonly string[] = [
   // rollback that re-synths from this manifest must replay it or it would
   // quietly drop a deployed Aurora cluster and EFS from the assembly.
   'CCE_PAPERCLIP_ENABLED',
+  // Phase 4. All three change what synth produces: paperclip-stack.ts pins
+  // both task definitions to the digest, builds its listener rule + the
+  // PAPERCLIP_PUBLIC_URL trusted origin from the hostname, and reads the
+  // bootstrap flag as the service's DesiredCount. A rollback that re-synths
+  // from this manifest must replay them or it would float the image, 403 every
+  // board mutation, or bring a scaled-to-zero service back up against a
+  // database the operator had deliberately not migrated yet.
+  //
+  // CCE_PAPERCLIP_SERVICE_READY was here and is deliberately GONE. It belonged
+  // to the rejected design in which synth omitted the FargateService unless a
+  // probe said '1' — the M33 defect, where replaying an empty value deletes a
+  // running service. Nothing reads that name anywhere in the tree now, and it
+  // must not come back: a variable that can remove a resource has no business
+  // in a replay list. CCE_PAPERCLIP_BOOTSTRAP replaces it and can only move
+  // DesiredCount, so the worst a replay can do is scale down, recoverably.
+  //
+  // None is a secret: a digest, a hostname and a '1' flag. The Paperclip API
+  // keys and the composed DATABASE_URL are NOT here and must never be added;
+  // they live only in Secrets Manager.
+  'CCE_PAPERCLIP_IMAGE_DIGEST',
+  'CCE_PAPERCLIP_HOSTNAME',
+  'CCE_PAPERCLIP_BOOTSTRAP',
   // Private WARP access opt-in + hostname. Both change what synth produces
   // (cloudflared sidecar, Route 53 private zone, ALB ingress shape), so a
   // rollback that re-synths from this manifest must replay them or it would

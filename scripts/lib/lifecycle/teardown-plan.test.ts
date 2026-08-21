@@ -130,6 +130,42 @@ describe('stack plan: live + manifest, not a fresh synth', () => {
     const armed = currentAppStackNames('CCE', { CCE_PAPERCLIP_ENABLED: '1' });
     expect(armed).toContain('CCE-Database');
     expect(armed).toContain('CCE-Filesystem');
+    expect(armed).toContain('CCE-Paperclip');
+
+    // EQUALITY, not toContain. `toContain` only proves the names you thought
+    // to name are present; it cannot see a stack nobody remembered. This list
+    // spot-checked three Paperclip names and passed while silently missing
+    // CCE-PowerSwitch, so it returned 17 names where `cdk ls` prints 18 and
+    // the comment above it claimed the counts already agreed.
+    //
+    // These two literals are the verified output of `npx cdk ls` (15) and
+    // `CCE_PAPERCLIP_ENABLED=1 npx cdk ls` (18). If you add a stack to
+    // infra/bin/app.ts, this test fails until this list is updated — which is
+    // the whole point: the failure is the reminder.
+    expect(currentAppStackNames('CCE', {})).toHaveLength(15);
+    expect(armed).toHaveLength(18);
+    expect([...armed].sort()).toEqual(
+      [
+        'CCE-Backup',
+        'CCE-Chaos',
+        'CCE-Compute',
+        'CCE-CostGuardrails',
+        'CCE-Database',
+        'CCE-Dynamo',
+        'CCE-Extensions',
+        'CCE-Filesystem',
+        'CCE-Guardrails',
+        'CCE-Iam',
+        'CCE-Messaging',
+        'CCE-Network',
+        'CCE-Observability',
+        'CCE-Paperclip',
+        'CCE-PowerSwitch',
+        'CCE-Security',
+        'CCE-Secrets',
+        'CCE-Storage',
+      ].sort(),
+    );
 
     const plan = planStacks({
       liveStackNames: ['CCE-Network', 'CCE-Database'],

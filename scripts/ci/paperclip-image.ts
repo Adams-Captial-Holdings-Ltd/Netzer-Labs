@@ -45,6 +45,7 @@
  * would additionally burn a full ARM build before failing at the push.
  */
 
+import { appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bold, fail, info, ok } from '../lib/ansi.js';
@@ -67,6 +68,21 @@ function required(name: string): string {
     throw new Error(`${name} must be set; the CI deploy workflow passes it to this step.`);
   }
   return value;
+}
+
+/**
+ * Hand the resolved digest to the workflow.
+ *
+ * The CDK deploy step forwards it as CCE_PAPERCLIP_IMAGE_DIGEST, which
+ * infra/bin/app.ts passes to PaperclipStack so both task definitions pin the
+ * image BY DIGEST. Without this the CI path had no digest at all and synth
+ * fell back to an unpullable placeholder tag: the same "the flag has more
+ * homes than the author enumerated" defect as M22/M27, one layer down.
+ */
+function emitDigest(digest: string): void {
+  const out = process.env.GITHUB_OUTPUT;
+  if (out) appendFileSync(out, `digest=${digest}
+`);
 }
 
 /**
@@ -133,6 +149,7 @@ async function main(): Promise<void> {
     console.log(
       ok(`Paperclip image ${bold(imageTag)} already in ${ecrRepoName}: ${existing} (build skipped)`),
     );
+    emitDigest(existing);
     return;
   }
 
@@ -187,6 +204,7 @@ async function main(): Promise<void> {
     );
   }
   console.log(ok(`Paperclip image digest: ${bold(digest)}`));
+  emitDigest(digest);
 }
 
 main().catch((err: unknown) => {

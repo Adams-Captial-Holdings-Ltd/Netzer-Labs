@@ -65,7 +65,7 @@ import {
   manifestKey,
   s3BodyToString,
 } from './journal.js';
-import { parseManifest, PAPERCLIP_CONTAINER_NAME, type DeployManifest } from './manifest.js';
+import { parseManifest, type DeployManifest } from './manifest.js';
 import { resolveStateNames, type StateNames } from './bootstrap-state.js';
 import { buildResourceNames } from '../../../infra/lib/constants.js';
 
@@ -289,19 +289,22 @@ export function collectPrivateEcrDigests(
   };
   if (manifest.imageDigest) add(privateRepoName, manifest.imageDigest);
   for (const img of manifest.images ?? []) {
-    if (img.containerName === PAPERCLIP_CONTAINER_NAME) {
-      // The image rollback class re-points ONE service, the orchestrator
-      // (see runRollback: it plans `targets.cluster/targets.service` from the
-      // record whose containerName is 'orchestrator'). The Paperclip image
-      // is recorded so a future rollback can resolve it, but verifying it
-      // here would abort an orchestrator rollback because a digest in a
-      // DIFFERENT repo - one teardown deletes with --force and one Phase 9
-      // will churn - is no longer present. Failing a rollback of a running
-      // service over an image no service consumes yet is the wrong trade.
-      // Phase 4 gives Paperclip a service; whoever adds its rollback must
-      // verify this digest on THAT path rather than deleting this skip.
-      continue;
-    }
+    // The Paperclip digest USED to be skipped here. That skip rested on one
+    // premise - "no service consumes this image" - and Phase 4
+    // (infra/lib/paperclip-stack.ts) ended it: the digest now pins the
+    // running Paperclip task definition and its migration job. A rollback
+    // target whose Paperclip image has been deleted out of ECR is genuinely
+    // unrestorable, so it must fail loudly in preflight, before anything is
+    // touched, rather than silently leave Paperclip on the newer image. The
+    // repo has no lifecycle policy, so in practice the digest is present;
+    // when it is not, that is real information.
+    //
+    // KNOWN GAP, named rather than hidden: `runImageClass` still re-points
+    // only the orchestrator service, so this preflight verifies more than
+    // that class restores. Rolling the Paperclip service back to a recorded
+    // digest is its own path and is NOT built yet - today it is a
+    // `cdk deploy` of the archived assembly (the infra class), which re-pins
+    // the task definition through CCE_PAPERCLIP_IMAGE_DIGEST.
     if (img.repo.includes('.dkr.ecr.')) {
       // URI form: <acct>.dkr.ecr.<region>.amazonaws.com/<repo-name>
       const name = img.repo.split('/').slice(1).join('/') || privateRepoName;

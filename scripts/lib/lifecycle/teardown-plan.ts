@@ -163,6 +163,14 @@ export const ALWAYS_ON_STACK_SUFFIXES: readonly string[] = [
   'Chaos',
   'Extensions',
   'CostGuardrails',
+  // PowerSwitch. infra/bin/app.ts builds it unconditionally (no flag, no
+  // tier gate), but this list omitted it, so `currentAppStackNames` returned
+  // one fewer name than `cdk ls` on EVERY invocation — armed or not. A live
+  // CCE-PowerSwitch was therefore classified "not in the current app" and
+  // routed to direct DeleteStack instead of cdk destroy. Found by making the
+  // colocated test assert an exact length instead of `toContain`, which is
+  // why that test now counts rather than spot-checks.
+  'PowerSwitch',
 ] as const;
 
 export function currentAppStackNames(
@@ -176,7 +184,22 @@ export function currentAppStackNames(
   // deletionProtection, and the direct-DeleteStack path this choice selects
   // cannot delete it.
   if (env.CCE_PAPERCLIP_ENABLED === '1') {
-    names.push(`${stackPrefix}-Database`, `${stackPrefix}-Filesystem`);
+    // All THREE, matching infra/bin/app.ts. Omitting CCE-Paperclip made this
+    // list disagree with what the app synthesizes, and a stack classified as
+    // "not in the current app" is routed to direct DeleteStack — which for
+    // the Paperclip stack means tearing down an ECS service outside the CDK
+    // path that owns it.
+    //
+    // Counts, since the earlier version of this comment got them wrong and
+    // the wrong number hid a second missing stack: 15 always-on + these 3 =
+    // 18 armed, matching `CCE_PAPERCLIP_ENABLED=1 npx cdk ls`; 15 unarmed,
+    // matching `npx cdk ls`. CodeBuild and DemoReset are separately gated and
+    // absent from both runs.
+    names.push(
+      `${stackPrefix}-Database`,
+      `${stackPrefix}-Filesystem`,
+      `${stackPrefix}-Paperclip`,
+    );
   }
   return names;
 }

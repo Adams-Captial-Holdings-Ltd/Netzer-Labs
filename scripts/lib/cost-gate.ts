@@ -35,12 +35,21 @@ export function resourceSummary(
   const parts = ['ALB', `NAT x${shape.natGatewayCount}`];
   if (privateEndpoints) parts.push('VPC interface endpoints');
   parts.push('DynamoDB', 'KMS', `Fargate x${shape.fargateMinTasks}`);
-  // Paperclip work engine substrate (ADR 0010): always-on Aurora min-ACU
-  // floor + EFS. Opt-in like the endpoints above — infra/bin/app.ts
-  // synthesizes the two stacks only when CCE_PAPERCLIP_ENABLED=1, so listing
-  // them unconditionally told every operator that a routine deploy was
-  // creating an Aurora cluster it never creates.
-  if (paperclip) parts.push('Aurora Serverless v2 (Paperclip)', 'EFS');
+  // Paperclip work engine (ADR 0010): always-on Aurora min-ACU floor + EFS +
+  // the service's own Fargate task. Opt-in like the endpoints above —
+  // infra/bin/app.ts synthesizes the stacks only when CCE_PAPERCLIP_ENABLED=1,
+  // so listing them unconditionally told every operator that a routine deploy
+  // was creating an Aurora cluster it never creates.
+  //
+  // The Fargate line is listed SEPARATELY from the `Fargate xN` above, not
+  // folded into that count: it is a second, independently-sized task
+  // (2 vCPU / 4 GB ARM64, desiredCount 1, no autoscaling) on its own task
+  // definition, and it is the single largest item the flag adds. Rolling it
+  // into the orchestrator's count would hide it behind a number that looks
+  // like it only went up by one.
+  if (paperclip) {
+    parts.push('Aurora Serverless v2 (Paperclip)', 'EFS', 'Fargate x1 (Paperclip)');
+  }
   if (shape.wafEnabled) parts.push('WAF');
   if (shape.cloudFrontEnabled) parts.push('CloudFront');
   return parts.join(' + ');
@@ -73,13 +82,25 @@ export function estimateLine(
 ): string {
   // Appended to BOTH branches, unlike the endpoints clause below. Neither
   // branch prices the Paperclip substrate on its own: the ranges above are
-  // pre-Paperclip, and scripts/cost-estimate.mjs carries no Aurora/EFS line
-  // item at all. Adding it only to the fallback would hide the cost on the
-  // path that normally runs. Fold it into the estimator in Phase 2, when the
-  // Paperclip Fargate task lands and the figure is real.
+  // pre-Paperclip, and scripts/cost-estimate.mjs carries no Aurora/EFS/Fargate
+  // line item for it at all. Adding it only to the fallback would hide the
+  // cost on the path that normally runs.
+  //
+  // The Fargate half is NEW HERE and it roughly doubles the figure. The
+  // previous note said "roughly $50/mo for the Aurora min-ACU floor and EFS"
+  // and carried a "fold in the Fargate task in Phase 2" TODO — that phase has
+  // now landed the task, so the gate was under-reporting the cost of arming
+  // by about half while telling operators it was complete.
+  //
+  // ~$58/mo: 2 vCPU + 4 GB ARM64 Fargate, desiredCount 1 with no autoscaling
+  // (infra/lib/paperclip-stack.ts), so it bills 24/7 at us-east-1 Graviton
+  // rates of $0.03238/vCPU-hr and $0.00356/GB-hr over 730 hours. Rounded and
+  // stated as an estimate: it is arithmetic from published rates, not a
+  // Pricing API call, and it excludes egress and the migration task's minutes.
   const paperclipNote = paperclip
-    ? ', plus roughly $50/mo for the Paperclip Aurora min-ACU floor and EFS ' +
-      '(estimated, not verified against pricing APIs)'
+    ? ', plus roughly $110/mo for the Paperclip work engine — about $50 for ' +
+      'the Aurora min-ACU floor and EFS, plus about $58 for its always-on ' +
+      '2 vCPU / 4 GB Fargate task (estimated, not verified against pricing APIs)'
     : '';
   if (estimatorStdout) {
     try {

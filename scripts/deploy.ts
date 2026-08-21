@@ -48,7 +48,12 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { SecretsManagerClient, DescribeSecretCommand } from '@aws-sdk/client-secrets-manager';
+import {
+  SecretsManagerClient,
+  DescribeSecretCommand,
+  GetSecretValueCommand,
+  PutSecretValueCommand,
+} from '@aws-sdk/client-secrets-manager';
 import { buildPublicTunnelSecretName } from '../infra/lib/public-dashboard-access.js';
 import { PUBLIC_SECRET_READY_STAGE } from './lib/public-tunnel/setup.js';
 import { DEPLOY_EXIT_DECLINED } from './lib/exit-codes.js';
@@ -548,6 +553,11 @@ async function main(): Promise<void> {
         ecrRepo: paperclipRepoName,
         reusedExisting: existingPaperclip.digest !== null,
       });
+      // Forward the resolved digest into synth. infra/lib/paperclip-stack.ts
+      // pins BOTH its task definitions to it (ADR 0010 DL-9: never a mutable
+      // tag), and this bag is an ALLOWLIST, so without the cdkEnvBag entry the
+      // value would silently never reach the cdk child process.
+      env.CCE_PAPERCLIP_IMAGE_DIGEST = paperclipImageDigest ?? '';
     }
 
     // ── PHASE b — populate + validate secrets ────────────────────────
@@ -590,6 +600,55 @@ async function main(): Promise<void> {
     await journal('secrets-populated', {
       secrets: secretVersions.map((r) => ({ secretId: r.secretId, versionId: r.versionId })),
     });
+
+    // ── PHASE b.5 — Paperclip schema migration (one-shot RunTask) ────
+    // Sits between the secrets population and the runtime-config seed for two
+    // reasons: it needs the secrets phase b just wrote, and it must finish
+    // before phase d rolls the Paperclip service, because that service
+    // deliberately does NOT carry PAPERCLIP_MIGRATION_AUTO_APPLY — a
+    // long-running service that migrates on boot turns every rollout into an
+    // unreviewed DDL run, and at minHealthyPercent 0 it would do so with no
+    // healthy task to fall back to.
+    //
+    // M33. This phase no longer decides whether the Paperclip SERVICE EXISTS.
+    // The first version set CCE_PAPERCLIP_SERVICE_READY from the result below,
+    // and synth omitted the FargateService when it was empty — so a machine
+    // that could not read the gitignored outputs file would have deleted a
+    // running service and exited 0. The service is now unconditional and the
+    // only knob is DesiredCount, owned by the operator flag
+    // CCE_PAPERCLIP_BOOTSTRAP. What this phase does when it cannot migrate is
+    // ABORT, loudly, having changed nothing — never "carry on and let
+    // CloudFormation find out".
+    //
+    // Bound to a distinct name on purpose: paperclip-image-pipeline.test.ts
+    // brace-matches the phase-a gate block by its exact opening line to prove
+    // the image build cannot escape the flag, and a second block opening with
+    // that identical line would make the match ambiguous. Same gate, same one
+    // flag, still seven homes and not eight.
+    const paperclipMigrationGated = paperclipEnabled;
+    if (paperclipMigrationGated) {
+      section('Phase b.5 · Paperclip schema migration');
+      const migrated = await runPaperclipMigration({
+        env,
+        secretsClient,
+        secretBase,
+        journal,
+      });
+      // Not migrated, and the operator has NOT declared this a bootstrap
+      // deploy: phase d would start an essential container against an
+      // unmigrated database, fail the rollout and roll CCE-Paperclip back.
+      // Stop here instead, with the remedy, before anything is touched.
+      if (!migrated && env.CCE_PAPERCLIP_BOOTSTRAP !== '1') {
+        throw new DeployAbort(
+          'Paperclip could not be migrated and this is not a declared bootstrap deploy.\n' +
+            'Set CCE_PAPERCLIP_BOOTSTRAP=1 for the FIRST armed deploy: that lands the stack ' +
+            'with DesiredCount 0, so no task starts and the migration task definition survives ' +
+            'for the next run. Clear the flag and re-deploy to migrate and start the service.\n' +
+            'The service is never omitted from the template either way; the flag only moves ' +
+            'DesiredCount, so it can scale Paperclip down but can never delete it.',
+        );
+      }
+    }
 
     // ── PHASE c — seed runtime-config ────────────────────────────────
     section('Phase c · seed runtime-config defaults');
@@ -1361,6 +1420,27 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // and no EFS. Normalized to '1'/'' so this and the phase-a list can never
     // disagree with app.ts's strict `=== '1'`.
     CCE_PAPERCLIP_ENABLED: env.CCE_PAPERCLIP_ENABLED === '1' ? '1' : '',
+    // Set by phase a (the resolved image digest), never by the operator's env
+    // file. It changes what synth PRODUCES — app.ts passes it to
+    // paperclip-stack.ts, which pins both task definitions to it — so a
+    // rollback re-synth must replay it or the image would float. Not a secret:
+    // a sha256 digest.
+    CCE_PAPERCLIP_IMAGE_DIGEST: env.CCE_PAPERCLIP_IMAGE_DIGEST ?? '',
+    // M33. The OPPOSITE rule to the digest above, and to
+    // CCE_PUBLIC_CONNECTOR_READY: this one comes from the OPERATOR and is
+    // never computed here. It declares "this is the first armed deploy; land
+    // the stack with DesiredCount 0 so no task starts against an unmigrated
+    // database". A probe must not own it, because the rejected version of this
+    // gate defaulted a failed probe to "omit the service", which on CI or a
+    // fresh clone would have deleted a running one. Unset is the safe value
+    // and normalized to '' so synth's strict `=== '1'` can never disagree with
+    // this driver.
+    CCE_PAPERCLIP_BOOTSTRAP: env.CCE_PAPERCLIP_BOOTSTRAP === '1' ? '1' : '',
+    // Ops hostname for the Paperclip operator console (Phase 4.5). Drives BOTH
+    // the ALB listener rule's host-header condition and PAPERCLIP_PUBLIC_URL,
+    // which must match the hostname the browser types EXACTLY or every board
+    // mutation 403s with "Board mutation requires trusted browser origin".
+    CCE_PAPERCLIP_HOSTNAME: env.CCE_PAPERCLIP_HOSTNAME ?? '',
     // Magic-link email config + Jarvis greeting. compute-stack reads these
     // from process.env (CCE_EMAIL_FROM/CCE_DASHBOARD_URL/CCE_SES_CONFIG_SET
     // default to '', JARVIS_GREETING to a generic line). Without forwarding
@@ -1907,6 +1987,303 @@ function resolveClusterService(): { cluster: string; service: string } {
     }
   }
   return { cluster, service };
+}
+
+/**
+ * Everything phase b.5 needs to start the migration job, read from the LIVE
+ * CCE-Paperclip stack's CloudFormation outputs. Returns null only when that
+ * stack does not exist yet, i.e. the first armed deploy, where phase d has not
+ * created it.
+ *
+ * The source is deliberately CloudFormation and not `cdk-outputs.json`. The
+ * rejected version of this phase read that file, and the file is GITIGNORED
+ * and machine-local: on CI, on a fresh clone and on a second engineer's
+ * machine it is simply absent, so `null` meant "I have no idea" far more often
+ * than it meant "not deployed". Live CFN answers the same question the same
+ * way from anywhere, which is what lets the CI workflow's "Migrate Paperclip
+ * database" step do this exact lookup instead of inventing a second protocol.
+ * `cloudformation:DescribeStacks` is already granted to the deploy role.
+ *
+ * M33 boundary, stated because the rejected version got it wrong here:
+ * NOTHING downstream may treat `null` as a decision about what should EXIST.
+ * Its only consumer aborts the deploy, or defers when the operator has
+ * declared a bootstrap run. No CloudFormation resource is added or removed on
+ * the strength of it, in either direction.
+ */
+async function resolvePaperclipMigrationTargets(
+  env: EnvBag,
+): Promise<{
+  cluster: string;
+  taskDefinition: string;
+  subnets: string[];
+  securityGroup: string;
+} | null> {
+  const stackName = `${env.CDK_STACK_NAME}-Paperclip`;
+  const described = await capture('aws', [
+    'cloudformation',
+    'describe-stacks',
+    '--stack-name',
+    stackName,
+    '--region',
+    env.AWS_REGION,
+    '--output',
+    'json',
+  ]);
+  if (described.code !== 0) {
+    // A stack that does not exist is the expected first-deploy answer and the
+    // caller handles it. Any OTHER failure (AccessDenied, throttling) must not
+    // wear the same mask: "I could not find out" and "not deployed" are the
+    // conflation that removed the cloudflared sidecar on 2026-08-14.
+    if (/ValidationError|does not exist/i.test(described.stderr)) return null;
+    throw new DeployAbort(
+      `Could not read ${stackName} to locate the Paperclip migration job: ` +
+        `${described.stderr.trim() || `exit ${described.code}`}. Refusing to guess.`,
+    );
+  }
+  const outputs = (
+    JSON.parse(described.stdout || '{}') as {
+      Stacks?: Array<{ Outputs?: Array<{ OutputKey?: string; OutputValue?: string }> }>;
+    }
+  ).Stacks?.[0]?.Outputs;
+  const byKey = Object.fromEntries(
+    (outputs ?? []).map((o) => [o.OutputKey ?? '', o.OutputValue ?? '']),
+  );
+  const cluster = byKey.PaperclipClusterName;
+  const taskDefinition = byKey.PaperclipMigrateTaskDefFamily;
+  const subnets = byKey.PaperclipMigrateSubnets;
+  const securityGroup = byKey.PaperclipMigrateSecurityGroup;
+  if (!cluster || !taskDefinition || !subnets || !securityGroup) return null;
+  return {
+    cluster,
+    taskDefinition,
+    subnets: subnets.split(',').filter(Boolean),
+    securityGroup,
+  };
+}
+
+/**
+ * TLS instruction appended to the composed Paperclip DATABASE_URL.
+ *
+ * NOT optional and NOT cosmetic. Aurora PostgreSQL 17 runs on the default
+ * cluster parameter group, which ships `rds.force_ssl=1`, and the image's
+ * driver (postgres@3.4.9) connects in PLAINTEXT unless the connection string
+ * says otherwise — there is no `ssl` option set anywhere in
+ * `packages/db/src/*`, so the URL query is the only channel that can carry it.
+ *
+ * PROBED 2026-08-21 against the pinned artifact and a local Postgres 17 whose
+ * pg_hba was reduced to hostssl-only (the force_ssl equivalent):
+ *   - without this suffix the migration job fails
+ *     `PostgresError: no pg_hba.conf entry for host ..., no encryption`, exit 1
+ *   - with it, `Migrating database via DATABASE_URL` / `Applying 182 pending
+ *     migration(s)...` / `Migrations complete`, exit 0; a re-run prints
+ *     `No pending migrations`, exit 0
+ * `require` rather than `verify-full` on purpose: it encrypts without
+ * validating the chain, and the image carries no RDS CA bundle, so
+ * `verify-full` would fail closed on a correctly-configured cluster.
+ *
+ * MIRRORED, not shared: .github/workflows/deploy.yml composes the
+ * byte-equivalent string in jq because CI never runs this file (M27). The two
+ * are pinned together by the cross-driver test in
+ * infra/lib/paperclip-stack.test.ts — change one and that test fails.
+ *
+ * On "byte-equivalent", since the two sides use different encoders and that is
+ * the kind of gap this phase keeps getting caught on: jq's `@uri` percent-
+ * encodes `! ' ( ) *` and `encodeURIComponent` does not, so the two CAN
+ * disagree on a password containing them. Checked, not assumed — the
+ * synthesized CCE-Database template generates the password with
+ * ExcludeCharacters " %+~`#$&*()|[]{}:;<>?!'/@\"\\ , which excludes all five,
+ * so no password this cluster can generate reaches the divergence. If anyone
+ * ever passes a custom `excludeCharacters` to Credentials.fromGeneratedSecret
+ * in infra/lib/database-stack.ts, re-check this: the URLs would still DECODE
+ * to the same password, but the byte compare below would rewrite the secret on
+ * every alternating local/CI deploy.
+ */
+const PAPERCLIP_DB_URL_TLS_SUFFIX = '?sslmode=require';
+
+/**
+ * Phase b.5. Composes DATABASE_URL, then runs Paperclip's schema migration as
+ * a one-shot Fargate task and refuses to continue unless it exits 0.
+ *
+ * DATABASE_URL is COMPOSED here because there is nowhere else it can come
+ * from: the Aurora credentials secret is RDS-managed and carries
+ * host/port/username/password/dbname but no URL form, and Paperclip accepts a
+ * connection ONLY as `DATABASE_URL` (its resolver falls back to config.json or
+ * a .env file on the EFS volume, neither of which a deploy can write). The
+ * composed value is merged into the Paperclip secret rather than passed as a
+ * RunTask environment override, because RunTask overrides are readable
+ * verbatim in `aws ecs describe-tasks` and that would put the database
+ * password in an API response. Nothing here ever prints it.
+ *
+ * Returns true when the schema is migrated and the service may take traffic.
+ *
+ * The embedded-postgres fallback is now SETTLED BY PROBE (2026-08-21, pinned
+ * artifact, local Postgres 17 configured hostssl-only to emulate Aurora):
+ * with DATABASE_URL empty the resolver does reach
+ * `ensureEmbeddedPostgresConnection`, but it exits **1**, not 0, because the
+ * container runs as root and embedded-postgres refuses to. So it is not the
+ * silent false green it was recorded as. The compose-and-verify below stays
+ * anyway: what makes it exit 1 is a root check, not a refusal to migrate the
+ * wrong database, so the safety is incidental and would evaporate the day the
+ * task definition gains a non-root `user`. Cheap guard, real failure mode.
+ */
+async function runPaperclipMigration(opts: {
+  env: EnvBag;
+  secretsClient: SecretsManagerClient;
+  secretBase: string;
+  journal: (event: string, data?: Record<string, unknown>) => Promise<void>;
+}): Promise<boolean> {
+  const { env, secretsClient, secretBase, journal } = opts;
+  const region = env.AWS_REGION;
+  const paperclipSecretId = `${secretBase}/paperclip`;
+  const dbSecretId = `${secretBase}/paperclip-db`;
+
+  // 1. Compose DATABASE_URL from the Aurora-generated secret.
+  let dbUrl: string;
+  try {
+    const raw = await secretsClient.send(
+      new GetSecretValueCommand({ SecretId: dbSecretId }),
+    );
+    const db = JSON.parse(raw.SecretString ?? '{}') as Record<string, string | number>;
+    const host = String(db.host ?? '');
+    const port = String(db.port ?? 5432);
+    const user = String(db.username ?? '');
+    const pass = String(db.password ?? '');
+    const name = String(db.dbname ?? 'paperclip');
+    if (!host || !user || !pass) {
+      // eslint-disable-next-line no-console
+      console.log(warn(`${dbSecretId} is missing host/username/password; skipping`));
+      return false;
+    }
+    dbUrl =
+      `postgres://${encodeURIComponent(user)}:${encodeURIComponent(pass)}` +
+      `@${host}:${port}/${name}${PAPERCLIP_DB_URL_TLS_SUFFIX}`;
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ResourceNotFoundException') {
+      // eslint-disable-next-line no-console
+      console.log(
+        warn(`${dbSecretId} does not exist yet; the Aurora cluster lands in phase a`),
+      );
+      return false;
+    }
+    throw err;
+  }
+
+  // 2. MERGE it into the Paperclip secret. PutSecretValue swaps the whole
+  //    string, so a replace here would wipe better_auth_secret and any minted
+  //    reconciler/agent keys — the same reason planSecretWrites marks this
+  //    secret mergeExisting.
+  const current = await secretsClient.send(
+    new GetSecretValueCommand({ SecretId: paperclipSecretId }),
+  );
+  const fields = JSON.parse(current.SecretString ?? '{}') as Record<string, string>;
+  if (fields.database_url !== dbUrl) {
+    await secretsClient.send(
+      new PutSecretValueCommand({
+        SecretId: paperclipSecretId,
+        SecretString: JSON.stringify({ ...fields, database_url: dbUrl }),
+      }),
+    );
+    // eslint-disable-next-line no-console
+    console.log(ok(`wrote database_url into ${paperclipSecretId}`));
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(dim(`  database_url in ${paperclipSecretId} already current`));
+  }
+
+  // 3. The migration task definition only exists once CCE-Paperclip has been
+  //    created, which happens in phase d. Defer rather than fail.
+  const targets = await resolvePaperclipMigrationTargets(env);
+  if (!targets) {
+    // eslint-disable-next-line no-console
+    console.log(
+      info(
+        'Paperclip migration deferred: CCE-Paperclip does not exist yet, so there is no ' +
+          'migration task definition to run (it lands in phase d). Run this deploy once with ' +
+          'CCE_PAPERCLIP_BOOTSTRAP=1, then again without it.',
+      ),
+    );
+    await journal('paperclip-migration-deferred', { secretId: paperclipSecretId });
+    return false;
+  }
+
+  // 4. Run it, wait, and read the container exit code.
+  const started = await capture('aws', [
+    'ecs',
+    'run-task',
+    '--cluster',
+    targets.cluster,
+    '--task-definition',
+    targets.taskDefinition,
+    '--launch-type',
+    'FARGATE',
+    '--count',
+    '1',
+    '--network-configuration',
+    `awsvpcConfiguration={subnets=[${targets.subnets.join(',')}],securityGroups=[${targets.securityGroup}],assignPublicIp=DISABLED}`,
+    '--region',
+    region,
+    '--output',
+    'json',
+  ]);
+  if (started.code !== 0) {
+    throw new DeployAbort(
+      `Paperclip migration could not start: ${started.stderr.trim() || `exit ${started.code}`}`,
+    );
+  }
+  const taskArn = (
+    JSON.parse(started.stdout) as { tasks?: Array<{ taskArn?: string }> }
+  ).tasks?.[0]?.taskArn;
+  if (!taskArn) throw new DeployAbort('Paperclip migration returned no task ARN');
+
+  const stop = spinner(`waiting for the Paperclip migration job (${targets.taskDefinition})`);
+  const waited = await capture('aws', [
+    'ecs',
+    'wait',
+    'tasks-stopped',
+    '--cluster',
+    targets.cluster,
+    '--tasks',
+    taskArn,
+    '--region',
+    region,
+  ]);
+  const described = await capture('aws', [
+    'ecs',
+    'describe-tasks',
+    '--cluster',
+    targets.cluster,
+    '--tasks',
+    taskArn,
+    '--region',
+    region,
+    '--output',
+    'json',
+  ]);
+  const container = (
+    JSON.parse(described.stdout || '{}') as {
+      tasks?: Array<{
+        stoppedReason?: string;
+        containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
+      }>;
+    }
+  ).tasks?.[0];
+  const exitCode = container?.containers?.[0]?.exitCode;
+  if (waited.code !== 0 || exitCode !== 0) {
+    stop(fail('Paperclip migration did not succeed'));
+    const detail =
+      container?.containers?.[0]?.reason ??
+      container?.stoppedReason ??
+      `exit code ${exitCode ?? 'unknown'}`;
+    await journal('paperclip-migration-failed', { taskArn, exitCode, detail });
+    // ABORT. Continuing would roll a service onto a half-migrated schema.
+    throw new DeployAbort(
+      `Paperclip migration exited non-zero (${detail}). Logs: ` +
+        `aws logs tail /claudeclaw/paperclip --log-stream-name-prefix migrate --region ${region}`,
+    );
+  }
+  stop(ok('Paperclip schema is migrated'));
+  await journal('paperclip-migrated', { taskArn, taskDefinition: targets.taskDefinition });
+  return true;
 }
 
 async function rollFargateService(env: EnvBag): Promise<void> {

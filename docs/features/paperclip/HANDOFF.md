@@ -3,34 +3,48 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-08-21
-as_of_commit: 45a96a8
+as_of_commit: c230a0a
 ---
 
 # Paperclip integration handoff
 
-- **Branch: `feature/paperclip-phase-1-5`.** Its Phases 1 and 1.5 work is
-  **merged** into `development` as
+- **Branch: `feature/paperclip-phase-1-5`.** Phases 1 and 1.5 are **merged**
+  into `development` as
   [PR #88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88),
-  squashed, 9/9 CI checks green. The branch still carries **uncommitted
-  Phase 4 work** (see Blockers), which is why it has not been deleted.
+  squashed, 9/9 CI checks green. **Phase 2 (the client)** and **Phase 4 (the
+  service stack and tenant bootstrap)** are committed on the branch and open as
+  [PR #89](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/89).
 - **Deployment: nothing.** No AWS resource has been created by this work. The
   session made read-only AWS calls only. `development` deploys nothing.
 - **Phases complete:** §33 first milestone, Phase 0, Phase 1 (substrate code),
-  **Phase 1 (contract probes and wire types)** and **Phase 1.5 (image
-  pipeline)**. Both of the latter were rejected four times by an independent
-  fresh-context critic and signed off blind on the fifth.
-- **Active work:** Phase 4 + 4.5 (the Paperclip service and its UI) — written,
-  typechecking, **rejected by its critic, not merged.**
+  Phase 1 (contract probes and wire types), Phase 1.5 (image pipeline),
+  **Phase 2 (the client)** and **Phase 4 (service stack and tenant bootstrap)**.
+- **Active work:** Phase 4.5 (operator console) and Phase 5 (the reconciler) are
+  the next two. Phase 4.5 is deliberately **deferred behind Phase 5**: the
+  reconciler is the critical path for Phases 6, 7 and 8, while the console is a
+  side branch.
 
 ## The single next action
 
-**Finish Phase 4's gauntlet, then deploy once.** The `qa → staging` promotion
-is deliberately being held: a deploy today would create a billable Aurora
-cluster and show nothing, because no Paperclip service exists yet. Deploying
-after Phase 4 lands gives a running Paperclip with its own board in one step
-instead of two.
+**Build Phase 5, the reconciler** — then hold the `qa → staging` promotion until
+the two deploy blockers below are cleared by hand.
+
+Phase 4's gauntlet is finished: its critic shipped it at round 3 and the blind
+judges preferred it to this repository's own `database-stack.ts` 2 of 3 in every
+round. A staging deploy is now worth doing — it would give a running Paperclip
+with its own board — but it is **still blocked on two things nobody has done**:
+the orphaned `/claudeclaw-staging/paperclip` log group must be deleted first
+(**M19**, **P21**), and CI populates no secrets (**A26**), so the new
+`Populate Paperclip secret` step only runs when the repository variable
+`CCE_PAPERCLIP_ENABLED` is set to `1`. Both are AWS/GitHub actions, not code.
 
 ## What changed on 2026-08-21
+
+### Committed on the branch, in PR #89
+
+| Commit | What |
+|---|---|
+| `c230a0a` | Phase 2 — the client, its errors, config, agent map and the mission-engine seam. Shipped at round 5; **15 of 15 blind judges** picked it over Linear's own `error.ts` with the order flipped each round |
 
 ### Merged
 

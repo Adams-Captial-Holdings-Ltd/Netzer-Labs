@@ -978,6 +978,88 @@ export class IamStack extends Stack implements IamOutputs {
           ],
         }),
       );
+
+      // ── Paperclip: populate the secret, then run the migration job ──
+      //
+      // Both grants exist because THIS workflow now performs both actions
+      // itself. `put-secret-value` appeared ZERO times in deploy.yml until
+      // Phase 4: CI populated no secrets, for any feature, so the Paperclip
+      // task definition's `database_url` field simply did not exist on the
+      // CI path and every task would have died at start with a
+      // ResourceInitializationError.
+      //
+      // ORDERING, and it is the same trap as the ECR grants above: this
+      // statement is created by the CDK deploy LATER IN THE SAME JOB, so it
+      // cannot help the "Populate Paperclip secret" and "Migrate Paperclip
+      // database" steps that run BEFORE it. It has to land in a prior,
+      // UNARMED deploy, before CCE_PAPERCLIP_ENABLED is ever set. And because
+      // this whole role is created only by the PROD IAM stack, a STAGING arm
+      // depends on a production IAM deploy having run first (M34) - which is
+      // why the mirror of every statement below also exists in the staging
+      // branch further down, and why the live role is the fact worth reading
+      // before arming anything.
+      //
+      // GetSecretValue is granted here where the connector probe above
+      // deliberately withholds it, because the merge is a read-modify-write:
+      // PutSecretValue swaps the WHOLE string, so writing database_url
+      // without first reading the current value would wipe better_auth_secret
+      // and every reconciler/agent key scripts/paperclip-bootstrap.ts minted.
+      // The trailing `*` does double duty: it absorbs Secrets Manager's
+      // six-character ARN suffix, which is not knowable at synth time, and it
+      // makes `/claudeclaw/paperclip*` cover `-db` as well. Nothing outside
+      // those two secrets matches.
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipSecretPopulate',
+          effect: Effect.ALLOW,
+          actions: [
+            'secretsmanager:GetSecretValue',
+            'secretsmanager:PutSecretValue',
+            'secretsmanager:DescribeSecret',
+          ],
+          resources: [
+            `arn:aws:secretsmanager:${this.region}:${this.account}:secret:/claudeclaw/paperclip*`,
+            `arn:aws:secretsmanager:${this.region}:${this.account}:secret:/claudeclaw-*/paperclip*`,
+          ],
+        }),
+      );
+      // The one-shot schema migration (phase b.5's CI mirror). RunTask is
+      // scoped to the migrate FAMILY only - not the service family - so this
+      // role can start a migration and nothing else. DescribeTasks is how the
+      // step reads the container exit code, which is the whole gate: a
+      // migration that cannot be observed must fail the deploy rather than
+      // let it proceed on a guess.
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipMigrationRunTask',
+          effect: Effect.ALLOW,
+          actions: ['ecs:RunTask', 'ecs:DescribeTasks'],
+          resources: [
+            `arn:aws:ecs:${this.region}:${this.account}:task-definition/claudeclaw-paperclip-migrate:*`,
+            `arn:aws:ecs:${this.region}:${this.account}:task-definition/claudeclaw-*-paperclip-migrate:*`,
+            `arn:aws:ecs:${this.region}:${this.account}:task/claudeclaw-cluster/*`,
+            `arn:aws:ecs:${this.region}:${this.account}:task/claudeclaw-*-cluster/*`,
+          ],
+        }),
+      );
+      // RunTask passes the task definition's execution role to ECS. The role
+      // is CDK-generated inside CCE-Paperclip, so its physical name is not
+      // knowable here; the real constraint is the service it may be handed
+      // to, which the condition pins. Without this, RunTask fails with
+      // "not authorized to perform: iam:PassRole" and the migration never
+      // starts - a hard failure BEFORE the deploy, which is the safe
+      // direction, but a pointless one.
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipMigrationPassRole',
+          effect: Effect.ALLOW,
+          actions: ['iam:PassRole'],
+          resources: [`arn:aws:iam::${this.account}:role/CCE*-Paperclip-*`],
+          conditions: {
+            StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' },
+          },
+        }),
+      );
     }
 
     // The deploy role is an account-wide singleton created by the PROD stack
@@ -1124,6 +1206,63 @@ export class IamStack extends Stack implements IamOutputs {
             `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/codebuild/claudeclaw-staging-paperclip-cloud-build`,
             `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/codebuild/claudeclaw-staging-paperclip-cloud-build:*`,
           ],
+        }),
+      );
+
+      // ── Paperclip secret population + migration, granted from the STAGING
+      // stack, mirroring the three statements in the !isStagingDeploy branch.
+      //
+      // M34 is exactly this: the prod-branch grants live on a role only the
+      // PROD IAM stack creates, so a staging arm would otherwise wait on a
+      // production IAM deploy. The pre-existing CodeBuild/ECR pair above was
+      // mirrored for that reason and the new pair is mirrored for the same
+      // one. Every ARN below is narrowed to `claudeclaw-staging` rather than
+      // wildcarded, because this branch knows which environment it is.
+      //
+      // Same ordering trap as everything else here: created by a CDK deploy,
+      // so it cannot help steps in the same job that run before it. It must
+      // land in a prior UNARMED staging deploy. Read the LIVE role before
+      // arming - the code is a plan, the role is the fact.
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipSecretPopulateStaging',
+          effect: Effect.ALLOW,
+          actions: [
+            'secretsmanager:GetSecretValue',
+            'secretsmanager:PutSecretValue',
+            'secretsmanager:DescribeSecret',
+          ],
+          // Spelled out rather than read from RESOURCE_NAMES: that constant is
+          // derived at IMPORT time from CCE_NAME_SUFFIX, so it says whatever
+          // the current process was launched with, while this branch is
+          // already known to be the staging one. The CodeBuild and ECR
+          // statements directly above spell their names out for the same
+          // reason.
+          resources: [
+            `arn:aws:secretsmanager:${this.region}:${this.account}:secret:/claudeclaw-staging/paperclip*`,
+          ],
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipMigrationRunTaskStaging',
+          effect: Effect.ALLOW,
+          actions: ['ecs:RunTask', 'ecs:DescribeTasks'],
+          resources: [
+            `arn:aws:ecs:${this.region}:${this.account}:task-definition/claudeclaw-staging-paperclip-migrate:*`,
+            `arn:aws:ecs:${this.region}:${this.account}:task/claudeclaw-staging-cluster/*`,
+          ],
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipMigrationPassRoleStaging',
+          effect: Effect.ALLOW,
+          actions: ['iam:PassRole'],
+          resources: [`arn:aws:iam::${this.account}:role/CCE-STAGING-Paperclip-*`],
+          conditions: {
+            StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' },
+          },
         }),
       );
     }

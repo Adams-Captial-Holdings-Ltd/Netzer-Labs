@@ -68,7 +68,12 @@ reference example and is bar criterion **A3**.
 - [x] Phase 2 — the client. Cleared its gauntlet at round 5: the harsh critic
       returned SHIP, and 15 of 15 blind judges across five rounds picked this
       client's `error.ts` over Linear's real one.
-- [ ] Phase 4 — service stack and tenant bootstrap (rework; previously rejected)
+- [x] Phase 4 — service stack and tenant bootstrap (rework of the rejected
+      draft; **M33** is the entry that rejected round 1). Round 2 closed the
+      four items its critic named: the migration now runs on the CI driver
+      too (**M38**), the deploy role is actually granted what CI does
+      (**M39**), the rejected design's flag is out of the manifest replay list
+      (**M40**), and a false claim in a comment was corrected against a probe.
 - [ ] Phase 4.5 — operator console
 - [ ] Phase 5 — reconciler
 - [ ] Phase 6 — inbound dispatch route and worker
@@ -98,6 +103,23 @@ reference example and is bar criterion **A3**.
 | `tsconfig.build.json` | modified | Excludes `**/test-helpers.ts` from the build |
 | `docs/features/paperclip/README.md` | modified | The executable-README section `readme.test.ts` compiles and byte-compares |
 | (this handoff) | new | Process step 2 — opened before code |
+
+Phase 4 (round 2 of the rework; the round-1 files stay and were reworked, not
+rebuilt):
+
+| File | Change | Rationale |
+|---|---|---|
+| `infra/lib/paperclip-stack.ts` | new | The service. `desiredCount: 1`, no autoscaling, 0/100, `/api/health` on 3100, digest-pinned image, separate migrate task-def, A23-safe listener rule. Reads **no** `process.env` — that is the M33 fix, and a colocated test greps the file to keep it true. Round 2 corrected one false comment: the orchestrator's `wget` **is** in the image; the reason to use `curl` is that `curl` was probed present, not that `wget` was absent |
+| `infra/lib/paperclip-stack.test.ts` | new | 40 assertions. The load-bearing group is `readiness gates (M33)` — a bare synth with no flag set still emits `AWS::ECS::Service` with `DesiredCount 1`. Round 2 added the manifest-replay guard and the deploy-role grant tests |
+| `scripts/paperclip-bootstrap.ts`, `scripts/lib/paperclip/bootstrap-core.ts` + test | new | Tenant bootstrap. Idempotence is proven (zero new agents, zero new keys on a second run), `main` holds `ceo`, every agent carries `metadata.netzarAgentId`, `PAPERCLIP_RESPONSIBLE_USER_AUTHZ_MODE` asserted unset, no token ever printed |
+| `infra/bin/app.ts` | modified | Instantiates Paperclip after Compute inside the existing `CCE_PAPERCLIP_ENABLED` gate, with five explicit `addDependency` calls. **All** env reading lives here |
+| `infra/lib/compute-stack.ts` | modified | Three `EcsSecret.fromSecretsManager` lines + `allSecretArns` extended from six ARNs to eight |
+| `infra/lib/iam-stack.ts` | modified | **Round 2.** `PaperclipSecretPopulate` + `PaperclipMigrationRunTask` + `PaperclipMigrationPassRole`, mirrored as `*Staging` in the `isStagingDeploy` branch. Without them the two new CI steps fail `AccessDenied` (**M39**) |
+| `.github/workflows/deploy.yml` | modified | `Populate Paperclip secret` (`put-secret-value` appeared **zero** times before this) and, **round 2**, `Migrate Paperclip database` — the CI mirror of phase b.5, which did not exist (**M38**) |
+| `scripts/deploy.ts` | modified | Phase b.5. **Round 2** re-sourced `resolvePaperclipMigrationTargets()` from live CloudFormation instead of the gitignored `cdk-outputs.json`, so the lookup answers the same on CI, a fresh clone and a laptop — and so the CI step could reuse the same protocol |
+| `scripts/lib/lifecycle/manifest.ts` | modified | `CCE_PAPERCLIP_BOOTSTRAP` added to `SYNTH_INPUT_ALLOWLIST`; **round 2 removed `CCE_PAPERCLIP_SERVICE_READY`**, which belonged to the rejected design (**M40**) |
+| `scripts/lib/lifecycle/teardown-plan.ts` + test | modified | `currentAppStackNames()` now returns `CCE-Paperclip` as well; it returned 17 names where `cdk ls` armed prints 18 |
+| `docs/diagrams/deploy-pipeline.md`, `rollback-classes.md` | modified | Both described the rejected gate. Corrected in round 2 rather than left to rot |
 
 ### 4.3 Decisions made
 
@@ -316,6 +338,18 @@ are the facts that run produced, and several of them correct a document.
 | A41 | Creating a claude.ai cloud **routine** against this repo fails `HTTP 403 — You don't have access to a repository this routine uses`. `Netzer-Labs` is PRIVATE under the `Adams-Captial-Holdings-Ltd` org, and the Claude GitHub integration has not been granted access to it. A local `gh` login (scopes `repo`, `workflow`, `read:org`) does **not** carry over — the cloud has its own grant. | Probably a consequence of the org transfer (**M16**, **A11**). Unblocked only by an org owner authorizing the integration for that repo; it cannot be fixed from a non-interactive session and must never be worked around with a pasted token. |
 | P27 | A builder/critic loop must be capped, and the cap must be **reported as a cap**. Phase 2's first workflow exited `passed: false` at `rounds < 3` — not because it converged, but because it ran out of rounds with two criteria still failing. | Read the exit condition before concluding a phase failed on quality. A capped loop that is *close* deserves a focused follow-up round on the named failures, not a rebuild — the follow-up cleared both in two rounds while touching nothing that already passed. |
 
+### 5.15 Appended this session (2026-08-21, Phase 4 rework round 2)
+
+| # | Entry | Detail |
+|---|---|---|
+| M38 | **M27 for the fourth time, and the most expensive shape of it yet.** Phase b.5 — compose `DATABASE_URL`, run the one-shot migration, abort on a non-zero exit — existed only in `scripts/deploy.ts`. CI does **not** run that script; it hand-mirrors each phase and then runs `npx cdk deploy --all`. `grep -n "migrat\|run-task" .github/workflows/deploy.yml` returned exactly one hit and it was a comment. So on the only driver that reaches staging and production, the schema was never migrated by anything: the service deliberately carries no `PAPERCLIP_MIGRATION_AUTO_APPLY`, so deploy 2 would have started an essential container against an empty schema, failed the rollout, and left `CCE-Paperclip` in `UPDATE_ROLLBACK` beside RETAIN + `deletionProtection` substrate (**P21**). | It failed *safely* — nothing would have been deleted — which is exactly why it survived a full review round: an M33-clean design can still be an unreachable one. **When a phase adds a step to `scripts/deploy.ts`, open `.github/workflows/deploy.yml` in the same edit and either mirror it or write down why it does not need mirroring.** RESOLVED this session — a `Migrate Paperclip database` step now sits between `Populate Paperclip secret` and `CDK deploy`, running `aws ecs run-task` + `ecs wait tasks-stopped` + an exit-code check, and hard-failing before the deploy rather than after it. |
+| M39 | The round-1 workflow wrote the Paperclip secret and nothing granted it. `grep secretsmanager infra/lib/iam-stack.ts` returned only power-switch and public-tunnel statements — **zero** Paperclip statements in either branch — so the step would have died `AccessDenied` on its first armed run. | A capability added to a workflow is not added until the role can do it, and the role has two homes (**M34**). RESOLVED this session — three statements in the `!isStagingDeploy` branch and three mirrored `*Staging` ones, asserted by name in `paperclip-stack.test.ts`. **Still a prerequisite, not a fix:** the grants are created by the CDK deploy later in the same job, so they must land in a prior UNARMED deploy, and the live `ClaudeClawGitHubDeploy` role is the fact worth reading before arming. |
+| M40 | `SYNTH_INPUT_ALLOWLIST` still carried `CCE_PAPERCLIP_SERVICE_READY` — a variable from the **rejected** design, referenced nowhere else in the tree — under a comment claiming synth "creates the FargateService only when the readiness gate is '1'", which is precisely the behaviour **M33** forbade and the code no longer has. Meanwhile the flag that *does* change synth output, `CCE_PAPERCLIP_BOOTSTRAP`, was missing from the list. | A replay list is executable documentation: a stale name there is a promise that a rollback will re-apply a gate that no longer exists. Worse, that particular name could only ever *remove* a resource. RESOLVED this session — removed, `CCE_PAPERCLIP_BOOTSTRAP` added, the comment rewritten to say why the old name must never come back, and a colocated test asserts both directions. Two diagram files carried the same stale claim and were corrected. |
+| A42 | A comment can be *right about the decision and wrong about the evidence*. `paperclip-stack.ts` justified using `curl` in the health check by asserting the orchestrator's `wget` "is not" in the image. `curl` is genuinely there and `wget` is genuinely there too, at `/usr/bin/wget`. | The choice was fine; the reason given was false, and a false reason is what the next reader deletes the choice on. **A1-16 in miniature: state what the probe proved, not what it implied.** The comment now says `curl` was probed present and names the cost of naming a binary the image lacks (UNHEALTHY forever, which at `minHealthyPercent: 0` is an outage). |
+| A43 | `resolvePaperclipMigrationTargets()` read the **gitignored** `cdk-outputs.json`. That was already M33-safe (its only consumer aborts, it removes nothing), but `null` still meant "a fresh clone" far more often than "not deployed" — and an operator on a fresh clone of a *working* environment would have been told to set `CCE_PAPERCLIP_BOOTSTRAP=1`, which scales the running service to zero. | Live CloudFormation answers the same question identically from anywhere, and `cloudformation:DescribeStacks` was already granted. Re-sourced this session; a non-`ValidationError` failure now aborts instead of masquerading as "not deployed". It is also what let the CI step reuse the same four outputs instead of inventing a second protocol. |
+| A44 | **The image bump is the same two-deploy protocol as the first arm, and that is stated rather than hidden.** Both drivers run the migration task definition the *previous* deploy created, so an image that introduces a migration must ship with `CCE_PAPERCLIP_BOOTSTRAP=1` and then be cleared. | `vendor/paperclip` is content-tagged and changes only when its Dockerfile or patch changes, so this is rare. Named in `.github/workflows/deploy.yml` at the migration step, because an unnamed constraint is one somebody hits at 3am. |
+| P28 | Both critics that mattered here disagreed about *what kind* of defect blocks a phase: the bar critic rejected on a reachability gap (the migration never running on CI), the blind judges passed the same file three times. | Blind head-to-heads test whether the artifact reads well; they do not test whether it *works on the path that reaches a customer*. Run both, and let the bar critic's verdict govern (**A39** already says winning blind is necessary, not sufficient — this is the second instance). |
+
 ## 6. Pending work
 
 Phases 2 through 9 of [the decomposition](../bar-and-phases.md), in decomposition
@@ -328,9 +362,19 @@ not this session's to skip:
 1. The orphaned log group `/claudeclaw-staging/paperclip` must be deleted before
    a staging deploy (**M19**, **P21**), or the stack rolls back at exactly the
    point it did on 2026-08-19.
-2. CI populates **no** secrets (**A26**), so a default-on Paperclip whose
-   container treats `/claudeclaw-staging/paperclip` as essential fails its
-   rollout the way the cloudflared connector did.
+2. CI populates **no** secrets (**A26**) — RESOLVED in code this session by the
+   `Populate Paperclip secret` step and its IAM grants, but **not** resolved in
+   the account: the grants are created by a CDK deploy and so must land in a
+   prior UNARMED deploy before `CCE_PAPERCLIP_ENABLED` is ever set (**M39**).
+
+Phase 4 adds a third, and it is an ordering constraint rather than a defect:
+
+3. Arming Paperclip on either driver is a **two-deploy** protocol. Deploy 1
+   with `CCE_PAPERCLIP_BOOTSTRAP=1` lands Aurora, EFS and the whole Paperclip
+   stack at `DesiredCount 0` — no task starts, nothing fails, and the migration
+   task definition comes into existence. Deploy 2 with the flag cleared
+   migrates and rolls the service up to 1. An image bump that introduces a
+   migration is the same shape, for the same reason (**A44**).
 
 ## 7. Verification actually performed
 
@@ -351,6 +395,25 @@ actually ran.
 | `node scripts/ci/feature-knowledge.mjs` | **Ran. OK**, exit 0. |
 | `git diff --check` | **Ran. Clean**, exit 0. |
 | `cdk diff`, `cdk deploy`, any AWS **mutation** | **Not run.** No AWS resource was created, modified or deleted this session. Nothing deployed to staging or production. |
+
+Phase 4, rework round 2:
+
+| Command | Result |
+|---|---|
+| `npx vitest run infra/ --reporter=basic` | **Ran.** `Test Files 10 passed (10)`, `Tests 151 passed (151)`. Up from 146 — the five new assertions are the manifest-replay guard and the four deploy-role grant tests. |
+| `npm run typecheck` | **Ran. Clean**, exit 0. |
+| `npx cdk ls` (flag unset) | **Ran.** 15 stacks, **byte-identical to the pre-change set** — Phase 3's "`cdk ls` unchanged when unarmed" acceptance still holds. |
+| `CCE_PAPERCLIP_ENABLED=1 npx cdk ls` | **Ran.** 18 stacks; the delta is exactly `CCE-Database`, `CCE-Filesystem`, `CCE-Paperclip`. Synth only — no AWS call. |
+| `npm test` (full, per **P4**) | **Ran twice.** Both runs: `Test Files 5 failed \| 197 passed \| 1 skipped (203)`, `Tests 1 failed \| 2342 passed \| 6 skipped (2349)`. The failing set is **name-for-name the documented baseline** (**A9**, **A29**): four `SyntaxError` collection failures in `scripts/ci/docs-links`, `scripts/ci/feature-knowledge`, `scripts/ci/runnable-blocks`, `scripts/release/sync-deprecations`, plus the `rollback-classes` Windows path-separator assertion. All four suite files and the `.mjs` helpers they import are untouched by this work. Passing rose 2315 → **2342**. |
+| — one-off variance, recorded per **P2** rather than smoothed over | A **third** run, launched as a detached background task, reported `6 failed \| 3 failed tests`. Its output was truncated by my own `tail -30` so the two extra names were not captured, and two subsequent foreground runs both returned the baseline set exactly. Treated as environmental variance under parallel load, **not** as cleared — if a future run shows 6/3 again, capture the full reporter output before assuming the same. |
+| `node scripts/ci/docs-links.mjs` | **Ran. OK**, exit 0 (101 files, 963 internal links). Required by **P8** because this round edited two diagram files and this handoff. |
+| `node scripts/ci/feature-knowledge.mjs` | **Ran. OK**, exit 0. |
+| `git diff --check` | **Ran. Clean**, exit 0 (CRLF warnings only). |
+| `npx js-yaml .github/workflows/deploy.yml` | **Ran. Parsed**, exit 0 — the new step is valid YAML and lands between `Populate Paperclip secret` and `CDK deploy`. |
+| `bash -n` on the extracted `Migrate Paperclip database` script | **Ran. Clean.** |
+| The new step's three decision paths, against a **stubbed `aws`/`jq` on PATH** (no AWS) | **Ran.** (a) stack absent + `CCE_PAPERCLIP_BOOTSTRAP=1` → prints the deferral, **exit 0**. (b) stack absent, flag empty → prints the remedy, **exit 1**, before `CDK deploy`. (c) stack returns `AccessDeniedException` **with the flag set to 1** → still **exit 1**, refusing to guess. (c) is the one that matters: an unreadable probe must never be answered as "not deployed", which is the 2026-08-14 conflation. |
+| The new CI steps against real AWS | **NOT run, and cannot be from here.** `Populate Paperclip secret` and `Migrate Paperclip database` have never executed against AWS; only their branch logic was exercised against stubs. The IAM grants that make them possible are **also** unexercised, and per **M34** the live `ClaudeClawGitHubDeploy` role was not read this session. |
+| A probe asserting the migration job prints `via DATABASE_URL` | **NOT run.** The embedded-postgres false-green (**§UNVERIFIED** in `scripts/deploy.ts` and in `paperclip-stack.ts`) is still marked UNVERIFIED. The compensating control — composing and verifying `database_url` non-empty before starting the job, on both drivers — is built; the probe that would close it is not. |
 
 ## 8. Environment state
 

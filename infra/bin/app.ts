@@ -9,6 +9,7 @@ import { DynamoStack } from '../lib/dynamo-stack.js';
 import { IamStack } from '../lib/iam-stack.js';
 import { GuardrailsStack } from '../lib/guardrails-stack.js';
 import { ComputeStack } from '../lib/compute-stack.js';
+import { PaperclipStack } from '../lib/paperclip-stack.js';
 import { ObservabilityStack } from '../lib/observability-stack.js';
 import { MessagingStack } from '../lib/messaging-stack.js';
 import { SecurityStack } from '../lib/security-stack.js';
@@ -60,14 +61,17 @@ const guardrails = new GuardrailsStack(app, `${stackPrefix}-Guardrails`, basePro
 // orchestrator itself had shipped fine. Arm it deliberately, when someone is
 // watching, with CCE_PAPERCLIP_ENABLED=1. Phase 2 wires the service and can
 // flip the default.
-if (process.env.CCE_PAPERCLIP_ENABLED === '1') {
-  const database = new DatabaseStack(app, `${stackPrefix}-Database`, {
+const paperclipEnabled = process.env.CCE_PAPERCLIP_ENABLED === '1';
+let database: DatabaseStack | undefined;
+let filesystem: FilesystemStack | undefined;
+if (paperclipEnabled) {
+  database = new DatabaseStack(app, `${stackPrefix}-Database`, {
     ...baseProps,
     vpc: network.vpc,
     paperclipSecurityGroup: network.paperclipSecurityGroup,
   });
   database.addDependency(network);
-  const filesystem = new FilesystemStack(app, `${stackPrefix}-Filesystem`, {
+  filesystem = new FilesystemStack(app, `${stackPrefix}-Filesystem`, {
     ...baseProps,
     vpc: network.vpc,
     paperclipSecurityGroup: network.paperclipSecurityGroup,
@@ -114,6 +118,55 @@ const compute = new ComputeStack(app, `${stackPrefix}-Compute`, {
   logsBucket: storage.logsBucket,
   messaging,
 });
+
+// Paperclip work engine service (ADR 0010 Phase 2 / bar-and-phases Phase 4 +
+// 4.5). Instantiated AFTER Compute because it reuses Compute's ECS cluster and
+// attaches its listener rule to Compute's HTTPS:443 listener — which normally
+// does not exist at all (it is created only when DOMAIN_NAME is set, and both
+// real environments deliberately set it empty), hence the optional field.
+//
+// Still inside the SAME CCE_PAPERCLIP_ENABLED gate as the substrate above, so
+// an unarmed deploy synthesizes no Paperclip stack and `npx cdk ls` prints the
+// identical stack set it printed before this change. Part D step 2 converts all
+// three to always-constructed, tier-gated internally; that is Phase 9, and it
+// must move every one of the seven homes of the flag in one commit.
+if (paperclipEnabled && database && filesystem) {
+  const paperclip = new PaperclipStack(app, `${stackPrefix}-Paperclip`, {
+    ...baseProps,
+    vpc: network.vpc,
+    paperclipSecurityGroup: network.paperclipSecurityGroup,
+    cluster: compute.cluster,
+    httpsListener: compute.httpsListener,
+    fileSystem: filesystem.paperclipFileSystem,
+    accessPoint: filesystem.paperclipAccessPoint,
+    logGroup: filesystem.paperclipLogGroup,
+    paperclipSecret: secrets.paperclipSecret,
+    // Env is read HERE, never inside the stack. Both deploy drivers forward
+    // the digest (scripts/deploy.ts via cdkEnvBag, CI via the Paperclip build
+    // step's output); an empty value renders an unpullable placeholder, which
+    // fails loudly rather than floating a mutable tag.
+    imageDigest: process.env.CCE_PAPERCLIP_IMAGE_DIGEST?.trim() || undefined,
+    opsHostname: process.env.CCE_PAPERCLIP_HOSTNAME?.trim() || undefined,
+    // M33. The ONE flag that changes runtime behaviour, and it is deliberately
+    // OPT-IN with the safe default: unset means DesiredCount 1, so a fresh
+    // clone, a CI runner or a second engineer's machine can never scale the
+    // service down by accident, and no template ever OMITS it. Set to 1 by an
+    // operator for the first armed deploy only, when the database has not been
+    // migrated yet; see the M33 table in paperclip-stack.ts. Never computed
+    // from a probe: "I could not find out" and "not ready" must not be the
+    // same answer.
+    bootstrapWithoutTasks: process.env.CCE_PAPERCLIP_BOOTSTRAP === '1',
+  });
+  // Explicit, not inferred. CDK only infers a dependency where a value
+  // actually crosses stacks, and `httpsListener` is undefined in both real
+  // environments — so without these the Paperclip service could be created
+  // before the cluster, the EFS mount targets or the secret exist.
+  paperclip.addDependency(network);
+  paperclip.addDependency(secrets);
+  paperclip.addDependency(database);
+  paperclip.addDependency(filesystem);
+  paperclip.addDependency(compute);
+}
 
 // Observability depends on storage (logsKey + logsBucket)
 const observability = new ObservabilityStack(app, `${stackPrefix}-Observability`, {

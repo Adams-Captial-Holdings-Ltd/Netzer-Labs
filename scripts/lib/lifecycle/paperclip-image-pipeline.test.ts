@@ -314,20 +314,25 @@ describe('buildImageRecords with the Paperclip image', () => {
     expect(record?.taskFamily).toBe('claudeclaw-staging-paperclip');
   });
 
-  it('does not make an orchestrator rollback depend on the Paperclip repo', () => {
-    // The image rollback class re-points the orchestrator service only. The
-    // Paperclip digest lives in a repo teardown deletes with --force and
-    // Phase 9 will churn; verifying it here would abort a rollback of a
-    // RUNNING service over an image no service consumes yet. Fed from the
-    // real record producer so the two cannot drift apart.
+  it('verifies the Paperclip digest in preflight now that a service consumes it', () => {
+    // INVERTED BY PHASE 4, deliberately. This assertion used to require the
+    // opposite, on the premise that "no service consumes this image yet" —
+    // verifying it would have aborted a rollback of the RUNNING orchestrator
+    // over an unused image. infra/lib/paperclip-stack.ts ended that premise:
+    // the digest now pins a live task definition, so a target manifest whose
+    // Paperclip image has been deleted out of ECR is unrestorable and must
+    // fail in preflight, before anything is touched. The handoff test at the
+    // bottom of this file is what forced the decision. Fed from the real
+    // record producer so the two cannot drift apart.
     const digest = 'sha256:' + 'b'.repeat(64);
     const images = buildImageRecords({ ...base, paperclipDigest: digest });
     const { toVerify } = collectPrivateEcrDigests(
       { imageDigest: base.imageDigest, images } as unknown as DeployManifest,
       'claudeclaw-staging-orchestrator',
     );
-    expect(toVerify.map((v) => v.digest)).toEqual([base.imageDigest]);
-    expect(toVerify.some((v) => v.repositoryName.endsWith('-paperclip'))).toBe(false);
+    expect(toVerify.map((v) => v.digest)).toEqual([base.imageDigest, digest]);
+    const paperclip = toVerify.find((v) => v.repositoryName.endsWith('-paperclip'));
+    expect(paperclip?.repositoryName).toBe('claudeclaw-staging-paperclip');
   });
 });
 

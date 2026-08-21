@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { clampTier, resourceSummary, estimateLine, FALLBACK_RANGES } from './cost-gate.js';
+import { TIERS } from '../../infra/lib/constants.js';
 
 describe('clampTier', () => {
   it('accepts the four valid tiers', () => {
@@ -46,6 +47,33 @@ describe('resourceSummary', () => {
     expect(resourceSummary(1, false)).not.toContain('EFS');
     expect(resourceSummary(1, false, true)).toContain('Aurora Serverless v2 (Paperclip)');
     expect(resourceSummary(1, false, true)).toContain('EFS');
+  });
+
+  it('names the Paperclip Fargate task separately from the orchestrator count', () => {
+    // The engine's service is a SECOND always-on task (2 vCPU / 4 GB, no
+    // autoscaling) and the largest single item arming adds. Folding it into
+    // the `Fargate xN` count would hide it behind a number that looks like it
+    // only went up by one, which is how the gate came to under-report the
+    // cost of arming by roughly half.
+    expect(resourceSummary(1, false)).not.toContain('Paperclip');
+    const armed = resourceSummary(1, false, true);
+    expect(armed).toContain('Fargate x1 (Paperclip)');
+    expect(armed).toContain(`Fargate x${TIERS[1].fargateMinTasks}`);
+  });
+
+  it('prices the Paperclip Fargate task, not just the Aurora floor and EFS', () => {
+    // The note carried a "fold in the Fargate task in Phase 2" TODO long
+    // after that task landed, so the money gate said ~$50 for something that
+    // actually costs ~$110. Both halves must be named or the next person
+    // cannot tell which one the estimate forgot.
+    const off = estimateLine(null, 1, false, false);
+    expect(off).not.toContain('Paperclip');
+    const on = estimateLine(null, 1, false, true);
+    expect(on).toContain('$110');
+    expect(on).toContain('Aurora min-ACU floor and EFS');
+    expect(on).toContain('2 vCPU / 4 GB Fargate task');
+    // Still flagged as arithmetic, not a Pricing API result.
+    expect(on).toContain('estimated, not verified against pricing APIs');
   });
 
   it('tier 2 adds WAF, tier 3 adds WAF + CloudFront', () => {

@@ -232,6 +232,19 @@ export class ComputeStack extends Stack implements ComputeOutputs {
       'VendorKeysSecretImport',
       props.secrets.vendorKeysSecret.secretArn,
     );
+    // Paperclip bridge credentials (ADR 0010). Safe to inject on day one even
+    // though the fields still read REPLACE_ME: secrets-stack.ts creates all
+    // three (`agent_keys`, `reconciler_key`, `dispatch_secret`) with the
+    // secret itself, and src/config/env.ts declares each with
+    // optionalNonPlaceholder(), so a placeholder resolves to "unset" rather
+    // than to a bad credential. A missing FIELD would be different in kind: it
+    // fails the task at START with a ResourceInitializationError. That is the
+    // cloudflared rollout failure, and it is why these are added now rather
+    // than left for a later "when the values exist" commit.
+    const paperclipSecret = reimportSecret(
+      'PaperclipSecretImport',
+      props.secrets.paperclipSecret.secretArn,
+    );
 
     // Grant exec role secretsmanager + KMS decrypt manually
     const allSecretArns = [
@@ -241,6 +254,21 @@ export class ComputeStack extends Stack implements ComputeOutputs {
       props.secrets.dbEncryptionSecret.secretArn,
       props.secrets.bedrockGuardrailsSecret.secretArn,
       props.secrets.vendorKeysSecret.secretArn,
+      // Paperclip work engine (ADR 0010). The execution role grants on a FIXED
+      // ARN list, so a secret this task definition later injects but that is
+      // missing from this list fails the task at START with a
+      // ResourceInitializationError — before any container runs, so it reads as
+      // a rollout failure, not an application error. Granted here ahead of the
+      // Phase 2 client's EcsSecret lines for exactly the reason the cloudflared
+      // token grant is held open unconditionally: re-attaching an injection
+      // must be a one-step change, never permission-plus-container.
+      props.secrets.paperclipSecret.secretArn,
+      // The Aurora-generated credentials secret. Named, not passed: DatabaseStack
+      // is gated off and is not a prop of this stack, and taking it as one would
+      // make the whole compute plane depend on a flag. The trailing `-*` covers
+      // Secrets Manager's six-character ARN suffix, which is not knowable at
+      // synth time.
+      `arn:aws:secretsmanager:${region}:${account}:secret:${RESOURCE_NAMES.secrets.paperclipDb}-*`,
     ];
     taskExecutionRole.addToPolicy(
       new PolicyStatement({
@@ -500,6 +528,20 @@ export class ComputeStack extends Stack implements ComputeOutputs {
           'brave_search_api_key',
         ),
         EXA_API_KEY: EcsSecret.fromSecretsManager(vendorKeysSecret, 'exa_api_key'),
+        // Paperclip bridge (ADR 0010). C-19: the SHIPPED field spellings win.
+        // `agent_keys` is a JSON STRING because one secret field injects as
+        // one env var, hence the _JSON suffix on the variable but not on the
+        // field. `agent_keys_json` / `dispatch_token` are the plan's wrong
+        // variants and a field mismatch is a task that cannot START.
+        PAPERCLIP_AGENT_KEYS_JSON: EcsSecret.fromSecretsManager(paperclipSecret, 'agent_keys'),
+        PAPERCLIP_RECONCILER_KEY: EcsSecret.fromSecretsManager(
+          paperclipSecret,
+          'reconciler_key',
+        ),
+        PAPERCLIP_DISPATCH_SECRET: EcsSecret.fromSecretsManager(
+          paperclipSecret,
+          'dispatch_secret',
+        ),
         SERPER_API_KEY: EcsSecret.fromSecretsManager(vendorKeysSecret, 'serper_api_key'),
         GOOGLE_GEMINI_API_KEY: EcsSecret.fromSecretsManager(
           vendorKeysSecret,
