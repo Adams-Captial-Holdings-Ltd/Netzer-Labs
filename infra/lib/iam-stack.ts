@@ -728,7 +728,9 @@ export class IamStack extends Stack implements IamOutputs {
         }),
       );
 
-      // ECR auth + push for the orchestrator image (built outside cdk-assets).
+      // ECR auth + push for the images this workflow builds outside
+      // cdk-assets: the orchestrator, and (when CCE_PAPERCLIP_ENABLED is
+      // armed) the Paperclip work-engine image of ADR 0010 Phase 1.5.
       cicdRole.addToPolicy(
         new PolicyStatement({
           sid: 'EcrAuth',
@@ -739,9 +741,27 @@ export class IamStack extends Stack implements IamOutputs {
       );
       // Cover both prod (`claudeclaw-orchestrator`) and staging
       // (`claudeclaw-staging-orchestrator`) repos with one wildcard.
+      //
+      // The Paperclip pair is here for the same reason and NOT as
+      // speculation: `.github/workflows/deploy.yml` has a
+      // "Build + Push Paperclip (linux/arm64)" step that describes, builds
+      // and pushes `claudeclaw[-suffix]-paperclip`. Without these two ARNs
+      // that step cannot read the repo and dies at `docker push` with
+      // AccessDenied - after a full emulated ARM build, and BEFORE `CDK
+      // deploy` and `Force ECS rollout` run, so arming Paperclip would take
+      // down a deploy of the orchestrator. `claudeclaw-staging-paperclip`
+      // matches neither orchestrator pattern.
+      //
+      // ORDERING, and it is the same shape as the 2026-08-14 connector
+      // incident this workflow documents inline: this grant is created by
+      // the CDK deploy LATER IN THE SAME JOB, so it cannot help the ECR
+      // steps that run before it. It must land in a prior, UNARMED deploy
+      // before CCE_PAPERCLIP_ENABLED is set. And because this whole role is
+      // created only by the PROD IAM stack (see isStagingDeploy above), a
+      // STAGING arm depends on a production IAM deploy having run first.
       cicdRole.addToPolicy(
         new PolicyStatement({
-          sid: 'EcrPushOrchestrator',
+          sid: 'EcrPushAppImages',
           effect: Effect.ALLOW,
           actions: [
             'ecr:BatchCheckLayerAvailability',
@@ -757,6 +777,8 @@ export class IamStack extends Stack implements IamOutputs {
           resources: [
             `arn:aws:ecr:${this.region}:${this.account}:repository/claudeclaw-orchestrator`,
             `arn:aws:ecr:${this.region}:${this.account}:repository/claudeclaw-*-orchestrator`,
+            `arn:aws:ecr:${this.region}:${this.account}:repository/claudeclaw-paperclip`,
+            `arn:aws:ecr:${this.region}:${this.account}:repository/claudeclaw-*-paperclip`,
           ],
         }),
       );
@@ -765,11 +787,15 @@ export class IamStack extends Stack implements IamOutputs {
       // requires `resources: ['*']` because the repo ARN doesn't exist yet
       // when the create call is made; the API itself does not accept an
       // ARN-scoped Resource for Create. We narrow blast radius with a
-      // resource-name condition on the orchestrator naming pattern, so
+      // resource-name condition on the two naming patterns this app owns, so
       // this role cannot create arbitrary ECR repositories.
+      //
+      // The Paperclip names are required by the SAME workflow step: it calls
+      // ensure_repo on the Paperclip repo under the CCE_PAPERCLIP_ENABLED
+      // guard, and a create the role cannot make is a hard step failure.
       cicdRole.addToPolicy(
         new PolicyStatement({
-          sid: 'EcrCreateOrchestratorRepo',
+          sid: 'EcrCreateAppRepos',
           effect: Effect.ALLOW,
           actions: ['ecr:CreateRepository'],
           resources: ['*'],
@@ -778,9 +804,126 @@ export class IamStack extends Stack implements IamOutputs {
               'ecr:RepositoryName': [
                 'claudeclaw-orchestrator',
                 'claudeclaw-*-orchestrator',
+                'claudeclaw-paperclip',
+                'claudeclaw-*-paperclip',
               ],
             },
           },
+        }),
+      );
+
+      // ── Paperclip image build: the SAME native ARM64 CodeBuild path the
+      // local deploy driver uses (scripts/lib/lifecycle/cloud-build.ts),
+      // driven from CI by scripts/ci/paperclip-image.ts.
+      //
+      // WHY CI NEEDS THESE AT ALL. The workflow used to cross-build that image
+      // with QEMU-emulated `docker buildx` on the amd64 runner while
+      // `npm run deploy` built it on native ARM CodeBuild - one artifact, two
+      // mechanisms, so the arm64 self-check, the base-image pull and the build
+      // environment differed between the path under test and the path that
+      // reaches staging. Making CI use the one real path costs exactly the
+      // grants below.
+      //
+      // SCOPE. Every resource here is a deterministic name derived from the
+      // Paperclip ECR repo by cloudBuildNames(): project
+      // `claudeclaw[-suffix]-paperclip-cloud-build`, role `<project>-role`,
+      // log group `/aws/codebuild/<project>`, source zips under the state
+      // bucket's `cloud-build/` prefix. The orchestrator's own cloud build is
+      // deliberately NOT covered: CI still builds that image with buildx, so
+      // granting it would be speculative.
+      //
+      // ORDERING, exactly as for the ECR grants above: this policy is applied
+      // by the CDK deploy step LATER IN THE SAME JOB, so it must land in a
+      // prior UNARMED deploy before CCE_PAPERCLIP_ENABLED is set, and this
+      // whole role is created only by the PROD IAM stack, so a staging arm
+      // depends on a production IAM deploy having run first.
+      //
+      // NOT A PRIVILEGE ESCALATION: cicdRole already assumes the four
+      // `cdk-hnb659fds-*` bootstrap roles (sid AssumeCdkBootstrapRoles), which
+      // between them can create any IAM principal in the account. A
+      // name-scoped create/pass of one build role is strictly narrower than
+      // what this role can already do through CloudFormation.
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildSource',
+          effect: Effect.ALLOW,
+          // `git archive HEAD` of the checkout is staged here and read by the
+          // build role. ListBucket is the head-bucket preflight that turns a
+          // missing bootstrap primitive into a first-second failure with a
+          // remedy instead of an opaque `aws s3 cp` error minutes in.
+          actions: ['s3:PutObject', 's3:ListBucket'],
+          resources: [
+            // resolveStateNames(): `claudeclaw[-suffix]-deploy-<account>-<region>`.
+            `arn:aws:s3:::claudeclaw*-deploy-${this.account}-${this.region}`,
+            `arn:aws:s3:::claudeclaw*-deploy-${this.account}-${this.region}/cloud-build/*`,
+          ],
+        }),
+      );
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildProject',
+          effect: Effect.ALLOW,
+          actions: [
+            'codebuild:BatchGetProjects',
+            'codebuild:CreateProject',
+            'codebuild:UpdateProject',
+            'codebuild:StartBuild',
+            'codebuild:BatchGetBuilds',
+          ],
+          resources: [
+            // `claudeclaw-paperclip-cloud-build` and
+            // `claudeclaw-staging-paperclip-cloud-build` in one pattern; the
+            // IAM `*` also matches the empty prod suffix.
+            `arn:aws:codebuild:${this.region}:${this.account}:project/claudeclaw*paperclip-cloud-build`,
+          ],
+        }),
+      );
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildRole',
+          effect: Effect.ALLOW,
+          // The build's own execution role, created idempotently by
+          // ensureRole() with the least-privilege inline policy
+          // cloudBuildRolePolicy() generates (logs to ONE group, push to ONE
+          // ECR repo, read ONE S3 prefix). TagRole is required because
+          // create-role passes `--tags Application=claudeclaw`.
+          actions: ['iam:GetRole', 'iam:CreateRole', 'iam:PutRolePolicy', 'iam:TagRole'],
+          resources: [
+            `arn:aws:iam::${this.account}:role/claudeclaw*paperclip-cloud-build-role`,
+          ],
+        }),
+      );
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildPassRole',
+          effect: Effect.ALLOW,
+          actions: ['iam:PassRole'],
+          resources: [
+            `arn:aws:iam::${this.account}:role/claudeclaw*paperclip-cloud-build-role`,
+          ],
+          // Handed to CodeBuild and nothing else.
+          conditions: {
+            StringEquals: { 'iam:PassedToService': 'codebuild.amazonaws.com' },
+          },
+        }),
+      );
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildLogs',
+          effect: Effect.ALLOW,
+          // Read-only, and only so a FAILED build prints its log tail in the
+          // job output instead of "see CloudWatch" (runCloudBuild's
+          // tailBuildLogs is best-effort and never fails the build itself).
+          actions: [
+            'logs:DescribeLogGroups',
+            'logs:DescribeLogStreams',
+            'logs:FilterLogEvents',
+            'logs:GetLogEvents',
+          ],
+          resources: [
+            `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/codebuild/claudeclaw*paperclip-cloud-build`,
+            `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/codebuild/claudeclaw*paperclip-cloud-build:*`,
+          ],
         }),
       );
 
@@ -843,13 +986,143 @@ export class IamStack extends Stack implements IamOutputs {
     // staging stack keeps this deployable without touching production at all.
     // Same DescribeSecret-only scope, narrowed to this environment's secret.
     if (process.env.CCE_CICD_ENABLED === '1' && isStagingDeploy) {
-      Role.fromRoleName(this, 'GithubDeployRoleRef', 'ClaudeClawGitHubDeploy').addToPrincipalPolicy(
+      const deployRoleRef = Role.fromRoleName(
+        this,
+        'GithubDeployRoleRef',
+        'ClaudeClawGitHubDeploy',
+      );
+      deployRoleRef.addToPrincipalPolicy(
         new PolicyStatement({
           sid: 'PublicTunnelReadinessStaging',
           effect: Effect.ALLOW,
           actions: ['secretsmanager:DescribeSecret'],
           resources: [
             `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${APP}-public-tunnel*`,
+          ],
+        }),
+      );
+
+      // ── Paperclip image build, granted from the STAGING stack.
+      //
+      // WHY THIS BLOCK EXISTS. The identical grants above on `cicdRole` sit
+      // inside the `!isStagingDeploy` branch, because that is where the role
+      // is created. Read literally, that made arming CCE_PAPERCLIP_ENABLED in
+      // staging depend on a PRODUCTION IAM deploy having run first — which is
+      // not an acceptable prerequisite for a staging-only change, and is the
+      // same defect shape this repo has already paid for twice: M22 (a flag
+      // gated in one of five homes) and M27 (a step added to
+      // scripts/deploy.ts but not to the CI workflow that actually reaches
+      // staging). Wired into the production path, absent from the path that
+      // deploys.
+      //
+      // Verified 2026-08-21 against the live role: its statements were
+      // AssumeCdkBootstrapRoles, EcrAuth, EcrPushOrchestrator,
+      // EcrCreateOrchestratorRepo, EcsForceRollout, CloudFormationDescribe,
+      // PublicTunnelReadiness, PublicTunnelReadinessStaging. Every ECR grant
+      // was orchestrator-scoped and there were no Paperclip statements at
+      // all, so an armed staging run would have failed AccessDenied at the
+      // ECR repo create and again at CodeBuild — after Aurora already existed.
+      //
+      // These mirror the prod statements but are narrowed to the staging
+      // names only (`claudeclaw-staging-paperclip*`), so this grants strictly
+      // less than the production block it parallels.
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'EcrPushPaperclipStaging',
+          effect: Effect.ALLOW,
+          actions: [
+            'ecr:BatchCheckLayerAvailability',
+            'ecr:GetDownloadUrlForLayer',
+            'ecr:BatchGetImage',
+            'ecr:InitiateLayerUpload',
+            'ecr:UploadLayerPart',
+            'ecr:CompleteLayerUpload',
+            'ecr:PutImage',
+            'ecr:DescribeRepositories',
+            'ecr:DescribeImages',
+          ],
+          resources: [
+            `arn:aws:ecr:${this.region}:${this.account}:repository/claudeclaw-staging-paperclip`,
+          ],
+        }),
+      );
+      // CreateRepository cannot be ARN-scoped — the repo does not exist when
+      // the call is made — so the blast radius is narrowed by a name
+      // condition, exactly as EcrCreateAppRepos does for production.
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'EcrCreatePaperclipRepoStaging',
+          effect: Effect.ALLOW,
+          actions: ['ecr:CreateRepository'],
+          resources: ['*'],
+          conditions: {
+            StringLike: { 'ecr:RepositoryName': ['claudeclaw-staging-paperclip'] },
+          },
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildSourceStaging',
+          effect: Effect.ALLOW,
+          actions: ['s3:PutObject', 's3:ListBucket'],
+          resources: [
+            `arn:aws:s3:::claudeclaw-staging-deploy-${this.account}-${this.region}`,
+            `arn:aws:s3:::claudeclaw-staging-deploy-${this.account}-${this.region}/cloud-build/*`,
+          ],
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildProjectStaging',
+          effect: Effect.ALLOW,
+          actions: [
+            'codebuild:BatchGetProjects',
+            'codebuild:CreateProject',
+            'codebuild:UpdateProject',
+            'codebuild:StartBuild',
+            'codebuild:BatchGetBuilds',
+          ],
+          resources: [
+            `arn:aws:codebuild:${this.region}:${this.account}:project/claudeclaw-staging-paperclip-cloud-build`,
+          ],
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildRoleStaging',
+          effect: Effect.ALLOW,
+          actions: ['iam:GetRole', 'iam:CreateRole', 'iam:PutRolePolicy', 'iam:TagRole'],
+          resources: [
+            `arn:aws:iam::${this.account}:role/claudeclaw-staging-paperclip-cloud-build-role`,
+          ],
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildPassRoleStaging',
+          effect: Effect.ALLOW,
+          actions: ['iam:PassRole'],
+          resources: [
+            `arn:aws:iam::${this.account}:role/claudeclaw-staging-paperclip-cloud-build-role`,
+          ],
+          conditions: {
+            StringEquals: { 'iam:PassedToService': 'codebuild.amazonaws.com' },
+          },
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipCloudBuildLogsStaging',
+          effect: Effect.ALLOW,
+          actions: [
+            'logs:DescribeLogGroups',
+            'logs:DescribeLogStreams',
+            'logs:FilterLogEvents',
+            'logs:GetLogEvents',
+          ],
+          resources: [
+            `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/codebuild/claudeclaw-staging-paperclip-cloud-build`,
+            `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/codebuild/claudeclaw-staging-paperclip-cloud-build:*`,
           ],
         }),
       );
