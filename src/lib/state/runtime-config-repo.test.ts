@@ -6,6 +6,7 @@ vi.mock('./ddb.js', () => ({ ddb: () => ({ send }) }));
 import {
   getConfig,
   setConfig,
+  setConfigIfGreater,
   getConfigCategory,
   invalidateRuntimeConfigCache,
 } from './runtime-config-repo.js';
@@ -72,5 +73,56 @@ describe('runtime-config-repo', () => {
   it('getConfigCategory fails open to an empty record on DDB error', async () => {
     send.mockRejectedValueOnce(new Error('ddb down'));
     expect(await getConfigCategory('cost')).toEqual({});
+  });
+
+  describe('setConfigIfGreater — the monotonic guard a cursor needs', () => {
+    it('writes one conditional put that only wins when the stored value is absent or older', async () => {
+      send.mockResolvedValueOnce({});
+      await expect(
+        setConfigIfGreater('paperclip', 'reconciler_watermark', '2026-08-21T10:00:00.000Z', {
+          updatedBy: 'paperclip-reconciler',
+        }),
+      ).resolves.toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+      const input = send.mock.calls[0][0].input;
+      expect(input.Item).toMatchObject({
+        PK: 'CONFIG#paperclip',
+        SK: 'reconciler_watermark',
+        value: '2026-08-21T10:00:00.000Z',
+        updatedBy: 'paperclip-reconciler',
+      });
+      expect(input.ConditionExpression).toBe('attribute_not_exists(PK) OR #value < :value');
+      expect(input.ExpressionAttributeNames).toEqual({ '#value': 'value' });
+      expect(input.ExpressionAttributeValues).toEqual({ ':value': '2026-08-21T10:00:00.000Z' });
+    });
+
+    it('a losing conditional write is false, caught by err.name and never rethrown', async () => {
+      send.mockRejectedValueOnce(
+        Object.assign(new Error('conditional'), { name: 'ConditionalCheckFailedException' }),
+      );
+      await expect(
+        setConfigIfGreater('paperclip', 'reconciler_watermark', '2026-08-20T00:00:00.000Z', {
+          updatedBy: 'paperclip-reconciler',
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it('any OTHER store error throws — a caller must know its write did not land', async () => {
+      send.mockRejectedValueOnce(Object.assign(new Error('down'), { name: 'InternalServerError' }));
+      await expect(
+        setConfigIfGreater('paperclip', 'reconciler_watermark', '2026-08-21T10:00:00.000Z', {
+          updatedBy: 'paperclip-reconciler',
+        }),
+      ).rejects.toThrow('down');
+    });
+
+    it('the winner sees its own write: the key and category caches are dropped', async () => {
+      send.mockResolvedValueOnce({ Item: { value: 'old' } });
+      expect(await getConfig('paperclip', 'reconciler_watermark')).toBe('old');
+      send.mockResolvedValueOnce({});
+      await setConfigIfGreater('paperclip', 'reconciler_watermark', 'new', { updatedBy: 't' });
+      send.mockResolvedValueOnce({ Item: { value: 'new' } });
+      expect(await getConfig('paperclip', 'reconciler_watermark')).toBe('new');
+    });
   });
 });

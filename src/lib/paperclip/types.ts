@@ -56,6 +56,15 @@
  * recorded here so it is not mistaken for the gap that invites a second types
  * file. Phases 5 and 6 add them to THIS file.
  *
+ * PHASE 5 CLOSED THREE OF THEM, at the bottom of this file: `ReconcilerWatermark`,
+ * `IssueChange` and `SweepResult` now have both a reader (`reconciler.ts`,
+ * `watermark.ts`) and evidence (the C-2 probe pins the cursor's ISO form and the
+ * `(id, updatedAt)` dedupe key it is built around). `ReconcileAction` stays
+ * DEFERRED: Phase 5 ships OBSERVING ONLY, so nothing decides an action yet, and
+ * naming one now would freeze a guess exactly as this paragraph warns. It lands
+ * with the dispatcher in Phase 6, alongside `PaperclipDispatchBody`/
+ * `PaperclipDispatchContext`.
+ *
  * THE DEFERRAL RULE AND THE EVIDENCE RULE ARE ONE RULE, and stating them apart
  * is what made the deferral above look inconsistent with what ships. Several
  * shapes here have no reader either - `PaperclipApproval`,
@@ -849,3 +858,93 @@ export interface PaperclipHealthUnhealthy {
 }
 
 export type PaperclipHealth = PaperclipHealthOk | PaperclipHealthUnhealthy;
+
+// ── Reconciler shapes (Phase 5) ───────────────────────────────────────────
+
+/**
+ * How the reconciler behaves, from runtime-config `paperclip/reconciler_mode`.
+ * Seeded `shadow`; C-7 makes that a READ COMPARATOR — it sweeps and reports and
+ * mutates neither system's domain state. Promotion is a config write, not a
+ * deploy, which is why this is a runtime value and not an env var.
+ */
+export type PaperclipReconcilerMode = 'off' | 'shadow' | 'live';
+
+/**
+ * The poll cursor. `updatedAt` absent means "never swept", and its default is
+ * ABSENCE semantics rather than epoch — the cold start is `now - overlap`.
+ * Deliberately one field: nothing has evidence for more, and this is the whole
+ * value the next `updatedSince` is derived from.
+ */
+export interface ReconcilerWatermark {
+  /** Canonical ISO-8601 UTC (`…THH:MM:SS.sssZ`), or absent on a cold start. */
+  updatedAt?: string;
+  /**
+   * A stored value that exists but does not parse. This is NOT the same as
+   * absence and must never be collapsed into it: absence means "never swept" and
+   * cold-starting at `now - overlap` is correct, while a corrupt cursor means
+   * "swept to somewhere unknown" and cold-starting SKIPS everything between the
+   * real cursor and now. The reconciler refuses to sweep on this flag.
+   */
+  corrupt?: boolean;
+}
+
+/**
+ * One deduplicated candidate row from a sweep.
+ *
+ * `key` is `` `${id}@${updatedAt}` `` — not a convenience, a measurement. The
+ * probe "C-2 (BLOCKING): a truncated watermark loses rows, and overlap-and-
+ * dedupe delivers them exactly once" dedupes on exactly that pair, comparing
+ * `updatedAt` as the RAW ISO STRING the server sent, and shows that the pair
+ * yields every row a sweep wrote exactly once across two overlapping polls.
+ * Deduping on `id` alone would collapse two genuine revisions of one issue.
+ */
+export interface IssueChange {
+  /** `${id}@${updatedAt}`, the pair the overlap dedupes on. */
+  key: string;
+  id: string;
+  /** The raw stamp as sent, NOT normalized — the dedupe key must match bytes. */
+  updatedAt: string;
+  issue: PaperclipIssue;
+}
+
+/**
+ * The outcome of one reconcile pass. Returned by the exported pass function so
+ * a test or an admin route can drive a single sweep without a timer, and logged
+ * as the shadow comparator's whole output.
+ *
+ * `watermarkAdvanced` is the durability assertion in field form: it is `false`
+ * whenever pagination did not run to an empty page, whenever the sweep saw no
+ * rows, and whenever the conditional write lost to a peer.
+ */
+export interface SweepResult {
+  ran: boolean;
+  /** Why a pass did no work. Absent when `ran` is true. */
+  reason?:
+    | 'mode-off'
+    | 'not-configured'
+    | 'boot-probe-failed'
+    /** The probe REQUEST failed, which is not evidence either way. Retried next tick. */
+    | 'boot-probe-error'
+    | 'watermark-corrupt'
+    | 'not-leader'
+    | 'lease-lost'
+    | 'pagination-truncated';
+  mode: PaperclipReconcilerMode;
+  /** The interval this pass resolved, after the 15 s floor. The self-chaining
+   * timer schedules the next tick from it, which is what makes a
+   * `poll_interval_ms` write take effect with no restart. */
+  pollIntervalMs: number;
+  /** Rows returned across every page, BEFORE dedupe. */
+  rowsSeen: number;
+  /** Distinct `(id, updatedAt)` candidates. `rowsSeen - candidates` is the overlap. */
+  candidates: number;
+  pages: number;
+  /** The cursor the poll started from; absent on a cold start. */
+  watermarkFrom?: string;
+  /** The newest `updatedAt` actually PROCESSED — not the newest row on the board. */
+  watermarkTo?: string;
+  watermarkAdvanced: boolean;
+  /** `paperclip/enabled_agents`, reported so an operator can see whether a
+   * promotion to `live` would act on anything. No other reader until Phase 6. */
+  enabledAgents: readonly string[];
+}
