@@ -502,6 +502,13 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         CCE_SECRET_DB_ENCRYPTION_ARN: props.secrets.dbEncryptionSecret.secretArn,
         CCE_SECRET_BEDROCK_GUARDRAILS_ARN: props.secrets.bedrockGuardrailsSecret.secretArn,
         CCE_SECRET_VENDOR_KEYS_ARN: props.secrets.vendorKeysSecret.secretArn,
+        // Phase 7 makes this a RUNTIME flag as well as a synth-time one: it is
+        // what `paperclipRoutingEnabled()` reads to decide whether the
+        // `/api/missions*` ACL is registered in front of the legacy handlers.
+        // Coupling the two is deliberate — the ACL has nothing to talk to
+        // unless the same flag put the Paperclip substrate in the account —
+        // and an unset value leaves the legacy stack serving.
+        CCE_PAPERCLIP_ENABLED: process.env.CCE_PAPERCLIP_ENABLED ?? '',
       },
       secrets: {
         SLACK_BOT_TOKEN: EcsSecret.fromSecretsManager(slackSecret, 'bot_token'),

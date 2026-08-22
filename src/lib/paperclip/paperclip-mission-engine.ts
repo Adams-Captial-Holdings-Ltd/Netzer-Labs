@@ -110,7 +110,19 @@ export function createPaperclipMissionEngine(deps: PaperclipMissionEngineDeps): 
         },
         { actor: opts.actor, runId: opts.runId },
       );
-      const issues = await page.paginateAll(opts.maxPages);
+      // `maxPages: 1` IS THE ONE-PAGE READ, and it is a real mode rather than a
+      // degenerate one. `paginateAll`'s loop is
+      // `for (let seen = 1; page.hasMore; seen += 1) { if (seen >= maxPages) throw }`,
+      // so passing 1 to it can only ever THROW on a non-empty board — it can
+      // never return the page it just fetched. That made 1 an unusable value and
+      // is why no caller passed it, so reading it here as "this page, then stop"
+      // takes nothing away from anybody and adds the primitive the ACL's
+      // single-Query legacy needs: ONE read, bounded by `limit`, no walk.
+      //
+      // Every other value keeps `paginateAll`'s all-or-throw contract exactly:
+      // a caller that wants the WHOLE board must still get the whole board or an
+      // error, never a short array that looks complete (A1-8).
+      const issues = opts.maxPages === 1 ? [...page.nodes] : await page.paginateAll(opts.maxPages);
       return issues
         .map((issue) => projectOrSkip(issue, agents))
         .filter((mission): mission is ProjectedMission => mission !== undefined);

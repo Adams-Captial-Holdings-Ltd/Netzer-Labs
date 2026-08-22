@@ -111,6 +111,35 @@ describe('createPaperclipMissionEngine', () => {
     expect(missions[0]?.identifier).toBe('NZR-1');
   });
 
+  /**
+   * `maxPages: 1` IS A ONE-PAGE READ, not a one-page walk.
+   *
+   * `paginateAll(1)` can only THROW on a non-empty board — its loop tests the
+   * bound before it can ever return the page in hand — so 1 was an unusable
+   * value and reading it as "this page, then stop" costs no caller anything. It
+   * is the primitive the ACL needs to reproduce legacy's single `Limit: n`
+   * Query, and the point is what does NOT happen: no second read, and no
+   * `PaperclipPaginationTruncatedError` on a board that has more rows.
+   */
+  it('maxPages: 1 reads ONE page and stops — no terminator read, no truncation throw', async () => {
+    const full = Array.from({ length: 3 }, (_, i) =>
+      issue({ id: `f000000${i}-0000-4000-8000-00000000000${i}`, identifier: `NZR-${i}` }),
+    );
+    // Every issue-list call answers a FULL page, so `hasMore` is permanently
+    // true and any walk at all would either read again or throw.
+    const routes = routed({ [AGENTS_ROUTE]: () => AGENTS, [ISSUES_ROUTE]: () => full });
+    const missions = await engineOver(routes).listMissions({ limit: 3, maxPages: 1 });
+    expect(missions).toHaveLength(3);
+    expect(routes.calls.filter((c) => c.path.endsWith('/issues'))).toHaveLength(1);
+  });
+
+  it('every other maxPages keeps paginateAll`s all-or-throw contract', async () => {
+    const routes = routed({ [AGENTS_ROUTE]: () => AGENTS, [ISSUES_ROUTE]: () => [issue()] });
+    await expect(engineOver(routes).listMissions({ maxPages: 2 })).rejects.toThrow(
+      /pagination stopped after 2 pages/,
+    );
+  });
+
   it('the projection is IMPORTED, not re-derived: every mapped value equals mission-projection`s own output', async () => {
     const routes = routed({ [AGENTS_ROUTE]: () => AGENTS, [ISSUES_ROUTE]: (n) => (n === 0 ? [issue({ status: 'in_review', priority: 'critical' })] : []) });
     const [projected] = await engineOver(routes).listMissions();

@@ -79,7 +79,9 @@ reference example and is bar criterion **A3**.
 - [x] Phase 6 — inbound dispatch route and worker. Critic SHIP at round 2, blind
       6/6. Then **three further verification rounds**, each of which found a real
       defect by EXECUTION that a reading-based review had passed — see M41-M43.
-- [ ] Phase 7 — ACL cutover
+- [x] Phase 7 — ACL cutover. Every acceptance item passed with envelope equality
+      proven by EXECUTION (16/17 bodies byte-identical, the 17th a probe-stub
+      artefact). Blind 8/9. Rejected once for the flag-on gap — see M44.
 - [ ] Phase 8 — cross-surface Missions parity
 - [ ] Phase 8.5 — org hierarchy and goals
 - [ ] Phase 9 — install by default
@@ -345,6 +347,10 @@ are the facts that run produced, and several of them correct a document.
 | A46 | **Dispatch rollback is a BOARD-UI operation, not a scripted one.** There is no agent-UPDATE call anywhere in this repo — `bootstrap-core.ts` has `listAgents` and `createAgent` and nothing else — and none of the 21 probes exercises one, so the method and path that would rewrite an existing `adapter_config` are established by nothing green. | The acceptance item ("rollback is blanking that URL — a data edit, no deploy") still holds, but the edit is made in the Paperclip board by hand. Marked UNVERIFIED rather than guessed from the plan document, which A1-16 forbids and which is already wrong about this route's auth. |
 | P29 | **Prove it by execution, not by reading.** Three consecutive verification rounds on Phase 6 each found a real defect with a throwaway probe, after a reading-based review had passed the same code. One of those verifiers caught its OWN false positive — a malformed mock threw before the code under test, so the right thing happened for the wrong reason — and re-ran. | Make "write a throwaway probe, then delete it and confirm `git status` is clean" an explicit instruction for any verifier of a failure-classification path. Reading finds the throws; only execution finds the returns. |
 | P30 | **Follow-up owed, not done:** `src/lib/scheduler/queue-drain.ts:126` has the identical loss-channel shape and is PRE-EXISTING and outside Phase 6 — a scheduled task firing during a maintenance freeze is permanently consumed, because the refusal returns normally and the SQS message is then deleted. | Now trivially fixable using the `refusal` marker Phase 6 added to `AgentTurnResponse`. Recorded here rather than fixed so it is not lost; `src/agent/canary.ts:75` scoring a freeze as a canary failure is a cosmetic sibling. |
+| M44 | **Six phases were validated with the feature flag OFF.** The whole integration is gated behind `CCE_PAPERCLIP_ENABLED`, so every "full validation, clean" exercised the LEGACY path. Phase 7's critic proved it: with the flag armed, `mission-tools.authz.test.ts` went 5/5 → 3/5, and CI runs flag-off so it would have stayed green forever while the new code's behaviour was asserted nowhere. | Bounded by luck, not diligence — a flag-on sweep found exactly the one file the critic named and nothing from Phases 2-6. **Validate a flag-gated feature in BOTH configurations, every time.** `npm test` AND `CCE_PAPERCLIP_ENABLED=1 npm test` are now both part of the pre-push list for this feature. RESOLVED — both now report 213 files passing with the identical 5-file environmental baseline. |
+| A47 | `resolveOwned` swept the whole owner board TWICE per mutation via `paginateAll` (up to 100 pages) where legacy did one bounded `Limit=100`. This is not merely slow: **A1-10's refusal counts DISTINCT list reads in flight per actor**, so a mutation-heavy dashboard fan-out is exactly the shape that trips it. | Bounded in the same change. When porting a bounded query onto a paginating client, the bound is part of the contract, not an implementation detail. |
+| A48 | **C-16's 8-char-prefix ambiguity was real, not theoretical.** `startsWith` silently picked the first match, so two missions sharing a prefix meant a mutation hit the WRONG mission. | Closed with a deterministic ambiguity error. That is a fix rather than a contract break: the ambiguous case could not previously succeed correctly, and the unambiguous cases stay byte-identical. |
+| A49 | `infra/lib/compute-stack.ts` had to plumb `CCE_PAPERCLIP_ENABLED` into the Fargate task environment. Without it the flag is synth-time only and the ACL never arms in a deployed task. | The fifth home of the flag (**M22**). It defaults to unset, so the legacy stack serves — the safe direction. |
 | P27 | A builder/critic loop must be capped, and the cap must be **reported as a cap**. Phase 2's first workflow exited `passed: false` at `rounds < 3` — not because it converged, but because it ran out of rounds with two criteria still failing. | Read the exit condition before concluding a phase failed on quality. A capped loop that is *close* deserves a focused follow-up round on the named failures, not a rebuild — the follow-up cleared both in two rounds while touching nothing that already passed. |
 
 ### 5.15 Appended this session (2026-08-21, Phase 4 rework round 2)
@@ -394,6 +400,10 @@ actually ran.
 |---|---|
 | `npm test` (baseline, before any edit) | **Ran.** 194 files, 2214 tests; **5 files fail, 1 test fails**: `scripts/ci/docs-links`, `scripts/ci/feature-knowledge`, `scripts/ci/runnable-blocks`, `scripts/release/sync-deprecations` (all `SyntaxError`) and `scripts/lib/lifecycle/rollback-classes` (path separator). **Identical file names to the previous session's baseline** — the documented Windows environmental set (**A9**, **A29**). |
 | `npm run typecheck` | **Ran. Clean**, exit 0. |
+| Phase 7, `npm test` **flag OFF** | **Ran.** 219 files / 2607 tests; **213 passed**, the 5 environmental failures only. |
+| Phase 7, `CCE_PAPERCLIP_ENABLED=1 npm test` **flag ON** | **Ran.** **Identical**: 213 passed, same 5 failures. This configuration had never been run before Phase 7 (**M44**). |
+| Phase 7, forbidden paths | **Ran.** `git diff --stat` empty on `authz-matrix.test.ts`, `route-manifest.ts`, `permissions.ts` and `web/`. |
+| Phase 7, `local:test:integration` | **Ran.** 8 passed, 1 failed — the documented emulator gap. |
 | Phase 6 full suite, after the three verification rounds | **Ran.** 213 files / 2502 tests; **5 files / 1 test fail, names identical to the baseline**. Passing rose to **207 files / 2495 tests**. |
 | `npm run local:test:integration` (Phase 6) | **Ran.** 8 passed, 1 failed — the documented `destroy.integration > checkSecrets … schedule-deleted` emulator gap. |
 | `npm test` (Phase 2 complete) | **Ran.** Exit 1. 202 files / 2322 tests: **5 files / 1 test fail, file names identical to the baseline** — no regression. Passing rose 188 → **196 files** and 2207 → **2315 tests**, so all 108 new tests are green. |
@@ -413,6 +423,10 @@ Phase 4, rework round 2:
 |---|---|
 | `npx vitest run infra/ --reporter=basic` | **Ran.** `Test Files 10 passed (10)`, `Tests 151 passed (151)`. Up from 146 — the five new assertions are the manifest-replay guard and the four deploy-role grant tests. |
 | `npm run typecheck` | **Ran. Clean**, exit 0. |
+| Phase 7, `npm test` **flag OFF** | **Ran.** 219 files / 2607 tests; **213 passed**, the 5 environmental failures only. |
+| Phase 7, `CCE_PAPERCLIP_ENABLED=1 npm test` **flag ON** | **Ran.** **Identical**: 213 passed, same 5 failures. This configuration had never been run before Phase 7 (**M44**). |
+| Phase 7, forbidden paths | **Ran.** `git diff --stat` empty on `authz-matrix.test.ts`, `route-manifest.ts`, `permissions.ts` and `web/`. |
+| Phase 7, `local:test:integration` | **Ran.** 8 passed, 1 failed — the documented emulator gap. |
 | Phase 6 full suite, after the three verification rounds | **Ran.** 213 files / 2502 tests; **5 files / 1 test fail, names identical to the baseline**. Passing rose to **207 files / 2495 tests**. |
 | `npm run local:test:integration` (Phase 6) | **Ran.** 8 passed, 1 failed — the documented `destroy.integration > checkSecrets … schedule-deleted` emulator gap. |
 | `npx cdk ls` (flag unset) | **Ran.** 15 stacks, **byte-identical to the pre-change set** — Phase 3's "`cdk ls` unchanged when unarmed" acceptance still holds. |

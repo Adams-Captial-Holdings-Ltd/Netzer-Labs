@@ -15,7 +15,7 @@
  * intentionally JSON-only so curl / Postman work today.
  */
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   QueryCommand,
@@ -126,6 +126,8 @@ import {
   type MissionStatus,
 } from '../../lib/state/mission-tasks-repo.js';
 import { autoAssign } from '../../lib/tools/mission-tools.js';
+import { registerMissionRoutes } from './missions.js';
+import { paperclipRoutingEnabled } from '../../lib/missions/mission-acl.js';
 import { addonConfigured, listAddons } from '../../lib/addons/registry.js';
 import { exportChatData, purgeChatData } from '../../lib/tools/privacy-tools.js';
 import {
@@ -775,6 +777,160 @@ export function costCapResponse(err: CostCapExceededError): {
   return Number.isNaN(err.spendUsd)
     ? { body: { error: 'cost_cap_unverifiable', capUsd: err.capUsd }, status: 503 }
     : { body: { error: 'cost_cap_exceeded', spendUsd: err.spendUsd, capUsd: err.capUsd }, status: 503 };
+}
+
+// ── The legacy mission stack (C-8: EXTRACT, DO NOT DELETE) ────────────────
+//
+// These four are the `/api/missions*` bodies verbatim, lifted out of
+// `buildDashboardRouter` so the Paperclip ACL can be registered in front of
+// them behind a flag whose PRIMARY ROLLBACK IS A FLAG FLIP rather than a
+// revert. Nothing else changed: same repo calls, same envelopes, same status
+// codes, same error slugs.
+//
+// THEY ARE NEVER CALLED FROM AN ACL HANDLER. The flag picks one whole stack at
+// registration; a per-request fallback from Paperclip to DynamoDB is forbidden
+// (it would answer a switched-off integration with stale board state and hide
+// the outage). Their deletion is the last step of Phase 9, gated on two clean
+// weeks — not this phase.
+
+type MissionCtx = Context<DashboardEnv>;
+
+async function legacyListMissions(c: MissionCtx): Promise<Response> {
+  if (!(await hasCapability(c, 'missions:read'))) {
+    return c.json({ error: 'forbidden', requiredCapability: 'missions:read' }, 403);
+  }
+  const owner = c.req.query('owner') ?? 'main';
+  const rows = await listMissionsForAgent(owner, 100);
+  return c.json({ owner, count: rows.length, missions: rows });
+}
+
+// Create a mission. Body: { prompt, agentId?, title? }. When agentId is
+// omitted we reuse the same Haiku auto-assign the create_mission tool uses,
+// falling back to 'main' if no agents can be picked. Returns the created
+// mission (with assignmentReason + dueAt when present). The Missions UI and
+// the mission CLI both call this route.
+async function legacyCreateMission(c: MissionCtx): Promise<Response> {
+  // Mission mutation: require agents:write (operator-tier), the documented
+  // capability, not just legacy operator rank. Mirrors the Scheduled cancel
+  // gate so a capability-drifted token (operator rank, agents:write stripped)
+  // is denied.
+  if (!(await hasCapability(c, 'agents:write'))) {
+    return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
+  }
+  const body = await c.req
+    .json<{ prompt?: string; agentId?: string; title?: string }>()
+    .catch(() => null);
+  const prompt = body?.prompt?.trim();
+  if (!prompt) {
+    return c.json({ error: 'missing_prompt' }, 400);
+  }
+  // Title defaults to the first line of the prompt, capped so the headline
+  // stays short.
+  const title =
+    body?.title?.trim() ||
+    prompt.split('\n')[0].trim().slice(0, 80) ||
+    'Untitled mission';
+
+  let owner: string;
+  let assignmentReason: string;
+  const explicit = body?.agentId?.trim();
+  if (explicit) {
+    const known = listKnownAgents();
+    if (!known.includes(explicit)) {
+      return c.json(
+        { error: 'unknown_agent', agentId: explicit, valid: known },
+        400,
+      );
+    }
+    owner = explicit;
+    assignmentReason = 'explicit assignment';
+  } else {
+    try {
+      const assign = await autoAssign(title, prompt);
+      owner = assign.owner;
+      assignmentReason = assign.reason;
+    } catch (err) {
+      logger.warn(
+        { errMessage: err instanceof Error ? err.message : String(err) },
+        'mission auto-assign failed; defaulting to main',
+      );
+      owner = 'main';
+      assignmentReason = 'auto-assign failed; defaulted to main';
+    }
+  }
+
+  const mission = await createMission({
+    ownerAgent: owner,
+    createdByAgent: 'dashboard',
+    createdByChat: dashboardIdentity(c),
+    title,
+    body: prompt,
+    assignmentReason,
+  });
+  return c.json({ mission }, 201);
+}
+
+async function legacyUpdateMissionStatus(
+  c: Context<DashboardEnv, '/missions/:owner/:id/status'>,
+): Promise<Response> {
+  if (!(await hasCapability(c, 'agents:write'))) {
+    return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
+  }
+  const owner = c.req.param('owner');
+  const id = c.req.param('id');
+  const body = await c.req
+    .json<{ status: MissionStatus }>()
+    .catch(() => null);
+  if (!body || !body.status) {
+    return c.json({ error: 'missing_status' }, 400);
+  }
+  // Reject anything that is not a real MissionStatus before it reaches the
+  // repo. An arbitrary string was previously persisted into the status field
+  // and the GSI1PK partition key, corrupting the board (the row dropped out
+  // of every known status lane). 400 keeps garbage out of the index.
+  if (!MISSION_STATUSES.includes(body.status)) {
+    return c.json(
+      { error: 'invalid_status', status: body.status, valid: MISSION_STATUSES },
+      400,
+    );
+  }
+  const ok = await updateMissionStatus(owner, id, body.status);
+  if (!ok) {
+    return c.json({ error: 'not_found', owner, id }, 404);
+  }
+  return c.json({ ok: true, owner, id, status: body.status });
+}
+
+// Reassign a mission to a different owner agent. Owner is part of the
+// mission PK, so the repo moves the row across partitions. Body:
+// { ownerAgent }. The Missions detail modal's Reassign action calls this.
+async function legacyReassignMission(
+  c: Context<DashboardEnv, '/missions/:owner/:id/reassign'>,
+): Promise<Response> {
+  if (!(await hasCapability(c, 'agents:write'))) {
+    return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
+  }
+  const owner = c.req.param('owner');
+  const id = c.req.param('id');
+  const body = await c.req
+    .json<{ ownerAgent?: string }>()
+    .catch(() => null);
+  const newOwner = body?.ownerAgent?.trim();
+  if (!newOwner) {
+    return c.json({ error: 'missing_ownerAgent' }, 400);
+  }
+  const known = listKnownAgents();
+  if (!known.includes(newOwner)) {
+    return c.json(
+      { error: 'unknown_agent', agentId: newOwner, valid: known },
+      400,
+    );
+  }
+  const mission = await reassignMission(owner, id, newOwner);
+  if (!mission) {
+    return c.json({ error: 'not_found', owner, id }, 404);
+  }
+  return c.json({ ok: true, mission });
 }
 
 export function buildDashboardRouter(): Hono<DashboardEnv> {
@@ -3101,139 +3257,27 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     return c.json(report);
   });
 
-  router.get('/missions', async (c) => {
-    if (!(await hasCapability(c, 'missions:read'))) {
-      return c.json({ error: 'forbidden', requiredCapability: 'missions:read' }, 403);
-    }
-    const owner = c.req.query('owner') ?? 'main';
-    const rows = await listMissionsForAgent(owner, 100);
-    return c.json({ owner, count: rows.length, missions: rows });
-  });
-
-  // Create a mission. Body: { prompt, agentId?, title? }. When agentId is
-  // omitted we reuse the same Haiku auto-assign the create_mission tool uses,
-  // falling back to 'main' if no agents can be picked. Returns the created
-  // mission (with assignmentReason + dueAt when present). The Missions UI and
-  // the mission CLI both call this route.
-  router.post('/missions', async (c) => {
-    // Mission mutation: require agents:write (operator-tier), the documented
-    // capability, not just legacy operator rank. Mirrors the Scheduled cancel
-    // gate so a capability-drifted token (operator rank, agents:write stripped)
-    // is denied.
-    if (!(await hasCapability(c, 'agents:write'))) {
-      return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
-    }
-    const body = await c.req
-      .json<{ prompt?: string; agentId?: string; title?: string }>()
-      .catch(() => null);
-    const prompt = body?.prompt?.trim();
-    if (!prompt) {
-      return c.json({ error: 'missing_prompt' }, 400);
-    }
-    // Title defaults to the first line of the prompt, capped so the headline
-    // stays short.
-    const title =
-      body?.title?.trim() ||
-      prompt.split('\n')[0].trim().slice(0, 80) ||
-      'Untitled mission';
-
-    let owner: string;
-    let assignmentReason: string;
-    const explicit = body?.agentId?.trim();
-    if (explicit) {
-      const known = listKnownAgents();
-      if (!known.includes(explicit)) {
-        return c.json(
-          { error: 'unknown_agent', agentId: explicit, valid: known },
-          400,
-        );
-      }
-      owner = explicit;
-      assignmentReason = 'explicit assignment';
-    } else {
-      try {
-        const assign = await autoAssign(title, prompt);
-        owner = assign.owner;
-        assignmentReason = assign.reason;
-      } catch (err) {
-        logger.warn(
-          { errMessage: err instanceof Error ? err.message : String(err) },
-          'mission auto-assign failed; defaulting to main',
-        );
-        owner = 'main';
-        assignmentReason = 'auto-assign failed; defaulted to main';
-      }
-    }
-
-    const mission = await createMission({
-      ownerAgent: owner,
-      createdByAgent: 'dashboard',
-      createdByChat: dashboardIdentity(c),
-      title,
-      body: prompt,
-      assignmentReason,
-    });
-    return c.json({ mission }, 201);
-  });
-
-  router.post('/missions/:owner/:id/status', async (c) => {
-    if (!(await hasCapability(c, 'agents:write'))) {
-      return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
-    }
-    const owner = c.req.param('owner');
-    const id = c.req.param('id');
-    const body = await c.req
-      .json<{ status: MissionStatus }>()
-      .catch(() => null);
-    if (!body || !body.status) {
-      return c.json({ error: 'missing_status' }, 400);
-    }
-    // Reject anything that is not a real MissionStatus before it reaches the
-    // repo. An arbitrary string was previously persisted into the status field
-    // and the GSI1PK partition key, corrupting the board (the row dropped out
-    // of every known status lane). 400 keeps garbage out of the index.
-    if (!MISSION_STATUSES.includes(body.status)) {
-      return c.json(
-        { error: 'invalid_status', status: body.status, valid: MISSION_STATUSES },
-        400,
-      );
-    }
-    const ok = await updateMissionStatus(owner, id, body.status);
-    if (!ok) {
-      return c.json({ error: 'not_found', owner, id }, 404);
-    }
-    return c.json({ ok: true, owner, id, status: body.status });
-  });
-
-  // Reassign a mission to a different owner agent. Owner is part of the
-  // mission PK, so the repo moves the row across partitions. Body:
-  // { ownerAgent }. The Missions detail modal's Reassign action calls this.
-  router.post('/missions/:owner/:id/reassign', async (c) => {
-    if (!(await hasCapability(c, 'agents:write'))) {
-      return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
-    }
-    const owner = c.req.param('owner');
-    const id = c.req.param('id');
-    const body = await c.req
-      .json<{ ownerAgent?: string }>()
-      .catch(() => null);
-    const newOwner = body?.ownerAgent?.trim();
-    if (!newOwner) {
-      return c.json({ error: 'missing_ownerAgent' }, 400);
-    }
-    const known = listKnownAgents();
-    if (!known.includes(newOwner)) {
-      return c.json(
-        { error: 'unknown_agent', agentId: newOwner, valid: known },
-        400,
-      );
-    }
-    const mission = await reassignMission(owner, id, newOwner);
-    if (!mission) {
-      return c.json({ error: 'not_found', owner, id }, 404);
-    }
-    return c.json({ ok: true, mission });
-  });
+  // ── /api/missions* — ONE ROUTER, TWO STACKS, ONE FLAG (C-8) ────────────
+  //
+  // The Paperclip ACL is registered IN FRONT of the legacy handlers, on THIS
+  // router object, so both are behind the router-wide middleware above — which
+  // is where `403 {error:'forbidden', requiredRole:'operator', yourRole:'viewer'}`
+  // comes from and why `authz-matrix.test.ts` passes unchanged through either
+  // stack. Registering a sub-router elsewhere, or relaxing `requiredRole()` for
+  // `/missions`, would each change that body. Neither is done.
+  //
+  // Hono's first matching handler that returns a Response ends the chain, so
+  // when the ACL is registered the legacy four are unreachable, and when it is
+  // not they serve. That is the off-switch: `CCE_PAPERCLIP_ENABLED` unset means
+  // the ACL was never mounted, not that a request fell back to legacy after
+  // trying Paperclip. There is no mid-request fallback anywhere below.
+  if (paperclipRoutingEnabled()) {
+    registerMissionRoutes(router, { hasCapability, identity: dashboardIdentity });
+  }
+  router.get('/missions', legacyListMissions);
+  router.post('/missions', legacyCreateMission);
+  router.post('/missions/:owner/:id/status', legacyUpdateMissionStatus);
+  router.post('/missions/:owner/:id/reassign', legacyReassignMission);
 
   router.get('/hive', async (c) => {
     if (!(await hasCapability(c, 'hive:read'))) {

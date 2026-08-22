@@ -15,13 +15,23 @@
 
 import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
 import { tools } from './registry.js';
+import { type MissionStatus } from '../state/mission-tasks-repo.js';
+// The SAME ACL the dashboard route, Jarvis and the GDPR export use. Only the
+// three call sites below change; every tool NAME, DESCRIPTION and inputSchema
+// in this file is byte-identical to before, because `create_mission`'s toolSpec
+// is part of the model-facing contract.
+//
+// ONE BEHAVIOUR CHANGE THE SPEC CANNOT EXPRESS: `priority` still accepts
+// `integer, minimum 0, maximum 100`, but on the Paperclip path it round-trips
+// through `PriorityBand` and quantizes to {95, 80, 50, 20}. A caller asking for
+// 73 gets 80 back. That is the documented lossiness, and papering over it with
+// a compensating store is exactly what the engine's contract forbids.
 import {
-  createMission,
-  listMissionsByStatus,
-  listMissionsForAgent,
-  updateMissionStatus,
-  type MissionStatus,
-} from '../state/mission-tasks-repo.js';
+  createBoardMission,
+  listBoardMissions,
+  listBoardMissionsByStatus,
+  setBoardMissionStatus,
+} from '../missions/mission-acl.js';
 import { sendInterAgent } from '../state/inter-agent-tasks-repo.js';
 import { listKnownAgents, loadAgent } from '../config/agent-loader.js';
 import { converseTurn } from '../bedrock/client.js';
@@ -167,9 +177,12 @@ tools.register('create_mission', {
       }
     }
 
-    const mission = await createMission({
+    const mission = await createBoardMission({
       ownerAgent: owner,
       createdByAgent: ctx.agentId,
+      // The provenance value. `mission.id` below is the Paperclip issue uuid,
+      // which is still a stable, 8-char-sliceable id — both the return text and
+      // the inbox note depend on that and neither changes.
       createdByChat: ctx.chatId,
       title,
       body,
@@ -242,8 +255,8 @@ tools.register('list_missions', {
 
     const rows =
       status === 'all'
-        ? await listMissionsForAgent(owner, limit)
-        : await listMissionsByStatus(owner, status as MissionStatus, limit);
+        ? await listBoardMissions(owner, limit)
+        : await listBoardMissionsByStatus(owner, status as MissionStatus, limit);
     if (rows.length === 0) {
       return { text: `No ${status} missions for ${owner}.` };
     }
@@ -292,7 +305,11 @@ tools.register('update_mission', {
       };
     }
     const status = String(args.status ?? '') as MissionStatus;
-    const ok = await updateMissionStatus(owner, id, status);
+    // `id` may be an 8-char prefix — the schema above says so and
+    // `list_missions` prints one. The ACL resolves prefixes owner-scoped, the
+    // same scan-and-`startsWith` the repo did; the engine itself resolves
+    // neither prefixes nor `NZR-42` identifiers (C-16).
+    const ok = await setBoardMissionStatus(owner, id, status);
     return ok
       ? { text: `Mission ${id} updated to ${status}.` }
       : { text: `No mission matches ${id} for ${owner}.`, isError: true };

@@ -79,7 +79,8 @@ import {
   KILL_SWITCH_META,
 } from '../../lib/state/kill-switches-repo.js';
 import { listDocuments } from '../../lib/vectors/store.js';
-import { listMissionsForAgent } from '../../lib/state/mission-tasks-repo.js';
+import { listBoardMissions } from '../../lib/missions/mission-acl.js';
+import { neutralizeForPrompt } from '../../lib/paperclip/mission-projection.js';
 import { listMemoriesForChat } from '../../lib/state/memories-repo.js';
 import { listScheduledTasksForAgent } from '../../lib/state/scheduled-tasks-repo.js';
 import { recentHive } from '../../lib/state/hive-mind-repo.js';
@@ -1255,8 +1256,28 @@ async function runQuery(resource: JarvisResource, params: QueryParams): Promise<
 
     case 'missions': {
       const owner = params.owner ?? 'main';
-      const missions = await listMissionsForAgent(owner, 100);
-      return { owner, count: missions.length, missions };
+      // The SAME ACL the `/api/missions` route uses, producing the SAME
+      // `{owner, count, missions}` envelope. Repointing only the HTTP route
+      // would leave the Missions tab and the voice co-pilot reporting
+      // different boards.
+      const missions = await listBoardMissions(owner, 100);
+      // C-13 / A30: THIS is a prompt boundary, not a JSON boundary. Everything
+      // `runQuery` returns is redacted and then INTERPOLATED into a Jarvis
+      // system prompt, and mission `title`/`body` are now Paperclip-owned text
+      // an outside author controls. `neutralizeForPrompt` escapes the angle
+      // brackets that would otherwise let a mission body close
+      // `</hive_context>` and open a `<system>` block. The guillemet variant in
+      // `agent-loop.ts` is the deliberately-different sibling scheme; do not
+      // introduce a third.
+      return {
+        owner,
+        count: missions.length,
+        missions: missions.map((m) => ({
+          ...m,
+          title: neutralizeForPrompt(m.title),
+          body: neutralizeForPrompt(m.body),
+        })),
+      };
     }
 
     case 'memories': {
