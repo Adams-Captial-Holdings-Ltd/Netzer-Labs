@@ -131,7 +131,12 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
 }
 
-function parseEnabledAgents(raw: string | undefined): string[] {
+/**
+ * Exported since Phase 6: the dispatch route is the second reader of
+ * `paperclip/enabled_agents` and must not fork a second parser for it. Fails
+ * towards acting for NOBODY on anything unparseable or non-array.
+ */
+export function parseEnabledAgents(raw: string | undefined): string[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -485,9 +490,14 @@ export async function runPaperclipReconcilePassOnce(
       // client-side. The row the overlap exists to recover sits at exactly the
       // previous watermark's millisecond, so any comparison against it discards
       // precisely the row that was never processed. Re-seeing a row across
-      // sweeps is the cost of not losing one; at-most-once belongs to the
-      // dispatcher's deterministic `idempotencyKey` (A1-13) in Phase 6, and this
-      // phase writes nothing, so re-seeing costs nothing today.
+      // sweeps is the cost of not losing one; suppressing the duplicate belongs
+      // to the dispatcher, which HAS now shipped (Phase 6) — but not in the
+      // shape this line used to promise. It dedupes on a durable one-shot claim
+      // over `(runId, issueId)`, not on a deterministic `idempotencyKey`
+      // (A1-13), and its guarantee is AT-LEAST-once, not at-most-once: the
+      // worker releases that claim on a transient failure so a redelivery
+      // retries, while a concurrent duplicate is still refused. This phase
+      // itself still writes nothing, so re-seeing costs nothing today.
       const key = `${issue.id}@${issue.updatedAt}`;
       if (!seen.has(key)) {
         seen.set(key, { key, id: issue.id, updatedAt: issue.updatedAt, issue });
@@ -589,12 +599,14 @@ export async function runPaperclipReconcilePassOnce(
   // 15-second loop that never acts would write ~5,760 `writeAudit` rows a day to
   // DDB and S3 describing nothing that happened, and the trail an observing-only
   // phase needs is exactly what a structured log already carries. The audit row
-  // lands with the first action, in Phase 6.
+  // lands with the first RECONCILER action — which Phase 6 did not ship: Phase 6
+  // shipped the inbound dispatch route, and this loop still decides no action on
+  // any row.
   logger.info(result, 'paperclip reconciler sweep');
   if (mode === 'live') {
     logger.warn(
       { candidates: result.candidates },
-      'paperclip reconciler_mode=live, but dispatch lands in Phase 6 — this sweep still wrote nothing',
+      'paperclip reconciler_mode=live, but this sweep still wrote nothing: the reconciler decides no action on any row, and Phase 6 shipped only the inbound dispatch route',
     );
   }
   return result;

@@ -374,31 +374,64 @@ export function assertResponsibleUserAuthzUnset(env: Record<string, string | und
  * agents, so re-running with a rotated secret does not rewrite an existing
  * agent's adapter_config. Rotating means updating the agent in the Paperclip
  * board (or deleting it so the bootstrap recreates it) in the same change as
- * the secret. Phase 6 owns the dispatch route and is where a rotation path
- * belongs.
+ * the secret.
+ *
+ * PHASE 6 DID NOT CLOSE IT, AND SAYS SO RATHER THAN PAPERING OVER IT.
+ * UNVERIFIED: there is no agent-UPDATE call anywhere in this repo — this module
+ * has `listAgents` and `createAgent` and nothing else — and no probe in the
+ * 21-probe set exercises one, so the method and path that would rewrite an
+ * existing `adapter_config` are established by NOTHING green here. A1-16
+ * forbids settling it from the plan document, which is already wrong about this
+ * route's auth. So rotation AND rollback are, today, a BOARD-UI OPERATION:
+ * blank the agent's `adapter_config.url` in the Paperclip board and dispatch
+ * for that agent stops, with no redeploy and no image. The complementary
+ * app-side switch, which this repo CAN prove, is the `paperclip/enabled_agents`
+ * runtime-config row: removing a slug from it makes the dispatch route answer
+ * 202 `{ignored:'agent_not_enabled'}` within one 30 s config-cache TTL.
+ * Writing `PATCH /api/agents/{id}` into code on the strength of the plan alone
+ * is exactly the move that must not happen; it needs a probe first.
  */
 export function agentSpecs(opts: {
   slugs: string[];
   dispatchUrl: string;
   dispatchSecret: string;
+  /**
+   * PHASE 6: which slugs actually get a `url`. Defaults to `['main']` — ONE
+   * agent, so the first install dispatches for exactly one actor rather than
+   * arming the whole chart at once.
+   *
+   * THE URL IS THE ARMING SWITCH, and that is what makes rollback a DATA EDIT
+   * rather than a deploy: an agent whose `adapter_config` carries no `url` has
+   * nothing for Paperclip to POST to. The app-side arming switch is the
+   * separate `paperclip/enabled_agents` runtime-config row the dispatch route
+   * reads; the two are independent on purpose, so an operator can close either
+   * end without touching the other and without shipping an image.
+   */
+  dispatchSlugs?: readonly string[];
 }): AgentSpec[] {
   if (!opts.slugs.includes('main')) {
     throw new Error(
       "PAPERCLIP_AGENTS must include 'main' — it is the ceo and the reconciler's actor",
     );
   }
+  const dispatchSlugs = opts.dispatchSlugs ?? ['main'];
   return opts.slugs.map((slug) => ({
     slug,
     name: `Netzar ${slug.charAt(0).toUpperCase()}${slug.slice(1)}`,
     role: slug === 'main' ? 'ceo' : 'general',
     reportsToSlug: slug === 'main' ? null : 'main',
-    adapterConfig: {
-      url: opts.dispatchUrl,
-      method: 'POST',
-      headers: { authorization: `Bearer ${opts.dispatchSecret}` },
-      payloadTemplate: { netzarAgentId: slug },
-      timeoutMs: 10_000,
-    },
+    adapterConfig: dispatchSlugs.includes(slug)
+      ? {
+          url: opts.dispatchUrl,
+          method: 'POST',
+          headers: { authorization: `Bearer ${opts.dispatchSecret}` },
+          payloadTemplate: { netzarAgentId: slug },
+          timeoutMs: 10_000,
+        }
+      : // No `url` and NO SECRET. An un-armed agent's adapter row is not a
+        // second copy of the dispatch secret sitting in plaintext jsonb for no
+        // reason (C-17 records the copy that has a purpose; this one would not).
+        { method: 'POST', payloadTemplate: { netzarAgentId: slug }, timeoutMs: 10_000 },
   }));
 }
 

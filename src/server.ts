@@ -40,6 +40,7 @@ import { buildOAuthRouter } from './adapters/dashboard/oauth.js';
 import { buildComplianceRouter } from './adapters/dashboard/compliance.js';
 import { buildBrandingRouter } from './adapters/dashboard/branding.js';
 import { buildJarvisRouter } from './adapters/dashboard/jarvis.js';
+import { buildPaperclipDispatchRouter } from './adapters/dashboard/paperclip-dispatch.js';
 // Side-effect imports: register tools into the global ToolRegistry.
 // Imported here (not inside registry.ts) to avoid the circular-init
 // issue where `tools` was undefined under ESM hoisting.
@@ -118,6 +119,13 @@ export function buildApp(env: Env): Hono {
   // dashboard router. Member routes (GET/POST/PATCH /api/members*, /api/profiles*)
   // live on the dashboard router below and are reachable through that mount.
   app.route('/api/auth', buildAuthRouter());
+  // Paperclip inbound dispatch (ADR 0010). PUBLIC to the dashboard token model:
+  // C-17 settled that it authenticates on the shared PAPERCLIP_DISPATCH_SECRET,
+  // not a claudeclaw-dashboard-tokens row, so it MUST be mounted before the /api
+  // catch-all below — that router's `router.use('*')` bearer middleware would
+  // 401 every dispatch and write an auth_failure audit row for each one.
+  // Registration order is behavior here, not style; do not tidy it.
+  app.route('/api/paperclip', buildPaperclipDispatchRouter());
   app.route('/api', buildDashboardRouter());
   app.route('/dashboard', buildDashboardSpaRouter());
   // D5: public status page. Mounted before /health so the route order

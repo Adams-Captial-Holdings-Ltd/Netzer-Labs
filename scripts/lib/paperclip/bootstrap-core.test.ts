@@ -331,3 +331,35 @@ describe('PAPERCLIP_RESPONSIBLE_USER_AUTHZ_MODE', () => {
     ).toThrow(/PAPERCLIP_RESPONSIBLE_USER_AUTHZ_MODE is set/);
   });
 });
+
+describe('Phase 6: exactly one agent is pointed at the dispatch route', () => {
+  it('gives a url to `main` only, so the first install dispatches for ONE actor', () => {
+    const withUrl = SPECS.filter((s) => typeof s.adapterConfig.url === 'string');
+    expect(withUrl).toHaveLength(1);
+    expect(withUrl[0].slug).toBe('main');
+    expect(withUrl[0].adapterConfig.url).toBe('https://netzar.example/api/paperclip/dispatch');
+  });
+
+  it('leaves an un-armed agent with no url AND no second plaintext copy of the secret', () => {
+    const research = SPECS.find((s) => s.slug === 'research')!;
+    expect(research.adapterConfig.url).toBeUndefined();
+    expect(research.adapterConfig.headers).toBeUndefined();
+    expect(JSON.stringify(research)).not.toContain('dispatch-secret-value');
+  });
+
+  it('arms a different set on request, and blanking the url is the rollback', () => {
+    // ROLLBACK IS A DATA EDIT, NOT A DEPLOY: an adapter row with no url has
+    // nothing for Paperclip to POST to. UNVERIFIED and stated as such — no
+    // agent-UPDATE call exists in this repo and no probe drives one, so
+    // blanking an ALREADY-CREATED agent's url is a board-UI operation today,
+    // not something this bootstrap performs. What is shown here is only that
+    // the spec builder can produce either state.
+    const armed = agentSpecs({
+      slugs: ['main', 'research'],
+      dispatchUrl: 'https://netzar.example/api/paperclip/dispatch',
+      dispatchSecret: 'dispatch-secret-value',
+      dispatchSlugs: [],
+    });
+    expect(armed.filter((s) => typeof s.adapterConfig.url === 'string')).toHaveLength(0);
+  });
+});

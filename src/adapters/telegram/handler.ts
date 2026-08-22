@@ -39,6 +39,7 @@ import { appendTurns, getSession } from '../../lib/state/sessions-repo.js';
 import { loadAgent } from '../../lib/config/agent-loader.js';
 import { resolveModel } from '../../lib/bedrock/models.js';
 import { publishTurn } from '../../lib/warroom/publisher.js';
+import { haltWarroomOnKillPhrase } from '../../lib/warroom/kill-phrase.js';
 import { getMeeting } from '../../lib/warroom/meetings-repo.js';
 import { orchestrateWarroomTurn } from '../../lib/warroom/orchestrator.js';
 import { resolveOwnerChatId } from '../../lib/identity/owner-alias.js';
@@ -173,6 +174,20 @@ async function handleMessage(
     const room = await getMeeting(wrCheck.activeWarroomId).catch(() => null);
     if (room?.status === 'active') {
       try {
+        // A person is typing into a live room, so the emergency kill phrase must
+        // work here exactly as it does outside one. It is checked on the RAW
+        // message, before publishTurn — the orchestrator only ever sees an
+        // assembled transcript. Shared with the dashboard entry point so the two
+        // cannot drift; see src/lib/warroom/kill-phrase.ts.
+        const halt = await haltWarroomOnKillPhrase({
+          meetingId: room.meetingId,
+          rawText,
+          surface: 'telegram',
+        });
+        if (halt) {
+          await sendMessage(botAgentId, replyChatId, halt, { replyToMessageId: replyTo });
+          return;
+        }
         const turn = await publishTurn(room.meetingId, userId ?? chatId, 'user', rawText);
         void sendChatAction(botAgentId, replyChatId, 'typing');
         // Fan the turn out to the room's agents and deliver each reply back to
@@ -317,6 +332,10 @@ async function handleMessage(
       onChunk,
       onToolEvent,
       surface: 'telegram',
+      // A person typed this in a chat window. `origin` is the ONLY thing that
+      // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
+      // and this is one of the five chat-surface call sites allowed to say so.
+      origin: 'human_chat',
       replyChatId,
       ...(userId ? { userId } : {}),
       ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),

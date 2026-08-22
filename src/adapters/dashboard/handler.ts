@@ -1762,6 +1762,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           history,
           modelOverride,
           surface: 'dashboard',
+          // A person typed this in a chat window. `origin` is the ONLY thing that
+          // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
+          // and this is one of the five chat-surface call sites allowed to say so.
+          origin: 'human_chat',
           userId: dashboardIdentity(c),
           // Per-seat spend attribution: the users-table id of the signed-in
           // principal (magic-link session). Token/break-glass principals have
@@ -2091,6 +2095,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         history,
         modelOverride,
         surface: 'dashboard',
+        // A person typed this in a chat window. `origin` is the ONLY thing that
+        // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
+        // and this is one of the five chat-surface call sites allowed to say so.
+        origin: 'human_chat',
         userId: dashboardIdentity(c),
         ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
       });

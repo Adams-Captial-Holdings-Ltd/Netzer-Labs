@@ -59,11 +59,26 @@
  * PHASE 5 CLOSED THREE OF THEM, at the bottom of this file: `ReconcilerWatermark`,
  * `IssueChange` and `SweepResult` now have both a reader (`reconciler.ts`,
  * `watermark.ts`) and evidence (the C-2 probe pins the cursor's ISO form and the
- * `(id, updatedAt)` dedupe key it is built around). `ReconcileAction` stays
- * DEFERRED: Phase 5 ships OBSERVING ONLY, so nothing decides an action yet, and
- * naming one now would freeze a guess exactly as this paragraph warns. It lands
- * with the dispatcher in Phase 6, alongside `PaperclipDispatchBody`/
- * `PaperclipDispatchContext`.
+ * `(id, updatedAt)` dedupe key it is built around).
+ *
+ * PHASE 6 CLOSES TWO MORE, in the `Dispatch shapes` section at the bottom:
+ * `PaperclipDispatchBody` and `PaperclipDispatchContext`. Their reader is
+ * `parseDispatchBody` in `dispatch-worker.ts`, and their evidence is running
+ * code rather than a probe — `agentSpecs()` in
+ * `scripts/lib/paperclip/bootstrap-core.ts` writes the adapter row that
+ * produces the push, so the method, the bearer and `netzarAgentId` are ours by
+ * construction. Everything beyond that is marked UNVERIFIED on the shape
+ * itself, because NO PROBE DRIVES THE ADAPTER PUSH.
+ *
+ * `ReconcileAction` IS STILL DEFERRED after Phase 6, and this is the second
+ * phase that has had to say so. Phase 6 ships the DISPATCHER, not the
+ * reconciler: the route's outcomes (`unauthorized`, `invalid_body`,
+ * `unknown_agent`, `agent_not_enabled`, `deduplicated`, `accepted`) are the
+ * dispatcher's, and `reconciler.ts` still runs in `shadow` and still decides no
+ * action on any row. Naming a reconcile action from the dispatcher's outcome
+ * set would be the guess-wearing-a-name this paragraph warns about, dressed in
+ * a reader that is not the reader it is for. It lands with the phase that
+ * promotes the reconciler to `live`.
  *
  * THE DEFERRAL RULE AND THE EVIDENCE RULE ARE ONE RULE, and stating them apart
  * is what made the deferral above look inconsistent with what ships. Several
@@ -945,6 +960,76 @@ export interface SweepResult {
   watermarkTo?: string;
   watermarkAdvanced: boolean;
   /** `paperclip/enabled_agents`, reported so an operator can see whether a
-   * promotion to `live` would act on anything. No other reader until Phase 6. */
+   * promotion to `live` would act on anything. Phase 6's dispatch route is the
+   * second reader: a slug absent from that list is answered 202
+   * `{ignored:'agent_not_enabled'}` rather than dispatched. */
   enabledAgents: readonly string[];
+}
+
+// ── Dispatch shapes (Phase 6) ─────────────────────────────────────────────
+
+/**
+ * The inbound body Paperclip's `http` adapter POSTs at the dispatch route.
+ *
+ * EVERY FIELD IS OPTIONAL AND THAT IS THE MEASUREMENT, not laziness. NO PROBE
+ * DRIVES THE ADAPTER PUSH — the 21 contract probes all drive Paperclip's own
+ * `/api/**` routes and the OpenAPI snapshot documents Paperclip's server, so
+ * neither evidence tier this file accepts says anything about what arrives
+ * here. What IS established, by running code (precedence tier 2), is
+ * `agentSpecs()` in `scripts/lib/paperclip/bootstrap-core.ts`, which writes
+ * every agent's `adapter_config` as
+ *
+ *     { url, method: 'POST', headers: { authorization: `Bearer <secret>` },
+ *       payloadTemplate: { netzarAgentId: <slug> }, timeoutMs: 10_000 }
+ *
+ * so `POST`, the bearer, and a body carrying at least `netzarAgentId` are ours
+ * BY CONSTRUCTION. `issueId` is the spelling the live board uses for an issue
+ * reference in a pushed payload (probe A1-12 drives `payload: { issueId }` at
+ * `/wakeup`), and `runId` names the value the `X-Paperclip-Run-Id` header
+ * carries. WHAT PAPERCLIP MERGES INTO `payloadTemplate` BEYOND THOSE — an event
+ * kind, a comment body, a triggering user — IS UNVERIFIED, and A1-16 does not
+ * accept a vendor source read as authority for it. Unknown fields are ignored
+ * rather than transcribed into a plausible-looking field set.
+ *
+ * `parseDispatchBody` in `dispatch-worker.ts` is the only reader; it narrows
+ * this to `PaperclipDispatchContext` or answers `null`, and the route turns a
+ * `null` into 400.
+ */
+export interface PaperclipDispatchBody {
+  /** Ours by construction: `payloadTemplate: { netzarAgentId: <slug> }`. */
+  netzarAgentId?: string;
+  /** The Paperclip issue uuid. Never an 8-char prefix, never `NZR-42` (C-16). */
+  issueId?: string;
+  /**
+   * The run Paperclip already holds. A1-3 / ADR 0010 hard constraint 2: this is
+   * the ONLY thing that makes an agent actor legitimate, it arrives here, and
+   * it is NEVER synthesized. Absent or empty is a 400, not a minted id.
+   */
+  runId?: string;
+  /** Free-form key/value the push may carry. Attacker-influenced; escaped at
+   * interpolation by `neutralizeForPrompt`, never at storage. */
+  context?: Record<string, unknown>;
+}
+
+/**
+ * The validated, in-process value the route hands the worker. Post-validation,
+ * so every field is present and non-empty.
+ *
+ * A2-16 SAYS "nothing in here describes a Netzar domain object", and this shape
+ * sits closest to that line of anything in the file: it is not a wire body, it
+ * is the dispatcher's own working value. It lives here anyway because Part B
+ * Phase 1 assigned this NAME to this FILE and the C-10 paragraph above records
+ * that deferral by name — moving it would recreate exactly the gap that
+ * paragraph exists to close, and `dispatch-types.ts` is forbidden by a green
+ * test in `client.test.ts`, not merely by prose.
+ */
+export interface PaperclipDispatchContext {
+  /** Netzar agent SLUG. Cross-checked against `listKnownAgents()` by the route. */
+  netzarAgentId: string;
+  issueId: string;
+  runId: string;
+  /** `${runId}#${issueId}`, the pair the duplicate claim is keyed on. */
+  dedupeKey: string;
+  /** Raw, unescaped. The prompt boundary escapes it; storage does not. */
+  context: Record<string, string>;
 }
