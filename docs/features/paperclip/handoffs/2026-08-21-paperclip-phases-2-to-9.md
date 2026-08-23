@@ -20,10 +20,10 @@ supersedes: 2026-08-21-paperclip-end-to-end
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `f817e8d5ae52a02fe6b8f3243a2e9b9b74143757` |
-| Commit at session end | TBD |
-| Pushed | not yet |
-| PR | none yet |
-| Deployed | nothing yet — staging only when reached, never production |
+| Commit at session end | `fa59609` (+ Phase 8 if it clears) |
+| Pushed | yes — `feature/paperclip-phase-1-5` |
+| PR | [#89](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/89) into `development` |
+| Deployed | **nothing.** No AWS resource was created, modified or deleted this session; every AWS call was read-only or none at all. |
 
 ## 2. Current state summary
 
@@ -369,9 +369,62 @@ are the facts that run produced, and several of them correct a document.
 
 ## 6. Pending work
 
-Phases 2 through 9 of [the decomposition](../bar-and-phases.md), in decomposition
-order. Phase 4 and 4.5 exist as **rejected** uncommitted drafts in the tree and
-are a rework, not a fresh build — **M33** records why the first attempt failed.
+> **PAUSED AT CONTEXT CAPACITY, 2026-08-22 22:10 EDT.** Phase 8 is **written,
+> uncommitted, and mid-verification** — 27 changed/new paths in the working
+> tree. Its round-1 verifier REJECTED, its round-2 builder applied fixes, and
+> its round-2 verifier was still running when the session paused, so **there is
+> no verdict on the current tree**. Do not commit Phase 8 on the strength of it
+> looking finished; the round-1 rejection is the last recorded judgement.
+>
+> **To resume the gauntlet:** `Workflow({scriptPath: ".../paperclip-phase-8-push-wf_1788fc20-41c.js", resumeFromRunId: "wf_1788fc20-41c"})` — completed agents replay from cache, so only the in-flight verifier re-runs. The script lives under the session's `workflows/scripts/` directory.
+>
+> **What Phase 8 was closing when it paused:** the assignment push left over the
+> wrong Telegram bot's token (`deliverToReplyChat` passes the *turn* agent, not
+> the bot that owns the conversation, and discards the send result), so a push
+> landed in a different conversation or 403'd into a warning while the tool
+> returned "Mission created". That code is new in this phase — it did not exist
+> at HEAD. Two earlier findings in the same phase are already fixed and verified
+> across 10 routes: the wrong-board bug and the HTML-escape oversize drop.
+
+**Seven of fourteen phases shipped.** Committed and pushed: 1, 2, 3, 4, 5, 6, 7.
+Phase 8 is in its gauntlet. **Not started: 4.5, 8.5, 9, and the Four Pillars
+(10, 11, 12).**
+
+**The next action is Phase 9, install by default.** It is the one the original
+brief led with, and nothing else delivers it: today `npx cdk ls` prints **15**
+stacks with `CCE_PAPERCLIP_ENABLED` unset and **18** with it set, so a client
+deploying Netzar does not get Paperclip. Its acceptance is precise — the two
+stack lists must be identical and asserted by a test, the money gate must price
+Paperclip unconditionally at the tiers that get it, and teardown must route the
+new stacks through `cdk-destroy`.
+
+Ordered after that: 8.5 (org hierarchy and goals), 4.5 (operator console —
+deliberately deferred as a side branch, not the critical path), then Part E's
+Four Pillars, which roughly double what remains.
+
+**Follow-ups owed, recorded so they are not lost:**
+
+- **P30** — `src/lib/scheduler/queue-drain.ts:126` carries the identical
+  loss-channel defect Phase 6 closed for dispatch, pre-existing and out of
+  scope: a scheduled task firing during a maintenance freeze is permanently
+  consumed because the refusal returns normally and the SQS message is then
+  deleted. Now trivially fixable with the typed `refusal` marker Phase 6 added.
+- **A8 skew is asserted, not measured.** Nothing establishes that
+  `poll_overlap_ms = 2000` bounds Paperclip's two-clock skew, so the reconciler
+  ships with one interleaving that can still lose a row, behind an explicit
+  UNVERIFIED marker naming the probe that would close it.
+- **A46** — dispatch rollback is a **board-UI operation**, not a scripted one.
+  There is no agent-UPDATE call anywhere in this repo and no probe exercises
+  one.
+
+**Two blockers stand between here and staging, and neither is code:**
+
+1. The orphaned `/claudeclaw-staging/paperclip` log group must be deleted first
+   (**M19**, **P21**) or the stack rolls back at exactly the point it did on
+   2026-08-19.
+2. CI populates **no** secrets (**A26**). Phase 4's `Populate Paperclip secret`
+   step is gated on the repository variable `CCE_PAPERCLIP_ENABLED == '1'` and
+   is inert until someone sets it.
 
 The two gates the previous session named still gate any staging deploy and are
 not this session's to skip:
@@ -446,6 +499,19 @@ Phase 4, rework round 2:
 
 ## 8. Environment state
 
+- **Docker Desktop was started during this session** (29.7.2) and **Floci is up**
+  on port 4566, provisioned. `npm run local:verify` passed —
+  `sts:GetCallerIdentity` returned `000000000000`, so every call went to the
+  emulator and never to AWS. Take the local stack down with `npm run local:down`.
+- **Cloud execution is NOT available from this session.** `Agent` with
+  `isolation: "remote"` resolved to a *local* git worktree under
+  `.claude/worktrees/`, not a cloud machine (**A40**), and creating a claude.ai
+  cloud **routine** returns `HTTP 403 — You don't have access to a repository
+  this routine uses` because `Netzer-Labs` is private under the
+  `Adams-Captial-Holdings-Ltd` org and the Claude GitHub integration has no
+  grant on it (**A41**). A local `gh` login does not carry over. Unblocking it
+  needs an org owner to authorize the integration; it cannot be worked around
+  with a pasted token.
 - Baseline recorded at the commit named in section 1, tree carrying the
   pre-existing uncommitted work described below.
 - Pre-existing uncommitted work found in the tree and **left alone** per **P6**:

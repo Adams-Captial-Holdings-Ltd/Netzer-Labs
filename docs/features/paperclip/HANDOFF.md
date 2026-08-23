@@ -3,7 +3,7 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-08-21
-as_of_commit: c230a0a
+as_of_commit: fa59609
 ---
 
 # Paperclip integration handoff
@@ -11,32 +11,45 @@ as_of_commit: c230a0a
 - **Branch: `feature/paperclip-phase-1-5`.** Phases 1 and 1.5 are **merged**
   into `development` as
   [PR #88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88),
-  squashed, 9/9 CI checks green. **Phase 2 (the client)** and **Phase 4 (the
-  service stack and tenant bootstrap)** are committed on the branch and open as
+  squashed, 9/9 CI checks green. **Phases 2, 4, 5, 6 and 7** are committed on the
+  branch and open as
   [PR #89](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/89).
 - **Deployment: nothing.** No AWS resource has been created by this work. The
   session made read-only AWS calls only. `development` deploys nothing.
-- **Phases complete:** §33 first milestone, Phase 0, Phase 1 (substrate code),
-  Phase 1 (contract probes and wire types), Phase 1.5 (image pipeline),
-  **Phase 2 (the client)** and **Phase 4 (service stack and tenant bootstrap)**.
-- **Active work:** Phase 4.5 (operator console) and Phase 5 (the reconciler) are
-  the next two. Phase 4.5 is deliberately **deferred behind Phase 5**: the
-  reconciler is the critical path for Phases 6, 7 and 8, while the console is a
-  side branch.
+- **Phases complete (7 of 14):** §33 first milestone, Phase 0, Phase 1
+  (substrate code), Phase 1 (contract probes and wire types), Phase 3 (image
+  pipeline, this plan's 1.5), **2** (client), **4** (service stack and tenant
+  bootstrap), **5** (reconciler), **6** (inbound dispatch) and **7** (ACL
+  cutover).
+- **Not built:** Phase 8 (cross-surface parity) is in its gauntlet and
+  uncommitted. **Phases 4.5, 8.5, 9 and the Four Pillars (10-12) are not
+  started.** Phase 4.5 was deliberately deferred as a side branch; the
+  reconciler was the critical path for 6, 7 and 8.
+- **Paperclip is still an opt-in add-on.** `npx cdk ls` prints **15** stacks
+  with `CCE_PAPERCLIP_ENABLED` unset and **18** with it set. Making those two
+  lists identical is **Phase 9**, which is not started - so a client deploying
+  Netzar today does not get Paperclip.
 
 ## The single next action
 
-**Build Phase 5, the reconciler** — then hold the `qa → staging` promotion until
-the two deploy blockers below are cleared by hand.
+**Build Phase 9, install by default** - it is the one thing the original brief
+led with and the only phase that makes Paperclip part of a standard Netzar
+install. Its acceptance is precise: `npx cdk ls` prints the same stack set with
+and without `CCE_PAPERCLIP_ENABLED`, asserted by a test; the money gate prices
+Paperclip unconditionally at the tiers that get it; teardown routes the new
+stacks through `cdk-destroy`.
 
-Phase 4's gauntlet is finished: its critic shipped it at round 3 and the blind
-judges preferred it to this repository's own `database-stack.ts` 2 of 3 in every
-round. A staging deploy is now worth doing — it would give a running Paperclip
-with its own board — but it is **still blocked on two things nobody has done**:
+Two blockers stand between here and a staging deploy, and **neither is code**:
 the orphaned `/claudeclaw-staging/paperclip` log group must be deleted first
-(**M19**, **P21**), and CI populates no secrets (**A26**), so the new
-`Populate Paperclip secret` step only runs when the repository variable
-`CCE_PAPERCLIP_ENABLED` is set to `1`. Both are AWS/GitHub actions, not code.
+(**M19**, **P21**) or the stack rolls back at exactly the point it did on
+2026-08-19; and CI populates **no** secrets (**A26**), so the
+`Populate Paperclip secret` step added in Phase 4 only runs when the repository
+variable `CCE_PAPERCLIP_ENABLED` is set to `1`.
+
+**Validate in BOTH configurations from now on.** Six phases were validated with
+the flag off before Phase 7 caught it (**M44**); `npm test` and
+`CCE_PAPERCLIP_ENABLED=1 npm test` are both part of this feature's pre-push
+list.
 
 ## What changed on 2026-08-21
 
