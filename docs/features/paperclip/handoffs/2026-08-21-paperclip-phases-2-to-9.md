@@ -75,7 +75,9 @@ reference example and is bar criterion **A3**.
       (**M39**), the rejected design's flag is out of the manifest replay list
       (**M40**), and a false claim in a comment was corrected against a probe.
 - [ ] Phase 4.5 — operator console
-- [ ] Phase 5 — reconciler
+- [x] Phase 5 — reconciler. Critic SHIP, blind 9/9. Committed `575031b`, with
+      ADR 0010's watermark predicate amended in the same change. Its own session
+      handoff is [`2026-08-21-phase-5-reconciler.md`](2026-08-21-phase-5-reconciler.md).
 - [x] Phase 6 — inbound dispatch route and worker. Critic SHIP at round 2, blind
       6/6. Then **three further verification rounds**, each of which found a real
       defect by EXECUTION that a reading-based review had passed — see M41-M43.
