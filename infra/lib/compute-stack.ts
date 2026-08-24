@@ -309,9 +309,10 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         RAW_BUCKET: bucketName(RESOURCE_NAMES.rawBucket, account, region),
         CURATED_BUCKET: bucketName(RESOURCE_NAMES.curatedBucket, account, region),
         VECTORS_STAGING_BUCKET: bucketName(RESOURCE_NAMES.vectorsStagingBucket, account, region),
-        // Vector store currently writes to the staging bucket. When we add
-        // a dedicated production vectors bucket, point this here.
-        VECTORS_BUCKET: bucketName(RESOURCE_NAMES.vectorsStagingBucket, account, region),
+        // The durable vector index. Deliberately NOT the staging bucket: they
+        // shared one bucket until 2026-08, and the staging expiry deleted the
+        // whole knowledge base. Keep these two pointing at different buckets.
+        VECTORS_BUCKET: bucketName(RESOURCE_NAMES.vectorsBucket, account, region),
         // Tier-gated with the WORM bucket (plan item 26): T0/T1 have no
         // audit-lock bucket, so pass '' — empty string reads as "unset"
         // through env.ts's optional schema, and the audit writer no-ops

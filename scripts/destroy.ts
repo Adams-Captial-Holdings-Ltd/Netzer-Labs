@@ -208,6 +208,7 @@ export function expectedNames(opts: {
     rn.rawBucket,
     rn.curatedBucket,
     rn.vectorsStagingBucket,
+    rn.vectorsBucket,
     rn.logsBucket,
     rn.extensionsBucket,
     rn.auditLockBucket,
