@@ -37,6 +37,21 @@ export interface ContainerImageRecord {
   platform: string;
 }
 
+/**
+ * Container name of the Paperclip server image (ADR 0010).
+ *
+ * PHASE 4 OWNS THIS STRING. Phase 1.5 records the image before any task
+ * definition exists, so this name and the `${app}-paperclip` task family in
+ * buildImageRecords() are both PREDICTIONS of what infra/lib/paperclip-stack.ts
+ * will choose. If Phase 4 names the container or the family anything else, it
+ * changes them HERE, in buildImageRecords, and in the literals pinned by
+ * paperclip-image-pipeline.test.ts - otherwise the manifest records a rollback
+ * target that matches nothing in ECS. It lives here rather than at either use
+ * site because two files already compare against it and a third (Phase 4's
+ * rollback) will.
+ */
+export const PAPERCLIP_CONTAINER_NAME = 'paperclip-server';
+
 /** One secret version written by this deploy, labeled with the deployId. */
 export interface SecretVersionRecord {
   secretId: string;

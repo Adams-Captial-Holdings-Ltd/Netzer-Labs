@@ -781,10 +781,20 @@ async function main(): Promise<void> {
   //    teardown itself ran on: manifest bucket, lock table, ECR repo).
   section('Final sweep · bootstrap primitives + residuals');
   // Cloud-build primitives (Docker-free installs): the CodeBuild project,
-  // its IAM role, and its log group are SDK-created next to the ECR repo,
-  // so they are swept here next to it. Every delete tolerates not-found.
-  {
-    const cb = cloudBuildNames(names.ecrRepo);
+  // its IAM role, its role policy, and its log group are SDK-created next
+  // to the ECR repo, so they are swept here next to it. Every delete
+  // tolerates not-found.
+  //
+  // There are TWO cloud builds, one per ECR repo: the orchestrator's, and
+  // the Paperclip image build added in Phase 1.5 (gated on
+  // CCE_PAPERCLIP_ENABLED, so absent on unarmed installs). Sweeping only
+  // the orchestrator repo would leave `claudeclaw[-suffix]-paperclip-cloud-build`,
+  // its role, its role policy and its log group behind forever - the same
+  // defect class as the ungated ECR repo (M23) and the catalog-reports-but-
+  // does-not-delete gap (M24). The catalog row is a REPORT; this loop is
+  // what actually deletes.
+  for (const repoName of [names.ecrRepo, buildResourceNames(suffix).paperclipEcrRepo]) {
+    const cb = cloudBuildNames(repoName);
     await runner.mutate(`codebuild:DeleteProject ${cb.project} (+ role ${cb.role} + logs)`, async () => {
       const p = await capture('aws', ['codebuild', 'delete-project', '--name', cb.project, '--region', region]);
       if (p.code !== 0 && !/ResourceNotFound/i.test(p.stderr)) throw new Error(p.stderr);

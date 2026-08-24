@@ -107,7 +107,10 @@ already built; the first is not.
    push) need an **explicit user deploy go-ahead** — they create billable AWS
    resources.
 2. **Nothing builds or pushes the Paperclip image.** Decision 1 above names the
-   path; the code does not exist.
+   path; the code does not exist. Specified as its own phase in
+   [Phase 1.5 — the Paperclip image pipeline](phase-1.5-image-pipeline.md),
+   which is the next thing to build and the last blocker on a verifiable
+   Phase 2.
 3. **Before Phase 4**, the plan's dual-write and `PAPERCLIP_ENABLED`
    contradictions need an author decision. §30's rollout and §25/§27's cutover
    were written to different premises and cannot both be executed. See
