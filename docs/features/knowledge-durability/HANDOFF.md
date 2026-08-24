@@ -8,33 +8,27 @@ as_of_commit: 5418497c4b8466f2f932862fcfee512ca527a7a3
 
 # Knowledge durability handoff
 
-- Branch: `hotfix/durable-knowledge-bucket`, branched from `production` at
-  `992fd9d`. Merge target: `production`. Backport branch:
-  `fix/knowledge-durability-backport`, from `development` at `17fadd1`, merge
-  target `development` and then on through `qa` and `staging`, per the
+- Branch: all four long-lived branches now carry the fix. Shipped via
+  `hotfix/durable-knowledge-bucket` into `production` and
+  `fix/knowledge-durability-backport` into `development`, then promoted
+  `development -> qa -> staging`, per the
   [branch-to-environment mapping](../../../development.md#branch-to-environment-mapping).
-- Pushed: see the session handoff. PR: see the session handoff.
-- Current objective: **two defects fixed, awaiting the operator's production
-  deploy.** (1) The durable index has its own versioned, non-expiring bucket and
-  the staging expiry is scoped to `uploads/`. (2) **New this session:** the
-  vectors bucket CORS allowlist is rebuilt from both `DOMAIN_NAME` and
-  `CCE_DASHBOARD_URL` — it previously contained only `http://localhost:3000`,
-  so every browser upload from `https://app.pgnos.ai` died in preflight. That
-  second defect, not the lifecycle rule, is why uploads error *now*.
-  Active task IDs: none.
-- Blockers: **production deploy is the operator's dispatch** (`workflow_dispatch`
-  only, requires typing `deploy`; `CCE-Storage` before `CCE-Compute`).
-  **`npm run local:test:integration` NOT RUN** — Docker Desktop will not start.
-- Verified against the live account this session (account `239887088812`):
-  `expire-staging-fast` really carries `Filter.Prefix ""` with a 7-day expiry,
-  versioning was never enabled, and `index/` holds **0 objects**. The CORS
-  allowlist really contains only `http://localhost:3000`.
-- Baseline `npm test` on untouched `992fd9d` (production): **4 files failed /
-  1 test failed** — `scripts/ci/docs-links.test.ts`,
-  `scripts/ci/feature-knowledge.test.ts`, `scripts/ci/runnable-blocks.test.ts`,
-  `scripts/release/sync-deprecations.test.ts` fail at import, plus a Windows
-  path-separator assertion at `scripts/lib/lifecycle/rollback-classes.test.ts:574`.
-  After the change: **identical failure set**, 1925 passed, 6 skipped (1932).
+- Pushed: yes. PRs #91, #92, #93, #94 — all merged.
+- Current objective: **done and deployed.** Production deployed 2026-08-24 at
+  tier 2; task definition `8` -> `9`; service ACTIVE 3/3. Verified against the
+  live account, not the deploy log. Active task IDs: none.
+- **If knowledge breaks again, start at
+  [README section 10](README.md#10-recovery-runbook--if-knowledge-stops-saving-again).**
+  It separates the two failure shapes — uploads refused versus knowledge
+  vanishing — in about a minute, and carries the diagnostic and repair commands.
+- Remaining work: re-ingest the knowledge base (the old data is unrecoverable);
+  unblock the staging deploy, which fails for an unrelated Paperclip ECR-grant
+  reason so staging's environment is still unfixed; and reconcile
+  `scripts/ci/branch-guard.mjs` with the `hotfix/*` route `development.md`
+  documents.
+- Not protected: the index is still a single copy in a single bucket in a single
+  account. Versioning is not a backup, `infra/lib/backup-stack.ts` is
+  DynamoDB-only, and `scripts/teardown.ts` deletes this bucket by name.
 
 ## Session log index
 

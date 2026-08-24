@@ -21,9 +21,9 @@ supersedes: none
 | AWS environment that branch reaches | `production` deploys production, manual dispatch only — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `17fadd1` (development), `992fd9d` (production) |
 | Commit at session end | see git log on both branches |
-| Pushed | see section 6 |
-| PR | see section 6 |
-| Deployed | **no** — production deploy is the operator's dispatch |
+| Pushed | yes — both branches |
+| PR | [#91](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/91) production, [#92](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/92) development, [#93](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/93) qa, [#94](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/94) staging — all merged |
+| Deployed | **yes — production, 2026-08-24, tier 2.** Task definition `8` → `9`. Staging NOT deployed (see 6.3) |
 
 ## 2. Current state summary
 
@@ -51,6 +51,21 @@ is the corroborating evidence: no upload has ever landed.
 **Two independent defects, two different symptoms.** The lifecycle rule explains
 why the knowledge that *was* there is gone. CORS explains why nothing new can be
 added. Fixing only one leaves the system broken.
+
+**Outcome: fixed, deployed to production, and verified against the live
+account.** The operator reproduced the CORS failure from the browser
+(`No 'Access-Control-Allow-Origin' header is present`) on a presigned PUT to
+`uploads/` — the exact failure traced from source before any browser evidence
+existed. Both defects were first mitigated directly on the live bucket to
+restore uploads within minutes, then the deploy made the fix permanent. All
+four long-lived branches carry the change, so no promotion can reinstate it.
+
+The riskiest moment was the deploy itself: had the synth found no dashboard
+origin, it would have overwritten the live CORS mitigation and re-broken uploads
+at the moment everyone believed it was fixed. It held because `CCE_DASHBOARD_URL`
+is a **GitHub Environment** variable, which `gh variable list` does not show —
+a distinction worth remembering, since checking only repository variables led to
+a wrong conclusion mid-session (see M12).
 
 ## 3. Codebase understanding
 
@@ -167,6 +182,7 @@ added. Fixing only one leaves the system broken.
 | M8 | `.env` was created for local development while several lifecycle scripts default their environment flag to **prod** and read `.env`. | Commands that were previously inert became genuinely dangerous. | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally). | Read that list before running any unfamiliar `npm run` script. |
 | M9 | `store.scope.test.ts` tested `normalizeScope` in isolation while its own docblock claimed it pinned both read and write paths. | Reverting `iterateRows` to a raw-scope template left all five tests **green** while every read silently returned empty. Found by mutation, not by reading. | Prefix construction unified into `indexPrefixFor`; two behavioural tests now drive the real read path through a spied S3 client. | A test of a helper is not a test of the invariant. Assert the property that broke. |
 | M10 | The first CORS guard was written before checking what `process.env` does with `undefined`. | Assigning `undefined` into `process.env` coerces to the **string** `"undefined"`, so `new URL("undefined")` threw and the test failed for the wrong reason. | Delete the key instead of assigning undefined. | The test caught a real flaw in the fix — a malformed value would have thrown an unreadable `Invalid URL` at deploy time. |
+| M12 | Concluded `CCE_DASHBOARD_URL` was unset because `gh variable list` did not show it, and nearly blocked the deploy on setting it. | Would have added a **repository**-scoped variable pinned to one customer's domain — wrong for an install shipped to multiple companies. | It was already set correctly as a **GitHub Environment** variable, per environment (`production` → `app.pgnos.ai`, `staging` → `staging.pgnos.ai`). Caught only because the operator asked what would happen for another client. | Repository and environment variables are different scopes and different CLI calls. `vars.X` in a job with an `environment:` key resolves from the environment. Check `gh api repos/<org>/<repo>/environments/<env>/variables` before concluding anything is unset. |
 | M11 | A review subagent was told it could mutate files to probe, and it died mid-probe without restoring. | It left `prefix: UPLOAD_STAGING_PREFIX` **deleted** in the working tree — the exact defect being fixed — staged for a production hotfix commit. Caught only by reading `git status` and finding `MM`. | Restored from the index; both branches re-verified by grep before commit. | Never let a probing agent share a tree you are about to commit from. Diff before you stage, always. |
 
 ### 5.3 Standing assumptions
@@ -202,23 +218,42 @@ the CORS mitigation — it restores uploads in minutes, without a deploy.
 
 ### 6.2 Immediate next steps
 
-1. Apply the live CORS mitigation. Uploads work again immediately.
-2. Push `hotfix/durable-knowledge-bucket`, PR into `production`, deploy.
-   **`CCE-Storage` must land before `CCE-Compute`**, or ingest writes to a
-   bucket that does not exist yet.
-3. Push `fix/knowledge-durability-backport`, PR into `development`, then promote
-   `development → qa → staging` so the next promotion cannot reinstate either
-   defect.
-4. Re-ingest from the `knowledge_ingest` audit rows — **only after** the deploy.
+1. ~~Apply the live CORS mitigation~~ — **done**, then superseded by the deploy.
+2. ~~Hotfix into `production` and deploy~~ — **done**. Run succeeded at tier 2.
+3. ~~Backport through `development → qa → staging`~~ — **done**, all merged.
+4. **Re-ingest from the `knowledge_ingest` audit rows.** Still outstanding. New
+   ingests land in the durable bucket and are safe.
+5. **Unblock the staging deploy** (6.3) — staging carries the code but its
+   environment is still unfixed.
+6. **Reconcile the promotion ladder with the runbook** (6.3).
 
 ### 6.3 Blockers and open questions
 
-- [ ] Blocker: **`npm run local:test:integration` NOT RUN.** Docker Desktop
-      fails to start on this machine (`Docker Desktop is unable to start`), so
-      Floci cannot come up. Per **P2** this is an un-run gate, not a pass. CI or
-      a machine with Docker must run it before merge.
-- [ ] Blocker: **production deploy requires the operator.** `workflow_dispatch`
-      only, and requires typing `deploy`.
+- [x] Resolved: **`npm run local:test:integration`** could not run locally
+      (Docker Desktop will not start on this machine) but **passed in CI** on
+      #91. Green, just never on this machine. Per **P2** it is recorded as run
+      by CI, not by this session.
+- [x] Resolved: **production deploy** dispatched at tier 2 to match the running
+      task rather than the workflow's tier-3 default. Diffing task definition 8
+      against 9, only `DEPLOY_SHA` and `VECTORS_BUCKET` changed — no collateral
+      to tier, cost cap, or any other env-backed tunable, which is the specific
+      risk `CLAUDE.md` warns a full `cdk deploy` carries.
+- [ ] Blocker: **the staging deploy fails, and staging's environment is still
+      unfixed.** It dies at `Ensure ECR repo exists`, *before* CDK runs, so
+      staging's bucket still has the localhost-only CORS and the empty-prefix
+      expiry. Cause is unrelated to this work: `CCE_PAPERCLIP_ENABLED=1` makes
+      the deploy probe `claudeclaw-staging-paperclip`, which the deploy role has
+      no `ecr:DescribeRepositories` grant for. The error text notes the grant
+      ships from the **prod** IAM stack — which carries no Paperclip code — so
+      this is a bootstrap ordering problem inside the Paperclip work. Left
+      untouched deliberately: unblocking it means either disarming the Paperclip
+      flag or changing its IAM, and neither is this feature's call.
+- [ ] Open question: **`scripts/ci/branch-guard.mjs:20` contradicts
+      `development.md`.** The ladder hard-codes `{ production: 'staging' }`, so
+      the `hotfix/* → production` route the runbook documents is rejected by the
+      Promotion ladder check. #91 was merged past that red check. One of the two
+      is wrong, and until it is reconciled every hotfix trains someone to
+      override a failing gate.
 - [x] Resolved: *is any object under `index/` still present?* **No — zero.**
       The bucket is entirely empty:
       `aws s3 ls s3://claudeclaw-vectors-staging-239887088812-us-east-1/ --recursive`
@@ -254,6 +289,22 @@ The four failing test files are identical before and after, on the untouched
 `scripts/release/sync-deprecations.test.ts` fail at import, and
 `scripts/lib/lifecycle/rollback-classes.test.ts:574` asserts POSIX path
 separators. Consistent with **A2**.
+
+### Deploy verification (live, post-deploy)
+
+| Property | Verified value |
+|---|---|
+| Deploy run | success, `env=prod`, `tier=2` |
+| Task definition | `claudeclaw-orchestrator:8` → `:9`, service ACTIVE 3/3 |
+| `VECTORS_BUCKET` | `claudeclaw-vectors-<account>-<region>` — the durable bucket |
+| Durable bucket versioning | `Enabled` |
+| Durable bucket lifecycle | only `expire-old-versions` (`ExpireDays: None`, `NoncurrentDays: 90`) — nothing can expire a current object |
+| Staging bucket CORS | `["https://app.pgnos.ai", "http://localhost:3000"]` — survived the deploy |
+| Staging bucket lifecycle | `Filter.Prefix: uploads/`, 7 days |
+| Env diff, rev 8 → 9 | exactly two values: `DEPLOY_SHA`, `VECTORS_BUCKET` |
+
+Mutation testing: seven defect variants reintroduced, every one caught red.
+Two guards did **not** fail on first attempt and were strengthened (M9, M10).
 
 Live AWS verification performed this session (read-only):
 `sts get-caller-identity`, `s3 ls`, `s3api get-bucket-lifecycle-configuration`,
