@@ -1,3 +1,4 @@
+<!-- drift-gate: verified against the knowledge-durability hotfix; mapped-source changes were the VECTORS_BUCKET env value and a new RESOURCE_NAMES entry, neither of which this diagram depicts -->
 <!-- drift-gate: verified against PR #104; mapped-source changes were dead-import removals only, no depicted flow changed. -->
 # Architecture, compute view
 

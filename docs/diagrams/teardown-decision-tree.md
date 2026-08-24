@@ -1,3 +1,4 @@
+<!-- drift-gate: verified against the knowledge-durability hotfix; the new vectors bucket joins the teardown/destroy name lists and, being versioned, routes through the existing empty-and-delete versioned-bucket step; no depicted branch changed -->
 # Teardown decision tree
 
 > Teardown inventories everything from CloudFormation, tags, the manifest, and the out-of-band resource catalog, then classifies resources as app-owned (deletable) versus shared account prerequisites (report-only by default), and demands a typed confirmation before destroying anything. Destruction is ordered so encrypted data can still be exported and decrypted on the way out: export offer first, then dependents, then buckets, then secrets on their 7-day window, with KMS key deletion blocked until every encrypted dependent is gone. Some things survive on purpose, most notably the WORM audit-lock bucket, and a break-glass mode still works when the state bucket itself is lost.

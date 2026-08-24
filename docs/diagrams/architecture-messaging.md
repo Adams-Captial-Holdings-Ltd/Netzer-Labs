@@ -1,3 +1,4 @@
+<!-- drift-gate: verified against the knowledge-durability hotfix; the compute-stack change was an env-var value only; no depicted message flow changed -->
 <!-- drift-gate: verified against PR #104; mapped-source changes were dead-import removals only, no depicted flow changed. -->
 # Architecture, messaging view
 

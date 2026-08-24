@@ -1,3 +1,4 @@
+<!-- drift-gate: verified against the knowledge-durability hotfix; the task role gained bucket + object access on the new vectors bucket, which this diagram shows as an unenumerated grant; no depicted trust boundary changed -->
 <!-- drift-gate: verified against the codebase-review fixes PR (#107); no trust boundary moved. Changes inside existing boundaries: tool_use re-checked every tool round, War Room per-meeting tool blocklist enforced via runAgentTurn, mission/knowledge tools contain owner+scope server-side, iam:CreateUser dropped from the opt-in copilot write grant. Legend updated. -->
 # Architecture, security view (trust boundaries)
 
