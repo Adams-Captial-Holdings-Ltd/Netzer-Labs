@@ -438,9 +438,8 @@ export async function runDispatchWork(
   const now = deps.now ?? Date.now;
   const chatId = `${PAPERCLIP_DISPATCH_CHAT_PREFIX}${ctx.issueId}`;
   // A1-3: `actor` is the agent slug whose key signs the request; `runId` is the
-  // run Paperclip already holds and handed us. Both ride every call below, which
-  // is how the inbound run id reaches the client layer and becomes the
-  // `X-Paperclip-Run-Id` header.
+  // run Paperclip already holds and handed us. Both ride every board call below,
+  // and the same genuine id enters the turn/tool context for delegated writes.
   const invoke = { actor: ctx.netzarAgentId, runId: ctx.runId };
   // Carried out of the `try` so the catch can reach the board, and so it knows
   // whether the board is still reachable at all — see `postTerminalFailureNotice`.
@@ -460,6 +459,7 @@ export async function runDispatchWork(
       userText,
       history,
       surface: 'system',
+      runId: ctx.runId,
       userId: `paperclip:${ctx.netzarAgentId}`,
       // NO `origin` — the default is 'machine' and it must stay that way. See
       // the block below: `userText` is board-controlled, and 'human_chat' is

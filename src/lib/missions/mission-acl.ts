@@ -36,8 +36,12 @@
  * KNOWN, DOCUMENTED LOSSES on the Paperclip path, none of them papered over:
  *   - `priority` quantizes. `toPriorityScore(toPriorityBand(73)) === 80`; the
  *     SPA renders `P80` where it rendered `P73`. The type is unchanged.
- *   - `status` narrows. `blocked` collapses to `open`, `in_review` to
- *     `in_progress`.
+ *   - `status` narrows, but ONLY where the narrowing is recoverable. Phase 9
+ *     gave `blocked` and `in_review` their own lanes, so those two no longer
+ *     collapse; what remains is `backlog` and `todo` both arriving as `open`,
+ *     and that one is lossless in practice because the split they encode is
+ *     "has an assignee", which `Mission.ownerAgent` carries and
+ *     `toIssueStatus` reconstructs.
  *   - UNVERIFIED: what status Paperclip gives an ASSIGNED, status-omitted
  *     create. No probe has ever read `.status` off a created row, so a created
  *     mission's column is not claimed here — whatever `toMissionStatus` makes
@@ -79,6 +83,7 @@ import { paperclipClientFromEnvironment } from '../paperclip/client.js';
 import { createPaperclipMissionEngine } from '../paperclip/paperclip-mission-engine.js';
 import type { MissionEngine } from '../paperclip/mission-engine.js';
 import { UnknownAgentError, type ProjectedMission } from '../paperclip/mission-projection.js';
+import { MISSION_RESOLVE_WINDOW, formatAmbiguousRef, resolveMissionRef } from './format.js';
 
 /**
  * THE ROUTER-LEVEL ROLLOUT FLAG (C-8).
@@ -238,10 +243,11 @@ export async function listBoardMissions(ownerAgent: string, limit = 100): Promis
 
 /**
  * `list_missions`' status filter, which the engine deliberately does NOT offer:
- * the domain `open` fans out to `backlog|todo|blocked`, the wire filter is
- * proven for a single value only, and an unrecognized status is a silent
- * `200 []` rather than a 400. Filtering client-side off rows we already hold
- * loses nothing and claims nothing.
+ * the domain `open` still fans out to `backlog|todo` (Phase 9 took `blocked`
+ * out of that fan, but not the other two), the wire filter is proven for a
+ * single value only, and an unrecognized status is a silent `200 []` rather
+ * than a 400. Filtering client-side off rows we already hold loses nothing and
+ * claims nothing.
  *
  * The fetch is widened before the filter so a status with few matches on a busy
  * board still fills `limit`.
@@ -434,7 +440,15 @@ export async function createBoardMission(args: CreateBoardMissionArgs): Promise<
  * and it is a property of migrating substrates — not something the bound
  * introduces, and not something it can fix.
  */
-const RESOLVE_WINDOW = 200;
+/**
+ * AND THE WINDOW IS NOW ONE NUMBER FOR EVERY CONSUMER. It used to be a private
+ * `200` here, a `15` in the chat router's `/mission <ref>` read and a `100` in
+ * `paperclip_comment` — the same 8 characters resolved against three different
+ * boards. `MISSION_RESOLVE_WINDOW` and `resolveMissionRef` live in the pure
+ * shared module beside the copy, per A3-4 ("every user-visible string AND
+ * NUMBERING RULE"), and this file is one of their three callers.
+ */
+const RESOLVE_WINDOW = MISSION_RESOLVE_WINDOW;
 
 /**
  * C-16, the half of it the engine cannot do: an 8-char prefix that matches TWO
@@ -467,27 +481,29 @@ export class AmbiguousMissionPrefixError extends Error {
     readonly prefix: string,
     readonly matches: readonly string[],
   ) {
-    super(
-      `Mission id '${prefix}' matches ${matches.length} missions for owner '${owner}' (${matches.join(', ')}); pass a full mission id.`,
-    );
+    // The MESSAGE is the shared module's, not a fifth spelling of it (A3-4).
+    // This error crosses into chat as a caught `Error.message` wherever a
+    // caller does not unwrap it, so the sentence a user sees must be the same
+    // one the chat router prints when it DOES unwrap it.
+    super(formatAmbiguousRef({ owner, ref: prefix, ids: matches }));
     this.name = 'AmbiguousMissionPrefixError';
   }
 }
 
 async function resolveOwned(owner: string, missionId: string): Promise<Mission | undefined> {
   const rows = await listBoardMissions(owner, RESOLVE_WINDOW);
-  // AN EXACT ID IS UNAMBIGUOUS BY DEFINITION and is matched first. Legacy's
+  // The matching itself is `resolveMissionRef` in the shared module — the same
+  // function the chat router and `paperclip_comment` call, so a ref means one
+  // thing everywhere it is typed back. It holds the exact-id-wins rule (legacy's
   // single `find` tested both arms per row, so a full id could lose to an
-  // earlier row that merely shared its prefix; there is no board on which
-  // preferring the exact match returns a different row than the one the caller
-  // named.
-  const exact = rows.find((m) => m.id === missionId);
-  if (exact) return exact;
-  const prefixed = rows.filter((m) => m.id.startsWith(missionId));
-  if (prefixed.length > 1) {
-    throw new AmbiguousMissionPrefixError(owner, missionId, prefixed.map((m) => m.id));
+  // earlier row that merely shared its prefix) and reports the collision; the
+  // ERROR SHAPE stays here, because `AmbiguousMissionPrefixError` is this
+  // layer's contract with the routes and the pure module does no throwing.
+  const match = resolveMissionRef(rows, missionId);
+  if (match.kind === 'ambiguous') {
+    throw new AmbiguousMissionPrefixError(owner, missionId, match.matches.map((m) => m.id));
   }
-  return prefixed[0];
+  return match.kind === 'found' ? match.mission : undefined;
 }
 
 /** `false` means "no mission matches for this owner" — the legacy 404 signal, unchanged. */

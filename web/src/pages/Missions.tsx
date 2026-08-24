@@ -33,10 +33,43 @@ interface Mission {
   updatedAt?: string;
 }
 
-type Column = 'open' | 'in_progress' | 'done' | 'cancelled';
+type Column = 'open' | 'in_progress' | 'blocked' | 'in_review' | 'done' | 'cancelled';
+// These six labels — and the `P<priority>` badge below — are the user's
+// vocabulary for a mission, and the chat surfaces now speak it too. The
+// server-side copy lives in `src/lib/missions/format.ts` (MISSION_STATUS_LABEL,
+// which cites this `COLUMNS` array by name rather than by line, so neither
+// pointer goes stale when the other file moves); keep the two in step when
+// changing either, the way `humanize.ts` and `Chat.tsx` point at each other for
+// the turn footer.
+//
+// THERE IS A THIRD COPY AND IT IS ON THIS PAGE: `statusLabel()` in
+// `web/src/lib/glossary.ts` renders the card badge and the detail drawer below,
+// so a disagreement between it and this array puts two spellings of one status
+// on one screen — which is exactly what happened ("In progress" there, "In
+// Progress" here). Change one, change all three.
+//
+// THE LANE ORDER IS THE REPOSITORY OWNER'S DECISION and it is the same order
+// as MISSION_STATUSES. `Blocked` and `In Review` are Paperclip statuses the
+// board used to have no lane for, so the projection folded them into `open`
+// and `in_progress` and a stalled mission was indistinguishable from an
+// un-started one.
+//
+// Read left to right it is the STORY OF A TASK: you start it (Open), you work
+// it (In Progress), you get stuck (Blocked), you unstick it and send it out
+// (In Review), it lands (Done). It also leaves the four original lanes — Open,
+// In Progress, Done, Cancelled — in their existing RELATIVE positions, so
+// nobody has to relearn a board they already know.
+//
+// Nothing in web/ type-checks this array against the server's MissionStatus.
+// The source scan in `src/lib/missions/format.test.ts` does, and it asserts
+// this array's ORDER as well as its labels — an earlier six-lane pass put
+// `Blocked` second here while every chat surface spoke it third, and a
+// membership-only scan stayed green through it.
 const COLUMNS: { key: Column; label: string; color: string }[] = [
   { key: 'open', label: 'Open', color: 'border-primary' },
   { key: 'in_progress', label: 'In Progress', color: 'border-warning' },
+  { key: 'blocked', label: 'Blocked', color: 'border-danger' },
+  { key: 'in_review', label: 'In Review', color: 'border-primary-light' },
   { key: 'done', label: 'Done', color: 'border-success' },
   { key: 'cancelled', label: 'Cancelled', color: 'border-muted' },
 ];
@@ -186,13 +219,26 @@ export function Missions() {
     }
   }
 
+  // Which lane a mission is drawn in. NOT a bare `m.status === col`: that
+  // filtered by EXACT EQUALITY with no fallback, so any status without a
+  // column vanished from the board entirely — no lane, no count, no error.
+  // That is how `blocked` would have disappeared had the projection started
+  // emitting it before this array grew, and it is still live for an EIGHTH
+  // Paperclip status arriving on an artifact bump. Every mission now lands in
+  // exactly one lane because `laneFor` is total; an unrecognized status falls
+  // to the first lane, where its badge still prints the raw word (statusLabel
+  // humanizes anything, and the `title` attribute carries the exact value).
+  const laneFor = (status: string): Column =>
+    COLUMNS.find((c) => c.key === status)?.key ?? COLUMNS[0].key;
+
   function getMissionsForColumn(col: Column): Mission[] {
-    return missions.filter((m) => m.status === col);
+    return missions.filter((m) => laneFor(m.status) === col);
   }
 
   const statusBadgeVariant = (s: string) => {
     if (s === 'done') return 'success' as const;
-    if (s === 'in_progress') return 'warning' as const;
+    if (s === 'in_progress' || s === 'in_review') return 'warning' as const;
+    if (s === 'blocked') return 'danger' as const;
     if (s === 'cancelled') return 'muted' as const;
     return 'info' as const;
   };
@@ -219,7 +265,7 @@ export function Missions() {
       </div>
 
       {loading ? (
-        <div data-tour="missions-board" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div data-tour="missions-board" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           {COLUMNS.map((c) => (
             <div key={c.key} class="bg-surface border border-border rounded-xl p-4 space-y-3">
               <Skeleton height="16px" width="40%" />
@@ -235,7 +281,7 @@ export function Missions() {
           onRetry={load}
         />
       ) : (
-        <div data-tour="missions-board" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div data-tour="missions-board" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           {COLUMNS.map((col) => {
             const items = getMissionsForColumn(col.key);
             return (
@@ -263,10 +309,10 @@ export function Missions() {
                       {m.dueAt && <Badge variant="info">Due {fmtDate(m.dueAt)}</Badge>}
                     </div>
                     <div class="flex gap-2 pt-2 border-t border-border" onClick={(e) => e.stopPropagation()}>
-                      {col.key === 'open' && (
+                      {(col.key === 'open' || col.key === 'blocked') && (
                         <Button size="sm" variant="ghost" onClick={() => setStatus(m, 'in_progress')}>Start</Button>
                       )}
-                      {col.key === 'in_progress' && (
+                      {(col.key === 'in_progress' || col.key === 'in_review') && (
                         <>
                           <Button size="sm" variant="ghost" onClick={() => setStatus(m, 'done')}>Complete</Button>
                           <Button size="sm" variant="ghost" onClick={() => setStatus(m, 'cancelled')}>Cancel</Button>

@@ -58,6 +58,7 @@ import './lib/tools/privacy-tools.js';
 import './lib/tools/document-generation-tools.js';
 import './lib/tools/identity-tools.js';
 import './lib/tools/salesforce-tools.js';
+import './lib/tools/paperclip-tools.js';
 
 export function buildApp(env: Env): Hono {
   const app = new Hono();

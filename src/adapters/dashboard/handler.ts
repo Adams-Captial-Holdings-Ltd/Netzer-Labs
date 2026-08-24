@@ -1922,6 +1922,18 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
           // and this is one of the five chat-surface call sites allowed to say so.
           origin: 'human_chat',
+          // PARITY GAP, DELIBERATE (see CLAUDE.md, "chat surface parity"):
+          // NO `replyChatId` IS PASSED, so `create_mission`'s assignment push
+          // is skipped on this surface alone. The missing primitive is an
+          // out-of-band channel: dashboard chat is request/response over an SSE
+          // stream that exists only for the turn in flight, and there is no bot
+          // identity that can post into it between turns. `deliverToReplyChat`
+          // answers false for a `dashboard:` id rather than pretending, and the
+          // long note at the emission site in `src/lib/tools/mission-tools.ts`
+          // records the fallback this surface has and the chat surfaces do not
+          // (its Missions tab renders the owner's board live). Marked here as
+          // well as there because a skipped feature is invisible at the call
+          // site that skips it.
           userId: dashboardIdentity(c),
           // Per-seat spend attribution: the users-table id of the signed-in
           // principal (magic-link session). Token/break-glass principals have
@@ -2255,6 +2267,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
         // and this is one of the five chat-surface call sites allowed to say so.
         origin: 'human_chat',
+        // PARITY GAP, DELIBERATE (see CLAUDE.md, "chat surface parity"): no
+        // `replyChatId`, so the assignment push is skipped here too — same
+        // missing primitive as the streamed route above, same note at the
+        // emission site in `src/lib/tools/mission-tools.ts`.
         userId: dashboardIdentity(c),
         ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
       });

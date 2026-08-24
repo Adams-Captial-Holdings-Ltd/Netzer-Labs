@@ -8,7 +8,7 @@
  * Schema:
  *   PK = AGENT#<ownerAgent>
  *   SK = MISSION#<isoCreated>#<id>
- *   GSI1PK = STATUS#<open|in_progress|done|cancelled>#AGENT#<owner>
+ *   GSI1PK = STATUS#<open|in_progress|blocked|in_review|done|cancelled>#AGENT#<owner>
  *   GSI1SK = PRIORITY#<padded>#<isoCreated>
  */
 
@@ -25,10 +25,40 @@ const TABLE = process.env.TABLE_MISSION_TASKS ?? 'claudeclaw-mission-tasks';
 
 /** Runtime list of valid mission statuses; the type below derives from it so
  * the two can never drift. Used to validate inbound status mutations before
- * they reach the status field and the GSI1PK partition key. */
+ * they reach the status field and the GSI1PK partition key.
+ *
+ * THE ORDER IS THE BOARD'S LANE ORDER, left to right, and it is contract: the
+ * `invalid_status` 400 serialises `valid: MISSION_STATUSES` verbatim, and
+ * `MISSION_STATUS_WORDS` builds the `/missions [...]` help line from it.
+ *
+ * `blocked` and `in_review` (Phase 9) are the two Paperclip statuses this list
+ * used to have no room for, so `toMissionStatus` collapsed them into `open`
+ * and `in_progress` and a stalled mission read as merely un-started.
+ *
+ * THE ORDER IS THE REPOSITORY OWNER'S DECISION, and the rationale is the point:
+ * it reads as the STORY OF A TASK — you start it (open), you work it
+ * (in_progress), you get stuck (blocked), you unstick it and send it for review
+ * (in_review), it lands (done). It also keeps the four original lanes — open,
+ * in_progress, done, cancelled — in their existing RELATIVE positions, so
+ * nobody has to relearn a board they already know; the two new lanes are
+ * inserted between them rather than displacing them.
+ *
+ * WIDENING THIS LIST ALSO WIDENS THE LEGACY DYNAMODB PATH, deliberately.
+ * `MISSION_STATUSES` is what the dashboard's status route validates against
+ * before a value reaches the `status` attribute and the GSI1PK partition key,
+ * so a legacy install will now ACCEPT `blocked`/`in_review` writes. That is
+ * the right call and it is not a widening of what the legacy path can PRODUCE:
+ * nothing on it mints either value (Haiku assignment opens `open`, the repo's
+ * own transitions are the four old words), so the only way one arrives is an
+ * operator pressing a lane button that the very same six-lane board draws.
+ * Accepting a status the board can render and refusing it in the store would
+ * be the drift this constant exists to prevent — and the guard still keeps
+ * arbitrary strings out of the partition key, which is the whole job. */
 export const MISSION_STATUSES = [
   'open',
   'in_progress',
+  'blocked',
+  'in_review',
   'done',
   'cancelled',
 ] as const;

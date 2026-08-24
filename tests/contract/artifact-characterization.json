@@ -314,5 +314,237 @@
       "error": null,
       "rows": 5
     }
+  },
+  "phase8ChildCreateContract": {
+    "array request": {
+      "status": 400,
+      "error": "Validation error"
+    },
+    "empty object request": {
+      "status": 400,
+      "error": "Validation error",
+      "details": "title: Required"
+    },
+    "title-only request": {
+      "status": 201,
+      "responseContainer": "object",
+      "defaults": {
+        "description": null,
+        "status": "backlog",
+        "priority": "medium",
+        "assigneeAgentId": null,
+        "requestDepth": 1
+      },
+      "parentIdPersisted": true
+    },
+    "single object request": {
+      "auth": "agent bearer; X-Paperclip-Run-Id omitted",
+      "status": 201,
+      "responseContainer": "object",
+      "responseKeys": [
+        "assigneeAdapterOverrides",
+        "assigneeAgentId",
+        "assigneeUserId",
+        "billingCode",
+        "blockedBy",
+        "blocks",
+        "cancelledAt",
+        "checkoutRunId",
+        "companyId",
+        "completedAt",
+        "createdAt",
+        "createdByAgentId",
+        "createdByUserId",
+        "description",
+        "executionAgentNameKey",
+        "executionLockedAt",
+        "executionPolicy",
+        "executionRunId",
+        "executionState",
+        "executionWorkspaceId",
+        "executionWorkspacePreference",
+        "executionWorkspaceSettings",
+        "goalId",
+        "harnessKind",
+        "hiddenAt",
+        "id",
+        "identifier",
+        "issueNumber",
+        "labelIds",
+        "labels",
+        "monitorAttemptCount",
+        "monitorLastTriggeredAt",
+        "monitorNextCheckAt",
+        "monitorNotes",
+        "monitorScheduledBy",
+        "monitorWakeRequestedAt",
+        "originFingerprint",
+        "originId",
+        "originKind",
+        "originRunId",
+        "parentId",
+        "priority",
+        "projectId",
+        "projectWorkspaceId",
+        "requestDepth",
+        "responsibleUserId",
+        "sourceTrust",
+        "startedAt",
+        "status",
+        "title",
+        "updatedAt",
+        "watchdog",
+        "workMode"
+      ],
+      "persisted": {
+        "title": true,
+        "description": true,
+        "status": "backlog",
+        "priority": "high",
+        "parentId": true,
+        "assigneeAgentId": true
+      }
+    }
+  },
+  "phase8RunMutationContract": {
+    "checkout": {
+      "request": {
+        "header": "X-Paperclip-Run-Id",
+        "body": {
+          "agentId": "<actor agent id>",
+          "expectedStatuses": [
+            "backlog"
+          ]
+        }
+      },
+      "status": 200,
+      "responseKeys": [
+        "assigneeAdapterOverrides",
+        "assigneeAgentId",
+        "assigneeUserId",
+        "billingCode",
+        "cancelledAt",
+        "checkoutRunId",
+        "companyId",
+        "completedAt",
+        "createdAt",
+        "createdByAgentId",
+        "createdByUserId",
+        "description",
+        "executionAgentNameKey",
+        "executionLockedAt",
+        "executionPolicy",
+        "executionRunId",
+        "executionState",
+        "executionWorkspaceId",
+        "executionWorkspacePreference",
+        "executionWorkspaceSettings",
+        "goalId",
+        "harnessKind",
+        "hiddenAt",
+        "id",
+        "identifier",
+        "issueNumber",
+        "labelIds",
+        "labels",
+        "monitorAttemptCount",
+        "monitorLastTriggeredAt",
+        "monitorNextCheckAt",
+        "monitorNotes",
+        "monitorScheduledBy",
+        "monitorWakeRequestedAt",
+        "originFingerprint",
+        "originId",
+        "originKind",
+        "originRunId",
+        "parentId",
+        "priority",
+        "projectId",
+        "projectWorkspaceId",
+        "requestDepth",
+        "responsibleUserId",
+        "sourceTrust",
+        "startedAt",
+        "status",
+        "title",
+        "updatedAt",
+        "watchdog",
+        "workMode"
+      ],
+      "persisted": {
+        "status": "in_progress",
+        "assigneeIsActor": true,
+        "checkoutRunIsInboundRun": true,
+        "executionRunDiffersFromCheckoutRun": false,
+        "activeRunBodyAfterAdapterFailure": null
+      }
+    },
+    "workProduct": {
+      "requestKeys": [
+        "externalId",
+        "isPrimary",
+        "provider",
+        "status",
+        "summary",
+        "title",
+        "type"
+      ],
+      "status": 201,
+      "responseKeys": [
+        "companyId",
+        "createdAt",
+        "createdByRunId",
+        "executionWorkspaceId",
+        "externalId",
+        "healthStatus",
+        "id",
+        "isPrimary",
+        "issueId",
+        "metadata",
+        "projectId",
+        "provider",
+        "reviewState",
+        "runtimeServiceId",
+        "sourceTrust",
+        "status",
+        "summary",
+        "title",
+        "type",
+        "updatedAt",
+        "url"
+      ],
+      "persisted": {
+        "status": "ready_for_review",
+        "externalId": true,
+        "isPrimary": true,
+        "summary": true,
+        "createdByAgentIsActor": false,
+        "createdByRunId": null
+      }
+    },
+    "PATCH status=done": {
+      "request": {
+        "header": "X-Paperclip-Run-Id: <failed issue execution run id>",
+        "body": {
+          "status": "done"
+        }
+      },
+      "status": 409,
+      "error": "Issue run ownership conflict"
+    },
+    "release": {
+      "request": {
+        "header": "X-Paperclip-Run-Id: <failed issue execution run id>",
+        "body": null
+      },
+      "status": 409,
+      "error": "Issue run ownership conflict",
+      "persisted": {
+        "status": "in_progress",
+        "assigneeIsActor": true,
+        "executionRunPreserved": false,
+        "checkoutRunPreserved": false
+      }
+    }
   }
 }

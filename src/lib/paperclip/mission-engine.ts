@@ -83,6 +83,11 @@ export interface MissionEngine {
   listMissions(opts?: ListMissionsOptions): PaperclipFetch<ProjectedMission[]>;
   getMission(missionId: string, opts?: MissionEngineOptions): PaperclipFetch<ProjectedMission>;
   createMission(mission: Mission, opts?: MissionEngineOptions): PaperclipFetch<ProjectedMission>;
+  createSubtask(
+    parentMissionId: string,
+    mission: Mission,
+    opts?: MissionEngineOptions,
+  ): PaperclipFetch<ProjectedMission>;
   setStatus(
     missionId: string,
     status: MissionStatus,

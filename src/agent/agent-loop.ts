@@ -102,6 +102,8 @@ export type TurnOrigin = 'human_chat' | 'machine';
 export interface AgentTurnRequest {
   agentId: string;
   chatId: string;
+  /** Genuine caller-held Paperclip run id. Chat turns leave this absent. */
+  runId?: string;
   userText: string;
   history: Turn[];
   modelOverride?: string;
@@ -159,6 +161,26 @@ export interface AgentTurnRequest {
    * target even when chatId is a principal alias (owner:*).
    */
   replyChatId?: string;
+  /**
+   * WHOSE MISSION BOARD THE TOOLS ADDRESS, when that is not `agentId`.
+   *
+   * The exact counterpart of `CommandScope.boardAgentId` in
+   * `src/agent/commands.ts`, and it exists for the same reason one conversation
+   * must not have two boards: `/missions` acts on the board of the BOT that
+   * received the message, so `list_missions` in that same chat has to answer
+   * from the same board or the ref the board reply teaches the user to copy is
+   * refused by the agent standing next to it.
+   *
+   * `agentId` is the SESSION scope (whose history and records this turn uses);
+   * this is the BOARD scope (a remote object named by an agent id). They differ
+   * only where a surface runs more than one bot AND the picker can answer as
+   * someone else — Telegram, where the sticky default answers `main` inside
+   * `/tg/research/webhook`. A surface with one identity per conversation omits
+   * it and the two coincide, which is why Slack's per-agent apps (which pass
+   * one id to both `runCommand` and `runAgentTurn`) and the dashboard pass
+   * nothing and are correct by construction.
+   */
+  boardAgentId?: string;
   /** Agent-to-agent delegation depth (ask_agent). Default 0. */
   delegationDepth?: number;
   /**
@@ -1029,6 +1051,7 @@ async function runAdmittedTurn(
       detail: {
         cacheReadInputTokens: initial.cacheReadInputTokens,
         cacheWriteInputTokens: initial.cacheWriteInputTokens,
+        ...(req.runId ? { runId: req.runId } : {}),
       },
       ...(req.userId ? { userId: req.userId } : {}),
       result: 'ok',
@@ -1180,7 +1203,9 @@ async function runAdmittedTurn(
         chatId: req.chatId,
         ...(req.userId ? { userId: req.userId } : {}),
         ...(req.surface ? { surface: req.surface } : {}),
+        ...(req.runId ? { runId: req.runId } : {}),
         ...(req.replyChatId ? { replyChatId: req.replyChatId } : {}),
+        ...(req.boardAgentId ? { boardAgentId: req.boardAgentId } : {}),
         ...(req.delegationDepth !== undefined ? { delegationDepth: req.delegationDepth } : {}),
       };
       const result: ToolResult = dispatchKilledMidTurn
@@ -1333,6 +1358,7 @@ async function runAdmittedTurn(
       toolCallCount,
       cacheReadInputTokens: totalCacheRead,
       cacheWriteInputTokens: totalCacheWrite,
+      ...(req.runId ? { runId: req.runId } : {}),
     },
     ...(req.userId ? { userId: req.userId } : {}),
     result: 'ok',

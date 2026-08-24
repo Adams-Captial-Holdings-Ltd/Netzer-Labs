@@ -238,6 +238,7 @@ describe('runDispatchWork', () => {
     expect(seen?.agentId).toBe('main');
     expect(seen?.chatId).toBe(`${PAPERCLIP_DISPATCH_CHAT_PREFIX}${TEST_ISSUE_ID}`);
     expect(seen?.surface).toBe('system');
+    expect(seen?.runId, 'the genuine dispatch run id stopped before the agent loop').toBe(RUN_ID);
     expect(rec.getOpts[0]).toEqual({ actor: 'main', runId: RUN_ID });
   });
 

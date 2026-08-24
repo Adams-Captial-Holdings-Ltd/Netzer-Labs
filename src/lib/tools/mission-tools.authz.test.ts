@@ -228,14 +228,20 @@ describe.each(STACKS)('mission tool ownership checks — $name', (stack: Stack) 
     const out = await tools.invoke('list_missions', {}, ctx);
     expect(stack.listedOwners()).toEqual(['research']);
     expect(out.isError).toBeFalsy();
-    expect(out.text).toBe('1 missions for research:\n- [abc12345] p50 open | Ship the ACL');
+    // Re-pinned in Phase 8: `list_missions` now renders through the shared
+    // mission formatter, so a tool answer and a `/missions` reply speak one
+    // vocabulary - the kanban's column labels and its `P<n>` badge.
+    expect(out.text).toBe('1 Open mission for research:\n[abc12345] P50 Open — Ship the ACL');
     stack.expectOtherStackUntouched();
   });
 
   it('list_missions allows naming yourself explicitly', async () => {
     const out = await tools.invoke('list_missions', { owner: 'research' }, ctx);
     expect(stack.listedOwners()).toEqual(['research']);
-    expect(out.text).toBe('1 missions for research:\n- [abc12345] p50 open | Ship the ACL');
+    // Re-pinned in Phase 8: `list_missions` now renders through the shared
+    // mission formatter, so a tool answer and a `/missions` reply speak one
+    // vocabulary - the kanban's column labels and its `P<n>` badge.
+    expect(out.text).toBe('1 Open mission for research:\n[abc12345] P50 Open — Ship the ACL');
     stack.expectOtherStackUntouched();
   });
 
@@ -253,7 +259,7 @@ describe.each(STACKS)('mission tool ownership checks — $name', (stack: Stack) 
   it('update_mission still works on your own missions', async () => {
     const out = await tools.invoke('update_mission', { mission_id: PREFIX, status: 'done' }, ctx);
     expect(out.isError).toBeFalsy();
-    expect(out.text).toBe(`Mission ${PREFIX} updated to done.`);
+    expect(out.text).toBe(`Mission ${PREFIX} → Done.`);
     const writes = stack.statusWrites();
     expect(writes.length).toBe(1);
     expect(writes[0].status).toBe('done');

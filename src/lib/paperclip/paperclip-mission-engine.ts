@@ -86,6 +86,21 @@ export function createPaperclipMissionEngine(deps: PaperclipMissionEngineDeps): 
     return issueToMission(issue, agents);
   }
 
+  async function create(
+    mission: Mission,
+    opts: MissionEngineOptions,
+    parentId?: string,
+  ): Promise<ProjectedMission> {
+    const agents = await agentCache();
+    const body = {
+      ...missionToIssueCreate(mission, agents, () => mission.id),
+      ...(parentId ? { parentId } : {}),
+      allowDuplicate: true,
+    };
+    const created = await client.createIssue(body, opts);
+    return project(created.id, opts);
+  }
+
   return {
     async listMissions(opts: ListMissionsOptions = {}): PaperclipFetch<ProjectedMission[]> {
       const agents = await agentCache();
@@ -133,7 +148,6 @@ export function createPaperclipMissionEngine(deps: PaperclipMissionEngineDeps): 
     },
 
     async createMission(mission: Mission, opts: MissionEngineOptions = {}): PaperclipFetch<ProjectedMission> {
-      const agents = await agentCache();
       // A1-3 / ADR hard constraint 2: the id generator is INJECTED and returns
       // the Mission's own id. Nothing here mints one, and using the Mission id
       // makes the idempotency key deterministic - never random - which is what
@@ -148,9 +162,11 @@ export function createPaperclipMissionEngine(deps: PaperclipMissionEngineDeps): 
       // `client.ts`'s retry policy (idempotency-keyed writes are retryable), so
       // sending anything other than the shape the replay was proven on would be
       // betting an extra issue on an untested body.
-      const body = { ...missionToIssueCreate(mission, agents, () => mission.id), allowDuplicate: true };
-      const created = await client.createIssue(body, opts);
-      return project(created.id, opts);
+      return create(mission, opts);
+    },
+
+    createSubtask(parentMissionId, mission, opts = {}) {
+      return create(mission, opts, parentMissionId);
     },
 
     async setStatus(missionId, status: MissionStatus, opts = {}) {

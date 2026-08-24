@@ -145,16 +145,19 @@ describe('createPaperclipMissionEngine', () => {
     const [projected] = await engineOver(routes).listMissions();
     // Literals, not `projection.toMissionStatus('in_review')` — computing the
     // expectation from the function under test passes even when it is wrong.
-    expect(projected?.status).toBe('in_progress');
+    // Since Phase 9 the literal is `in_review` itself: the status has a lane.
+    expect(projected?.status).toBe('in_review');
     expect(projected?.priority).toBe(95);
   });
 
-  it('C-15: the round trip is lossy in both directions, and the engine does not paper over it', async () => {
-    // in_review collapses to in_progress and 95 comes back for critical: the
-    // engine must surface the same loss the projection tests already pin.
+  it('C-15: PRIORITY is still lossy, STATUS is not any more, and the engine papers over neither', async () => {
+    // What changed in Phase 9 and what did not. `blocked` used to arrive as
+    // `open` - the loss this case was written to pin - and now arrives as
+    // itself. The priority quantization is untouched and still real: `high`
+    // comes back 80 whatever score produced it.
     const routes = routed({ [AGENTS_ROUTE]: () => AGENTS, [ISSUES_ROUTE]: (n) => (n === 0 ? [issue({ status: 'blocked', priority: 'high' })] : []) });
     const [projected] = await engineOver(routes).listMissions();
-    expect(projected?.status).toBe('open');
+    expect(projected?.status).toBe('blocked');
     expect(projected?.priority).toBe(80);
   });
 
@@ -237,6 +240,30 @@ describe('createPaperclipMissionEngine', () => {
     expect(routes.calls.map((call) => call.method)).toEqual(['GET', 'POST', 'GET']);
   });
 
+  it('createSubtask uses the proven company create route with parentId and the canonical agent map', async () => {
+    const parentId = 'b0000000-0000-4000-8000-000000000009';
+    const routes = routed({
+      [AGENTS_ROUTE]: () => AGENTS,
+      [CREATE_ROUTE]: () => ({ id: ISSUE_ID, updatedAt: 'x' }),
+      [DETAIL_ROUTE]: () => issue({ assigneeAgentId: ANALYST_UUID }),
+    });
+    const created = await engineOver(routes).createSubtask(
+      parentId,
+      mission({ id: 'subtask-abc', ownerAgent: 'analyst' }),
+      { actor: 'main', runId: 'paperclip-minted-run-id' },
+    );
+    const write = routes.calls.find((call) => call.method === 'POST');
+    expect(write?.path).toBe(`/api/companies/${COMPANY}/issues`);
+    expect(write?.body).toMatchObject({
+      parentId,
+      assigneeAgentId: ANALYST_UUID,
+      idempotencyKey: 'netzar-mission:subtask-abc',
+      allowDuplicate: true,
+    });
+    expect(created.ownerAgent).toBe('analyst');
+    expect(routes.calls.map((call) => call.method)).toEqual(['GET', 'POST', 'GET']);
+  });
+
   it('setStatus reads the current assignee first, so `open` projects to todo rather than backlog', async () => {
     const routes = routed({
       [AGENTS_ROUTE]: () => AGENTS,
@@ -288,6 +315,7 @@ describe('createPaperclipMissionEngine', () => {
       () => engine.listMissions(),
       () => engine.getMission(ISSUE_ID),
       () => engine.createMission(mission()),
+      () => engine.createSubtask(ISSUE_ID, mission()),
       () => engine.setStatus(ISSUE_ID, 'done'),
       () => engine.reassign(ISSUE_ID, 'main'),
       () => engine.comment(ISSUE_ID, 'hi'),

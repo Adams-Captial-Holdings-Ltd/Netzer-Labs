@@ -40,6 +40,11 @@ describe('mission status projection', () => {
   it.each([
     ['open', true, 'todo'], ['open', false, 'backlog'], ['done', true, 'done'],
     ['done', false, 'done'], ['cancelled', true, 'cancelled'], ['cancelled', false, 'cancelled'],
+    // Phase 9: reachable from Netzar at all for the first time. Neither takes
+    // an assignee check - unlike `in_progress`, neither has an unowned twin in
+    // Paperclip's vocabulary for an unassigned row to fall back to.
+    ['blocked', true, 'blocked'], ['blocked', false, 'blocked'],
+    ['in_review', true, 'in_review'], ['in_review', false, 'in_review'],
   ] as const)('maps %s with assignee=%s to %s', (status, assigned, expected) => {
     expect(toIssueStatus(status, assigned)).toBe(expected);
   });
@@ -49,17 +54,34 @@ describe('mission status projection', () => {
   });
 
   it('maps every Paperclip status explicitly', () => {
+    // SIX of the seven now map to a lane of their own. The regression this
+    // guards is the one Phase 9 closed: `blocked` answered `open` and
+    // `in_review` answered `in_progress`, so a stalled mission was
+    // indistinguishable from an un-started one on every surface at once, and
+    // the loss was invisible because both answers are valid statuses.
     expect(toMissionStatus('backlog')).toBe('open');
     expect(toMissionStatus('todo')).toBe('open');
     expect(toMissionStatus('in_progress')).toBe('in_progress');
-    expect(toMissionStatus('in_review')).toBe('in_progress');
-    expect(toMissionStatus('blocked')).toBe('open');
+    expect(toMissionStatus('in_review')).toBe('in_review');
+    expect(toMissionStatus('blocked')).toBe('blocked');
     expect(toMissionStatus('done')).toBe('done');
     expect(toMissionStatus('cancelled')).toBe('cancelled');
   });
 
-  it.each(['open', 'in_progress', 'done', 'cancelled'] as const)('round-trips %s through assigned issue status', (status) => {
+  it.each(['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const)('round-trips %s through assigned issue status', (status) => {
     expect(toMissionStatus(toIssueStatus(status, true))).toBe(status);
+  });
+
+  it('the SEVEN engine statuses collapse only where Mission carries the fact elsewhere', () => {
+    // The whole projection, stated as a partition. Every Paperclip status maps
+    // to a Mission status; only `backlog`/`todo` share one, and that pair is
+    // recoverable because the split IS the assignee, which `toIssueStatus`
+    // rebuilds from `hasAssignee`. Nothing else is lossy any more.
+    const ENGINE = ['backlog', 'todo', 'blocked', 'in_progress', 'in_review', 'done', 'cancelled'] as const;
+    const lossless = ENGINE.filter((e) => toIssueStatus(toMissionStatus(e), true) === e);
+    expect(lossless).toEqual(['todo', 'blocked', 'in_progress', 'in_review', 'done', 'cancelled']);
+    // `backlog` is the one survivor, and it survives as its unassigned self.
+    expect(toIssueStatus(toMissionStatus('backlog'), false)).toBe('backlog');
   });
 
   it('throws for archived instead of silently treating it as open', () => {

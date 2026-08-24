@@ -11,6 +11,15 @@
  *   /status             show env, model, history length
  *   /agents             list available agents
  *   /agent <id>         set sticky agent for this chat (via session)
+ *   /missions [status]  this agent's mission board
+ *   /mission <id>|new <title>|done <id>
+ *
+ * MISSIONS ARE THE CROSS-SURFACE CASE (CLAUDE.md, "chat surface parity"). The
+ * board was dashboard-only. It reaches Telegram, both Slack send paths and the
+ * dashboard through THIS router and nothing else — every chat entry point
+ * already calls runCommand() and posts CommandResult.reply verbatim, so the
+ * copy cannot drift between surfaces. The words themselves live in the pure
+ * shared module src/lib/missions/format.ts; see missionCommand() below.
  *
  * Returns a CommandResult with the reply text and any side effect already
  * applied. If the input wasn't a command, returns null and the caller
@@ -33,6 +42,28 @@ import {
   endMeeting,
 } from '../lib/warroom/meetings-repo.js';
 import { parseMentions } from '../lib/warroom/orchestrator.js';
+import {
+  AmbiguousMissionPrefixError,
+  createBoardMission,
+  listBoardMissions,
+  listBoardMissionsByStatus,
+  setBoardMissionStatus,
+} from '../lib/missions/mission-acl.js';
+import {
+  MISSION_HELP_LINES,
+  MISSION_LIST_LIMIT,
+  MISSION_RESOLVE_WINDOW,
+  formatAmbiguousRef,
+  formatBoardError,
+  formatMissionCard,
+  formatMissionList,
+  formatMissionUsage,
+  formatNoMatch,
+  formatStatusChanged,
+  formatUnknownStatus,
+  resolveMissionRef,
+} from '../lib/missions/format.js';
+import { MISSION_STATUSES, type MissionStatus } from '../lib/state/mission-tasks-repo.js';
 
 export interface CommandResult {
   reply: string;
@@ -40,6 +71,33 @@ export interface CommandResult {
   forwardedText?: string;
   /** Agent the message should be forwarded to (e.g., after /agent ops hi). */
   forwardedAgentId?: string;
+}
+
+/**
+ * A COMMAND HAS TWO SCOPES, AND CONFLATING THEM CORRUPTS ONE OF THEM.
+ *
+ * `runCommand`'s first argument is the SESSION scope: the agent whose session
+ * row, history and agent record this chat uses. `/newchat`, `/reset`,
+ * `/status`, `/context`, `/warroom`, `/endroom` and `/model` all read or write
+ * exactly the records the ordinary chat turn in the same conversation reads and
+ * writes, so this id MUST be the id that chat turn uses. Hand them a different
+ * one and the command reports success against records nobody reads: "Conversation
+ * cleared." with the history still there, `history: 0 turn(s)` on a live
+ * session, a war-room flag on a session the war-room check never looks at.
+ *
+ * `boardAgentId` is the BOARD scope, and it is a different kind of thing: the
+ * mission board is a REMOTE object named by an agent id, not a record of this
+ * conversation. `/missions` and `/mission` are the only commands that address
+ * it, and the agent whose board a person means is the bot they typed at (see
+ * the Telegram and Slack call sites, and CLAUDE.md "chat surface parity") —
+ * which on a per-agent bot is not the agent their session is keyed under.
+ *
+ * It defaults to the session scope, so a caller with one identity (Slack's
+ * per-agent apps, the dashboard) passes nothing and gets the old behaviour.
+ */
+export interface CommandScope {
+  /** Agent whose mission board `/missions` and `/mission` act on. */
+  boardAgentId?: string;
 }
 
 const HELP_TEXT = [
@@ -51,6 +109,9 @@ const HELP_TEXT = [
   '/endroom — leave war room and return to normal chat',
   '/agents — list available agents',
   '/agent <id> [message] — talk to a specific agent',
+  // The two mission lines are the shared module's, not this file's: the
+  // advertisement is user-visible copy like every other mission string (A3-4).
+  ...MISSION_HELP_LINES,
   '/dashboard — get the dashboard URL',
   '/status — show env, model, history length',
   '/help — show this list',
@@ -60,6 +121,7 @@ export async function runCommand(
   agentId: string,
   chatId: string,
   text: string,
+  scope: CommandScope = {},
 ): Promise<CommandResult | null> {
   const trimmed = text.trim();
   if (!trimmed.startsWith('/')) return null;
@@ -85,8 +147,13 @@ export async function runCommand(
     case 'model': {
       // /model sets the AGENT'S saved default — the same field the dashboard
       // edits — so it propagates to every task and every chat and shows in the UI
-      // (one source of truth). The agent here is the one the message routed to
-      // (a per-agent bot's own agent, or the picker's choice on the main bot).
+      // (one source of truth). The agent here is the SESSION scope: the agent
+      // the message routed to (a per-agent bot's own agent, or the picker's
+      // choice on the main bot), which is the agent that will answer the next
+      // ordinary message in this conversation and load the model set here.
+      // Deliberately NOT the board scope — editing the receiving bot's record
+      // while the next turn loads a different agent's would confirm a change
+      // the user never gets.
       const available = listAvailableModels(process.env);
       const agent = await loadAgent(agentId);
       const envDefault = pickDefaultModel(process.env);
@@ -216,6 +283,14 @@ export async function runCommand(
       return { reply: 'Dashboard is available at /dashboard on the ALB. Set CCE_DASHBOARD_URL or CCE_TUNNEL_DOMAIN to get a direct link.' };
     }
 
+    case 'missions':
+    case 'mission':
+      // THE ONE PLACE THE BOARD SCOPE IS USED (see CommandScope above). Every
+      // other case in this switch is session- or agent-record-scoped and stays
+      // on `agentId`, because those records are the ones ordinary chat in this
+      // same conversation reads.
+      return missionCommand(scope.boardAgentId ?? agentId, chatId, cmd, rest);
+
     case 'agents':
       return {
         reply:
@@ -254,6 +329,119 @@ export async function runCommand(
     };
   }
   return null; // let the agent see it; some users send /vibes etc as part of normal chat
+}
+
+/**
+ * THE ONE PLACE MISSION COPY IS PRODUCED FOR A HUMAN — the A3-3 analogue of
+ * `onToolEvent`'s single emission site. Every chat surface reaches this
+ * function and only this function, and every sentence it can answer with —
+ * board, card, usage, unknown status, no match, ambiguous ref, status changed,
+ * outage — is a call into `src/lib/missions/format.ts`. **This function
+ * contains no user-visible string literal of its own**, which is the property
+ * `format.test.ts` scans `src/` to prove: a shared formatter whose refusals are
+ * still hand-typed at the call site is the A3-4 defect one layer down, and the
+ * refusals are the strings a user actually hits.
+ */
+async function missionCommand(
+  agentId: string,
+  chatId: string,
+  cmd: string,
+  rest: string,
+): Promise<CommandResult> {
+  try {
+    if (cmd === 'missions') {
+      const requested = rest.toLowerCase();
+      const status = (requested || 'open') as MissionStatus | 'all';
+      if (status !== 'all' && !MISSION_STATUSES.includes(status as MissionStatus)) {
+        return { reply: formatUnknownStatus(rest) };
+      }
+      const rows =
+        status === 'all'
+          ? await listBoardMissions(agentId, MISSION_LIST_LIMIT)
+          : await listBoardMissionsByStatus(agentId, status, MISSION_LIST_LIMIT);
+      return { reply: formatMissionList(rows, { owner: agentId, status }) };
+    }
+
+    const [verb = '', ...tail] = rest.split(/\s+/);
+    const arg = tail.join(' ').trim();
+
+    if (verb === 'new') {
+      if (!arg) return { reply: formatMissionUsage('new') };
+      // No Haiku auto-assign here, deliberately: a slash command is the
+      // deterministic path and the person typing it is talking to THIS agent.
+      // `create_mission` remains the tool that can hand work to someone else.
+      const mission = await createBoardMission({
+        ownerAgent: agentId,
+        createdByAgent: agentId,
+        createdByChat: chatId,
+        title: arg,
+        body: arg,
+        priority: 50,
+        assignmentReason: 'opened from a chat command',
+      });
+      return { reply: formatMissionCard(mission) };
+    }
+
+    if (verb === 'done') {
+      if (!arg) return { reply: formatMissionUsage('done') };
+      // The raw ref goes to the ACL, which resolves it owner-scoped and throws
+      // AmbiguousMissionPrefixError rather than transitioning the wrong row.
+      // A MUTATION NEVER RESOLVES A PREFIX IN THIS FILE. That throw is caught
+      // BELOW the outage catch, on purpose: an ambiguous prefix is a user error
+      // and used to be answered "Mission board unavailable: …", which is an
+      // outage sentence for a working board — different condition, different
+      // words, and both words live in the shared module.
+      const ok = await setBoardMissionStatus(agentId, arg, 'done');
+      return {
+        reply: ok
+          ? formatStatusChanged({ ref: arg, status: 'done' })
+          : formatNoMatch({ owner: agentId, ref: arg }),
+      };
+    }
+
+    if (!verb) return { reply: formatMissionUsage() };
+
+    // A READ RESOLVES THE REF THE SAME WAY A MUTATION DOES — same window, same
+    // matcher, same refusal. It previously read `MISSION_LIST_LIMIT` (15) rows
+    // and picked the nearest prefix match, so on a 40-row board `/mission
+    // <ref>` answered "no mission matches" for a mission `/mission done <ref>`
+    // transitioned in the same turn, and an ambiguous prefix rendered ONE card
+    // while the ACL refused the identical input. Both halves of the rule now
+    // come from the shared module.
+    const rows = await listBoardMissions(agentId, MISSION_RESOLVE_WINDOW);
+    const match = resolveMissionRef(rows, verb);
+    if (match.kind === 'none') return { reply: formatNoMatch({ owner: agentId, ref: verb }) };
+    if (match.kind === 'ambiguous') {
+      return {
+        reply: formatAmbiguousRef({
+          owner: agentId,
+          ref: verb,
+          ids: match.matches.map((m) => m.id),
+        }),
+      };
+    }
+    return { reply: formatMissionCard(match.mission) };
+  } catch (err) {
+    // AN AMBIGUOUS PREFIX IS NOT AN OUTAGE. The ACL raises this from the
+    // mutation path; answering it with the board-unavailable sentence told the
+    // user their board was down when it was working and their ref was short.
+    // Same words as the read path, from the same function.
+    if (err instanceof AmbiguousMissionPrefixError) {
+      return {
+        reply: formatAmbiguousRef({ owner: err.owner, ref: err.prefix, ids: err.matches }),
+      };
+    }
+    // THE SWALLOWING CATCH, and the reason it is not empty. Every one of
+    // runCommand's chat call sites `await`s it unguarded, so a throw here 500s
+    // the Telegram webhook (which then retries the same message for ~60s) and
+    // both Slack event routes. The board is REMOTE now — Paperclip down, the
+    // paperclip_disabled kill switch — so unlike /status it really can throw. A
+    // surface bug must not kill the turn; an empty body here would post a blank
+    // message instead, and the dashboard's Missions tab already settled that
+    // argument by drawing an ErrorState ("this is an error, not an empty
+    // board"). The sentence itself is `formatBoardError` in the shared module.
+    return { reply: formatBoardError(err) };
+  }
 }
 
 function formatTokenCount(n: number): string {

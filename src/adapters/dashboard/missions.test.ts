@@ -318,7 +318,7 @@ describe('ACCEPTANCE 3: the ACL response is byte-identical to the recorded legac
       expected: JSON.stringify({
         error: 'invalid_status',
         status: 'nope',
-        valid: ['open', 'in_progress', 'done', 'cancelled'],
+        valid: ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'],
       }),
       status: 400,
     },
