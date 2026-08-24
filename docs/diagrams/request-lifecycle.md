@@ -20,7 +20,7 @@ sequenceDiagram
   H->>H: resolve owner alias / canonical identity
   H-->>T: 200 ack immediately, then process async
   H->>T: send placeholder reply
-  H->>D: getSession (history + model override; empty turns repaired on read)
+  H->>D: getSession (history + model override, empty turns repaired on read)
   H->>L: runAgentTurn
   L->>D: kill switches: sessions_frozen, rate limit, bedrock_global, cost cap
   L->>D: build system prompt: memory recall + hive notes + agent inbox
