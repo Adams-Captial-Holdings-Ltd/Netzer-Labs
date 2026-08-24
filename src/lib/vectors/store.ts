@@ -263,8 +263,9 @@ export async function* iterateRows(
     const list = await s3().send(
       new ListObjectsV2Command({
         Bucket: INDEX_BUCKET,
-        // normalizeScope, not the raw scope: see the note on normalizeScope.
-        Prefix: `index/${normalizeScope(scope)}/`,
+        // indexPrefixFor, never a hand-built template: the write path derives
+        // its key from the same function, so the two cannot drift apart.
+        Prefix: indexPrefixFor(scope),
         ContinuationToken: continuationToken,
       }),
     );
@@ -337,7 +338,20 @@ export function normalizeScope(scope: string): string {
   return scope.replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
-function keyFor(scope: string, docId: string): string {
+/**
+ * The single place an `index/` prefix is constructed.
+ *
+ * Both the read path (`iterateRows`) and the write path (`keyFor`) derive from
+ * this. That is the point: the 2026-08 silent-loss bug was two hand-built
+ * templates drifting apart, and a guard that only checked `normalizeScope` in
+ * isolation stayed green while they did. One construction site makes the
+ * divergence unrepresentable rather than merely detectable.
+ */
+export function indexPrefixFor(scope: string): string {
+  return `index/${normalizeScope(scope)}/`;
+}
+
+export function keyFor(scope: string, docId: string): string {
   const safeDoc = docId.replace(/[^A-Za-z0-9._-]/g, '_');
-  return `index/${normalizeScope(scope)}/${safeDoc}.jsonl`;
+  return `${indexPrefixFor(scope)}${safeDoc}.jsonl`;
 }

@@ -10,8 +10,14 @@
  *
  * Both paths now go through `normalizeScope`. These tests pin that.
  */
-import { describe, it, expect } from 'vitest';
-import { normalizeScope } from './store.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+
+// store.ts captures INDEX_BUCKET at module load, so this must be set before
+// the import below is evaluated. vi.hoisted runs above the import graph.
+vi.hoisted(() => {
+  process.env.VECTORS_BUCKET = 'test-index-bucket';
+});
+import { normalizeScope, indexPrefixFor, keyFor } from './store.js';
 
 describe('normalizeScope', () => {
   it('folds the documented `agent:<id>` scope form', () => {
@@ -36,5 +42,41 @@ describe('normalizeScope', () => {
 
   it('never emits a character that would split an S3 prefix', () => {
     expect(normalizeScope('a/b')).not.toContain('/');
+  });
+});
+
+/**
+ * The invariant that actually matters.
+ *
+ * Testing `normalizeScope` alone did NOT pin it. Reverting `iterateRows` to a
+ * hand-built `index/${scope}/` template left every test above green while
+ * reads silently returned empty again -- verified by mutation, not assumed.
+ * This drives the REAL read path and asserts the prefix S3 is actually asked
+ * for, which is the property the incident violated.
+ */
+describe('the read path lists the prefix the write path writes', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  async function prefixAskedFor(scope: string): Promise<string> {
+    const { S3Client } = await import('@aws-sdk/client-s3');
+    const send = vi
+      .spyOn(S3Client.prototype, 'send')
+      .mockResolvedValue({ Contents: [] } as never);
+    const { iterateRows } = await import('./store.js');
+    for await (const _ of iterateRows(scope)) void _;
+    const cmd = send.mock.calls[0][0] as unknown as { input: { Prefix: string } };
+    return cmd.input.Prefix;
+  }
+
+  it('asks S3 for the folded prefix, not the raw scope', async () => {
+    expect(await prefixAskedFor('agent:ops')).toBe('index/agent_ops/');
+  });
+
+  it('asks for a prefix the written key actually falls under', async () => {
+    const { keyFor } = await import('./store.js');
+    for (const scope of ['agent:ops', 'tenant:acme corp/2026', 'default']) {
+      const prefix = await prefixAskedFor(scope);
+      expect(keyFor(scope, 'doc-1').startsWith(prefix)).toBe(true);
+    }
   });
 });
