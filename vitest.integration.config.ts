@@ -19,7 +19,14 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: false,
-    include: ['src/**/*.integration.test.ts', 'scripts/**/*.integration.test.ts'],
+    // `tests/contract/` holds the Paperclip pinned-artifact contract probes.
+    // They gate themselves on PAPERCLIP_TEST_AUTH_SECRET, so they skip visibly
+    // on the LocalStack lane and run for real under `npm run test:paperclip:all`.
+    include: [
+      'src/**/*.integration.test.ts',
+      'scripts/**/*.integration.test.ts',
+      'tests/**/*.integration.test.ts',
+    ],
     // LocalStack cold start + DDB table create per test file is slow;
     // bump from vitest's default 5s.
     testTimeout: 30_000,

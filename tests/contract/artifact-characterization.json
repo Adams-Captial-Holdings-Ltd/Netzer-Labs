@@ -1,0 +1,318 @@
+{
+  "$comment": "What the pinned Paperclip artifact actually does, measured - never hand-written. Regenerate with UPDATE_PAPERCLIP_SNAPSHOT=1 npm run test:paperclip:all and commit the diff; a section that changes means the artifact changed. boardMutationGuard: A1-17, the outcome of each of the five agent-key write shapes, so 'does the guard reject agent mutations' has an answer that survives a bump. runIdBoundary: C-3, which write shapes demand X-Paperclip-Run-Id from a run-less agent actor, plus what an empty header does. commentMovesIssueUpdatedAt: R4, whether a comment moves the parent issue's updatedAt, which decides whether the reconciler can see comment activity through its watermark at all. routeReachability and boardOnlyAndCountRoutes: the status and error string of every integration point, including the two the bar got wrong - /issues/count is an attention query rather than a totals endpoint, and /api/companies is board-only. healthBodyByActor: the exact key set GET /api/health returns to an anonymous caller and to an authenticated one - the only measurement that entitles PaperclipHealthOk to name a field, since the OpenAPI document declares only eight of the twelve. listFilterValidation: how the three issue-list filters reject a bad value, which is NOT uniform - assigneeAgentId is a clean 422, an unknown status is a silent empty 200, and a malformed parentId is a 500, so the ACL must validate that one before forwarding it. checkoutReleaseContract: A1-11, the checkout and release error strings observed rather than transcribed; the two pause strings the bar also names are absent because no probe here can drive a project to its budget hard stop. commentPagination: A1-6 crossed with A1-8, on the one route where the OpenAPI document is no help at all - GET /api/issues/{id}/comments declares no query parameter but its own path id, so after, afterCommentId, order and limit are indistinguishable from names the server never heard of until a probe watches it act. Measured against a five-comment thread: limit=2 really returns two rows, after=<middle row> and afterCommentId=<middle row> each return the two rows older than it and return the SAME page, and sending both names returns the after page. The two rows that make the trap visible are the last two - zzzUnknown=1 and limit=0 are BOTH answered 200 with the full five-row thread, so an unimplemented name is silent here, and limit=0 does NOT behave like the issue list's limit<=0, which is a 400. If an artifact bump drops the cursor, those five-row counts move and this section goes red instead of the ACL quietly re-reading page 1 forever. wakeupDefaults: everything about POST /api/agents/{id}/wakeup that no research read specifies - the status code BOTH branches answer with (the OpenAPI document declares 200 for this operation and the live artifact sends something else, which is exactly why the probe records it and asserts only that the two branches match), the triggerDetail the server picks when the request omits it, the skip reason, and the lifecycle status a freshly created run carries. That last one is the ONLY heartbeat-run status anything has ever observed: the literals queued, scheduled_retry, interrupted and succeeded appear zero times in the whole committed OpenAPI snapshot, so PaperclipHeartbeatRunStatus is an open string with one known member rather than an eight-member union assembled from nowhere. All of it is recorded rather than asserted, because a plausible value asserted from nowhere is what made A1-12 wrong the first time.",
+  "$artifact": "netzer-paperclip:2026.722.0-netzar.1",
+  "boardMutationGuard": [
+    {
+      "shape": "POST /api/companies/{companyId}/issues",
+      "status": 201,
+      "error": null
+    },
+    {
+      "shape": "PATCH /api/issues/{id}",
+      "status": 200,
+      "error": null
+    },
+    {
+      "shape": "POST /api/issues/{id}/comments",
+      "status": 201,
+      "error": null
+    },
+    {
+      "shape": "POST /api/issues/{id}/checkout",
+      "status": 200,
+      "error": null
+    },
+    {
+      "shape": "POST /api/issues/{id}/work-products",
+      "status": 201,
+      "error": null
+    }
+  ],
+  "runIdBoundary": {
+    "routes": {
+      "POST /api/issues/{id}/comments": {
+        "status": 201,
+        "error": null,
+        "requiresRunId": false
+      },
+      "PATCH /api/issues/{id}": {
+        "status": 200,
+        "error": null,
+        "requiresRunId": false
+      },
+      "POST /api/issues/{id}/checkout": {
+        "status": 401,
+        "error": "Agent run id required",
+        "requiresRunId": true
+      },
+      "POST /api/issues/{id}/work-products": {
+        "status": 201,
+        "error": null,
+        "requiresRunId": false
+      }
+    },
+    "emptyHeader": {
+      "status": 401,
+      "error": "Agent run id required"
+    }
+  },
+  "commentMovesIssueUpdatedAt": {
+    "moved": true,
+    "consequence": "the reconciler sees comment activity through the updatedSince watermark"
+  },
+  "routeReachability": [
+    {
+      "route": "GET /api/health",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/openapi.json",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/companies",
+      "status": 403,
+      "error": "Board access required"
+    },
+    {
+      "route": "GET /api/companies/{companyId}",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/companies/{companyId}/issues",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/companies/{companyId}/issues/count",
+      "status": 400,
+      "error": "issues/count currently requires attention=blocked"
+    },
+    {
+      "route": "GET /api/companies/{companyId}/agents",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/companies/{companyId}/approvals",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/companies/{companyId}/activity",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/agents/me",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/agents/{id}",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{id}",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{id}/comments",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{id}/work-products",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{id}/approvals",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{id}/activity",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{id}/runs",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{issueId}/live-runs",
+      "status": 200,
+      "error": null
+    },
+    {
+      "route": "GET /api/issues/{issueId}/active-run",
+      "status": 200,
+      "error": null
+    }
+  ],
+  "boardOnlyAndCountRoutes": {
+    "GET /api/companies/{companyId}/issues/count": {
+      "status": 400,
+      "error": "issues/count currently requires attention=blocked"
+    },
+    "GET /api/companies/{companyId}/issues/count?attention=blocked": {
+      "status": 200,
+      "error": null
+    },
+    "GET /api/companies": {
+      "status": 403,
+      "error": "Board access required"
+    }
+  },
+  "healthBodyByActor": {
+    "anonymous": [
+      "bootstrapInviteActive",
+      "bootstrapStatus",
+      "databaseBackup",
+      "deploymentExposure",
+      "deploymentMode",
+      "status",
+      "warnings"
+    ],
+    "authenticated": [
+      "authReady",
+      "bootstrapInviteActive",
+      "bootstrapStatus",
+      "databaseBackup",
+      "deploymentExposure",
+      "deploymentMode",
+      "features",
+      "serverInfo",
+      "serverVersion",
+      "status",
+      "version",
+      "warnings"
+    ]
+  },
+  "listFilterValidation": {
+    "assigneeAgentId=<not a uuid>": {
+      "status": 422,
+      "error": "assigneeAgentId must be a UUID or 'null'"
+    },
+    "parentId=<not a uuid>": {
+      "status": 500,
+      "error": "Internal server error"
+    },
+    "status=<not a status>": {
+      "status": 200,
+      "error": null,
+      "rows": 0
+    }
+  },
+  "checkoutReleaseContract": {
+    "POST /api/issues/{id}/checkout as another agent": {
+      "status": 403,
+      "error": "Agent can only checkout as itself"
+    },
+    "POST /api/issues/{id}/release run-less": {
+      "status": 401,
+      "error": "Agent run id required"
+    },
+    "POST /api/issues/{id}/release holding a run id": {
+      "status": 200,
+      "error": null
+    },
+    "POST /api/issues/{id}/checkout with an unmatched expectedStatuses": {
+      "status": 409,
+      "error": "Issue checkout conflict"
+    },
+    "POST /api/issues/{id}/checkout with an empty expectedStatuses": {
+      "status": 400,
+      "error": "Validation error"
+    }
+  },
+  "wakeupDefaults": {
+    "status code on the run branch": 202,
+    "status code on the skipped branch": 202,
+    "triggerDetail when the request omits it": "manual",
+    "reason on a skip whose issueId does not resolve": "wakeup_skipped",
+    "status on the run row a fresh wakeup returns": "queued"
+  },
+  "searchRateLimit": {
+    "GET /api/companies/{companyId}/search": {
+      "limit": 60,
+      "rateLimitHeadersOnSuccess": true,
+      "sharedBucketWithExtract": true,
+      "drainedAfterSerialRequests": true,
+      "refusal": {
+        "status": 429,
+        "error": "Search rate limit exceeded"
+      },
+      "retryAfterHeaderMatchesBodyField": true,
+      "scopedToActor": "agent"
+    },
+    "GET /api/companies/{companyId}/search/extract": {
+      "requiresContains": {
+        "status": 400,
+        "error": "contains must be at least 2 characters"
+      },
+      "rateLimitHeadersOnValidation400": false
+    }
+  },
+  "issueListCoalescer": {
+    "GET /api/companies/{companyId}/issues": {
+      "identicalConcurrentReads": 64,
+      "identicalConcurrentRefusals": 0,
+      "distinctConcurrentReads": 24,
+      "refusal": {
+        "status": 429,
+        "error": "Too many concurrent issue-list requests for this actor/client"
+      },
+      "retryAfterSeconds": 1,
+      "requestCacheHeaderOnRefusal": "retry",
+      "rateLimitHeadersOnRefusal": false,
+      "clearedByHonouringRetryAfter": true
+    }
+  },
+  "commentPagination": {
+    "comments on the issue": 5,
+    "GET /api/issues/{id}/comments": {
+      "status": 200,
+      "error": null,
+      "rows": 5
+    },
+    "GET /api/issues/{id}/comments?limit=2": {
+      "status": 200,
+      "error": null,
+      "rows": 2
+    },
+    "GET /api/issues/{id}/comments?after=<middle row>": {
+      "status": 200,
+      "error": null,
+      "rows": 2
+    },
+    "GET /api/issues/{id}/comments?afterCommentId=<middle row>": {
+      "status": 200,
+      "error": null,
+      "rows": 2
+    },
+    "GET /api/issues/{id}/comments?after=<middle row>&afterCommentId=<oldest row>": {
+      "status": 200,
+      "error": null,
+      "rows": 2,
+      "matches the after=<middle row> page": true
+    },
+    "GET /api/issues/{id}/comments?zzzUnknown=1": {
+      "status": 200,
+      "error": null,
+      "rows": 5
+    },
+    "GET /api/issues/{id}/comments?limit=0": {
+      "status": 200,
+      "error": null,
+      "rows": 5
+    }
+  }
+}

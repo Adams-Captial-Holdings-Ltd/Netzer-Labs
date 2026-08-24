@@ -24,7 +24,12 @@ vi.mock('./embedder.js', () => ({
   embedMany: embedManyMock,
 }));
 
-vi.mock('./store.js', () => ({
+// Partial mock: only the S3-touching writes are stubbed. `normalizeScope` is a
+// pure helper and MUST stay real here — re-implementing its regex in the mock
+// would let the test pass while write and read folded scopes differently, which
+// is the exact defect it guards (see src/lib/vectors/store.scope.test.ts).
+vi.mock('./store.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./store.js')>()),
   putDocument: putDocumentMock,
   deleteDocument: vi.fn(),
 }));

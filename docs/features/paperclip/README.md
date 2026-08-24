@@ -196,8 +196,8 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Risk | Evidence | Approved next work |
 |---|---|---|
 | Phase 1 stacks have never been `cdk diff`ed against the real account | [HANDOFF](HANDOFF.md) — synth-only evidence | Phase 1 steps 6–8, gated on an explicit user deploy go-ahead |
-| ~~ARM64 buildability of the patched image is unanswered~~ **RESOLVED 2026-08-20** | The pinned digest is an OCI image index carrying `linux/arm64` (`sha256:6ab3c816…`), read from GHCR | None. The base image is multi-arch, and the whole compute plane is ARM64 already (`compute-stack.ts` `CpuArchitecture.ARM64`) |
-| **Nothing builds or pushes the patched Paperclip image** | `.github/workflows/deploy.yml` has no build step; `vendor/paperclip/Dockerfile` is never invoked | Extend `scripts/lib/lifecycle/cloud-build.ts` (the Docker-free CodeBuild path) to build it in the operator's own account — decided 2026-08-20, not yet built |
+| ~~ARM64 buildability of the patched image is unanswered~~ **RESOLVED 2026-08-20** | The pinned digest `sha256:6b9daa3c…` is an OCI image index whose `linux/arm64` child manifest is `sha256:6ab3c816…`, read from GHCR. The Dockerfile pins the index; the two differing is correct | None. The base image is multi-arch, and the whole compute plane is ARM64 already (`compute-stack.ts` `CpuArchitecture.ARM64`) |
+| **Nothing builds or pushes the patched Paperclip image** | `.github/workflows/deploy.yml` has no build step; `vendor/paperclip/Dockerfile` is built only by `docker-compose.paperclip.yml` for the local test harness | [Phase 1.5 — the Paperclip image pipeline](phase-1.5-image-pipeline.md): extend `scripts/lib/lifecycle/cloud-build.ts` (the Docker-free CodeBuild path) to build it in the operator's own account. Specified 2026-08-20, not yet built. |
 | **Aurora is untiered: a Tier 0 install provisions the production cluster** | `infra/lib/database-stack.ts` has zero `TIERS`/`props.tier` references | Tier-gate `serverlessV2Min/MaxCapacity`; keep `deletionProtection` and `RETAIN` (**P17**, **M19**) — decided 2026-08-20, not yet built |
 | The patch must be re-evaluated on every artifact re-pin | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Drop the patch the release upstream ships `updatedSince` |
 | Node-vs-Postgres clock skew can stamp an update at or before an observed watermark | [Session handoff §3.1](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | Reconciler must overlap polls rather than trust exact watermarks; owned by the client/reconciler phase |
@@ -238,6 +238,8 @@ step 7. Run the **full** `npm test`, never a scoped run.
 ## 9. Related documents
 
 - [Operational HANDOFF](HANDOFF.md) — current state and next action
+- [Phase 1.5 — the Paperclip image pipeline](phase-1.5-image-pipeline.md) — the
+  approved work definition for the last blocker on a verifiable Phase 2
 - [Implementation plan](implementation-plan.md) and its [audit](plan-audit.md)
 - [ADR 0010 — Paperclip is the missions work engine](../../adr/0010-paperclip-work-engine.md)
 - [Feature knowledge framework](../README.md)

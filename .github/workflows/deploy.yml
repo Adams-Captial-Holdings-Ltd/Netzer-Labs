@@ -181,13 +181,37 @@ jobs:
           # CI does NOT run scripts/deploy.ts, it runs `cdk deploy --all`
           # directly, so the deploy driver has TWO homes. A repo created in
           # only one of them is absent on the path that reaches staging.
+          #
+          # "Does not exist" and "I am not allowed to look" must not be the
+          # same answer. `2>/dev/null` used to make them one: an AccessDenied
+          # on describe fell through to create-repository, which then failed
+          # with a second AccessDenied naming the wrong API. Same failure mode
+          # as the connector-readiness probe below, whose comment records what
+          # a swallowed AccessDenied cost on 2026-08-14.
           ensure_repo() {
-            if aws ecr describe-repositories --repository-names "$1" --region "$AWS_REGION" --no-cli-pager >/dev/null 2>&1; then
+            set +e
+            out=$(aws ecr describe-repositories --repository-names "$1" --region "$AWS_REGION" --no-cli-pager 2>&1)
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
               echo "ECR repository already exists: $1"
-            else
-              echo "Creating ECR repository: $1"
-              aws ecr create-repository --repository-name "$1" --image-scanning-configuration scanOnPush=true --image-tag-mutability MUTABLE --region "$AWS_REGION" --no-cli-pager
+              return 0
             fi
+            case "$out" in
+              *RepositoryNotFoundException*) ;;
+              *)
+                echo "::error::Cannot read ECR repository $1; refusing to guess that it is missing."
+                echo "$out" >&2
+                echo "The deploy role needs ecr:DescribeRepositories on $1." >&2
+                echo "Grants live in infra/lib/iam-stack.ts (cicdRole, sid EcrPushAppImages /" >&2
+                echo "EcrCreateAppRepos) and are applied by the CDK deploy LATER IN THIS JOB," >&2
+                echo "so a new repo pattern must ship in an earlier deploy than the flag that" >&2
+                echo "uses it. cicdRole is created only by the PROD IAM stack." >&2
+                exit 1
+                ;;
+            esac
+            echo "Creating ECR repository: $1"
+            aws ecr create-repository --repository-name "$1" --image-scanning-configuration scanOnPush=true --image-tag-mutability MUTABLE --region "$AWS_REGION" --no-cli-pager
           }
           ensure_repo "$ECR_REPO"
           # Paperclip work engine (ADR 0010): same gate as the substrate
@@ -204,6 +228,11 @@ jobs:
       # ubuntu-latest runner is amd64, so we use QEMU + buildx to
       # cross-compile. Without this, ECS tasks fail to start with
       # "exec format error" and the deployment circuit breaker trips.
+      #
+      # ORCHESTRATOR IMAGE ONLY. The Paperclip image below is deliberately NOT
+      # built here: it goes through the same native ARM64 CodeBuild path the
+      # local deploy driver uses, so that artifact has one build mechanism
+      # rather than two. See the step's comment for why.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
@@ -227,6 +256,71 @@ jobs:
             --push \
             -f Dockerfile \
             .
+
+      # Mirrors the Paperclip image build in scripts/deploy.ts phase a (Phase
+      # 1.5, ADR 0010) by running THE SAME CODE, not a hand-mirrored copy of
+      # it. CI does NOT run scripts/deploy.ts - it runs `npx cdk deploy --all`
+      # and hand-mirrors every step - and this is the one step where
+      # hand-mirroring changed the ARTIFACT'S PROVENANCE rather than just its
+      # wording. The previous version cross-built vendor/paperclip/Dockerfile
+      # with QEMU-emulated `docker buildx` on this amd64 runner while the local
+      # driver used the native ARM64 CodeBuild path in
+      # scripts/lib/lifecycle/cloud-build.ts. Same Dockerfile, two mechanisms,
+      # so the arm64 guarantee, the base-image pull and the whole build
+      # environment differed between the path that gets exercised locally and
+      # the path that actually reaches staging and production. Emulation was
+      # also wrong on its own merits here: that Dockerfile runs apt-get and
+      # then a full `tsc` over the entire Paperclip server (a 12,670-line route
+      # module, a 212 KB generated OpenAPI, ~116 schema files) at 5-20x under
+      # QEMU, with no layer cache on a fresh runner.
+      #
+      # scripts/ci/paperclip-image.ts is a thin CLI over that same module, not
+      # a second implementation. It computes the SAME content-addressed tag
+      # (contentImageTag: git's own tree hash for vendor/paperclip, so an app
+      # commit that cannot alter this image does not rebuild it), performs the
+      # SAME skip-if-already-present ECR probe with the same refusal to read an
+      # AccessDenied as absence, and calls the SAME runCloudBuild with
+      # `pushLatest: false` - no floating :latest in a repo whose only
+      # legitimate consumer is a task definition pinned to the digest.
+      #
+      # The arm64 gate is unchanged and still the thing that stops a
+      # wrong-platform image being pushed AT ALL: the buildspec's
+      # `test "$ARCH" = "arm64"` runs INSIDE the build, on a native ARM host,
+      # between `docker build` and `docker push`. It is not ceremony - the
+      # pinned Paperclip base is a multi-arch INDEX, so a builder on the wrong
+      # platform succeeds quietly and produces amd64 that crash-loops on
+      # Fargate with "exec format error".
+      #
+      # Same gate as the ECR repo create above: with CCE_PAPERCLIP_ENABLED
+      # unset this step never runs, so an unarmed deploy creates no CodeBuild
+      # project, starts no build and pushes no image.
+      #
+      # IAM, and it is the same ordering trap the ECR grants carry: this step
+      # needs cicdRole's PaperclipCloudBuild* statements (infra/lib/iam-stack.ts)
+      # to stage the source zip, create/start the CodeBuild project and pass its
+      # role. Those are applied by the CDK deploy LATER IN THIS JOB, so they
+      # must land in a prior UNARMED deploy before CCE_PAPERCLIP_ENABLED is set,
+      # and cicdRole is created only by the PROD IAM stack, so a staging arm
+      # depends on a production IAM deploy having run first.
+      #
+      # timeout-minutes is belt and braces: runCloudBuild gives up at 35
+      # minutes and the CodeBuild project times out at 30, so this only catches
+      # a hung AWS CLI.
+      - name: Build + Push Paperclip (native ARM64 CodeBuild)
+        if: vars.CCE_PAPERCLIP_ENABLED == '1'
+        timeout-minutes: 45
+        env:
+          PAPERCLIP_ECR_REPO: ${{ steps.cfg.outputs.paperclip_ecr_repo }}
+          # Selects THIS environment's state bucket through the same
+          # resolveStateNames() every other lifecycle tool uses. Must match the
+          # CCE_NAME_SUFFIX the CDK deploy step below passes, or the source zip
+          # is staged in the other environment's bucket.
+          CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}
+          # Forwarded as the shared buildspec's --build-arg. The vendored
+          # Dockerfile declares no matching ARG, so it is inert here - which is
+          # also why it is correctly absent from the content tag.
+          DEPLOY_TIER: ${{ env.CCE_TIER }}
+        run: npx tsx scripts/ci/paperclip-image.ts
 
       # Mirrors the readiness gate in scripts/deploy.ts. The cloudflared
       # connector is an ESSENTIAL container that reads the `token` field of the

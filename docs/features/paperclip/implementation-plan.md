@@ -10369,3 +10369,121 @@ genuine need appears. Not part of the base plan; buys nothing today.
 
 **Reversibility.** **High** in the direction of pinning (bump a tag). **Low** in the direction of
 forking — once forked, the divergence compounds at ~1 stable/week and is effectively permanent.
+
+---
+
+# 35. Addendum — the Four Pillars scope expansion
+
+> **This section is an addendum, appended 2026-08-21. Sections 1–34 above are unchanged and remain
+> `status: historical` — true when observed on 2026-08-18, not maintained since. This section carries
+> its own status, `accepted`, and is the only part of this document describing work not yet attempted.**
+>
+> It exists because the author established that **Netzar OS is the fourth pillar — the Agentic OS** —
+> and that the other three pillars must therefore be part of this implementation rather than left
+> upstream. Sections 1–34 scoped Paperclip narrowly, as a work-item engine behind the existing Missions
+> wire contract. That scope is now too small.
+>
+> **Nothing below is implemented yet.** Per the standing rule for this document, §35.4's status table
+> is filled in as each phase actually lands and its verification actually runs — never in advance.
+
+## 35.1 The four pillars, and who owns each
+
+| Pillar | Owner | What it means here |
+|---|---|---|
+| **Agentic Task Manager** — declare intent, agents work, you verify the output | **Paperclip**, surfaced through Netzar | Tasks, approvals and review gates; proactive agent coworkers; auditable routines and workflows; verification from diffs, screenshots and tests |
+| **Org Chart for Agents** — roles, permissions and boundaries for humans and agents | **Paperclip**, surfaced through Netzar | Mixed human + agent org chart; responsibilities, delegation, specialization; governance over who can do what; scoped secrets and company boundaries |
+| **Agent Employee Training** — design, train and evaluate your AI employees | **Paperclip**, surfaced through Netzar | Skill Studio and shared org-wide skills; evals and saved test runs; active learning loops and quality metrics; performance reviews for agents |
+| **Agentic OS** — the infrastructure that makes the work run | **Netzar OS itself** | Cross-provider runtime, sandboxing, integrations and MCP, SSO/GRC/RBAC, cost controls, data privacy and trace collection |
+
+The consequence: **Netzar does not need to build pillars 1–3 from scratch, and must not re-implement
+them.** It needs to surface them without adopting Paperclip's vocabulary, while keeping pillar 4 —
+identity, cost admission, kill switches, guardrails and the chat surfaces — firmly Netzar-side. That
+division is unchanged from §1; only the breadth of what gets surfaced has grown.
+
+## 35.2 The surface each pillar actually has
+
+Verified 2026-08-20 against the **running** pinned artifact by reading `GET /api/openapi.json`
+(475 paths). Per **A1-16**, routes are cited by method and path only, never by source line number.
+
+### Pillar 1 — Agentic Task Manager
+
+| Capability | Routes |
+|---|---|
+| Approvals and review gates | `GET`/`POST /api/issues/{id}/approvals`; `DELETE /api/issues/{id}/approvals/{approvalId}`; `GET`/`POST /api/companies/{cid}/approvals`; `GET /api/approvals/{id}`; `GET /api/approvals/{id}/issues`; `POST /api/approvals/{id}/approve`, `/reject`, `/request-revision`, `/resubmit`; `GET`/`POST /api/approvals/{id}/comments` |
+| Auditable routines and workflows | `GET`/`POST /api/companies/{cid}/routines`; `GET`/`PATCH /api/routines/{id}`; `GET /api/routines/{id}/runs`; `POST /api/routines/{id}/run`; `POST /api/routines/{id}/triggers`; `PATCH`/`DELETE /api/routine-triggers/{id}`; `POST /api/routine-triggers/{id}/rotate-secret`; `POST /api/routine-triggers/public/{publicId}/fire`; `GET /api/routines/{id}/revisions`; `POST /api/routines/{id}/revisions/{revisionId}/restore`; plus description annotations |
+| Verify from diffs, screenshots and tests | `GET`/`POST /api/issues/{id}/work-products`; `PATCH`/`DELETE /api/work-products/{id}`; `GET /api/companies/{cid}/artifacts`; `GET /api/issues/{id}/documents`; `GET`/`PUT`/`DELETE /api/issues/{id}/documents/{key}`; document revisions and restore; annotations; `POST /api/issues/{id}/documents/{key}/lock` and `/unlock` |
+
+**`request-revision` is this pillar's keystone and has no Netzar equivalent.** It is the verb that makes
+"you verify the output" a loop rather than a binary accept-or-reject.
+
+**Routines overlap Netzar's own scheduler.** §1 assigns scheduling to Netzar. Surfacing Paperclip
+routines therefore needs an explicit decision about which scheduler owns recurring work, or the two
+will drift into two sources of truth. This is a **blocking decision before any routine work starts**.
+
+### Pillar 2 — Org Chart for Agents
+
+| Capability | Routes |
+|---|---|
+| The chart | `GET /api/companies/{cid}/org`; `GET /api/companies/{cid}/org.svg`; `GET /api/companies/{cid}/org.png` |
+| Reporting lines | `agents.reports_to`, exposed through the agent routes |
+| Governance | `PATCH /api/agents/{id}/permissions`, and the company permission model |
+| Scoped secrets | `GET /api/agents/me/secrets`; `POST /api/agents/me/secrets/{key}/value`; the company secret-provider routes |
+
+`org.svg` and `org.png` are **server-rendered**, so no chart-drawing code is written Netzar-side.
+`GET /api/companies/{cid}/org` returns an **undocumented** body (`additionalProperties: {}`) and must be
+characterized by probe before anything types it.
+
+### Pillar 3 — Agent Employee Training
+
+The largest surface of the three: **37 routes.**
+
+| Capability | Routes |
+|---|---|
+| Skill Studio | `GET`/`POST /api/companies/{cid}/skills`; `GET`/`PATCH`/`DELETE /api/companies/{cid}/skills/{skillId}`; `GET`/`PATCH`/`DELETE .../files`; `POST .../reset`; `GET`/`POST .../versions`; `GET .../versions/{versionId}` |
+| Shared org-wide skills | `GET /api/skills/catalog`, `/catalog/{catalogId}`, `/catalog/{catalogId}/files`; `POST /api/companies/{cid}/skills/install-catalog`; `GET /api/skills/available`, `/index`, `/{skillName}`; `GET /api/companies/{cid}/skills/categories` |
+| Evals and saved test runs | `GET`/`POST .../skills/{skillId}/test-inputs`; `PATCH`/`DELETE .../test-inputs/{inputId}`; `GET`/`POST /api/companies/{cid}/skill-test-run-templates`; `PATCH`/`DELETE .../{templateId}`; `GET`/`POST .../skills/{skillId}/test-runs`; `GET`/`DELETE .../test-runs/{runId}`; `POST .../test-runs/{runId}/cancel` |
+| Governance over skills | `GET`/`PUT`/`DELETE /api/companies/{cid}/skill-policy`; `POST /api/companies/{cid}/skill-policy/evaluate`; `POST .../skills/{skillId}/audit` |
+| Collaboration and provenance | `POST .../skills/{skillId}/fork`; `GET .../fork-precheck`; `POST`/`DELETE .../star`; `GET`/`POST .../comments`; `PATCH`/`DELETE .../comments/{commentId}` |
+| Agent binding | `GET /api/agents/{id}/skills`; `POST /api/agents/{id}/skills/sync` |
+| Import and discovery | `POST /api/companies/{cid}/skills/import`; `POST .../skills/scan-projects`; `POST .../skills/{skillId}/install-update`; `GET .../skills/{skillId}/update-status` |
+
+**"Performance reviews for agents" has no located route** and is the one pillar-3 claim not yet found in
+the API. It may be a UI composition over test runs and activity rather than its own resource. **Do not
+build against it until a probe finds it** — treat it as unverified, which is the rule that cost this
+project two prior sessions when it was ignored.
+
+**Skills are executable instructions delivered to an agent.** A malicious or careless skill is a
+prompt-injection and capability-escalation vector that Netzar's guardrails do not currently see. Skill
+governance is therefore a **security** feature here, not a convenience, and `skill-policy` is the
+control that matters.
+
+## 35.3 What this changes about the architecture
+
+1. **The ACL grows beyond Missions.** §1 scoped translation to one file for one wire contract. Four
+   further surfaces now cross the boundary — approvals, routines, skills, org — each needing the same
+   no-shared-vocabulary discipline. The single-file rule does not survive; the **principle** must.
+2. **Missions is no longer the only frontend question.** Pillar 3 especially has no Netzar equivalent to
+   extend, so it is new product surface rather than a projection of an existing one.
+3. **§16.6's "operator-only" ruling on the org chart is reversed** by author decision: the chart is a
+   client-facing demonstration of how agents relate and report to each other.
+4. **Two schedulers now exist** — Netzar's and Paperclip's routines. One must own recurring work.
+5. **The prompt-injection surface widens again**, from issue text to skill bodies, goal titles, org
+   labels and approval comments. `neutralizeForPrompt` escapes angle brackets only and is adequate for
+   none of them.
+
+## 35.4 Implementation status
+
+**Empty by design.** A row is filled only when the work actually lands and its verification has actually
+run — never in advance, and never from a plan.
+
+| Pillar | Phase | Landed | Commit | Verified by |
+|---|---|---|---|---|
+| Agentic Task Manager | — | not started | — | — |
+| Org Chart for Agents | — | not started | — | — |
+| Agent Employee Training | — | not started | — | — |
+
+## 35.5 Related
+
+- [The bar and phase decomposition](bar-and-phases.md) — carries the phases that implement this section
+- [ADR 0010](../../adr/0010-paperclip-work-engine.md) and its amendment
+- [The plan audit](plan-audit.md)
