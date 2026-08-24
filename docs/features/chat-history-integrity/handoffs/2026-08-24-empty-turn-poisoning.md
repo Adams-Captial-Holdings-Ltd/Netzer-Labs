@@ -20,9 +20,9 @@ supersedes: none
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | **none** — `fix/*` deploys nowhere, per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `f64d1e04b2d85853752e393b310ef243460958dd` |
-| Commit at session end | the single commit this file lands in; see the PR |
-| Pushed | yes — see the PR link in the feature [HANDOFF](../HANDOFF.md) |
-| PR | into `development` |
+| Commit at session end | `ea1eb93` |
+| Pushed | yes |
+| PR | [#96](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/96) into `development` |
 | Deployed | **no** — nothing reached staging or production |
 
 ## 2. Current state summary

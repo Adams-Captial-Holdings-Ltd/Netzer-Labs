@@ -16,7 +16,8 @@ as_of_commit: f64d1e04b2d85853752e393b310ef243460958dd
 | Based on | `development` at `f64d1e04b2d85853752e393b310ef243460958dd` |
 | Next merge target | `development` |
 | Deployment state | **Deployed nowhere.** No staging deploy, no production deploy. |
-| Pushed | See the session log below — this HANDOFF is written before the push completes. |
+| Pushed | yes — `fix/docgen-crash-isolation` |
+| PR | [#96](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/96) into `development` |
 
 Staging is reachable only by the promotion chain `development → qa → staging`,
 each step its own pull request, because `scripts/ci/deploy-source-guard.mjs`
