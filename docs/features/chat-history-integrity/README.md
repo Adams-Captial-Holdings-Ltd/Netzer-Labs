@@ -104,3 +104,7 @@ executed at all.
 Source and tests are declared in this document's frontmatter and are the
 ultimate truth for present behavior. Session history lives in
 [`handoffs/`](handoffs/); current volatile state lives in [`HANDOFF.md`](HANDOFF.md).
+
+The rules this folder follows are specified in exactly one place, the
+[feature knowledge framework](../README.md). Branch and environment reality is
+owned by [`development.md`](../../../development.md).
