@@ -46,6 +46,8 @@ export interface StorageOutputs {
   rawBucket: IBucket;
   curatedBucket: IBucket;
   vectorsStagingBucket: IBucket;
+  /** Durable vector index. No lifecycle expiry, versioning on. */
+  vectorsBucket: IBucket;
   logsBucket: IBucket;
   /**
    * WORM audit bucket (S3 Object Lock). Tier-gated: only created at
