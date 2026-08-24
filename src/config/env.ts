@@ -55,7 +55,12 @@ const envSchema = z.object({
   RAW_BUCKET: z.string().optional(),
   CURATED_BUCKET: z.string().optional(),
   VECTORS_STAGING_BUCKET: z.string().optional(),
-  /** Alias used by src/lib/vectors/store.ts. Falls back to staging if unset. */
+  /**
+   * Durable vector index (`index/<scope>/<docId>.jsonl`). A DIFFERENT bucket
+   * from VECTORS_STAGING_BUCKET: staging carries a 7-day expiry and this one
+   * must never carry any expiry. They were the same bucket until 2026-08,
+   * which cost the production knowledge base.
+   */
   VECTORS_BUCKET: z.string().optional(),
   AUDIT_LOCK_BUCKET: z.string().optional(),
 

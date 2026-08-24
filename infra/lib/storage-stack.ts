@@ -14,6 +14,36 @@ import { RESOURCE_NAMES, TAGS, bucketName } from './constants.js';
 import type { BaseStackProps, StorageOutputs } from './interfaces.js';
 
 /**
+ * Upload-staging key prefix. MUST match `UPLOAD_PREFIX` in
+ * `src/lib/vectors/store.ts`; `infra/lib/storage-stack.test.ts` asserts the
+ * two are identical, because drift between them silently re-widens the
+ * staging expiry over durable keys.
+ */
+const UPLOAD_STAGING_PREFIX = 'uploads/';
+
+/**
+ * The dashboard's browser origin, for the staging bucket's CORS allowlist.
+ *
+ * Fails the synth on a malformed value rather than dropping it. A dropped
+ * origin is invisible: uploads die in CORS preflight, so the request never
+ * reaches the server and nothing is logged. That is precisely how it went
+ * unnoticed in production for ten days.
+ */
+function dashboardOrigin(raw: string | undefined): string[] {
+  const value = raw?.trim();
+  if (!value) return [];
+  try {
+    return [new URL(value).origin];
+  } catch {
+    throw new Error(
+      `CCE_DASHBOARD_URL is not a valid URL: ${JSON.stringify(value)}. ` +
+        'The vectors staging CORS allowlist is built from it, and a bad value ' +
+        'silently blocks every browser upload.',
+    );
+  }
+}
+
+/**
  * S3 buckets, KMS CMKs.
  *
  * Three CMKs (data, curated, logs) for clean blast-radius separation.
@@ -31,6 +61,7 @@ export class StorageStack extends Stack implements StorageOutputs {
   public readonly rawBucket: Bucket;
   public readonly curatedBucket: Bucket;
   public readonly vectorsStagingBucket: Bucket;
+  public readonly vectorsBucket: Bucket;
   public readonly logsBucket: Bucket;
   /** WORM audit bucket — tier >= 2 only (plan item 26); undefined at T0/T1. */
   public readonly auditLockBucket: Bucket | undefined;
@@ -377,6 +408,11 @@ export class StorageStack extends Stack implements StorageOutputs {
         {
           id: 'expire-staging-fast',
           enabled: true,
+          // SCOPED ON PURPOSE. Without a prefix this rule matches EVERY key in
+          // the bucket, which is exactly how the production knowledge base was
+          // destroyed in 2026-08 while it still lived here. The durable index
+          // now lives in `vectorsBucket`; this rule must never widen again.
+          prefix: UPLOAD_STAGING_PREFIX,
           expiration: Duration.days(7),
         },
       ],
@@ -390,16 +426,63 @@ export class StorageStack extends Stack implements StorageOutputs {
         {
           allowedHeaders: ['*'],
           allowedMethods: [HttpMethods.PUT],
+          // Built from BOTH origin variables on purpose. Sourcing it from
+          // DOMAIN_NAME alone is how uploads broke in production in 2026-08:
+          // the deploy shell set CCE_DASHBOARD_URL but not DOMAIN_NAME, so
+          // this list synthesized as localhost only, every browser PUT from
+          // https://app.pgnos.ai was refused by CORS preflight, and nothing
+          // appeared in the logs because the request never reached us. Magic
+          // links kept working off CCE_DASHBOARD_URL, which is why the two
+          // never got compared.
           allowedOrigins: [
-            ...(process.env.DOMAIN_NAME?.trim()
-              ? [`https://${process.env.DOMAIN_NAME.trim()}`]
-              : []),
-            'http://localhost:3000',
+            ...new Set([
+              ...(process.env.DOMAIN_NAME?.trim()
+                ? [`https://${process.env.DOMAIN_NAME.trim()}`]
+                : []),
+              ...dashboardOrigin(process.env.CCE_DASHBOARD_URL),
+              'http://localhost:3000',
+            ]),
           ],
           exposedHeaders: ['ETag'],
           maxAge: 3000,
         },
       ],
     });
+
+    // ── Vectors bucket (DURABLE) ────────────────────────────────────
+    // Home of the vector index, `index/<scope>/<docId>.jsonl`. This is the
+    // ONLY copy of ingested knowledge: source documents are deleted from
+    // staging once indexed, nothing re-derives vectors from the curated
+    // bucket, and BackupStack covers DynamoDB only.
+    //
+    // Therefore, and deliberately:
+    //   * NO lifecycle expiry. Not scoped, not long - none. The 2026-08
+    //     production wipe happened because the index sat in a bucket that
+    //     had one.
+    //   * `versioned: true`, so an accidental delete or overwrite is
+    //     recoverable instead of permanent.
+    // `infra/lib/storage-stack.test.ts` enforces both.
+    this.vectorsBucket = new Bucket(this, 'VectorsBucket', {
+      bucketName: bucketName(RESOURCE_NAMES.vectorsBucket, account, region),
+      encryption: BucketEncryption.KMS,
+      encryptionKey: this.dataKey,
+      bucketKeyEnabled: true,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      versioned: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+      serverAccessLogsBucket: this.logsBucket,
+      serverAccessLogsPrefix: 'vectors/',
+      lifecycleRules: [
+        {
+          // Version housekeeping ONLY. This expires superseded copies of a
+          // re-ingested document; it can never remove a current object.
+          id: 'expire-old-versions',
+          enabled: true,
+          noncurrentVersionExpiration: Duration.days(90),
+        },
+      ],
+    });
+    new CfnOutput(this, 'VectorsBucketName', { value: this.vectorsBucket.bucketName });
   }
 }

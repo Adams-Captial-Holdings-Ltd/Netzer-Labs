@@ -21,11 +21,20 @@ no `CCE_NAME_SUFFIX`).
 
 ## What moves, what is re-created, what stays behind
 
+> **Do not assume a bucket is disposable because its name says "staging".**
+> Until 2026-08 the durable vector index lived in `claudeclaw-vectors-staging-*`,
+> and this table told operators to abandon it because "vectors re-derive from
+> curated". No such re-derivation exists anywhere in this codebase, and acting on
+> that line destroys the knowledge base. Verify what a bucket actually holds
+> before classifying it: the vector index lives at `index/<scope>/<docId>.jsonl`
+> and nothing anywhere reconstructs it.
+
 | Thing | Treatment |
 | --- | --- |
 | DynamoDB tables (`claudeclaw-sessions`, `claudeclaw-memories`, `claudeclaw-runtime-config`, ... the full `claudeclaw-*` set) | Exported to S3, imported via `ImportTable` (new-table-only, see step 6) |
 | S3 `claudeclaw-config-*`, `claudeclaw-raw-*`, `claudeclaw-curated-*` | Staged copy into the new account, re-encrypted under new CMKs |
-| S3 `claudeclaw-vectors-staging-*` | NOT migrated: ephemeral by contract (7-day expiry); vectors re-derive from curated |
+| S3 `claudeclaw-vectors-*` | **MUST be migrated.** This is the durable vector index and the ONLY copy of ingested knowledge — nothing re-derives it. Staged copy into the new account, re-encrypted under new CMKs, exactly like `curated` |
+| S3 `claudeclaw-vectors-staging-*` | NOT migrated: genuinely ephemeral (browser upload scratch under `uploads/`, deleted once indexed, 7-day expiry) |
 | ECR images (`claudeclaw-orchestrator`) | Registry-copied by digest, or re-imported from upstream when eligible (step 3) |
 | Secrets (`/claudeclaw/slack`, `/claudeclaw/telegram`, `/claudeclaw/dashboard`, `/claudeclaw/db-encryption`, `/claudeclaw/bedrock-guardrails`, `/claudeclaw/vendor-keys`) | RE-ENTERED BY HAND in the new account, never plaintext-exported |
 | EventBridge schedules (group `claudeclaw`) | REHYDRATED from the `claudeclaw-scheduled-tasks` table (derived state, step 7) |
@@ -152,7 +161,8 @@ question is whether anything references a version ID:
 | `claudeclaw-config-*` | yes | latest-only copy; noncurrent versions are a non-migrated residual |
 | `claudeclaw-curated-*` | yes | latest-only copy; noncurrent versions are a non-migrated residual |
 | `claudeclaw-raw-*` | no | straight copy |
-| `claudeclaw-vectors-staging-*` | no | not migrated (ephemeral) |
+| `claudeclaw-vectors-*` | yes | **must be migrated** — sole copy of the knowledge index |
+| `claudeclaw-vectors-staging-*` | no | not migrated (upload scratch only) |
 | `claudeclaw-audit-lock-*` | yes + Object Lock | not migrated (WORM residual, retention holds it in place anyway) |
 | `claudeclaw-logs-*` | no | not migrated (history residual) |
 
@@ -214,6 +224,11 @@ aws s3 sync s3://claudeclaw-raw-111111111111-us-east-1 \
   s3://cce-migration-staging-222222222222-us-east-1/s3/raw/
 aws s3 sync s3://claudeclaw-curated-111111111111-us-east-1 \
   s3://cce-migration-staging-222222222222-us-east-1/s3/curated/
+# The vector index. This is the ONLY copy of ingested knowledge and nothing
+# re-derives it, so skipping this line loses the customer's knowledge base.
+# `vectors-staging` is deliberately NOT synced: it is upload scratch.
+aws s3 sync s3://claudeclaw-vectors-111111111111-us-east-1 \
+  s3://cce-migration-staging-222222222222-us-east-1/s3/vectors/
 ```
 
 Record object counts per prefix now; they feed the validation gate.
