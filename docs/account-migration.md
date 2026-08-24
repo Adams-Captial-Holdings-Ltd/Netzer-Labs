@@ -26,8 +26,8 @@ no `CCE_NAME_SUFFIX`).
 > and this table told operators to abandon it because "vectors re-derive from
 > curated". No such re-derivation exists anywhere in this codebase, and acting on
 > that line destroys the knowledge base. Verify what a bucket actually holds
-> before classifying it — see
-> [knowledge durability](features/knowledge-durability/README.md).
+> before classifying it: the vector index lives at `index/<scope>/<docId>.jsonl`
+> and nothing anywhere reconstructs it.
 
 | Thing | Treatment |
 | --- | --- |

@@ -17,7 +17,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 vi.hoisted(() => {
   process.env.VECTORS_BUCKET = 'test-index-bucket';
 });
-import { normalizeScope, indexPrefixFor, keyFor } from './store.js';
+import { normalizeScope } from './store.js';
 
 describe('normalizeScope', () => {
   it('folds the documented `agent:<id>` scope form', () => {
