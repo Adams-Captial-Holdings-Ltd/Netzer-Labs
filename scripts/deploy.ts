@@ -96,7 +96,11 @@ import {
   XRAY_SIDECAR_DIGEST_FALLBACK,
   xrayDigestFromComputeStackSource,
 } from './lib/lifecycle/deploy-phases.js';
-import { runCloudBuild } from './lib/lifecycle/cloud-build.js';
+import {
+  contentImageTag,
+  runCloudBuild,
+  staleContentTagReason,
+} from './lib/lifecycle/cloud-build.js';
 import { SEED_DEFAULTS, applyEnvOverrides, runSeed } from './lib/seed-defaults.js';
 import { validateConfiguredSurfaces, type SurfaceCheck } from './lib/surface-validate.js';
 import { buildApp, buildResourceNames } from '../infra/lib/constants.js';
@@ -430,6 +434,9 @@ async function main(): Promise<void> {
     section('Phase a · foundation stacks');
     const prefix = env.CDK_STACK_NAME;
     const paperclipEnabled = env.CCE_PAPERCLIP_ENABLED === '1';
+    // Set only by the gated Paperclip build below; stays undefined on an
+    // unarmed deploy, and the manifest then carries no Paperclip record.
+    let paperclipImageDigest: string | undefined;
     const foundationStacks = [
       `${prefix}-Network`,
       `${prefix}-Storage`,
@@ -452,7 +459,7 @@ async function main(): Promise<void> {
     await journal('foundation-complete', { stacks: foundationStacks });
     await ensureSchedulerGroup(env, nameSuffix);
     // Paperclip work engine (ADR 0010): the ECR repo the pinned+patched
-    // image is pushed to in Phase 2. Gated on the SAME flag as the two
+    // image is built into, just below. Gated on the SAME flag as the two
     // stacks above, so an unarmed deploy creates nothing - the previous
     // ungated version left an empty, uncatalogued repo on every deploy
     // (M23). Named from buildResourceNames so it tracks CCE_NAME_SUFFIX,
@@ -460,7 +467,87 @@ async function main(): Promise<void> {
     // and deleted in scripts/teardown.ts's final sweep -- note the catalog
     // only REPORTS, so a row there without that delete would orphan it.
     if (paperclipEnabled) {
-      await ensureEcrRepo(env, buildResourceNames(nameSuffix).paperclipEcrRepo);
+      const paperclipRepoName = buildResourceNames(nameSuffix).paperclipEcrRepo;
+      await ensureEcrRepo(env, paperclipRepoName);
+      // Phase 1.5: build the pinned+patched Paperclip image (ADR 0010) into
+      // that repo. ALWAYS through CodeBuild, never the local Docker path:
+      // the point of the phase is ONE path that needs no daemon on the
+      // operator's machine, and the buildspec's `test "$ARCH" = "arm64"`
+      // self-check is the only thing standing between a multi-arch base
+      // image and an amd64 container that crash-loops on Fargate. The whole
+      // block sits inside the CCE_PAPERCLIP_ENABLED gate, so an unarmed
+      // deploy creates no project, starts no build, and pushes no image.
+      // The mirror of this on the CI driver is the "Build + Push Paperclip"
+      // step in .github/workflows/deploy.yml (CI does NOT run this script).
+      //
+      // Tagged by CONTENT, never by the app's git sha. vendor/paperclip
+      // changes only when its Dockerfile or its patch changes, so an app
+      // commit that cannot possibly alter this image must not trigger a
+      // fresh ~10 minute ARM build, a second source upload, and another
+      // layer set in a repo that has no lifecycle policy - forever, in every
+      // customer account, once Paperclip installs by default. The fallback
+      // to the app tag only fires outside a git checkout, which the cloud
+      // build cannot run in anyway (it packages with git archive).
+      const paperclipTag =
+        (await contentImageTag(repoRoot, 'vendor/paperclip', 'paperclip')) ?? imageTag;
+      const existingPaperclip = await describeImageDigest(env, paperclipTag, paperclipRepoName);
+      if (existingPaperclip.digest) {
+        // ...but only when the tag can honestly speak for the working tree.
+        // paperclipTag hashes HEAD:vendor/paperclip, so uncommitted edits
+        // there (the re-pin workflow's own step) leave the tag naming the OLD
+        // content, which is already in ECR - and this branch would then print
+        // success while shipping the previous image and recording its digest
+        // as this deploy's. Same rule on the CI driver, through the same
+        // function; its doc comment says why this refuses rather than warns.
+        // A DeployAbort so the operator gets the remedy, not a stack trace,
+        // and it lands here in phase a: before secrets, before any stack
+        // update, before the manifest, so nothing has rolled out.
+        const stale = await staleContentTagReason(repoRoot, 'vendor/paperclip', paperclipTag);
+        if (stale) throw new DeployAbort(stale);
+        // Idempotent re-run: this exact content is already in the operator's
+        // ECR. Skip the build and record the EXISTING digest, so the manifest
+        // still carries a Paperclip record (requirement 4) and a rollback can
+        // still resolve it.
+        paperclipImageDigest = existingPaperclip.digest;
+        // eslint-disable-next-line no-console
+        console.log(
+          ok(
+            `Paperclip image ${bold(paperclipTag)} already in ${paperclipRepoName}; skipping the build`,
+          ),
+        );
+      } else {
+        section('Phase a · Paperclip image build (no local Docker)');
+        await runCloudBuild({
+          region: env.AWS_REGION,
+          accountId: env.AWS_ACCOUNT_ID,
+          ecrRepoName: paperclipRepoName,
+          ecrHost: ecrHostOf(env),
+          stateBucket,
+          imageTag: paperclipTag,
+          // DEPLOY_TIER reaches the shared buildspec as a --build-arg the
+          // vendored Dockerfile declares no ARG for, so it is inert here -
+          // which is also why it is correctly absent from the content tag.
+          deployTier: env.DEPLOY_TIER ?? '1',
+          repoRoot,
+          // The Dockerfile COPYs updated-since.patch from beside itself, so
+          // the context is the vendor directory, not the repo root.
+          dockerfile: 'vendor/paperclip/Dockerfile',
+          buildContext: 'vendor/paperclip',
+          // No `:latest` in this repo. Its only legitimate consumer is a task
+          // definition pinned to the digest recorded in the manifest below,
+          // and a mutable tag sitting in a repo with no lifecycle policy is
+          // exactly what the next author reaches for instead. The CI driver
+          // publishes no `:latest` here either.
+          pushLatest: false,
+        });
+        paperclipImageDigest = await resolveImageDigest(env, paperclipTag, paperclipRepoName);
+      }
+      await journal('paperclip-image-pushed', {
+        imageTag: paperclipTag,
+        imageDigest: paperclipImageDigest,
+        ecrRepo: paperclipRepoName,
+        reusedExisting: existingPaperclip.digest !== null,
+      });
     }
 
     // ── PHASE b — populate + validate secrets ────────────────────────
@@ -545,6 +632,7 @@ async function main(): Promise<void> {
       gitSha: gitShaFull,
       imageTag,
       imageDigest,
+      paperclipImageDigest,
       secretVersions,
       seedRevision,
       stateBucket,
@@ -1015,14 +1103,25 @@ async function ecrLoginAndPush(env: EnvBag, tag: string): Promise<void> {
   console.log(ok(`pushed ${bold(remoteSha)}`));
 }
 
-/** Resolve the pushed image's digest from ECR (recorded in the manifest). */
-async function resolveImageDigest(env: EnvBag, tag: string): Promise<string> {
-  const stop = spinner('resolving pushed image digest');
+/**
+ * Digest of a tag already in ECR, or null when that tag is not there.
+ *
+ * Silent and non-throwing, so it serves two callers: resolveImageDigest
+ * below (which turns a null into a labelled abort), and the "has this exact
+ * content been built before?" probe in phase a, where absence is the normal
+ * case and not an error. `stderr` is carried out so the aborting caller
+ * keeps the diagnostic it used to print.
+ */
+async function describeImageDigest(
+  env: EnvBag,
+  tag: string,
+  repoName: string,
+): Promise<{ digest: string | null; stderr: string }> {
   const r = await capture('aws', [
     'ecr',
     'describe-images',
     '--repository-name',
-    env.ECR_REPO_NAME,
+    repoName,
     '--image-ids',
     `imageTag=${tag}`,
     '--region',
@@ -1030,14 +1129,25 @@ async function resolveImageDigest(env: EnvBag, tag: string): Promise<string> {
     '--output',
     'json',
   ]);
-  if (r.code !== 0) {
-    stop(fail(`could not describe pushed image: ${r.stderr.trim()}`));
-    throw new DeployAbort('ECR describe-images failed for the just-pushed tag');
-  }
+  if (r.code !== 0) return { digest: null, stderr: r.stderr.trim() };
   const parsed = JSON.parse(r.stdout) as { imageDetails?: Array<{ imageDigest?: string }> };
-  const digest = parsed.imageDetails?.[0]?.imageDigest;
+  return { digest: parsed.imageDetails?.[0]?.imageDigest ?? null, stderr: '' };
+}
+
+/**
+ * Resolve the pushed image's digest from ECR (recorded in the manifest).
+ * `repoName` defaults to the orchestrator repo; the Paperclip build passes
+ * its own so a rollback can resolve the digest it is rolling back to.
+ */
+async function resolveImageDigest(
+  env: EnvBag,
+  tag: string,
+  repoName: string = env.ECR_REPO_NAME,
+): Promise<string> {
+  const stop = spinner(`resolving pushed image digest (${repoName})`);
+  const { digest, stderr } = await describeImageDigest(env, tag, repoName);
   if (!digest) {
-    stop(fail('ECR returned no imageDigest for the pushed tag'));
+    stop(fail(`could not describe pushed image${stderr ? `: ${stderr}` : ''}`));
     throw new DeployAbort('pushed image digest could not be resolved');
   }
   stop(ok(`image digest ${bold(digest)}`));
@@ -1473,6 +1583,8 @@ async function assembleManifest(opts: {
   gitSha: string;
   imageTag: string;
   imageDigest: string;
+  /** Present only when the gated Paperclip image build ran this deploy. */
+  paperclipImageDigest?: string;
   secretVersions: SecretVersionRecord[];
   seedRevision: string;
   stateBucket: string;
@@ -1483,6 +1595,7 @@ async function assembleManifest(opts: {
   const tier = Number(env.DEPLOY_TIER ?? '1');
   const app = buildApp(nameSuffix);
   const repoUri = `${ecrHostOf(env)}/${env.ECR_REPO_NAME}`;
+  const paperclipRepoUri = `${ecrHostOf(env)}/${buildResourceNames(nameSuffix).paperclipEcrRepo}`;
 
   // X-Ray sidecar digest: read from the compute-stack source so the record
   // can never drift from the task definition (fallback constant otherwise).
@@ -1559,6 +1672,8 @@ async function assembleManifest(opts: {
       imageDigest: opts.imageDigest,
       tier,
       xrayDigest,
+      paperclipRepoUri,
+      paperclipDigest: opts.paperclipImageDigest,
     }),
     cdkVersion,
     synthInputs: collectSynthInputs(envBag as Record<string, string | undefined>),

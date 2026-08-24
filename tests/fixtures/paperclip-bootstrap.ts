@@ -532,10 +532,13 @@ async function provisionKeys(
   }
 }
 
+let adminJar: CookieJar | undefined;
+
 async function bootstrap(): Promise<PaperclipBootstrap> {
   const jar = new CookieJar();
   await enableSqlStateLogging();
   await establishAdminSession(jar);
+  adminJar = jar;
   const company = await provisionCompany(jar);
   const agents = await provisionAgents(jar, company.id);
   const keys = await provisionKeys(jar, company.id, agents);
@@ -556,6 +559,23 @@ let bootstrapPromise: Promise<PaperclipBootstrap> | undefined;
 export function bootstrapPaperclip(): Promise<PaperclipBootstrap> {
   bootstrapPromise ??= bootstrap();
   return bootstrapPromise;
+}
+
+/**
+ * Issue a request as the bootstrapped board admin, reusing this fixture's own
+ * authenticated session rather than establishing a second one.
+ *
+ * Only key administration needs this: minting an API key is a board-session
+ * operation, and no agent key can mint another. The A1-9 contract probe uses it
+ * to create a task_bridge-scoped key, which `provisionKeys` deliberately cannot
+ * make (it asserts every provisioned key is standard scope). A caller that
+ * creates a key MUST revoke it again, because `assertActiveKeys` fails the next
+ * bootstrap if an unexpected active key survives.
+ */
+export async function paperclipAdminRequest(pathname: string, init: RequestInit = {}): Promise<Response> {
+  await bootstrapPaperclip();
+  if (!adminJar) throw new Error('Paperclip admin session is not established');
+  return await boardRequest(adminJar, pathname, init);
 }
 
 export async function readPaperclipLogsSince(since: string): Promise<string> {

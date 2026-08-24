@@ -107,6 +107,7 @@ async function provisionBuckets(names: ReturnType<typeof buildResourceNames>) {
     names.rawBucket,
     names.curatedBucket,
     names.vectorsStagingBucket,
+    names.vectorsBucket,
   ];
   const existing = new Set(
     ((await s3.send(new ListBucketsCommand({}))).Buckets ?? []).map((b) => b.Name ?? ''),

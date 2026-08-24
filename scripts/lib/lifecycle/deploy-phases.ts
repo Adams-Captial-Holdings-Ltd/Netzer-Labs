@@ -34,7 +34,11 @@ import {
 } from '@aws-sdk/client-secrets-manager';
 import { deployLabel } from './ids.js';
 import type { AwsClientLike } from './lock.js';
-import type { ContainerImageRecord, SecretVersionRecord } from './manifest.js';
+import {
+  PAPERCLIP_CONTAINER_NAME,
+  type ContainerImageRecord,
+  type SecretVersionRecord,
+} from './manifest.js';
 import { buildResourceNames } from '../../../infra/lib/constants.js';
 import type { SeedRow } from '../seed-defaults.js';
 
@@ -575,12 +579,23 @@ export interface BuildImageRecordsOptions {
   tier: number;
   /** Resolved X-Ray digest (xrayDigestFromComputeStackSource or fallback). */
   xrayDigest?: string;
+  /** Full ECR repo URI for the Paperclip image (ADR 0010). */
+  paperclipRepoUri?: string;
+  /**
+   * Digest of the Paperclip image this deploy pushed. Absent unless
+   * CCE_PAPERCLIP_ENABLED armed the gated build, and the record is omitted
+   * entirely when it is absent, so an unarmed deploy's manifest is unchanged.
+   */
+  paperclipDigest?: string;
 }
 
 /**
  * Every container in every task definition (item 9): the orchestrator task,
- * the consolidation-worker task (same image, container 'worker'), and at
- * tier >= 2 the X-Ray daemon sidecar pinned by digest in compute-stack.ts.
+ * the consolidation-worker task (same image, container 'worker'), at
+ * tier >= 2 the X-Ray daemon sidecar pinned by digest in compute-stack.ts,
+ * and, when the gated build ran, the Paperclip server image. Rollback
+ * resolves what it is rolling back to from these records, so an image that
+ * is deployed but unrecorded is an image that cannot be rolled back.
  */
 export function buildImageRecords(opts: BuildImageRecordsOptions): ContainerImageRecord[] {
   const records: ContainerImageRecord[] = [
@@ -599,6 +614,24 @@ export function buildImageRecords(opts: BuildImageRecordsOptions): ContainerImag
       platform: 'linux/arm64',
     },
   ];
+  if (opts.paperclipDigest && opts.paperclipRepoUri) {
+    records.push({
+      // PHASE 4 OWNS THESE TWO STRINGS. The image is built and recorded a
+      // phase before any task definition exists, so both are predictions of
+      // what infra/lib/paperclip-stack.ts will name; a Phase 4 that picks a
+      // different family or container silently records a rollback target
+      // matching nothing in ECS. See PAPERCLIP_CONTAINER_NAME in manifest.ts
+      // for the full note and the other places that must change with them.
+      taskFamily: `${opts.app}-paperclip`,
+      containerName: PAPERCLIP_CONTAINER_NAME,
+      repo: opts.paperclipRepoUri,
+      digest: opts.paperclipDigest,
+      // Built on a native ARM64 CodeBuild host with the buildspec's
+      // `test "$ARCH" = "arm64"` self-check, so this is a single-platform
+      // image and the platform is stated exactly, not per-index.
+      platform: 'linux/arm64',
+    });
+  }
   if (opts.tier >= 2) {
     records.push({
       taskFamily: `${opts.app}-orchestrator`,
