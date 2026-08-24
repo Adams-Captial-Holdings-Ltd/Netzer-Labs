@@ -22,6 +22,28 @@ import type { BaseStackProps, StorageOutputs } from './interfaces.js';
 const UPLOAD_STAGING_PREFIX = 'uploads/';
 
 /**
+ * The dashboard's browser origin, for the staging bucket's CORS allowlist.
+ *
+ * Fails the synth on a malformed value rather than dropping it. A dropped
+ * origin is invisible: uploads die in CORS preflight, so the request never
+ * reaches the server and nothing is logged. That is precisely how it went
+ * unnoticed in production for ten days.
+ */
+function dashboardOrigin(raw: string | undefined): string[] {
+  const value = raw?.trim();
+  if (!value) return [];
+  try {
+    return [new URL(value).origin];
+  } catch {
+    throw new Error(
+      `CCE_DASHBOARD_URL is not a valid URL: ${JSON.stringify(value)}. ` +
+        'The vectors staging CORS allowlist is built from it, and a bad value ' +
+        'silently blocks every browser upload.',
+    );
+  }
+}
+
+/**
  * S3 buckets, KMS CMKs.
  *
  * Three CMKs (data, curated, logs) for clean blast-radius separation.
@@ -389,11 +411,22 @@ export class StorageStack extends Stack implements StorageOutputs {
         {
           allowedHeaders: ['*'],
           allowedMethods: [HttpMethods.PUT],
+          // Built from BOTH origin variables on purpose. Sourcing it from
+          // DOMAIN_NAME alone is how uploads broke in production in 2026-08:
+          // the deploy shell set CCE_DASHBOARD_URL but not DOMAIN_NAME, so
+          // this list synthesized as localhost only, every browser PUT from
+          // https://app.pgnos.ai was refused by CORS preflight, and nothing
+          // appeared in the logs because the request never reached us. Magic
+          // links kept working off CCE_DASHBOARD_URL, which is why the two
+          // never got compared.
           allowedOrigins: [
-            ...(process.env.DOMAIN_NAME?.trim()
-              ? [`https://${process.env.DOMAIN_NAME.trim()}`]
-              : []),
-            'http://localhost:3000',
+            ...new Set([
+              ...(process.env.DOMAIN_NAME?.trim()
+                ? [`https://${process.env.DOMAIN_NAME.trim()}`]
+                : []),
+              ...dashboardOrigin(process.env.CCE_DASHBOARD_URL),
+              'http://localhost:3000',
+            ]),
           ],
           exposedHeaders: ['ETag'],
           maxAge: 3000,

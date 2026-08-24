@@ -124,3 +124,58 @@ describe('bucket-wide durability classification', () => {
     }
   });
 });
+
+/**
+ * Reachability guard.
+ *
+ * Durability is not the only way knowledge silently fails to persist. In the
+ * same 2026-08 production incident the browser could not PUT at all: the
+ * staging bucket's CORS allowlist was built only from `DOMAIN_NAME`, the
+ * deploy shell set `CCE_DASHBOARD_URL` instead, and the synthesized allowlist
+ * was `['http://localhost:3000']`. Every upload from `https://app.pgnos.ai`
+ * died in CORS preflight, so nothing ever reached S3 and nothing was logged
+ * server-side. A bucket that cannot be written to loses knowledge just as
+ * effectively as one that expires it.
+ */
+describe('vectors staging bucket (browser upload reachability)', () => {
+  function originsWith(env: Record<string, string | undefined>): string[] {
+    const saved = { DOMAIN_NAME: process.env.DOMAIN_NAME, CCE_DASHBOARD_URL: process.env.CCE_DASHBOARD_URL };
+    // Assigning undefined into process.env coerces to the STRING "undefined";
+    // the key has to be deleted to be genuinely absent.
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    try {
+      const [, bucket] = byLogicalId('VectorsStagingBucket');
+      const props = bucket.Properties as { CorsConfiguration?: { CorsRules?: { AllowedOrigins?: string[] }[] } };
+      return (props.CorsConfiguration?.CorsRules ?? []).flatMap((r) => r.AllowedOrigins ?? []);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  }
+
+  it('allows the dashboard origin when only CCE_DASHBOARD_URL is set', () => {
+    // The exact shape of the outage: DOMAIN_NAME absent from the deploy shell.
+    const origins = originsWith({ DOMAIN_NAME: undefined, CCE_DASHBOARD_URL: 'https://app.pgnos.ai' });
+    expect(origins).toContain('https://app.pgnos.ai');
+  });
+
+  it('allows the dashboard origin when only DOMAIN_NAME is set', () => {
+    const origins = originsWith({ DOMAIN_NAME: 'app.pgnos.ai', CCE_DASHBOARD_URL: undefined });
+    expect(origins).toContain('https://app.pgnos.ai');
+  });
+
+  it('never degrades to a localhost-only allowlist when an origin is configured', () => {
+    const origins = originsWith({ DOMAIN_NAME: undefined, CCE_DASHBOARD_URL: 'https://app.pgnos.ai' });
+    expect(origins).not.toEqual(['http://localhost:3000']);
+  });
+
+  it('takes the origin only, discarding any path on the dashboard URL', () => {
+    const origins = originsWith({ DOMAIN_NAME: undefined, CCE_DASHBOARD_URL: 'https://app.pgnos.ai/dashboard/' });
+    expect(origins).toContain('https://app.pgnos.ai');
+  });
+});
