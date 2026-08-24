@@ -26,7 +26,15 @@ import { cosineSimilarity } from './embedder.js';
 import { captureAwsClient } from '../observability/xray.js';
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
-const BUCKET = process.env.VECTORS_BUCKET ?? '';
+// Two DIFFERENT buckets, on purpose. `VECTORS_BUCKET` is the durable index and
+// nothing may expire from it; `VECTORS_STAGING_BUCKET` is disposable scratch for
+// browser uploads and carries a 7-day expiry. They pointed at the same bucket
+// until 2026-08, and the staging expiry deleted the entire knowledge base.
+const INDEX_BUCKET = process.env.VECTORS_BUCKET ?? '';
+// Falls back to the index bucket only so a partial rollout degrades to "uploads
+// land somewhere writable" rather than hard-failing; uploads are deleted once
+// indexed either way.
+const STAGING_BUCKET = process.env.VECTORS_STAGING_BUCKET ?? INDEX_BUCKET;
 
 let _s3: S3Client | null = null;
 function s3(): S3Client {
@@ -37,13 +45,15 @@ function s3(): S3Client {
 // ── Direct-to-S3 upload staging (bypasses the CloudFront WAF 8KB body cap) ──
 // The dashboard PUTs a file straight to S3 via this presigned URL, then asks
 // the backend to ingest from the key — so PDFs/large files never hit the WAF.
-const UPLOAD_PREFIX = 'uploads/';
+/** Upload-staging prefix. `infra/lib/storage-stack.ts` scopes its expiry
+ * rule to this exact value; the storage-stack test asserts they match. */
+export const UPLOAD_PREFIX = 'uploads/';
 
 export async function presignUploadUrl(key: string): Promise<string> {
-  if (!BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
   // No ContentType in the signature so the browser's auto Content-Type header
   // can't cause a signature mismatch; we only read the bytes back.
-  const cmd = new PutObjectCommand({ Bucket: BUCKET, Key: key });
+  const cmd = new PutObjectCommand({ Bucket: STAGING_BUCKET, Key: key });
   // getSignedUrl resolves credentials from the ECS task role; on a Fargate
   // task that endpoint can blip mid credential-refresh, which surfaced as an
   // opaque "presign_failed" with no retry. One short retry turns a transient
@@ -65,8 +75,8 @@ export async function presignUploadUrl(key: string): Promise<string> {
 
 /** s3:// URI for a staging object, used to hand audio files to Transcribe. */
 export function objectS3Uri(key: string): string {
-  if (!BUCKET) throw new Error('VECTORS_BUCKET env var not set');
-  return `s3://${BUCKET}/${key}`;
+  if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
+  return `s3://${STAGING_BUCKET}/${key}`;
 }
 
 /** Make a sanitized, namespaced staging key for a browser upload. */
@@ -81,15 +91,15 @@ export function isUploadKey(key: string): boolean {
 }
 
 export async function getObjectBuffer(key: string): Promise<Buffer> {
-  if (!BUCKET) throw new Error('VECTORS_BUCKET env var not set');
-  const out = await s3().send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
+  const out = await s3().send(new GetObjectCommand({ Bucket: STAGING_BUCKET, Key: key }));
   const bytes = await (out.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray();
   return Buffer.from(bytes);
 }
 
 export async function deleteObject(key: string): Promise<void> {
-  if (!BUCKET) return;
-  try { await s3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key })); } catch { /* best effort */ }
+  if (!STAGING_BUCKET) return;
+  try { await s3().send(new DeleteObjectCommand({ Bucket: STAGING_BUCKET, Key: key })); } catch { /* best effort */ }
 }
 
 export interface VectorRow {
@@ -137,7 +147,7 @@ export async function putDocument(
   docId: string,
   rows: VectorRow[],
 ): Promise<void> {
-  if (!BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
   // Tag every chunk with the document's scope so retrieval-time scope
   // filtering and the per-doc rollup stay consistent even if a caller built
   // the rows without stamping metadata.scope. The scope argument is the
@@ -150,7 +160,7 @@ export async function putDocument(
   const body = tagged.map((r) => JSON.stringify(r)).join('\n');
   await s3().send(
     new PutObjectCommand({
-      Bucket: BUCKET,
+      Bucket: INDEX_BUCKET,
       Key: keyFor(scope, docId),
       Body: body,
       ContentType: 'application/jsonl',
@@ -174,10 +184,10 @@ export async function documentExists(
   scope: string,
   docId: string,
 ): Promise<boolean> {
-  if (!BUCKET) return false;
+  if (!INDEX_BUCKET) return false;
   try {
     await s3().send(
-      new HeadObjectCommand({ Bucket: BUCKET, Key: keyFor(scope, docId) }),
+      new HeadObjectCommand({ Bucket: INDEX_BUCKET, Key: keyFor(scope, docId) }),
     );
     return true;
   } catch (err) {
@@ -196,10 +206,10 @@ export async function deleteDocument(
   scope: string,
   docId: string,
 ): Promise<void> {
-  if (!BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
   await s3().send(
     new DeleteObjectCommand({
-      Bucket: BUCKET,
+      Bucket: INDEX_BUCKET,
       Key: keyFor(scope, docId),
     }),
   );
@@ -213,7 +223,7 @@ export async function deleteDocument(
  * so the dashboard list shows recent uploads on top.
  */
 export async function listDocuments(scope: string): Promise<Doc[]> {
-  if (!BUCKET) return [];
+  if (!INDEX_BUCKET) return [];
   const byDoc = new Map<string, Doc>();
   for await (const row of iterateRows(scope)) {
     const meta = row.metadata;
@@ -247,20 +257,22 @@ export async function listDocuments(scope: string): Promise<Doc[]> {
 export async function* iterateRows(
   scope: string,
 ): AsyncIterableIterator<VectorRow> {
-  if (!BUCKET) return;
+  if (!INDEX_BUCKET) return;
   let continuationToken: string | undefined;
   do {
     const list = await s3().send(
       new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: `index/${scope}/`,
+        Bucket: INDEX_BUCKET,
+        // indexPrefixFor, never a hand-built template: the write path derives
+        // its key from the same function, so the two cannot drift apart.
+        Prefix: indexPrefixFor(scope),
         ContinuationToken: continuationToken,
       }),
     );
     for (const obj of list.Contents ?? []) {
       if (!obj.Key) continue;
       const resp = await s3().send(
-        new GetObjectCommand({ Bucket: BUCKET, Key: obj.Key }),
+        new GetObjectCommand({ Bucket: INDEX_BUCKET, Key: obj.Key }),
       );
       const body = await resp.Body?.transformToString();
       if (!body) continue;
@@ -311,8 +323,35 @@ export async function search(args: {
   return heap.sort((a, b) => b.score - a.score);
 }
 
-function keyFor(scope: string, docId: string): string {
-  const safeScope = scope.replace(/[^A-Za-z0-9_-]/g, '_');
+/**
+ * Canonical on-disk form of a scope. MUST be applied on BOTH write and read.
+ *
+ * Scopes are operator-supplied — `knowledgeScope` in `agents/<id>/agent.yaml`,
+ * free-form and unvalidated — and the documented format includes values like
+ * `agent:ops`. Until 2026-08 this folding happened only on the write path, so
+ * `agent:ops` was written to `index/agent_ops/` and listed from
+ * `index/agent:ops/`: every read returned empty, with no error and nothing
+ * actually missing. Any new code that builds an `index/` prefix goes through
+ * here.
+ */
+export function normalizeScope(scope: string): string {
+  return scope.replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+/**
+ * The single place an `index/` prefix is constructed.
+ *
+ * Both the read path (`iterateRows`) and the write path (`keyFor`) derive from
+ * this. That is the point: the 2026-08 silent-loss bug was two hand-built
+ * templates drifting apart, and a guard that only checked `normalizeScope` in
+ * isolation stayed green while they did. One construction site makes the
+ * divergence unrepresentable rather than merely detectable.
+ */
+export function indexPrefixFor(scope: string): string {
+  return `index/${normalizeScope(scope)}/`;
+}
+
+export function keyFor(scope: string, docId: string): string {
   const safeDoc = docId.replace(/[^A-Za-z0-9._-]/g, '_');
-  return `index/${safeScope}/${safeDoc}.jsonl`;
+  return `${indexPrefixFor(scope)}${safeDoc}.jsonl`;
 }
