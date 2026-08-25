@@ -45,6 +45,66 @@ export const MAX_TABLE_ROWS = 1000;
 export const MAX_SHEETS = 20;
 export const MAX_SHEET_ROWS = 10_000;
 export const MAX_TITLE_LEN = 200;
+/**
+ * Total cell budget across the WHOLE spec, tables and sheets alike.
+ *
+ * The per-dimension bounds above do not bound the product, and there is no
+ * column bound at all, so `MAX_SHEETS x MAX_SHEET_ROWS x 20 columns` passes
+ * every check above and then kills the process: measured at 4,000,000 cells it
+ * OOMs, and 2,000,000 cells peaks at 1,870 MB RSS against a 4 GB task shared
+ * with two sidecars. An OOM is a SIGKILL, not a catchable error — it takes the
+ * whole chat process down, which is exactly what the tool's own try/catch
+ * exists to prevent.
+ *
+ * Nothing a model can currently emit comes close: `TURN_MAX_TOKENS` (8192)
+ * caps a tool-call spec near 24 KB, which measures at ~160 MB. This bound
+ * exists so that raising the token ceiling later cannot quietly turn a
+ * document request into a process kill.
+ */
+export const MAX_TOTAL_CELLS = 200_000;
+/**
+ * Hard per-cell character cap. Excel's own limit is 32,767: at 32,768 exceljs
+ * still writes a file, the tool still reports success, and Excel then refuses
+ * to open it ("Unable to get the Open property of the Workbooks class").
+ * Verified at the exact boundary. A file the user cannot open is worse than a
+ * clean error, so this rejects instead.
+ */
+export const MAX_CELL_LEN = 32_767;
+
+/**
+ * Coerce a model-supplied cell to text, and refuse the values that produce a
+ * corrupt-but-successful document.
+ *
+ * Two failures this closes, both confirmed by measurement:
+ *  - C0 control characters were written RAW into `word/document.xml`, so DOCX
+ *    returned a file with correct PK magic and all 18 OPC parts whose primary
+ *    part is not well-formed XML. exceljs already strips them for XLSX, so the
+ *    two builders disagreed on the same input; they now agree.
+ *  - A non-string cell was coerced with `String(cell ?? '')`, turning an object
+ *    into the literal "[object Object]" and an array into "1,2" — written into
+ *    the document as if the model meant it.
+ *
+ * Tab, newline and carriage return are kept: they are legal in both formats
+ * and a model uses them deliberately.
+ */
+export function cellText(cell: unknown): string {
+  if (cell === null || cell === undefined) return '';
+  if (typeof cell === 'object') {
+    throw new Error(
+      'table cells must be text or numbers, not objects or arrays. ' +
+        'Send the value itself, not a wrapper around it.',
+    );
+  }
+  // eslint-disable-next-line no-control-regex
+  const text = String(cell).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  if (text.length > MAX_CELL_LEN) {
+    throw new Error(
+      `a cell exceeds ${MAX_CELL_LEN.toLocaleString()} characters, which Excel cannot open. ` +
+        'Split the value across rows.',
+    );
+  }
+  return text;
+}
 
 export function validateDocumentSpec(spec: unknown): DocumentSpec {
   if (typeof spec !== 'object' || spec === null) {
@@ -64,6 +124,7 @@ export function validateDocumentSpec(spec: unknown): DocumentSpec {
     throw new Error(`spec.sections exceeds ${MAX_SECTIONS} entries`);
   }
   const sections: DocumentSection[] = [];
+  let cells = 0;
   for (const raw of s.sections) {
     if (typeof raw !== 'object' || raw === null) continue;
     const sec = raw as Record<string, unknown>;
@@ -78,15 +139,35 @@ export function validateDocumentSpec(spec: unknown): DocumentSpec {
         }
         const rows: string[][] = [];
         for (const row of t.rows) {
-          if (!Array.isArray(row)) continue;
-          rows.push(row.map((cell) => String(cell ?? '')));
+          // Throw rather than `continue`: silently dropping a malformed row
+          // hands back a document that is valid, empty and indistinguishable
+          // from a legitimately empty one.
+          if (!Array.isArray(row)) {
+            throw new Error('each table row must be an array of cells');
+          }
+          rows.push(row.map(cellText));
         }
         section.table = { rows };
+        cells += rows.reduce((n, r) => n + r.length, 0);
+        assertCellBudget(cells);
       }
     }
     sections.push(section);
   }
   return { title: s.title, sections };
+}
+
+/**
+ * Guard the whole-spec cell budget. Throws so the caller turns it into a clean
+ * tool error — the one outcome an OOM cannot give you.
+ */
+function assertCellBudget(cells: number): void {
+  if (cells > MAX_TOTAL_CELLS) {
+    throw new Error(
+      `spec exceeds ${MAX_TOTAL_CELLS.toLocaleString()} total cells (got ${cells.toLocaleString()}). ` +
+        'Split it into several smaller documents.',
+    );
+  }
 }
 
 export function validateSpreadsheetSpec(spec: unknown): SpreadsheetSpec {
@@ -110,6 +191,7 @@ export function validateSpreadsheetSpec(spec: unknown): SpreadsheetSpec {
     throw new Error(`spec.sheets exceeds ${MAX_SHEETS}`);
   }
   const sheets: SpreadsheetSheet[] = [];
+  let cells = 0;
   for (const raw of s.sheets) {
     if (typeof raw !== 'object' || raw === null) continue;
     const sh = raw as Record<string, unknown>;
@@ -120,17 +202,24 @@ export function validateSpreadsheetSpec(spec: unknown): SpreadsheetSpec {
     }
     const rows: Array<Array<string | number | boolean | null>> = [];
     for (const row of rowsIn) {
-      if (!Array.isArray(row)) continue;
+      // Throw rather than `continue`. A model that emits rows as objects
+      // instead of arrays had every row discarded without error, and the tool
+      // handed back a valid, completely empty workbook reported as a success.
+      if (!Array.isArray(row)) {
+        throw new Error(`sheet "${name}" rows must each be an array of cells`);
+      }
       rows.push(
         row.map((c) => {
           if (typeof c === 'number' && Number.isFinite(c)) return c;
           if (typeof c === 'boolean') return c;
           if (c === null) return null;
-          return String(c ?? '');
+          return cellText(c);
         }),
       );
     }
     sheets.push({ name, rows });
+    cells += rows.reduce((n, r) => n + r.length, 0);
+    assertCellBudget(cells);
   }
   return { title: s.title, sheets };
 }

@@ -1135,7 +1135,11 @@ async function runAdmittedTurn(
     }
   }
 
-  const finalText = lastText || '(no response)';
+  // Same reasoning as the non-tool return: never empty, and on `max_tokens`
+  // say the reply was cut off rather than "(no response)". This is the path a
+  // document request actually takes, so it is the one that most needs to
+  // explain itself.
+  const finalText = lastText || truncatedNotice(lastStopReason);
   const costUsd = turnCost(modelId, totalIn, totalOut, totalCacheRead, totalCacheWrite);
   const latencyMs = Date.now() - t0;
 
