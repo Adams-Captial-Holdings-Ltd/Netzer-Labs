@@ -1,8 +1,9 @@
 import { readFile, readdir } from 'node:fs/promises';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PaperclipClient,
   PaperclipPage,
+  __resetPaperclipCompanyPin,
   PAPERCLIP_NO_RETRY,
   PAPERCLIP_RETRY_POLICY,
   type PaperclipClientOptions,
@@ -70,6 +71,51 @@ describe('construction', () => {
     expect(() => new PaperclipClient({ companyId: COMPANY, agentKeys: { main: 'k' } })).toThrow(
       PaperclipDisabledError,
     );
+  });
+
+  /**
+   * ONE NETZAR DEPLOYMENT = ONE PAPERCLIP COMPANY, the accepted architectural
+   * invariant. It is what makes the tenant-safety of Paperclip's ~735
+   * company-scoped handlers irrelevant to us, so it must fail CLOSED and it must
+   * fail at CONSTRUCTION — after the instance exists it is too late to promise
+   * that no request was made.
+   */
+  describe('the one-company invariant', () => {
+    afterEach(__resetPaperclipCompanyPin);
+
+    it('refuses a second company at construction, before any request can be made', () => {
+      __resetPaperclipCompanyPin();
+      const fetchFn = vi.fn();
+      paperclipTestClient({ fetchFn });                       // pins TEST_COMPANY
+      expect(() => paperclipTestClient({ companyId: OTHER_COMPANY, fetchFn })).toThrow(
+        PaperclipDisabledError,
+      );
+      // The point of "at construction": nothing was ever sent.
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it('names both companies, so the failure is diagnosable rather than just loud', () => {
+      __resetPaperclipCompanyPin();
+      paperclipTestClient();
+      try {
+        paperclipTestClient({ companyId: OTHER_COMPANY });
+        expect.unreachable('a second company id must not construct');
+      } catch (err) {
+        expect((err as Error).message).toContain(COMPANY);
+        expect((err as Error).message).toContain(OTHER_COMPANY);
+      }
+    });
+
+    it('still allows any number of clients on the SAME company', () => {
+      // The control: the invariant is one COMPANY, not one client. Per-agent
+      // and per-timeout clients are ordinary and must keep working.
+      __resetPaperclipCompanyPin();
+      expect(() => {
+        paperclipTestClient();
+        paperclipTestClient({ readTimeoutMs: 1 });
+        paperclipTestClient({ defaultActor: 'main' });
+      }).not.toThrow();
+    });
   });
 });
 

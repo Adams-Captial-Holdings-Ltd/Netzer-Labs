@@ -20,7 +20,7 @@
  * PAPERCLIP_TASK_FAMILY)` compares a constant with itself and passes under any
  * rename, which is the failure mode these tests exist to catch.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { App, Stack } from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
@@ -30,7 +30,6 @@ import {
   ApplicationProtocol,
   ListenerAction,
   ListenerCertificate,
-  type ApplicationListener,
 } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { NetworkStack } from './network-stack.js';
 import { StorageStack } from './storage-stack.js';
@@ -41,6 +40,7 @@ import { IamStack } from './iam-stack.js';
 import { FilesystemStack } from './filesystem-stack.js';
 import { DatabaseStack } from './database-stack.js';
 import { PaperclipStack } from './paperclip-stack.js';
+import { ComputeStack } from './compute-stack.js';
 import { buildResourceNames } from './constants.js';
 import {
   PAPERCLIP_CONTAINER_NAME,
@@ -51,7 +51,6 @@ const ENV = { account: '637423318609', region: 'us-east-1' };
 
 interface SynthOpts {
   bootstrapWithoutTasks?: boolean;
-  opsHostname?: string;
   withListener?: boolean;
   imageDigest?: string;
 }
@@ -91,14 +90,13 @@ function synth(opts: SynthOpts = {}): {
     vpc: network.vpc,
     clusterName: 'claudeclaw-cluster',
   });
-  let httpsListener: ApplicationListener | undefined;
   if (opts.withListener) {
     const alb = new ApplicationLoadBalancer(host, 'Alb', {
       vpc: network.vpc,
       internetFacing: true,
       securityGroup: network.albSecurityGroup,
     });
-    httpsListener = alb.addListener('HttpsListener', {
+    alb.addListener('HttpsListener', {
       port: 443,
       protocol: ApplicationProtocol.HTTPS,
       certificates: [
@@ -116,13 +114,11 @@ function synth(opts: SynthOpts = {}): {
     vpc: network.vpc,
     paperclipSecurityGroup: network.paperclipSecurityGroup,
     cluster,
-    httpsListener,
     fileSystem: filesystem.paperclipFileSystem,
     accessPoint: filesystem.paperclipAccessPoint,
     logGroup: filesystem.paperclipLogGroup,
     paperclipSecret: secrets.paperclipSecret,
     imageDigest: opts.imageDigest,
-    opsHostname: opts.opsHostname,
     bootstrapWithoutTasks: opts.bootstrapWithoutTasks,
   });
 
@@ -254,8 +250,8 @@ describe('readiness gates (M33)', () => {
   });
 
   it('scales a bootstrap deploy to zero tasks instead of deleting the service', () => {
-    // The escape hatch for the FIRST armed deploy, where the database is not
-    // migrated yet. It must degrade, never destroy: the service resource, its
+    // The fresh-install and maintenance escape hatch while the database is not
+    // ready. It must degrade, never destroy: the service resource, its
     // target-group attachment and both task definitions all survive, so one
     // redeploy without the flag restores the running system.
     const boot = synth({ bootstrapWithoutTasks: true });
@@ -272,7 +268,7 @@ describe('readiness gates (M33)', () => {
     for (const opts of [
       {},
       { bootstrapWithoutTasks: true },
-      { withListener: true, opsHostname: 'ops.example.com' },
+      { withListener: true },
     ]) {
       expect(byFamily(synth(opts).paperclip, 'claudeclaw-paperclip-migrate')).toBeDefined();
     }
@@ -389,20 +385,47 @@ describe('UI serving and deployment mode', () => {
     expect(envOf(serviceContainer).PAPERCLIP_PUBLIC_URL).toBeUndefined();
   });
 
-  it('sets PAPERCLIP_PUBLIC_URL to exactly the hostname the rule matches', () => {
-    const hosted = synth({ opsHostname: 'ops.example.com', withListener: true });
+  it('does not expose open self-registration through an existing public listener', () => {
+    const hosted = synth({ withListener: true });
+    hosted.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 0);
     const container = byFamily(hosted.paperclip, 'claudeclaw-paperclip')
       .ContainerDefinitions.find((c) => c.Name === 'paperclip-server')!;
-    expect(envOf(container).PAPERCLIP_PUBLIC_URL).toBe('https://ops.example.com');
-    hosted.paperclip.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
-      Priority: 3,
-      Conditions: [
-        Match.objectLike({
-          Field: 'host-header',
-          HostHeaderConfig: { Values: ['ops.example.com'] },
-        }),
-      ],
+    expect(envOf(container).PAPERCLIP_PUBLIC_URL).toBeUndefined();
+  });
+
+  it('keeps the AWS-authenticated SSM tunnel reachable', () => {
+    paperclip.hasResourceProperties('AWS::ECS::Service', {
+      EnableExecuteCommand: true,
     });
+    paperclip.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'SsmExec',
+            Effect: 'Allow',
+            Action: [
+              'ssmmessages:CreateControlChannel',
+              'ssmmessages:CreateDataChannel',
+              'ssmmessages:OpenControlChannel',
+              'ssmmessages:OpenDataChannel',
+            ],
+            Resource: '*',
+          }),
+        ]),
+      },
+    });
+  });
+
+  it('keeps the operator console out of every Netzar SPA source file', () => {
+    const webRoot = new URL('../../web/src/', import.meta.url);
+    const source = readdirSync(webRoot, { recursive: true, encoding: 'utf8' })
+      .filter((name) => {
+        const url = new URL(name.replaceAll('\\', '/'), webRoot);
+        return /\.(?:js|jsx|ts|tsx)$/.test(name) && statSync(url).isFile();
+      })
+      .map((name) => readFileSync(new URL(name.replaceAll('\\', '/'), webRoot), 'utf8'))
+      .join('\n');
+    expect(source).not.toMatch(/paperclip-ops\.|CCE_PAPERCLIP_HOSTNAME/);
   });
 });
 
@@ -425,26 +448,17 @@ describe('listener rule (A23)', () => {
     // The degrade decision (Phase 4.5 acceptance 6): no listener means no ALB
     // path to the console, NOT a missing service. Operators reach it over
     // ECS Exec / the SSM port-forward to 3100.
-    const t = synth({ withListener: false, opsHostname: 'ops.example.com' });
+    const t = synth({ withListener: false });
     t.paperclip.resourceCountIs('AWS::ECS::Service', 1);
     t.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 0);
   });
 
-  it('adds no rule when a listener exists but no ops hostname is configured', () => {
-    // A rule with no condition cannot be written: priorities 1 and 2 are
-    // taken and at cloudFrontEnabled tiers the default action is a 403.
+  it('never attaches the console to the existing potentially public listener', () => {
+    // A38: authenticated mode still leaves self-registration open. Until an
+    // independently access-controlled listener exists, SSM is the only path.
     const t = synth({ withListener: true });
     t.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 0);
-    // ...and losing the rule never costs the service.
     t.paperclip.resourceCountIs('AWS::ECS::Service', 1);
-  });
-
-  it('starts at priority 3, leaving 1 and 2 to compute-stack', () => {
-    const t = synth({ withListener: true, opsHostname: 'ops.example.com' });
-    const rules = Object.values(
-      t.paperclip.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'),
-    ).map((r) => (r.Properties as { Priority: number }).Priority);
-    expect(rules).toEqual([3]);
   });
 });
 
@@ -489,6 +503,157 @@ describe('migration job', () => {
       expect((c.Secrets ?? []).map((s) => s.Name)).toContain('DATABASE_URL');
       expect(envOf(c).DATABASE_URL).toBeUndefined();
     }
+  });
+});
+
+/**
+ * Synthesize the real ComputeStack at a given tier. Heavier than the
+ * Paperclip synth above (it needs storage, secrets, dynamo, messaging and
+ * IAM), but the orchestrator's task definition is written there and nowhere
+ * else, so the only alternative is asserting on a source-level grep.
+ */
+function computeTemplate(tier: 0 | 1): Template {
+  // `paperclipProvisioned` is the tier OR the environment-scoped override, and
+  // it reads process.env. A developer with the override exported would make
+  // the Tier 0 case assert the opposite of what it says, so "unset" is made to
+  // mean unset here — the same treatment app.stack-set.test.ts gives it.
+  const before = process.env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE;
+  delete process.env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE;
+  try {
+    return computeTemplateUnguarded(tier);
+  } finally {
+    if (before === undefined) delete process.env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE;
+    else process.env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE = before;
+  }
+}
+
+function computeTemplateUnguarded(tier: 0 | 1): Template {
+  const app = new App();
+  const net = new NetworkStack(app, 'CCE-Network', { tier, env: ENV });
+  const storage = new StorageStack(app, 'CCE-Storage', { tier, env: ENV });
+  const secretsStack = new SecretsStack(app, 'CCE-Secrets', {
+    tier,
+    env: ENV,
+    dataKey: storage.dataKey,
+  });
+  const dynamo = new DynamoStack(app, 'CCE-Dynamo', {
+    tier,
+    env: ENV,
+    dataKey: storage.dataKey,
+  });
+  const messaging = new MessagingStack(app, 'CCE-Messaging', {
+    tier,
+    env: ENV,
+    configBucket: storage.configBucket,
+  });
+  const iam = new IamStack(app, 'CCE-Iam', {
+    tier,
+    env: ENV,
+    storage,
+    secrets: secretsStack,
+    dynamo,
+    messaging,
+  });
+  const compute = new ComputeStack(app, 'CCE-Compute', {
+    tier,
+    env: ENV,
+    vpc: net.vpc,
+    albSecurityGroup: net.albSecurityGroup,
+    fargateSecurityGroup: net.fargateSecurityGroup,
+    taskRole: iam.taskRole,
+    secrets: secretsStack,
+    logsBucket: storage.logsBucket,
+    messaging,
+  });
+  return Template.fromStack(compute);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Reachability. Before this, a standard install provisioned a Paperclip
+// the orchestrator could neither address nor connect to: PAPERCLIP_BASE_URL
+// appeared in no file under infra/, and PaperclipSg admitted only the ALB.
+// The address and orchestrator ingress are asserted separately because either
+// one alone still leaves the service unreachable.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('orchestrator to Paperclip reachability', () => {
+  it('opens PaperclipSg to the orchestrator Fargate SG on 3100', () => {
+    // A20: literal port, and the SOURCE is asserted, not just the count —
+    // an ingress from the ALB on the same port would satisfy a count check
+    // and leave the orchestrator locked out, which is the shipped bug.
+    const rules = Object.values(network.findResources('AWS::EC2::SecurityGroupIngress'))
+      .map(
+        (r) =>
+          r.Properties as {
+            FromPort: number;
+            GroupId: unknown;
+            SourceSecurityGroupId: unknown;
+          },
+      )
+      .filter((r) => /PaperclipSg/.test(JSON.stringify(r.GroupId)));
+    const fromFargate = rules.filter((r) =>
+      /FargateSg/.test(JSON.stringify(r.SourceSecurityGroupId)),
+    );
+    expect(fromFargate).toHaveLength(1);
+    expect(fromFargate[0].FromPort).toBe(3100);
+    // SSM-only console posture: the ALB must not be admitted on this port.
+    expect(
+      rules.filter((r) => /AlbSg/.test(JSON.stringify(r.SourceSecurityGroupId))),
+    ).toHaveLength(0);
+  });
+
+  it('registers a stable Cloud Map A record in a VPC-private namespace', () => {
+    // The name is what has to be stable. desiredCount 1 at minHealthyPercent 0
+    // replaces the single task — and its IP — on every deploy, so anything
+    // holding an address rather than a name breaks on the next roll.
+    paperclip.hasResourceProperties('AWS::ServiceDiscovery::PrivateDnsNamespace', {
+      Name: 'claudeclaw.internal',
+    });
+    paperclip.hasResourceProperties('AWS::ServiceDiscovery::Service', {
+      Name: 'paperclip',
+      DnsConfig: Match.objectLike({
+        DnsRecords: [Match.objectLike({ Type: 'A' })],
+      }),
+    });
+    // ...and the SERVICE is attached to it. A discovery service with nothing
+    // registered resolves NXDOMAIN, which looks identical to "not deployed".
+    paperclip.hasResourceProperties('AWS::ECS::Service', {
+      ServiceRegistries: [Match.objectLike({ RegistryArn: Match.anyValue() })],
+    });
+  });
+
+  it('leaves the ALB console path exactly as it was (additive only)', () => {
+    // The existing listener stays unbound; target-group health remains.
+    const withListener = synth({ withListener: true });
+    withListener.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 0);
+    withListener.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
+    paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
+  });
+
+  it('gives the orchestrator task definition PAPERCLIP_BASE_URL', () => {
+    // The half that lives in the OTHER stack. src/lib/paperclip/config.ts
+    // reads `runtimeConfig ?? env.PAPERCLIP_BASE_URL`, and `paperclip/base_url`
+    // is deliberately not seeded (scripts/lib/seed-defaults.ts), so this env
+    // var is what the client resolves. A20: the expected value is spelled out
+    // as a literal, not rebuilt from the constant the stack synthesized it
+    // from.
+    const compute = computeTemplate(1);
+    const orchestrator = taskDefs(compute)
+      .flatMap((d) => d.ContainerDefinitions)
+      .find((c) => c.Name === 'orchestrator')!;
+    expect(envOf(orchestrator).PAPERCLIP_BASE_URL).toBe(
+      'http://paperclip.claudeclaw.internal:3100',
+    );
+  });
+
+  it('sets NO base URL at Tier 0, where no engine is provisioned', () => {
+    // Tier 0 creates no Paperclip at all. A URL there would turn the typed
+    // PaperclipDisabledError ("no base URL", with its remediation) into a DNS
+    // failure inside a fetch — a worse error for the same absence.
+    const orchestrator = taskDefs(computeTemplate(0))
+      .flatMap((d) => d.ContainerDefinitions)
+      .find((c) => c.Name === 'orchestrator')!;
+    expect(envOf(orchestrator)).not.toHaveProperty('PAPERCLIP_BASE_URL');
   });
 });
 
@@ -623,12 +788,11 @@ describe('service boundary', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// The deploy role. Phase 4 makes CI do two things it has never done:
-// write a secret and run a one-shot task. Neither is granted anywhere,
-// so both fail with AccessDenied on the FIRST armed deploy unless these
-// statements exist — and M34 says they have to exist in BOTH branches,
-// because `cicdRole` is created only by the prod IAM stack and a staging
-// arm would otherwise depend on a production IAM deploy.
+// The deploy role. Paperclip CI writes a secret and runs a one-shot task, so
+// both need explicit grants. deploy.yml applies the environment's IAM stack
+// exclusively before those consumers run, including on a fresh install; M34
+// still requires the statements in BOTH environment branches so their
+// resource scopes stay exact.
 //
 // A20: every expectation below is a LITERAL. Asserting against
 // RESOURCE_NAMES would compare the constant with itself, and worse, that

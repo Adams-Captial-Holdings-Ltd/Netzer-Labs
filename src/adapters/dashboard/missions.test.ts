@@ -130,7 +130,7 @@ const ROW = {
   createdByChat: 'dashboard:hash-admin',
   title: 'Ship the ACL',
   body: 'Byte for byte.',
-  priority: 50,
+  priority: 'medium',
   status: 'open',
   assignmentReason: 'explicit assignment',
   createdAt: '2026-08-20T10:00:00.000Z',
@@ -255,13 +255,14 @@ describe('ACCEPTANCE 3: the ACL response is byte-identical to the recorded legac
     expect(aclRes.text).toBe(legacy.text);
   });
 
-  it('a row WITHOUT assignmentReason/dueAt omits the keys on both stacks (absent, never null)', async () => {
+  it('a row without assignmentReason omits it and the retired dueAt key on both stacks', async () => {
     const bare = { ...ROW } as Record<string, unknown>;
     delete bare.assignmentReason;
     repo.listMissionsForAgent.mockResolvedValue([bare]);
     acl.listBoardMissions.mockResolvedValue([bare]);
     const { legacy, aclRes } = await both('/missions');
     expect(legacy.text).not.toContain('assignmentReason');
+    expect(legacy.text).not.toContain('dueAt');
     expect(aclRes.text).toBe(legacy.text);
   });
 

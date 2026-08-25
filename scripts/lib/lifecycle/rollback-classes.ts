@@ -876,10 +876,54 @@ async function infraDiffAndMaybeDeploy(
     // tag, so the Compute task def pins the rolled-back image, plus the
     // short-sha deploy marker compute-stack stamps (kept in sync so a
     // post-rollback `cdk diff` reads clean).
+    // THE TIER IS NOT OPTIONAL, and it is not defaultable. Since Phase 9 it
+    // decides what EXISTS — the whole Paperclip substrate is provisioned at
+    // Tier 1+ and empty at Tier 0 — and this env is built from synthInputs
+    // ALONE, without spreading process.env, so a manifest carrying neither
+    // spelling falls through to app.ts's `?? '1'`. On a Tier 0 install that
+    // silently CREATES a RETAIN'd, deletion-protected Aurora cluster during a
+    // rollback; on a Tier 1 install rolling back to a manifest written at
+    // Tier 0 it would empty one. Adding DEPLOY_TIER to SYNTH_INPUT_ALLOWLIST
+    // only helps manifests written from now on: every manifest already in the
+    // state bucket was written when the list held CCE_TIER, which cdkEnvBag
+    // never set, so those carry no tier key at all. Refuse rather than guess.
+    const recordedTier = target.synthInputs?.CCE_TIER ?? target.synthInputs?.DEPLOY_TIER;
+    const currentTier = process.env.CCE_TIER ?? process.env.DEPLOY_TIER;
+    if (recordedTier === undefined && currentTier === undefined) {
+      throw new Error(
+        `target deploy ${target.deployId} records no deploy tier (neither CCE_TIER nor ` +
+          'DEPLOY_TIER in its synthInputs), and the tier decides which resources EXIST — ' +
+          'notably the Paperclip Aurora cluster and EFS filesystem, which are RETAIN and ' +
+          'deletion-protected in both directions.\n' +
+          'Export the tier this install is actually running at and re-run, e.g.\n' +
+          '  CCE_TIER=1 npm run rollback -- ...\n' +
+          'Manifests written before the tier joined the allowlist carry no tier key; this ' +
+          'tool will not pick one for you.',
+      );
+    }
+    const tier = recordedTier ?? currentTier!;
     synthEnv = {
       ...Object.fromEntries(
         Object.entries(target.synthInputs ?? {}).filter(([, v]) => v !== undefined),
       ),
+      // Both spellings, from one value, for the same reason cdkEnvBag forwards
+      // both: app.ts reads `CCE_TIER ?? DEPLOY_TIER`.
+      CCE_TIER: tier,
+      DEPLOY_TIER: tier,
+      // Forwarded, because this env REPLACES the child's environment: without
+      // it a Tier 0 rollback would hit app.ts's teardown guard with no way to
+      // answer it. Only ever passed through, never invented here.
+      ...(process.env.CCE_PAPERCLIP_TEARDOWN === '1'
+        ? { CCE_PAPERCLIP_TEARDOWN: '1' }
+        : {}),
+      // Same rule, other direction: an environment that provisions the
+      // substrate BELOW its tier (staging) must still do so during a rollback,
+      // or the re-synth would render the three stacks empty and the rollback
+      // would orphan the very Aurora cluster it is trying to restore around.
+      // Passed through from the caller's environment, never invented here.
+      ...(process.env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE === '1'
+        ? { CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: '1' }
+        : {}),
       CCE_IMAGE_TAG: target.imageTag,
       DEPLOY_SHA: target.gitSha.slice(0, 7),
     };

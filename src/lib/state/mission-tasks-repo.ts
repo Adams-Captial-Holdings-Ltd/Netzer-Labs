@@ -65,6 +65,9 @@ export const MISSION_STATUSES = [
 
 export type MissionStatus = (typeof MISSION_STATUSES)[number];
 
+export const MISSION_PRIORITIES = ['critical', 'high', 'medium', 'low'] as const;
+export type MissionPriority = (typeof MISSION_PRIORITIES)[number];
+
 export interface Mission {
   id: string;
   ownerAgent: string;
@@ -72,19 +75,29 @@ export interface Mission {
   createdByChat: string;
   title: string;
   body: string;
-  /** 0-100, higher = more urgent. */
-  priority: number;
+  priority: MissionPriority;
   status: MissionStatus;
   /** Optional rationale Haiku gave for picking the owner. */
   assignmentReason?: string;
-  /** Optional ISO deadline. */
-  dueAt?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-function padPriority(n: number): string {
-  return String(Math.max(0, Math.min(100, Math.round(n)))).padStart(3, '0');
+function priorityRank(priority: MissionPriority): string {
+  // Keep the legacy 000-100 sort-key scale so pre-Phase-9 numeric rows and new
+  // four-band rows remain correctly interleaved in the same GSI partition.
+  return String({ critical: 95, high: 80, medium: 50, low: 20 }[priority]).padStart(3, '0');
+}
+
+/** Reads pre-Phase-9 numeric DynamoDB rows without leaking the retired domain. */
+export function normalizeMissionPriority(value: unknown): MissionPriority {
+  if (MISSION_PRIORITIES.includes(value as MissionPriority)) return value as MissionPriority;
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 'medium';
+  if (score >= 90) return 'critical';
+  if (score >= 70) return 'high';
+  if (score >= 40) return 'medium';
+  return 'low';
 }
 
 export async function createMission(args: {
@@ -93,13 +106,12 @@ export async function createMission(args: {
   createdByChat: string;
   title: string;
   body: string;
-  priority?: number;
+  priority?: MissionPriority;
   assignmentReason?: string;
-  dueAt?: string;
 }): Promise<Mission> {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
-  const priority = args.priority ?? 50;
+  const priority = args.priority ?? 'medium';
   const mission: Mission = {
     id,
     ownerAgent: args.ownerAgent,
@@ -110,7 +122,6 @@ export async function createMission(args: {
     priority,
     status: 'open',
     ...(args.assignmentReason ? { assignmentReason: args.assignmentReason } : {}),
-    ...(args.dueAt ? { dueAt: args.dueAt } : {}),
     createdAt,
     updatedAt: createdAt,
   };
@@ -121,7 +132,7 @@ export async function createMission(args: {
         PK: `AGENT#${args.ownerAgent}`,
         SK: `MISSION#${createdAt}#${id}`,
         GSI1PK: `STATUS#open#AGENT#${args.ownerAgent}`,
-        GSI1SK: `PRIORITY#${padPriority(priority)}#${createdAt}`,
+        GSI1SK: `PRIORITY#${priorityRank(priority)}#${createdAt}`,
         ...mission,
       },
     }),
@@ -224,7 +235,7 @@ export async function reassignMission(
         PK: `AGENT#${newOwner}`,
         SK: `MISSION#${moved.createdAt}#${moved.id}`,
         GSI1PK: `STATUS#${moved.status}#AGENT#${newOwner}`,
-        GSI1SK: `PRIORITY#${padPriority(moved.priority)}#${moved.createdAt}`,
+        GSI1SK: `PRIORITY#${priorityRank(moved.priority)}#${moved.createdAt}`,
         ...moved,
       },
     }),
@@ -249,10 +260,9 @@ function toMission(i: Record<string, unknown>): Mission {
     createdByChat: String(i.createdByChat ?? ''),
     title: String(i.title ?? ''),
     body: String(i.body ?? ''),
-    priority: Number(i.priority ?? 50),
+    priority: normalizeMissionPriority(i.priority),
     status: (i.status as MissionStatus | undefined) ?? 'open',
     ...(i.assignmentReason ? { assignmentReason: String(i.assignmentReason) } : {}),
-    ...(i.dueAt ? { dueAt: String(i.dueAt) } : {}),
     createdAt: String(i.createdAt ?? ''),
     updatedAt: String(i.updatedAt ?? i.createdAt ?? ''),
   };

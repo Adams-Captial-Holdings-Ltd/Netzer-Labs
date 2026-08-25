@@ -42,7 +42,11 @@ import {
   formatWrongSubstrate,
   resolveMissionRef,
 } from '../missions/format.js';
-import type { Mission } from '../state/mission-tasks-repo.js';
+import {
+  MISSION_PRIORITIES,
+  type Mission,
+  type MissionPriority,
+} from '../state/mission-tasks-repo.js';
 import type { MissionEngineOptions } from '../paperclip/mission-engine.js';
 import { PaperclipDisabledError, PaperclipRunIdRequiredError } from '../paperclip/error.js';
 
@@ -229,10 +233,9 @@ tools.register('paperclip_create_subtask', {
         body: { type: 'string', description: 'Bounded work and acceptance criteria.' },
         owner: { type: 'string', description: 'Netzar agent slug that will own the child.' },
         priority: {
-          type: 'integer',
-          minimum: 0,
-          maximum: 100,
-          description: '0-100, default 50.',
+          type: 'string',
+          enum: [...MISSION_PRIORITIES],
+          description: 'Priority band; default medium.',
         },
       },
     },
@@ -269,7 +272,9 @@ tools.register('paperclip_create_subtask', {
         createdByChat: ctx.chatId,
         title,
         body,
-        priority: Number.isFinite(args.priority) ? Number(args.priority) : 50,
+        priority: MISSION_PRIORITIES.includes(args.priority as MissionPriority)
+          ? args.priority as MissionPriority
+          : 'medium',
         status: 'open',
         assignmentReason: `delegated by ${ctx.agentId}`,
         createdAt: now,

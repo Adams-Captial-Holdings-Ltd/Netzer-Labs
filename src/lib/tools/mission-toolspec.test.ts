@@ -1,6 +1,7 @@
 /**
- * `create_mission`'s toolSpec is MODEL-FACING CONTRACT and must stay
- * byte-identical across the Paperclip migration. Until now nothing pinned it —
+ * `create_mission`'s toolSpec is MODEL-FACING CONTRACT. Phase 9 deliberately
+ * changes only priority to the shared four-band enum and removes due_at. Until
+ * now nothing pinned it —
  * `grep -rl create_mission src tests web` found only the tool itself, the War
  * Room policy, the orchestrator and one comment, so byte-identity was enforced
  * by review alone. Phase 8 adds a sibling tools module and a new verb beside
@@ -35,7 +36,7 @@ function specOf(name: string): unknown {
 }
 
 describe('create_mission', () => {
-  it('is byte-identical to the shipped contract, key order included', () => {
+  it('matches the deliberate Phase 9 contract, key order included', () => {
     expect(JSON.stringify(specOf('create_mission'))).toBe(
       JSON.stringify({
         toolSpec: {
@@ -57,18 +58,37 @@ describe('create_mission', () => {
                   description: 'Optional explicit owner agent id. Skip to let Haiku auto-assign.',
                 },
                 priority: {
-                  type: 'integer',
-                  minimum: 0,
-                  maximum: 100,
-                  description: '0-100, default 50.',
+                  type: 'string',
+                  enum: ['critical', 'high', 'medium', 'low'],
+                  description: 'Priority band; default medium.',
                 },
-                due_at: { type: 'string', description: 'Optional ISO 8601 deadline.' },
               },
             },
           },
         },
       }),
     );
+  });
+});
+
+describe('mission status schemas', () => {
+  function statusEnum(name: string): unknown {
+    const registered = specOf(name) as {
+      toolSpec: { inputSchema: { json: { properties: { status: { enum: unknown } } } } };
+    };
+    return registered.toolSpec.inputSchema.json.properties.status.enum;
+  }
+
+  it('list_missions follows the six canonical lanes, then all, in exact order', () => {
+    expect(statusEnum('list_missions')).toEqual([
+      'open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled', 'all',
+    ]);
+  });
+
+  it('update_mission follows the six canonical lanes in exact order', () => {
+    expect(statusEnum('update_mission')).toEqual([
+      'open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled',
+    ]);
   });
 });
 

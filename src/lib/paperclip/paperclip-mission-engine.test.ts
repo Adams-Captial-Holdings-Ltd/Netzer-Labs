@@ -48,7 +48,7 @@ function mission(overrides: Partial<Mission> = {}): Mission {
     createdByChat: 'chat-1',
     title: 'Ship the thing',
     body: 'body text',
-    priority: 73,
+    priority: 'high',
     status: 'open',
     createdAt: '2026-08-21T00:00:00.000Z',
     updatedAt: '2026-08-21T00:00:00.000Z',
@@ -147,18 +147,16 @@ describe('createPaperclipMissionEngine', () => {
     // expectation from the function under test passes even when it is wrong.
     // Since Phase 9 the literal is `in_review` itself: the status has a lane.
     expect(projected?.status).toBe('in_review');
-    expect(projected?.priority).toBe(95);
+    expect(projected?.priority).toBe('critical');
   });
 
-  it('C-15: PRIORITY is still lossy, STATUS is not any more, and the engine papers over neither', async () => {
-    // What changed in Phase 9 and what did not. `blocked` used to arrive as
-    // `open` - the loss this case was written to pin - and now arrives as
-    // itself. The priority quantization is untouched and still real: `high`
-    // comes back 80 whatever score produced it.
+  it('C-15: priority and the widened statuses now both project exactly', async () => {
+    // Phase 9 removes both avoidable losses: `blocked` has its own lane and
+    // the shared Mission domain carries Paperclip's exact priority band.
     const routes = routed({ [AGENTS_ROUTE]: () => AGENTS, [ISSUES_ROUTE]: (n) => (n === 0 ? [issue({ status: 'blocked', priority: 'high' })] : []) });
     const [projected] = await engineOver(routes).listMissions();
     expect(projected?.status).toBe('blocked');
-    expect(projected?.priority).toBe(80);
+    expect(projected?.priority).toBe('high');
   });
 
   it('A2-17: NO single unprojectable row can blank the board, whatever the projection threw', async () => {
@@ -339,14 +337,14 @@ describe('layering guards', () => {
     expect(engine).toContain("from './mission-projection.js'");
   });
 
-  it('A2-24: the shipped projection export names are canonical (C-6), so any rename must ship an alias', () => {
-    // Nothing was renamed in this phase. This is the guard that makes a future
-    // silent rename fail rather than a claim that one happened.
+  it('A2-24: the projection export inventory drops the retired lossy priority converters', () => {
     for (const canonical of [
-      'toIssueStatus', 'toMissionStatus', 'toPriorityBand', 'toPriorityScore',
+      'toIssueStatus', 'toMissionStatus',
       'missionToIssueCreate', 'issueToMission', 'neutralizeForPrompt',
     ] as const) {
       expect(typeof projection[canonical], canonical).toBe('function');
     }
+    expect(projection).not.toHaveProperty('toPriorityBand');
+    expect(projection).not.toHaveProperty('toPriorityScore');
   });
 });

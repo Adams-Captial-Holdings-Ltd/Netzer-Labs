@@ -14,6 +14,7 @@ import type { Mission } from '../state/mission-tasks-repo.js';
 import {
   MISSION_HELP_LINES,
   MISSION_LIST_LIMIT,
+  MISSION_PRIORITY_LABEL,
   MISSION_REF_LENGTH,
   MISSION_REPLY_MAX_CHARS,
   MISSION_RESOLVE_WINDOW,
@@ -46,7 +47,7 @@ const ROW: Mission = {
   createdByChat: 'owner:emmanuel',
   title: 'Ship the reconciler',
   body: 'With a watermark overlap.',
-  priority: 80,
+  priority: 'high',
   status: 'open',
   createdAt: '2026-08-20T10:00:00.000Z',
   updatedAt: '2026-08-20T10:00:00.000Z',
@@ -176,6 +177,7 @@ describe('formatMissionList', () => {
     // because A3-8 names an unmarked duplicate as the defect in its own right.
     const columns = await readFile('web/src/pages/Missions.tsx', 'utf8');
     const glossary = await readFile('web/src/lib/glossary.ts', 'utf8');
+    const shippedDashboard = await readFile('src/adapters/dashboard/public/app.js', 'utf8');
     for (const [key, label] of Object.entries(MISSION_STATUS_LABEL)) {
       expect(columns).toContain(`{ key: '${key}', label: '${label}',`);
       expect(glossary).toContain(`${key}: '${label}',`);
@@ -184,6 +186,11 @@ describe('formatMissionList', () => {
     expect(columns).toContain('src/lib/missions/format.ts');
     expect(glossary).toContain('MISSION_STATUS_LABEL');
     expect(glossary).toContain('COLUMNS');
+    expect(shippedDashboard).toContain(
+      "const STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];",
+    );
+    expect(shippedDashboard).toContain('${escapeHtml(m.priority)} priority');
+    expect(shippedDashboard).not.toContain('p${m.priority}');
 
     // AND THE ORDER, not just the membership. The loop above is `toContain`
     // per key, so it is satisfied by all six words being PRESENT in any
@@ -207,9 +214,12 @@ describe('formatMissionList', () => {
     }
   });
 
-  it('speaks priority as P<n>, the same badge the board renders', () => {
+  it('speaks the exact four-band priority the board renders', () => {
+    expect(MISSION_PRIORITY_LABEL).toEqual({
+      critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low',
+    });
     expect(formatMissionList([ROW], { owner: 'research', status: 'open' })).toBe(
-      '1 Open mission for research:\n[abc12345] P80 Open — Ship the reconciler',
+      '1 Open mission for research:\n[abc12345] High Open — Ship the reconciler',
     );
   });
 
@@ -223,33 +233,24 @@ describe('formatMissionList', () => {
     );
   });
 
-  it('appends a due date only when the mission has one (absent key, never "undefined")', () => {
-    // `dueAt` is a CONDITIONALLY SPREAD key all the way from toWireMission.
-    expect(formatMissionList([ROW], { owner: 'research', status: 'open' })).not.toContain('due');
-    expect(
-      formatMissionList([{ ...ROW, dueAt: '2026-09-01' }], { owner: 'research', status: 'open' }),
-    ).toContain('(due 2026-09-01)');
-  });
 });
 
 describe('formatMissionCard', () => {
-  it('omits assignmentReason and dueAt rather than printing them empty', () => {
+  it('omits assignmentReason rather than printing it empty', () => {
     const card = formatMissionCard(ROW);
     expect(card).not.toContain('undefined');
     expect(card).not.toContain('Due:');
     expect(card).not.toContain('Assigned because:');
     expect(card).toBe(
-      '[abc12345] Ship the reconciler\nOpen · P80 · owner research\n\nWith a watermark overlap.',
+      '[abc12345] Ship the reconciler\nOpen · High priority · owner research\n\nWith a watermark overlap.',
     );
   });
 
-  it('renders the optional fields when the provenance row supplied them', () => {
+  it('renders the optional assignment reason when provenance supplied it', () => {
     const card = formatMissionCard({
       ...ROW,
-      dueAt: '2026-09-01',
       assignmentReason: 'closest to the watermark work',
     });
-    expect(card).toContain('Due: 2026-09-01');
     expect(card).toContain('Assigned because: closest to the watermark work');
   });
 });
@@ -288,19 +289,18 @@ describe('the unhappy strings are shared too', () => {
   it('speaks ONE board vocabulary to a tool and to a chat command alike', () => {
     // The regression: `list_missions` rendered its own rows and `/missions`
     // rendered the shared ones, so the SAME board came back as
-    // `- [abc12345] p80 open | Ship the reconciler` through a tool and
-    // `[abc12345] P80 Open — Ship the reconciler` through a command, in one
+    // `- [abc12345] high open | Ship the reconciler` through a tool and
+    // `[abc12345] High Open — Ship the reconciler` through a command, in one
     // conversation. `ToolResult.text` is relayed to the user by the model, so
     // both are the user's vocabulary and there can only be one.
     const board = formatMissionList([ROW], { owner: 'research', status: 'open' });
-    expect(board).toContain('P80 Open');
-    expect(board).not.toContain('p80');
+    expect(board).toContain('High Open');
     expect(board).not.toContain('| Ship');
   });
 
   it('names the create receipt in the same ref, badge and owner the card uses', () => {
     expect(formatMissionCreated({ mission: ROW, reason: 'closest to the work' })).toBe(
-      'Mission abc12345 created. Owner: research (closest to the work). Priority 80.',
+      'Mission abc12345 created. Owner: research (closest to the work). Priority high.',
     );
   });
 
@@ -313,7 +313,7 @@ describe('the unhappy strings are shared too', () => {
     expect(
       formatMissionCreated({ mission: ROW, reason: 'closest to the work', pushFailed: true }),
     ).toBe(
-      'Mission abc12345 created. Owner: research (closest to the work). Priority 80. ' +
+      'Mission abc12345 created. Owner: research (closest to the work). Priority high. ' +
         'This chat was not notified; research still has it in their inbox.',
     );
     // And nothing is added on the happy path — the receipt is not a delivery
@@ -400,7 +400,7 @@ describe('formatAssignmentPush', () => {
     const out = formatAssignmentPush({ mission: { ...ROW, ownerAgent: 'ops' }, byAgent: 'research' });
     expect(out).not.toContain('\n');
     expect(out).toBe(
-      'Mission [abc12345] "Ship the reconciler" assigned to ops by research (P80).',
+      'Mission [abc12345] "Ship the reconciler" assigned to ops by research (high priority).',
     );
   });
 
@@ -409,12 +409,6 @@ describe('formatAssignmentPush', () => {
     expect(out).toContain(`[${missionRef(ROW.id)}]`);
   });
 
-  it('appends the deadline only when there is one', () => {
-    expect(formatAssignmentPush({ mission: ROW, byAgent: 'main' })).not.toContain('due');
-    expect(
-      formatAssignmentPush({ mission: { ...ROW, dueAt: '2026-09-01' }, byAgent: 'main' }),
-    ).toContain('due 2026-09-01');
-  });
 });
 
 /**
@@ -433,7 +427,7 @@ describe('every returned string is bounded, for every input', () => {
 
   it.each([
     ['a full board of 400 rows with 20k-char titles', () => formatMissionList(BOARD, { owner: HUGE, status: 'all' })],
-    ['a card with a 20k-char body, title and reason', () => formatMissionCard({ ...ROW, title: HUGE, body: HUGE, assignmentReason: HUGE, dueAt: HUGE })],
+    ['a card with a 20k-char body, title and reason', () => formatMissionCard({ ...ROW, title: HUGE, body: HUGE, assignmentReason: HUGE })],
     ['an ambiguous ref over the whole board', () => formatAmbiguousRef({ owner: HUGE, ref: HUGE, ids: BOARD.map((m) => m.id) })],
     ['a board error carrying a 20k-char message', () => formatBoardError(new Error(HUGE))],
     ['a no-match refusal for a 20k-char ref', () => formatNoMatch({ owner: HUGE, ref: HUGE })],
@@ -488,8 +482,8 @@ describe('every returned string is bounded, for every input', () => {
  */
 describe('the copy renders identically on every surface', () => {
   const BOARD_COPY: [string, string][] = [
-    ['list', formatMissionList([ROW, { ...ROW, dueAt: '2026-09-01' }], { owner: 'a', status: 'all' })],
-    ['card', formatMissionCard({ ...ROW, dueAt: '2026-09-01', assignmentReason: 'because' })],
+    ['list', formatMissionList([ROW, { ...ROW, status: 'blocked' }], { owner: 'a', status: 'all' })],
+    ['card', formatMissionCard({ ...ROW, assignmentReason: 'because' })],
     ['ambiguous', formatAmbiguousRef({ owner: 'a', ref: 'abc12345', ids: [ROW.id, TWIN.id] })],
     ['no-match', formatNoMatch({ owner: 'a', ref: 'abc12345' })],
     ['status changed', formatStatusChanged({ ref: 'abc12345', status: 'done' })],

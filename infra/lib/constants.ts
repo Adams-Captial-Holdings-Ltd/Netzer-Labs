@@ -36,6 +36,16 @@ export const TAGS = {
 export { APP as app };
 
 /**
+ * Port the Paperclip work engine listens on. Never 3000 — it is deliberately
+ * distinct from the orchestrator's port so the two are separable in flow logs,
+ * metrics and SG audits. Lives here rather than in paperclip-stack.ts because
+ * three files have to agree on it: network-stack's SG rules, paperclip-stack's
+ * container/target-group/health-check, and the internal URL below that
+ * compute-stack hands the orchestrator.
+ */
+export const PAPERCLIP_PORT = 3100;
+
+/**
  * Per-suffix resource-name shape. `buildResourceNames(suffix)` produces a
  * struct of deterministic names rooted at `claudeclaw[-suffix]`. The
  * default `RESOURCE_NAMES` below is what every stack actually uses; this
@@ -155,6 +165,32 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
     // name tag. Suffix-aware so CCE_NAME_SUFFIX staging keeps working.
     paperclipDbCluster: `${app}-paperclip-db`,
     paperclipEfs: `${app}-paperclip-efs`,
+
+    // Paperclip service discovery (Cloud Map). Without these the orchestrator
+    // has no address for the engine at all: the ONLY route into Paperclip was
+    // an ALB listener rule that is emitted only when DOMAIN_NAME is set, which
+    // both real environments deliberately leave empty — so a standard install
+    // provisioned a service nothing could reach.
+    //
+    // Deterministic and derived from `app`, exactly like every other name in
+    // this file, for the reason stated on RESOURCE_NAMES: the orchestrator's
+    // task definition is written by CCE-Compute, which is created BEFORE
+    // CCE-Paperclip (Paperclip imports Compute's cluster and listener), so a
+    // real cross-stack reference to the discovery record would be a cycle. A
+    // name both sides compute from the same constant is not.
+    //
+    // COLLISION: a private DNS namespace is a Route 53 private hosted zone
+    // associated with ONE VPC — the one NetworkStack creates in this same app
+    // — and this repo creates no other namespace anywhere (grep
+    // `PrivateDnsNamespace`). The name is app-suffixed, so prod
+    // (`claudeclaw.internal`) and staging (`claudeclaw-staging.internal`) are
+    // distinct even in one account. An out-of-band namespace already attached
+    // to this VPC under the same name would fail the CREATE loudly, which is
+    // the right direction.
+    paperclipNamespace: `${app}.internal`,
+    paperclipDiscoveryName: 'paperclip',
+    /** What compute-stack sets as PAPERCLIP_BASE_URL on the orchestrator. */
+    paperclipInternalUrl: `http://paperclip.${app}.internal:${PAPERCLIP_PORT}`,
     alertTopic: `${app}-ops-alerts`,
     cloudTrailName: `${app}-audit`,
 
@@ -211,6 +247,26 @@ export const BEDROCK_MODELS = {
 export type DeployTier = 0 | 1 | 2 | 3;
 
 /**
+ * Coerce a raw tier env string to a valid DeployTier, defaulting to 1.
+ *
+ * THE ONE PARSER. `infra/bin/app.ts` and `scripts/lib/cost-gate.ts` both call
+ * this, because since Phase 9 the tier decides whether the Paperclip substrate
+ * EXISTS — a bare `Number(process.env.CCE_TIER ?? '1')` in app.ts read a blank
+ * tier as `Number('') === 0`, i.e. Hobby, i.e. an EMPTY Aurora stack, while the
+ * deploy driver's clampTier read the same blank value as Standard. Two parsers
+ * that disagree about `''` is two answers to "does this install have a
+ * database".
+ */
+export function clampTier(raw: string | undefined): DeployTier {
+  const trimmed = (raw ?? '').trim();
+  // Guard the empty string explicitly: Number('') is 0, which is a VALID
+  // tier, and an unset tier must mean the tier-1 default, not Hobby.
+  if (trimmed === '') return 1;
+  const n = Number(trimmed);
+  return (n === 0 || n === 1 || n === 2 || n === 3 ? n : 1) as DeployTier;
+}
+
+/**
  * Per-tier resource shape. The setup wizard writes the chosen tier into
  * `DEPLOY_TIER` in the project .env; CDK reads it via `app.ts`.
  *
@@ -237,6 +293,23 @@ export interface TierShape {
    * scale-to-zero, which is a runtime behaviour change, not a size knob.
    */
   paperclipAuroraMaxAcu: number;
+  /**
+   * Whether the Paperclip work engine (ADR 0010) is PROVISIONED at this tier.
+   *
+   * The Database, Filesystem and Paperclip stacks are always CONSTRUCTED —
+   * `npx cdk ls` prints the same stack names at every tier and in every value
+   * of CCE_PAPERCLIP_ENABLED — and this flag decides whether they create any
+   * resources, the same shape SecurityStack (WAF at T2+) and BackupStack (T1+)
+   * already use.
+   *
+   * T0 Hobby is OUT because the Aurora floor is not tiered: only the ceiling
+   * above is, and database-stack.ts holds `serverlessV2MinCapacity` at 0.5 on
+   * every tier because min ACU bills continuously. Provisioning at T0 would put
+   * roughly $110/mo of always-on cost (~$50 Aurora floor + EFS, ~$58 for the
+   * always-on 2 vCPU / 4 GB Fargate task) on a Hobby install, for a RETAIN'd,
+   * deletion-protected cluster its owner cannot casually tear down.
+   */
+  paperclipEnabled: boolean;
   wafEnabled: boolean;
   cloudFrontEnabled: boolean;
   flowLogsEnabled: boolean;
@@ -256,6 +329,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     configCacheTtlSec: 300,
     logRetentionDays: 7,
     paperclipAuroraMaxAcu: 1,
+    paperclipEnabled: false,
     wafEnabled: false,
     cloudFrontEnabled: false,
     flowLogsEnabled: false,
@@ -273,6 +347,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     configCacheTtlSec: 300,
     logRetentionDays: 30,
     paperclipAuroraMaxAcu: 2,
+    paperclipEnabled: true,
     wafEnabled: false,
     cloudFrontEnabled: false,
     flowLogsEnabled: true,
@@ -294,6 +369,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     configCacheTtlSec: 300,
     logRetentionDays: 90,
     paperclipAuroraMaxAcu: 4,
+    paperclipEnabled: true,
     wafEnabled: true,
     cloudFrontEnabled: false,
     flowLogsEnabled: true,
@@ -311,6 +387,7 @@ export const TIERS: Record<DeployTier, TierShape> = {
     configCacheTtlSec: 300,
     logRetentionDays: 365,
     paperclipAuroraMaxAcu: 8,
+    paperclipEnabled: true,
     wafEnabled: true,
     cloudFrontEnabled: true,
     flowLogsEnabled: true,
@@ -318,6 +395,47 @@ export const TIERS: Record<DeployTier, TierShape> = {
     dailyCostCapDefaultUsd: 1000,
   },
 };
+
+/**
+ * Does THIS DEPLOYMENT provision the Paperclip work engine substrate?
+ *
+ * THE ONE PREDICATE, for the same reason clampTier above is the one parser:
+ * infra/bin/app.ts, the three substrate stacks, cost-guardrails-stack.ts, the
+ * deploy gate copy, scripts/ci/tier-gate.ts and scripts/deploy.ts must all give
+ * the same answer or CI builds an image for an engine CDK does not create.
+ *
+ * Two inputs, answering two DIFFERENT questions:
+ *
+ *   TIERS[tier].paperclipEnabled  — "how big is this customer". Tier 0 Hobby
+ *     is out because the Aurora floor is not tiered (~$110/mo of always-on
+ *     cost); Tier 1+ is in.
+ *   CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE — "provision the substrate in THIS
+ *     ENVIRONMENT even though its tier would not".
+ *
+ * The override is ENVIRONMENT-SCOPED and it is ONE-DIRECTIONAL. It is set per
+ * environment by a deploy driver — `.github/workflows/deploy.yml` sets it on
+ * the staging branch of its CCE_TIER expression and NOWHERE else, so staging
+ * stays pinned at Tier 0 (nothing else scales up) while still growing the
+ * substrate the engine is validated on, and PRODUCTION is not the first
+ * environment ever to run it. There is no value of it that EMPTIES a substrate
+ * a tier provisions: that is what makes it a provisioning override and not a
+ * resurrection of CCE_PAPERCLIP_ENABLED, the general-purpose feature gate
+ * Phase 9 deleted, whose OFF value is what made a green deploy with no Aurora
+ * behind it possible (M22).
+ *
+ * A genuine Tier 0 Hobby customer who sets nothing is unaffected: no Aurora,
+ * no EFS, no Paperclip task, and still protected by the teardown guard in
+ * infra/bin/app.ts, which refuses to synthesize an EMPTY substrate over a
+ * provisioned one unless CCE_PAPERCLIP_TEARDOWN=1 declares it.
+ */
+export function paperclipProvisioned(
+  tier: DeployTier,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return (
+    TIERS[tier].paperclipEnabled || env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE === '1'
+  );
+}
 
 /** @deprecated use TIERS[tier]. Kept for back-compat with callers that
  * referenced the old flat object. */

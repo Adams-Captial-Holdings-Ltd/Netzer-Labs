@@ -752,13 +752,11 @@ export class IamStack extends Stack implements IamOutputs {
       // down a deploy of the orchestrator. `claudeclaw-staging-paperclip`
       // matches neither orchestrator pattern.
       //
-      // ORDERING, and it is the same shape as the 2026-08-14 connector
-      // incident this workflow documents inline: this grant is created by
-      // the CDK deploy LATER IN THE SAME JOB, so it cannot help the ECR
-      // steps that run before it. It must land in a prior, UNARMED deploy
-      // before CCE_PAPERCLIP_ENABLED is set. And because this whole role is
-      // created only by the PROD IAM stack (see isStagingDeploy above), a
-      // STAGING arm depends on a production IAM deploy having run first.
+      // ORDERING. deploy.yml applies this environment's IAM stack exclusively
+      // immediately after assuming the role and before any Paperclip ECR,
+      // CodeBuild, secret or migration call. The shared role already has to
+      // exist for OIDC to reach that step; no earlier Paperclip-armed deploy is
+      // required to land these grants.
       cicdRole.addToPolicy(
         new PolicyStatement({
           sid: 'EcrPushAppImages',
@@ -791,8 +789,8 @@ export class IamStack extends Stack implements IamOutputs {
       // this role cannot create arbitrary ECR repositories.
       //
       // The Paperclip names are required by the SAME workflow step: it calls
-      // ensure_repo on the Paperclip repo under the CCE_PAPERCLIP_ENABLED
-      // guard, and a create the role cannot make is a hard step failure.
+      // ensure_repo when the resolved tier/environment gate provisions
+      // Paperclip, and a create the role cannot make is a hard step failure.
       cicdRole.addToPolicy(
         new PolicyStatement({
           sid: 'EcrCreateAppRepos',
@@ -832,11 +830,9 @@ export class IamStack extends Stack implements IamOutputs {
       // deliberately NOT covered: CI still builds that image with buildx, so
       // granting it would be speculative.
       //
-      // ORDERING, exactly as for the ECR grants above: this policy is applied
-      // by the CDK deploy step LATER IN THE SAME JOB, so it must land in a
-      // prior UNARMED deploy before CCE_PAPERCLIP_ENABLED is set, and this
-      // whole role is created only by the PROD IAM stack, so a staging arm
-      // depends on a production IAM deploy having run first.
+      // ORDERING, exactly as for the ECR grants above: deploy.yml applies this
+      // environment's IAM stack exclusively before invoking the shared build
+      // module, including on the first workflow run that provisions Paperclip.
       //
       // NOT A PRIVILEGE ESCALATION: cicdRole already assumes the four
       // `cdk-hnb659fds-*` bootstrap roles (sid AssumeCdkBootstrapRoles), which
@@ -988,16 +984,12 @@ export class IamStack extends Stack implements IamOutputs {
       // CI path and every task would have died at start with a
       // ResourceInitializationError.
       //
-      // ORDERING, and it is the same trap as the ECR grants above: this
-      // statement is created by the CDK deploy LATER IN THE SAME JOB, so it
-      // cannot help the "Populate Paperclip secret" and "Migrate Paperclip
-      // database" steps that run BEFORE it. It has to land in a prior,
-      // UNARMED deploy, before CCE_PAPERCLIP_ENABLED is ever set. And because
-      // this whole role is created only by the PROD IAM stack, a STAGING arm
-      // depends on a production IAM deploy having run first (M34) - which is
-      // why the mirror of every statement below also exists in the staging
-      // branch further down, and why the live role is the fact worth reading
-      // before arming anything.
+      // ORDERING, exactly as for the ECR grants above: deploy.yml applies this
+      // environment's IAM stack exclusively before the secret and migration
+      // steps consume these permissions. Every statement is still mirrored in
+      // the staging branch below because the same shared role must be scoped to
+      // each environment's resources; the live role remains the fact worth
+      // reading when a call is denied.
       //
       // GetSecretValue is granted here where the connector probe above
       // deliberately withholds it, because the merge is a read-modify-write:
@@ -1219,10 +1211,10 @@ export class IamStack extends Stack implements IamOutputs {
       // one. Every ARN below is narrowed to `claudeclaw-staging` rather than
       // wildcarded, because this branch knows which environment it is.
       //
-      // Same ordering trap as everything else here: created by a CDK deploy,
-      // so it cannot help steps in the same job that run before it. It must
-      // land in a prior UNARMED staging deploy. Read the LIVE role before
-      // arming - the code is a plan, the role is the fact.
+      // Keep the staging branch explicit because the resources are scoped to
+      // that environment. deploy.yml applies this environment's IAM stack
+      // exclusively before the Paperclip consumers run, including on the
+      // first workflow run. Read the LIVE role when verifying the rollout.
       deployRoleRef.addToPrincipalPolicy(
         new PolicyStatement({
           sid: 'PaperclipSecretPopulateStaging',

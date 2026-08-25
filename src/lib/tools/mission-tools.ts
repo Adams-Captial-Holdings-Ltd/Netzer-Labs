@@ -15,17 +15,18 @@
 
 import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
 import { tools } from './registry.js';
-import { type MissionStatus } from '../state/mission-tasks-repo.js';
+import {
+  MISSION_PRIORITIES,
+  MISSION_STATUSES,
+  type MissionPriority,
+  type MissionStatus,
+} from '../state/mission-tasks-repo.js';
 // The SAME ACL the dashboard route, Jarvis and the GDPR export use. Only the
-// three call sites below change; every tool NAME, DESCRIPTION and inputSchema
-// in this file is byte-identical to before, because `create_mission`'s toolSpec
-// is part of the model-facing contract.
+// three call sites below change. Phase 9 deliberately widens the status schemas,
+// changes priority to the exact four bands, and removes the retired due date.
 //
-// ONE BEHAVIOUR CHANGE THE SPEC CANNOT EXPRESS: `priority` still accepts
-// `integer, minimum 0, maximum 100`, but on the Paperclip path it round-trips
-// through `PriorityBand` and quantizes to {95, 80, 50, 20}. A caller asking for
-// 73 gets 80 back. That is the documented lossiness, and papering over it with
-// a compensating store is exactly what the engine's contract forbids.
+// Phase 9 makes the shared domain match Paperclip's four exact priority bands;
+// there is no numeric projection or due-date field to lose at this boundary.
 import {
   AmbiguousMissionPrefixError,
   createBoardMission,
@@ -143,14 +144,9 @@ tools.register('create_mission', {
           description: 'Optional explicit owner agent id. Skip to let Haiku auto-assign.',
         },
         priority: {
-          type: 'integer',
-          minimum: 0,
-          maximum: 100,
-          description: '0-100, default 50.',
-        },
-        due_at: {
           type: 'string',
-          description: 'Optional ISO 8601 deadline.',
+          enum: [...MISSION_PRIORITIES],
+          description: 'Priority band; default medium.',
         },
       },
     },
@@ -176,8 +172,9 @@ tools.register('create_mission', {
     const body = String(args.body ?? '').trim();
     if (!title) return { text: formatMissingArgument('title'), isError: true };
     if (!body) return { text: formatMissingArgument('body'), isError: true };
-    const priority = Number.isFinite(args.priority) ? Number(args.priority) : 50;
-    const due = typeof args.due_at === 'string' && args.due_at ? args.due_at : undefined;
+    const priority = MISSION_PRIORITIES.includes(args.priority as MissionPriority)
+      ? args.priority as MissionPriority
+      : 'medium';
 
     let owner: string;
     let reason: string;
@@ -217,7 +214,6 @@ tools.register('create_mission', {
       body,
       priority,
       assignmentReason: reason,
-      ...(due ? { dueAt: due } : {}),
     });
 
     // THE ASSIGNMENT PUSH (A3-12), and it is ONE emission site for every
@@ -334,7 +330,7 @@ tools.register('list_missions', {
         },
         status: {
           type: 'string',
-          enum: ['open', 'in_progress', 'done', 'cancelled', 'all'],
+          enum: [...MISSION_STATUSES, 'all'],
           description: 'Filter; defaults to "open".',
         },
         limit: {
@@ -388,7 +384,7 @@ tools.register('list_missions', {
 tools.register('update_mission', {
   spec: spec(
     'update_mission',
-    'Transition a mission to a new status. Use to mark a mission in_progress, done, or cancelled.',
+    'Transition a mission to a new status.',
     {
       type: 'object',
       required: ['mission_id', 'status'],
@@ -403,7 +399,7 @@ tools.register('update_mission', {
         },
         status: {
           type: 'string',
-          enum: ['open', 'in_progress', 'done', 'cancelled'],
+          enum: [...MISSION_STATUSES],
           description: 'New status.',
         },
       },

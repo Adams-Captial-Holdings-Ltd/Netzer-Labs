@@ -14,19 +14,22 @@ import {
 } from 'aws-cdk-lib/aws-ecs';
 import { SubnetType, type IVpc, type SecurityGroup } from 'aws-cdk-lib/aws-ec2';
 import {
-  ApplicationListenerRule,
   ApplicationProtocol,
   ApplicationTargetGroup,
-  ListenerAction,
-  ListenerCondition,
   TargetType,
-  type ApplicationListener,
 } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Role, ServicePrincipal, PolicyStatement, Effect } from 'aws-cdk-lib/aws-iam';
 import { Secret as SmSecret, type ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { IFileSystem, IAccessPoint } from 'aws-cdk-lib/aws-efs';
 import type { ILogGroup } from 'aws-cdk-lib/aws-logs';
-import { APP, RESOURCE_NAMES, TAGS } from './constants.js';
+import { PrivateDnsNamespace, DnsRecordType } from 'aws-cdk-lib/aws-servicediscovery';
+import {
+  APP,
+  PAPERCLIP_PORT,
+  RESOURCE_NAMES,
+  TAGS,
+  paperclipProvisioned,
+} from './constants.js';
 import type { BaseStackProps } from './interfaces.js';
 
 /**
@@ -53,9 +56,6 @@ const PAPERCLIP_TASK_FAMILY = `${APP}-paperclip`;
  * refuses to continue on a non-zero exit.
  */
 const PAPERCLIP_MIGRATE_TASK_FAMILY = `${APP}-paperclip-migrate`;
-
-/** Port Paperclip listens on. Never 3000 — see network-stack's PaperclipSg. */
-const PAPERCLIP_PORT = 3100;
 
 /** Health path. Verified against the pinned artifact: `GET /api/health` 200. */
 const PAPERCLIP_HEALTH_PATH = '/api/health';
@@ -96,31 +96,20 @@ const PAPERCLIP_MIGRATE_COMMAND = [
   'packages/db/src/migrate.ts',
 ];
 
-/**
- * Listener-rule priority. 1 and 2 are taken in compute-stack (CloudFrontOnly,
- * DirectHost) at cloudFrontEnabled tiers, and at those tiers the HTTPS
- * listener's DEFAULT action is a 403 fixed response — so this rule must carry
- * its own condition rather than relying on a default forward.
- */
-const PAPERCLIP_LISTENER_PRIORITY = 3;
-
 export interface PaperclipStackProps extends BaseStackProps {
   vpc: IVpc;
-  /** Task SG from network-stack: ALB -> 3100 ingress, NAT egress. */
+  /** Task SG from network-stack: orchestrator -> 3100 ingress, NAT egress. */
   paperclipSecurityGroup: SecurityGroup;
   /** Reused from compute-stack; a second cluster would buy nothing. */
   cluster: ICluster;
   /**
-   * compute-stack's HTTPS:443 listener. OPTIONAL and normally ABSENT: it only
-   * exists when DOMAIN_NAME is set, and BOTH real environments set it empty on
-   * purpose (no Route 53 zone, no ACM cert, internal ALB behind a Cloudflare
-   * tunnel). Every branch below must survive `undefined`.
+   * EFS + access point (posix 1000:1000, path /paperclip) + log group.
+   * All three are UNDEFINED at Tier 0, where FilesystemStack creates nothing
+   * — and so does this stack, which returns before it reads them.
    */
-  httpsListener?: ApplicationListener;
-  /** EFS + access point (posix 1000:1000, path /paperclip) + log group. */
-  fileSystem: IFileSystem;
-  accessPoint: IAccessPoint;
-  logGroup: ILogGroup;
+  fileSystem?: IFileSystem;
+  accessPoint?: IAccessPoint;
+  logGroup?: ILogGroup;
   /** `/claudeclaw[-suffix]/paperclip` — better_auth_secret + database_url. */
   paperclipSecret: ISecret;
   /**
@@ -130,8 +119,6 @@ export interface PaperclipStackProps extends BaseStackProps {
    * M33 defect. A colocated test greps this file to keep it that way.
    */
   imageDigest?: string;
-  /** Ops hostname for the console (Phase 4.5). Normally unset. */
-  opsHostname?: string;
   /** First-deploy escape hatch. See `desiredCount` below; default `false`. */
   bootstrapWithoutTasks?: boolean;
 }
@@ -174,11 +161,11 @@ export interface PaperclipStackProps extends BaseStackProps {
  * That is rejected and must not come back, because CloudFormation deletes what
  * a template omits: on CI, a fresh clone, or a second engineer's machine the
  * probe could never succeed, so an armed `cdk deploy --all` would have DELETED
- * a running service and its listener rule and exited 0.
+ * a running service and its target-group attachment and exited 0.
  *
  * The rule this stack now follows: **nothing decides whether a resource
- * exists.** The service, both task definitions, the target group and the
- * listener rule are unconditional. The only thing readiness moves is
+ * exists.** The service, both task definitions and the target group are
+ * unconditional. The only thing readiness moves is
  * `desiredCount`, and only in the create direction that is safe:
  *
  *   | State of the flag                     | Effect on a service that ALREADY EXISTS |
@@ -188,27 +175,69 @@ export interface PaperclipStackProps extends BaseStackProps {
  *   |                                        | case, and it is the SAFE default.       |
  *   | `CCE_PAPERCLIP_BOOTSTRAP=1` (explicit) | `DesiredCount: 0` — scales to zero. The |
  *   |                                        | service, its ARN, its target-group      |
- *   |                                        | attachment and the listener rule all    |
- *   |                                        | survive; one redeploy without the flag  |
- *   |                                        | restores it. A recoverable outage, not  |
- *   |                                        | an unrecoverable delete.                |
+ *   |                                        | attachment survive; one redeploy without|
+ *   |                                        | the flag restores it. A recoverable     |
+ *   |                                        | outage, not an unrecoverable delete.    |
  *
- * The flag is set by an OPERATOR for the first armed deploy, exactly like
- * `CCE_PUBLIC_BOOTSTRAP`. It is never computed by a probe, because "I could
- * not find out" and "not ready" must not be the same answer — that conflation
- * is what removed the cloudflared sidecar from production on 2026-08-14.
+ * `desiredCount: 0` means no task starts, so no rollout fails, so
+ * CloudFormation does not roll CCE-Paperclip back and the migration task
+ * definition survives to be run.
  *
- * On that first deploy `desiredCount: 0` means no task starts, so no rollout
- * fails, so CloudFormation does not roll CCE-Paperclip back and the migration
- * task definition survives for phase b.5 to run. Deploy #2, with the flag
- * cleared, migrates and starts it.
+ * WHO SETS IT, and this changed in Phase 9. It is still an operator escape
+ * hatch — an operator may set it at any time to park the service — but it is
+ * NO LONGER "the first armed deploy only", because there is no armed deploy
+ * any more: the substrate installs at Tier 1+ by default, so the first-install
+ * case is the DEFAULT path and cannot depend on a human having set a variable.
+ * Both deploy drivers now arm it for themselves on that one path and clear it
+ * in the same run (`scripts/deploy.ts` phase b.5, and the "Migrate Paperclip
+ * database" step in `.github/workflows/deploy.yml`).
+ *
+ * That is not the probe this stack rejects. The rejected one let a probe
+ * decide whether the SERVICE EXISTS and read "I could not find out" as "not
+ * ready" — the conflation that removed the cloudflared sidecar from production
+ * on 2026-08-14. The drivers arm this flag only on an AFFIRMATIVE "the stack
+ * is not there", where no service exists to scale down; every unreadable probe
+ * still fails the deploy. And the worst this flag can ever do is move
+ * DesiredCount, per the table above.
+ *
+ * ── THE ONE THING THAT DECIDES WHETHER ANY OF IT EXISTS ────────────────
+ *
+ * The tier, and nothing else. This stack is now part of a standard install:
+ * it is always CONSTRUCTED (so `npx cdk ls` prints the same names at every
+ * tier and under every value of CCE_PAPERCLIP_ENABLED), and at Tier 0 it
+ * creates nothing — see TierShape.paperclipEnabled for why Hobby is out.
+ * That is a tier knob an operator picks once at install time, not a per-deploy
+ * flag, so it cannot flicker a running service in and out of a template the
+ * way the rejected probe would have.
+ *
+ * CCE_PAPERCLIP_ENABLED no longer reaches this file, or synth at all. It
+ * survives as the RUNTIME router flag the orchestrator task reads
+ * (src/lib/missions/mission-acl.ts), which is a separate decision:
+ * provisioning the engine and serving `/api/missions` from it are different
+ * changes and retire on different schedules.
  */
 export class PaperclipStack extends Stack {
-  public readonly service: FargateService;
+  /** Undefined at Tier 0, where this stack creates no resources at all. */
+  public readonly service: FargateService | undefined;
 
   constructor(scope: Construct, id: string, props: PaperclipStackProps) {
     super(scope, id, props);
     Object.entries(TAGS).forEach(([k, v]) => this.tags.setTag(k, v));
+
+    // Tier 0 (Hobby): no service, no task definitions, no target group, no
+    // roles. Nothing here is stateful, so a later tier bump creates it all.
+    if (!paperclipProvisioned(props.tier)) return;
+
+    // Above Tier 0 the FilesystemStack really did create these, so an absent
+    // one is a wiring mistake rather than a tier. Fail at synth, loudly,
+    // instead of rendering a task definition with no volume.
+    const { fileSystem, accessPoint, logGroup } = props;
+    if (!fileSystem || !accessPoint || !logGroup) {
+      throw new Error(
+        `PaperclipStack at tier ${props.tier} requires the FilesystemStack outputs ` +
+          '(fileSystem, accessPoint, logGroup); one of them is undefined.',
+      );
+    }
 
     const account = this.account;
     const region = this.region;
@@ -321,10 +350,10 @@ export class PaperclipStack extends Stack {
           'elasticfilesystem:ClientWrite',
           'elasticfilesystem:ClientRootAccess',
         ],
-        resources: [props.fileSystem.fileSystemArn],
+        resources: [fileSystem.fileSystemArn],
         conditions: {
           StringEquals: {
-            'elasticfilesystem:AccessPointArn': props.accessPoint.accessPointArn,
+            'elasticfilesystem:AccessPointArn': accessPoint.accessPointArn,
           },
         },
       }),
@@ -361,12 +390,10 @@ export class PaperclipStack extends Stack {
     // the exact hostname the browser types and EVERY board mutation answers
     // 403 "Board mutation requires trusted browser origin".
     //
-    // So it is set ONLY when an ops hostname is configured, and it is then
-    // the same string the listener rule matches on. With no hostname there is
-    // no listener rule either (see below), the console is reached over the
-    // SSM port-forward, and Host/X-Forwarded-Host alone drives the guard —
-    // which is correct, where a guessed value would silently break writes.
-    const opsHostname = props.opsHostname?.trim();
+    // The console is SSM-tunnel-only until a separate access-controlled
+    // listener contract exists. Do not guess PAPERCLIP_PUBLIC_URL: the SSM
+    // request Host is the exact browser origin and boardMutationGuard trusts
+    // it. A guessed hosted URL would only make legitimate mutations fail.
 
     // ── Service task definition ─────────────────────────────────
     const taskDef = new FargateTaskDefinition(this, 'PaperclipTaskDef', {
@@ -395,10 +422,10 @@ export class PaperclipStack extends Stack {
     taskDef.addVolume({
       name: 'paperclip-data',
       efsVolumeConfiguration: {
-        fileSystemId: props.fileSystem.fileSystemId,
+        fileSystemId: fileSystem.fileSystemId,
         transitEncryption: 'ENABLED',
         authorizationConfig: {
-          accessPointId: props.accessPoint.accessPointId,
+          accessPointId: accessPoint.accessPointId,
           iam: 'ENABLED',
         },
       },
@@ -409,7 +436,7 @@ export class PaperclipStack extends Stack {
       containerName: PAPERCLIP_CONTAINER,
       portMappings: [{ containerPort: PAPERCLIP_PORT }],
       essential: true,
-      logging: LogDrivers.awsLogs({ streamPrefix: 'server', logGroup: props.logGroup }),
+      logging: LogDrivers.awsLogs({ streamPrefix: 'server', logGroup }),
       environment: {
         NODE_ENV: 'production',
         HOST: '0.0.0.0',
@@ -421,13 +448,12 @@ export class PaperclipStack extends Stack {
         // ships /app/ui/dist; vendor/paperclip/Dockerfile symlinks it to the
         // /app/server/ui-dist path the server actually resolves.
         //
-        // LEDGER A38, and it is the reason opsHostname defaults to unset:
+        // LEDGER A38, and it is the reason no browser listener is emitted:
         // serving the board also serves `POST /api/auth/sign-up/email`, which
         // the probed artifact answers 200 to WITH NO CREDENTIAL, even under
         // PAPERCLIP_DEPLOYMENT_MODE=authenticated below. Open self-
         // registration is therefore contained by NETWORK POSTURE ONLY: the
-        // console listener rule is not emitted unless an operator sets both
-        // DOMAIN_NAME and the ops hostname, and neither real environment does.
+        // console is reachable only through the AWS-authenticated SSM tunnel.
         // Anyone who reaches the board can create themselves an account.
         // Whoever wires that rule must put an authorizer in front of it or
         // close sign-up upstream FIRST — this flag is not a control.
@@ -436,7 +462,6 @@ export class PaperclipStack extends Stack {
         // gate sign-up; see the A38 note above.
         PAPERCLIP_DEPLOYMENT_MODE: 'authenticated',
         PAPERCLIP_DEPLOYMENT_EXPOSURE: 'private',
-        ...(opsHostname ? { PAPERCLIP_PUBLIC_URL: `https://${opsHostname}` } : {}),
         // PAPERCLIP_MIGRATION_AUTO_APPLY is deliberately ABSENT here. See the
         // class doc; paperclip-stack.test.ts asserts the absence.
       },
@@ -498,7 +523,7 @@ export class PaperclipStack extends Stack {
       containerName: 'migrate',
       command: PAPERCLIP_MIGRATE_COMMAND,
       essential: true,
-      logging: LogDrivers.awsLogs({ streamPrefix: 'migrate', logGroup: props.logGroup }),
+      logging: LogDrivers.awsLogs({ streamPrefix: 'migrate', logGroup }),
       environment: {
         NODE_ENV: 'production',
         PAPERCLIP_HOME: '/tmp/paperclip',
@@ -528,57 +553,42 @@ export class PaperclipStack extends Stack {
       deregistrationDelay: Duration.seconds(20),
     });
 
-    // ── Listener rule (Phase 4.5), when there is a listener at all ──
-    // A23: the HTTPS listener exists ONLY when DOMAIN_NAME is set, and BOTH
-    // real environments set it EMPTY on purpose — so `props.httpsListener` is
-    // normally `undefined` and this whole branch is normally skipped. That is
-    // the DEGRADE decision Phase 4.5 acceptance 6 demands be made before
-    // building rather than during: this stack does NOT provision an ALB,
-    // listener, certificate or hosted zone of its own. Where there is no
-    // listener the operator console is reached the same way the dashboard is
-    // in that posture — `aws ecs execute-command` / the SSM port-forward to
-    // port 3100 — and the target group simply has no path in front of it.
+    // ── Operator console posture (Phase 4.5) ────────────────────
+    // The pinned artifact keeps email self-registration open even in
+    // authenticated mode (A38). Therefore this stack deliberately emits NO
+    // listener rule onto Compute's potentially internet-facing ALB. The only
+    // supported operator path is the AWS-authenticated ECS Exec/SSM tunnel to
+    // port 3100. This also handles the normal no-listener environments without
+    // inventing a certificate, public hostname or false access guarantee.
+
+    // ── Service discovery (Cloud Map) ───────────────────────────
+    // THE ROUTE THE ORCHESTRATOR ACTUALLY USES, and until now there was none.
+    // Before Cloud Map, a standard install brought up a Paperclip task with no
+    // stable address the orchestrator could call; PAPERCLIP_BASE_URL appeared
+    // nowhere in infra/.
     //
-    // M33, the other direction: this branch DOES control existence, so state
-    // what clearing CCE_PAPERCLIP_HOSTNAME does to a rule that already exists.
-    // It deletes the rule — and only the rule. The service keeps running, the
-    // target group keeps its registered task, the console falls back to the
-    // SSM port-forward, and re-setting the variable restores the rule on the
-    // next deploy. Nothing stateful is lost and nothing is unrecoverable,
-    // which is the bar an existence gate has to clear. It is also inert in
-    // both real environments, where there is no listener to attach to.
+    // A private DNS namespace gives a STABLE name (`paperclip.<app>.internal`)
+    // in front of an ephemeral task IP, which is the property that matters:
+    // `desiredCount: 1` with `minHealthyPercent: 0` means every deploy replaces
+    // the task and its IP, so anything that cached an IP would break on the
+    // next roll. The record is app-suffixed and the namespace is attached to
+    // THIS app's VPC; see RESOURCE_NAMES.paperclipNamespace for the collision
+    // argument.
     //
-    // Deliberately NO link from the Netzar SPA either way (Phase 4.5
-    // acceptance 4): a Sidebar entry would put a second, unsynchronized
-    // authorization surface one click from every operator-tier user.
+    // The orchestrator does NOT learn this name through a cross-stack
+    // reference. CCE-Compute is created BEFORE CCE-Paperclip (Paperclip
+    // imports Compute's cluster and listener), so a reference in that
+    // direction is a cycle; compute-stack builds the same string from
+    // RESOURCE_NAMES instead, exactly as it already does for every other
+    // deterministic name it hands the task.
     //
-    // A38 BEFORE YOU SET THE HOSTNAME: this rule is the only thing standing
-    // between the public internet and Paperclip's open sign-up endpoint (see
-    // the SERVE_UI note on the service container). Emitting it publishes a
-    // board that will hand an account to anyone who asks. It is safe today
-    // only because both real environments leave DOMAIN_NAME empty, so
-    // `props.httpsListener` is undefined and this branch never runs — that is
-    // a posture, not a decision, and it stops being true the moment someone
-    // sets a domain. Gate it (authorizer, WAF rule, or closing sign-up in the
-    // image) in the same change that sets the hostname, never after.
-    if (props.httpsListener && opsHostname) {
-      // `listener.addAction(...)` would place the rule in the LISTENER's stack
-      // (CCE-Compute) while it forwards to a target group in THIS stack, and
-      // CDK rejects that as a cyclic reference: Compute already has to exist
-      // before Paperclip. Constructing the rule here keeps the reference
-      // one-directional — Paperclip imports the listener ARN, Compute imports
-      // nothing. `paperclip-stack.test.ts` synthesizes this branch, so the
-      // cycle cannot come back unnoticed.
-      new ApplicationListenerRule(this, 'PaperclipConsoleRule', {
-        listener: props.httpsListener,
-        priority: PAPERCLIP_LISTENER_PRIORITY,
-        // Its OWN condition, not a default forward: priorities 1 and 2 are
-        // taken, and at cloudFrontEnabled tiers the listener's default action
-        // is a 403 fixed response.
-        conditions: [ListenerCondition.hostHeaders([opsHostname])],
-        action: ListenerAction.forward([targetGroup]),
-      });
-    }
+    // ADDITIVE. The target group remains for ECS health; no browser listener
+    // is attached while A38 remains true.
+    const namespace = new PrivateDnsNamespace(this, 'PaperclipNamespace', {
+      name: RESOURCE_NAMES.paperclipNamespace,
+      vpc: props.vpc,
+      description: 'Private DNS for the Paperclip work engine (ADR 0010)',
+    });
 
     // ── The service. Unconditional; see the M33 table in the class doc ──
     this.service = new FargateService(this, 'PaperclipService', {
@@ -605,6 +615,16 @@ export class PaperclipStack extends Stack {
       maxHealthyPercent: 100,
       propagateTags: PropagatedTagSource.SERVICE,
       healthCheckGracePeriod: Duration.seconds(120),
+      // A records, not SRV: the consumer is `fetch()` against a URL whose port
+      // is already fixed at 3100, so an SRV lookup would be a second resolver
+      // the Node HTTP client does not perform. Short TTL because the address
+      // changes on every deploy (minHealthyPercent 0 replaces the one task).
+      cloudMapOptions: {
+        cloudMapNamespace: namespace,
+        name: RESOURCE_NAMES.paperclipDiscoveryName,
+        dnsRecordType: DnsRecordType.A,
+        dnsTtl: Duration.seconds(15),
+      },
     });
     this.service.attachToApplicationTargetGroup(targetGroup);
     // NO autoScaleTaskCount(). Intentionally. See the class doc and the

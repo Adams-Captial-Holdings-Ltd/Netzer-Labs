@@ -80,7 +80,7 @@ function projected(over: Partial<ProjectedMission> = {}): ProjectedMission {
     createdByChat: 'paperclip',
     title: 'Ship the ACL',
     body: 'Byte for byte.',
-    priority: 50,
+    priority: 'medium',
     status: 'open',
     createdAt: '2026-08-20T10:00:00.000Z',
     updatedAt: '2026-08-20T10:00:00.000Z',
@@ -188,19 +188,18 @@ describe('toWireMission — the envelope crossing', () => {
     ]);
   });
 
-  it('OMITS assignmentReason and dueAt on absence — the key is absent, never null', () => {
+  it('omits assignmentReason and never exposes the retired dueAt field', () => {
     const json = JSON.parse(JSON.stringify(toWireMission(projected())));
     expect('assignmentReason' in json).toBe(false);
     expect('dueAt' in json).toBe(false);
   });
 
-  it('restores the three fields Paperclip has no source for, in legacy key order', () => {
+  it('restores the two provenance fields Paperclip has no source for, in wire key order', () => {
     const wire = toWireMission(projected(), {
       missionId: ISSUE_A,
       createdByChat: 'dashboard:hash',
       createdByAgent: 'dashboard',
       assignmentReason: 'explicit assignment',
-      dueAt: '2026-09-01T00:00:00.000Z',
     });
     expect(wire.createdByChat).toBe('dashboard:hash');
     expect(wire.createdByAgent).toBe('dashboard');
@@ -214,7 +213,6 @@ describe('toWireMission — the envelope crossing', () => {
       'priority',
       'status',
       'assignmentReason',
-      'dueAt',
       'createdAt',
       'updatedAt',
     ]);

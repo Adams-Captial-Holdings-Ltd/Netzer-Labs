@@ -88,7 +88,7 @@ const WIRE_ROW: Mission = {
   createdByChat: 'owner:emmanuel',
   title: 'Ship the ACL',
   body: 'Byte for byte.',
-  priority: 50,
+  priority: 'medium',
   status: 'open',
   createdAt: '2026-08-20T10:00:00.000Z',
   updatedAt: '2026-08-20T10:00:00.000Z',
@@ -230,8 +230,8 @@ describe.each(STACKS)('mission tool ownership checks — $name', (stack: Stack) 
     expect(out.isError).toBeFalsy();
     // Re-pinned in Phase 8: `list_missions` now renders through the shared
     // mission formatter, so a tool answer and a `/missions` reply speak one
-    // vocabulary - the kanban's column labels and its `P<n>` badge.
-    expect(out.text).toBe('1 Open mission for research:\n[abc12345] P50 Open — Ship the ACL');
+    // vocabulary - the kanban's column and four-band priority labels.
+    expect(out.text).toBe('1 Open mission for research:\n[abc12345] Medium Open — Ship the ACL');
     stack.expectOtherStackUntouched();
   });
 
@@ -240,8 +240,8 @@ describe.each(STACKS)('mission tool ownership checks — $name', (stack: Stack) 
     expect(stack.listedOwners()).toEqual(['research']);
     // Re-pinned in Phase 8: `list_missions` now renders through the shared
     // mission formatter, so a tool answer and a `/missions` reply speak one
-    // vocabulary - the kanban's column labels and its `P<n>` badge.
-    expect(out.text).toBe('1 Open mission for research:\n[abc12345] P50 Open — Ship the ACL');
+    // vocabulary - the kanban's column and four-band priority labels.
+    expect(out.text).toBe('1 Open mission for research:\n[abc12345] Medium Open — Ship the ACL');
     stack.expectOtherStackUntouched();
   });
 

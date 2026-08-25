@@ -44,7 +44,7 @@ const ROW = {
   createdByChat: 'paperclip',
   title: `Fix login ${INJECTION}`,
   body: `Repro: ${INJECTION}`,
-  priority: 50,
+  priority: 'medium',
   status: 'open',
   createdAt: '2026-08-20T10:00:00.000Z',
   updatedAt: '2026-08-20T10:00:00.000Z',

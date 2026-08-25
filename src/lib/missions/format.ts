@@ -4,7 +4,7 @@
  *
  * WHY THIS FILE IS IN `src/lib/` (CLAUDE.md, "chat surface parity"). Missions
  * were dashboard-only: the kanban board at `web/src/pages/Missions.tsx` owned
- * every noun ("Open", "In Progress", `P80`, `Due …`) and no chat surface could
+ * every noun ("Open", "In Progress", "High priority") and no chat surface could
  * speak them. Putting the copy here — beside `src/lib/media/process.ts` and
  * `src/lib/tools/humanize.ts`, never in an adapter — is what makes the four
  * chat code paths render the SAME sentence by construction rather than by
@@ -99,7 +99,7 @@
  *
  * The previous round shipped `formatMissionList` here and left four spellings
  * of the no-match refusal across three other files, plus a second board
- * vocabulary inside `list_missions` (`- [abc12345] p50 open | Ship the ACL` —
+ * vocabulary inside `list_missions` (`- [abc12345] medium open | Ship the ACL` —
  * raw enum, lowercase `p`, a pipe and a leading dash) so an agent answering
  * "what is on my board" and the same user typing `/missions` in the same
  * conversation got two different renderings of one board. A shared formatter
@@ -128,8 +128,8 @@
  * bound only bounds a surface that MEASURES the source. Telegram does not: its
  * `sendMessage` sends `toTelegramHtml(text)`, which HTML-escapes `&`, `<` and
  * `>`, so escaping alone expands by up to 5x. MEASURED, on this code: a card
- * whose body is 2000 `&` is 1059 characters here and 5055 as Telegram receives
- * it; a board of `&`-heavy titles is 2175 here and 9315 there. Both are inside
+ * whose body is 2000 `&` is 1071 characters here and 5067 as Telegram receives
+ * it; a board of `&`-heavy titles is 2220 here and 9360 there. Both are inside
  * the 3000 bound and both are over Telegram's 4096 — the header's old claim
  * that the oversize half of A3-10 was "closed HERE" was therefore false, and
  * the reply vanished with no error anywhere.
@@ -236,7 +236,7 @@
  *
  * THE VOCABULARY IS THE DASHBOARD'S. `MISSION_STATUS_LABEL` reproduces the six
  * kanban column labels from `COLUMNS` in `web/src/pages/Missions.tsx`, and
- * priority is spoken `P<n>` exactly as the card badge speaks it. Those are the
+ * priority is spoken as the same four-band label the card badge shows. Those are the
  * words the user already learned. If you change a column label over there,
  * change it here in the same PR — `web/src/pages/Missions.tsx` carries the
  * pointer back, the way `humanize.ts` and `Chat.tsx` point at each other for
@@ -266,7 +266,7 @@
  * Telegram outage must not fail a mission that was already created). The words
  * both catches say are `formatBoardError` and they are in this file too.
  */
-import type { Mission, MissionStatus } from '../state/mission-tasks-repo.js';
+import type { Mission, MissionPriority, MissionStatus } from '../state/mission-tasks-repo.js';
 import { MISSION_STATUSES } from '../state/mission-tasks-repo.js';
 
 /**
@@ -287,6 +287,13 @@ export const MISSION_STATUS_LABEL: Record<MissionStatus, string> = {
   in_review: 'In Review',
   done: 'Done',
   cancelled: 'Cancelled',
+};
+
+export const MISSION_PRIORITY_LABEL: Record<MissionPriority, string> = {
+  critical: 'Critical',
+  high: 'High',
+  medium: 'Medium',
+  low: 'Low',
 };
 
 /** How many characters of a mission uuid a human is ever shown or asked to type. */
@@ -450,13 +457,12 @@ export function resolveMissionRef(rows: readonly Mission[], ref: string): Missio
 }
 
 /**
- * One list row: `[1a2b3c4d] P80 Open — Ship the reconciler (due 2026-09-01)`.
+ * One list row: `[1a2b3c4d] High Open — Ship the reconciler`.
  * NO LEADING `-`: see "THE MARKUP RULE" — a leading dash is the one character
  * each surface's generic markdown pass rewrites differently.
  */
 function missionLine(m: Mission): string {
-  const due = m.dueAt ? ` (due ${cap(m.dueAt, 40)})` : '';
-  return `[${missionRef(m.id)}] P${m.priority} ${MISSION_STATUS_LABEL[m.status]} — ${cap(m.title, TITLE_MAX)}${due}`;
+  return `[${missionRef(m.id)}] ${MISSION_PRIORITY_LABEL[m.priority]} ${MISSION_STATUS_LABEL[m.status]} — ${cap(m.title, TITLE_MAX)}`;
 }
 
 /**
@@ -479,16 +485,14 @@ export function formatMissionList(
 }
 
 /**
- * One mission in full. Optional fields are OMITTED, not rendered empty:
- * `assignmentReason` and `dueAt` are an ABSENT KEY on absence all the way from
- * `toWireMission`, and printing "Due: undefined" would invent a fact.
+ * One mission in full. `assignmentReason` is omitted rather than rendered
+ * empty when it is absent.
  */
 export function formatMissionCard(m: Mission): string {
   const lines = [
     `[${missionRef(m.id)}] ${cap(m.title, TITLE_MAX)}`,
-    `${MISSION_STATUS_LABEL[m.status]} · P${m.priority} · owner ${cap(m.ownerAgent, 64)}`,
+    `${MISSION_STATUS_LABEL[m.status]} · ${MISSION_PRIORITY_LABEL[m.priority]} priority · owner ${cap(m.ownerAgent, 64)}`,
   ];
-  if (m.dueAt) lines.push(`Due: ${cap(m.dueAt, 40)}`);
   if (m.assignmentReason) lines.push(`Assigned because: ${cap(m.assignmentReason, REASON_MAX)}`);
   if (m.body) lines.push('', capBody(m.body, BODY_MAX));
   return clamp(lines.join('\n'));
@@ -619,7 +623,7 @@ export function formatSubtaskCreated(opts: {
  * The create receipt. `create_mission` returns this as `ToolResult.text`, so it
  * is the model's account of what just happened and the model relays it - same
  * audience as everything else here, one layer removed. It speaks the same ref,
- * the same `P<n>` and the same owner-and-reason pair the dashboard card shows.
+ * the same four-band priority and owner-and-reason pair the dashboard card shows.
  *
  * NOTE FOR ANY FUTURE EDIT: this is the RESULT text, not the toolSpec. The
  * `create_mission` toolSpec JSON is frozen byte-for-byte (pinned by
@@ -644,7 +648,7 @@ export function formatMissionCreated(opts: {
     ? ` This chat was not notified; ${owner} still has it in their inbox.`
     : '';
   return clamp(
-    `Mission ${missionRef(m.id)} created. Owner: ${owner} (${cap(reason, REASON_MAX)}). Priority ${m.priority}.${undelivered}`,
+    `Mission ${missionRef(m.id)} created. Owner: ${owner} (${cap(reason, REASON_MAX)}). Priority ${MISSION_PRIORITY_LABEL[m.priority].toLowerCase()}.${undelivered}`,
   );
 }
 
@@ -667,8 +671,7 @@ export function formatAssignmentPush(opts: {
   byAgent: string;
 }): string {
   const { mission: m, byAgent } = opts;
-  const due = m.dueAt ? `, due ${cap(m.dueAt, 40)}` : '';
   return clamp(
-    `Mission [${missionRef(m.id)}] "${cap(m.title, TITLE_MAX)}" assigned to ${cap(m.ownerAgent, 64)} by ${cap(byAgent, 64)} (P${m.priority}${due}).`,
+    `Mission [${missionRef(m.id)}] "${cap(m.title, TITLE_MAX)}" assigned to ${cap(m.ownerAgent, 64)} by ${cap(byAgent, 64)} (${MISSION_PRIORITY_LABEL[m.priority].toLowerCase()} priority).`,
   );
 }

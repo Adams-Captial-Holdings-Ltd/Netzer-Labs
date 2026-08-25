@@ -10,8 +10,6 @@ import {
   neutralizeForPrompt,
   toIssueStatus,
   toMissionStatus,
-  toPriorityBand,
-  toPriorityScore,
   type AgentIdMap,
   type PaperclipIssueView,
 } from './mission-projection.js';
@@ -24,7 +22,7 @@ const agentMap: AgentIdMap = {
 
 const mission = (overrides: Partial<Mission> = {}): Mission => ({
   id: 'mission-1', ownerAgent: 'haiku', createdByAgent: 'main', createdByChat: 'chat-1',
-  title: 'Ship projection', body: 'mission body', priority: 73, status: 'open',
+  title: 'Ship projection', body: 'mission body', priority: 'high', status: 'open',
   createdAt: '2026-08-18T10:00:00.000Z', updatedAt: '2026-08-18T11:00:00.000Z',
   ...overrides,
 });
@@ -94,20 +92,10 @@ describe('mission status projection', () => {
 });
 
 describe('priority projection', () => {
-  it.each([[89, 'high'], [90, 'critical'], [69, 'medium'], [70, 'high'], [39, 'low'], [40, 'medium'], [0, 'low'], [100, 'critical'], [-5, 'low'], [1000, 'critical']] as const)(
-    'maps score %i to %s', (score, expected) => expect(toPriorityBand(score)).toBe(expected),
-  );
-
-  it.each([['critical', 95], ['high', 80], ['medium', 50], ['low', 20]] as const)(
-    'maps %s to representative score %i', (band, expected) => expect(toPriorityScore(band)).toBe(expected),
-  );
-
-  it.each(['critical', 'high', 'medium', 'low'] as const)('keeps the %s band stable across the lossy round-trip', (band) => {
-    expect(toPriorityBand(toPriorityScore(band))).toBe(band);
-  });
-
-  it('documents the accepted lossy score conversion', () => {
-    expect(toPriorityScore(toPriorityBand(73))).toBe(80);
+  it.each(['critical', 'high', 'medium', 'low'] as const)('round-trips %s exactly', (priority) => {
+    const body = missionToIssueCreate(mission({ priority }), agentMap, () => 'priority');
+    expect(body.priority).toBe(priority);
+    expect(issueToMission(issue({ priority }), agentMap).priority).toBe(priority);
   });
 });
 
@@ -138,7 +126,7 @@ describe('field projection', () => {
 
   it('maps issue description back to Mission body and preserves the ISO timestamps', () => {
     const projected = issueToMission(issue(), agentMap);
-    expect(projected).toMatchObject({ id: 'issue-1', identifier: 'NZR-42', ownerAgent: 'haiku', createdByAgent: 'main', body: 'issue body', createdAt: '2026-08-18T10:00:00.000Z', updatedAt: '2026-08-18T11:00:00.000Z', bodyTruncated: false });
+    expect(projected).toMatchObject({ id: 'issue-1', identifier: 'NZR-42', ownerAgent: 'haiku', createdByAgent: 'main', body: 'issue body', priority: 'high', createdAt: '2026-08-18T10:00:00.000Z', updatedAt: '2026-08-18T11:00:00.000Z', bodyTruncated: false });
     expect(Number.isFinite(Date.parse(projected.createdAt))).toBe(true);
     expect(Number.isFinite(Date.parse(projected.updatedAt))).toBe(true);
     expect(projected).not.toHaveProperty('dueAt');

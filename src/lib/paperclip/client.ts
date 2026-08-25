@@ -289,6 +289,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * ONE NETZAR DEPLOYMENT = ONE PAPERCLIP COMPANY. An ACCEPTED ARCHITECTURAL
+ * INVARIANT, not defensive coding, and the owner's decision is that it is
+ * permanent and enforced HERE rather than by review.
+ *
+ * What it buys: Paperclip has ~735 company-scoped handlers and whether every
+ * one of them is tenant-safe is UNVERIFIED. This invariant is what makes that
+ * question irrelevant — if the process only ever addresses one company, a
+ * cross-tenant handler bug has no second tenant to leak into. That argument
+ * holds only while the invariant does, so a second company must not be able to
+ * appear quietly; it has to be impossible.
+ *
+ * The first constructed client pins the company id for the life of the process
+ * and every later client is checked against it, at CONSTRUCTION, beside the
+ * missing-base-url and missing-agent-key fail-fasts in `paperclipConfig` and in
+ * the same typed `PaperclipDisabledError` shape. It fails CLOSED: the throw
+ * happens before the instance exists, so a mis-scoped client cannot reach
+ * `invoke` and cannot make a request.
+ *
+ * This is NOT the same check as `assertCompanyScope` further down. That one
+ * reads a company id off a RESPONSE and catches Paperclip answering for someone
+ * else; this one catches US asking. Neither implies the other.
+ */
+let pinnedCompanyId: string | undefined;
+
+/** Test seam, in `__setSqsClient`'s shape. Production never calls it. */
+export function __resetPaperclipCompanyPin(): void {
+  pinnedCompanyId = undefined;
+}
+
 // ── The client ────────────────────────────────────────────────────────────
 
 export class PaperclipClient {
@@ -305,7 +335,9 @@ export class PaperclipClient {
   /**
    * SYNCHRONOUS and total: a missing base URL, company or agent key throws
    * `PaperclipDisabledError` here, naming the secret path and the runtime-config
-   * key, rather than becoming a request to `undefined/api/…`.
+   * key, rather than becoming a request to `undefined/api/…`. A company id that
+   * disagrees with the one this process already pinned throws the same way, for
+   * the reason recorded above `pinnedCompanyId`.
    */
   constructor(options: PaperclipClientOptions = {}) {
     const {
@@ -315,6 +347,19 @@ export class PaperclipClient {
       ...rest
     } = options;
     this.config = paperclipConfig({ baseUrl, companyId, agentKeys, defaultActor, readTimeoutMs, writeTimeoutMs });
+    // The one-company invariant, enforced before any field of this instance is
+    // usable. `paperclipConfig` has already rejected an absent or blank company
+    // id, so `this.config.companyId` is a real value by here.
+    if (pinnedCompanyId !== undefined && pinnedCompanyId !== this.config.companyId) {
+      throw new PaperclipDisabledError({
+        body: {
+          error: `Paperclip is not configured: one Netzar deployment addresses exactly one Paperclip company, and this process is already pinned to ${pinnedCompanyId} (got ${this.config.companyId})`,
+          remediation:
+            'this is an accepted architectural invariant, not a tunable — run a second Netzar deployment for a second company rather than a second company id in this one',
+        },
+      });
+    }
+    pinnedCompanyId = this.config.companyId;
     this.fetchFn = fetchFn ?? globalThis.fetch;
     this.retry = retry ?? PAPERCLIP_RETRY_POLICY;
     this.killSwitch = killSwitch ?? isKillSwitchActive;

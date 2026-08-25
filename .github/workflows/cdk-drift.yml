@@ -81,7 +81,26 @@ jobs:
           else
             echo "deployed DEPLOY_SHA: <unresolved, synth uses local gitSha()>"
           fi
-      - name: cdk diff (fail on drift)
+          # Paperclip work engine (ADR 0010). paperclip-stack.ts pins BOTH its
+          # task definitions to this digest, so a synth without it renders an
+          # unpullable placeholder and the diff can NEVER match a deployed
+          # stack -- permanently red, which this file's own header warns
+          # teaches reviewers to ignore CI. Resolved read-only from the live
+          # task definition, exactly like the two stamps above. Empty until
+          # prod actually runs the engine, which is harmless while the three
+          # substrate stacks are excluded from the diff below.
+          PCIMAGE=$(aws ecs describe-task-definition --task-definition claudeclaw-paperclip --region us-east-1 --query 'taskDefinition.containerDefinitions[0].image' --output text 2>/dev/null || true)
+          case "$PCIMAGE" in
+            *@sha256:*) DIGEST="${PCIMAGE##*@}" ;;
+            *) DIGEST="" ;;
+          esac
+          echo "paperclip_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "deployed Paperclip digest: ${DIGEST:-<unresolved>}"
+      # Synthesize ONCE into an explicit assembly, so the diff below can be
+      # handed a cloud assembly instead of re-running the app — and so this step
+      # can remove the two Outputs described under it before anything is
+      # compared.
+      - name: Synthesize the drift assembly
         env:
           CCE_IMAGE_TAG: ${{ steps.live.outputs.tag }}
           CDK_STACK_NAME: CCE
@@ -110,4 +129,76 @@ jobs:
           # Power panel URL: drives the security-stack paused-mode CloudFront
           # reroute (and the app proxy fallback). Synth must match deployed.
           CCE_POWER_URL: ${{ vars.CCE_POWER_URL }}
-        run: npx cdk diff "CCE-*" --fail
+          CCE_PAPERCLIP_IMAGE_DIGEST: ${{ steps.live.outputs.paperclip_digest }}
+        # DATED SUPPRESSION (added 2026-08-23), the other half of the stack
+        # exclusion below. Excluding CCE-Database/CCE-Filesystem/CCE-Paperclip
+        # was not enough: their mere PRESENCE in the assembly makes CDK emit a
+        # CloudFormation EXPORT in each stack they consume a value from, and two
+        # of those producers are stacks this job DOES diff. Production has not
+        # deployed the substrate, so its deployed templates carry neither export
+        # and the job reds every day on two Outputs -- the exact failure the
+        # header of this file warns about, one layer below where the last round
+        # looked.
+        #
+        #   CCE-Network  ExportsOutputFnGetAttPaperclipSg*   the Paperclip task
+        #                SG's GroupId, consumed by all three substrate stacks
+        #   CCE-Compute  ExportsOutputRefCluster*            the shared ECS
+        #                cluster, consumed by CCE-Paperclip
+        #
+        # Both stacks stay FULLY DIFFED -- only these two named Outputs are
+        # dropped from the synthesized side, so real drift in the VPC, the NAT
+        # layout, the ALB, the task definition, the IAM statements and the
+        # security-group rules still fails this job. That is the difference
+        # between this and excluding the two stacks, which would have bought the
+        # same green by gutting the check.
+        #
+        # RESTORE THIS AND THE STACK EXCLUSION BELOW TOGETHER, as soon as a
+        # production deploy has actually created the substrate: from that moment
+        # the exports exist in the deployed templates too, and stripping them
+        # from synth turns the same two lines into a spurious `[-] Output`. That
+        # is deliberate -- it reds loudly rather than hiding, so the restore
+        # cannot be forgotten quietly. The "exactly one match" assertion does the
+        # same job in the other direction: if a rename makes these patterns match
+        # nothing, this step FAILS instead of silently suppressing nothing.
+        # If neither has happened by 2026-10-01, escalate rather than extend.
+        run: |
+          npx cdk synth --quiet --output cdk.out.drift
+          node -e '
+            const fs = require("fs");
+            const targets = [
+              ["cdk.out.drift/CCE-Network.template.json", /^ExportsOutputFnGetAttPaperclipSg/],
+              ["cdk.out.drift/CCE-Compute.template.json", /^ExportsOutputRefCluster/],
+            ];
+            for (const [file, re] of targets) {
+              const t = JSON.parse(fs.readFileSync(file, "utf8"));
+              const hit = Object.keys(t.Outputs || {}).filter((k) => re.test(k));
+              if (hit.length !== 1) {
+                console.error("::error::" + file + ": expected exactly one Output matching " + re + ", found " + hit.length + ". The Phase 9 export suppression in cdk-drift.yml is stale - read the comment above this step.");
+                process.exit(1);
+              }
+              delete t.Outputs[hit[0]];
+              fs.writeFileSync(file, JSON.stringify(t, null, 1));
+              console.log("suppressed " + hit[0] + " from " + file);
+            }
+          '
+
+      # DATED EXCLUSION (added 2026-08-23). The pattern was "CCE-*".
+      # ADR 0010 Phase 9 puts CCE-Database, CCE-Filesystem and CCE-Paperclip
+      # into the assembly at EVERY tier and POPULATES them at Tier 1+ -- and
+      # this job synthesizes at CCE_TIER 3. Production has not deployed the
+      # substrate yet, so from the day Phase 9 merges those three stacks
+      # differ by their entire contents and this job reds EVERY DAY, which is
+      # precisely the failure the header of this file says teaches reviewers
+      # to ignore CI.
+      #
+      # RESTORE "CCE-*" as soon as a production deploy has actually created
+      # the substrate: after that, an excluded stack is undetected drift on a
+      # RETAIN'd, deletion-protected Aurora cluster. If that has not happened
+      # by 2026-10-01, the exclusion is itself the problem and should be
+      # escalated rather than extended.
+      #
+      # `--app` on the pre-synthesized assembly, NOT a second synth: the diff
+      # has to see the templates the step above edited, and re-running the app
+      # here would put the two exports straight back.
+      - name: cdk diff (fail on drift)
+        run: npx cdk diff --fail --app cdk.out.drift CCE-Network CCE-Storage CCE-Guardrails CCE-Secrets CCE-Dynamo CCE-Messaging CCE-Iam CCE-Compute CCE-Observability CCE-Security CCE-Backup CCE-Chaos CCE-Extensions CCE-CostGuardrails CCE-PowerSwitch

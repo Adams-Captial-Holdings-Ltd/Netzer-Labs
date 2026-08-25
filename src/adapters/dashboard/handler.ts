@@ -807,7 +807,7 @@ async function legacyListMissions(c: MissionCtx): Promise<Response> {
 // Create a mission. Body: { prompt, agentId?, title? }. When agentId is
 // omitted we reuse the same Haiku auto-assign the create_mission tool uses,
 // falling back to 'main' if no agents can be picked. Returns the created
-// mission (with assignmentReason + dueAt when present). The Missions UI and
+// mission (with assignmentReason when present). The Missions UI and
 // the mission CLI both call this route.
 async function legacyCreateMission(c: MissionCtx): Promise<Response> {
   // Mission mutation: require agents:write (operator-tier), the documented

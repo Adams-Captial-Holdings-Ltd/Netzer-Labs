@@ -4,7 +4,7 @@ import { SecurityGroup, Port, SubnetType } from 'aws-cdk-lib/aws-ec2';
 import type { IVpc } from 'aws-cdk-lib/aws-ec2';
 import { FileSystem, AccessPoint, LifecyclePolicy } from 'aws-cdk-lib/aws-efs';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { RESOURCE_NAMES, TAGS, TIERS } from './constants.js';
+import { RESOURCE_NAMES, TAGS, TIERS, paperclipProvisioned } from './constants.js';
 import type { BaseStackProps, FilesystemOutputs } from './interfaces.js';
 
 export interface FilesystemStackProps extends BaseStackProps {
@@ -24,16 +24,25 @@ export interface FilesystemStackProps extends BaseStackProps {
  * The access point pins posix uid/gid 1000, matching the `node` user
  * Paperclip's docker-entrypoint drops to; a mismatch produces a recursive
  * chown over NFS on every cold start.
+ *
+ * TIER-GATED INTERNALLY, same shape as DatabaseStack: always constructed,
+ * creates nothing at Tier 0. See TierShape.paperclipEnabled.
  */
 export class FilesystemStack extends Stack implements FilesystemOutputs {
-  public readonly paperclipFileSystem: FileSystem;
-  public readonly paperclipAccessPoint: AccessPoint;
-  public readonly paperclipLogGroup: LogGroup;
-  public readonly paperclipEfsSecurityGroup: SecurityGroup;
+  public readonly paperclipFileSystem: FileSystem | undefined;
+  public readonly paperclipAccessPoint: AccessPoint | undefined;
+  public readonly paperclipLogGroup: LogGroup | undefined;
+  public readonly paperclipEfsSecurityGroup: SecurityGroup | undefined;
 
   constructor(scope: Construct, id: string, props: FilesystemStackProps) {
     super(scope, id, props);
     Object.entries(TAGS).forEach(([k, v]) => this.tags.setTag(k, v));
+
+    // Tier 0 (Hobby): no EFS, no access point, no log group — the RETAIN'd
+    // filesystem is half of the always-on cost the Hobby tier is opting out
+    // of. Every consumer already tolerates absence (the fields are optional
+    // and PaperclipStack is gated on the same flag).
+    if (!paperclipProvisioned(props.tier)) return;
 
     this.paperclipEfsSecurityGroup = new SecurityGroup(this, 'PaperclipEfsSg', {
       vpc: props.vpc,

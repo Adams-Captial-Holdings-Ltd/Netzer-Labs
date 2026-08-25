@@ -2,11 +2,29 @@
 feature: paperclip
 document_role: index
 status: current
-observed_at: 2026-08-20
-as_of_commit: 5e6325b
+observed_at: 2026-08-24
+as_of_commit: 7220d3eef301f9b3f527b9916922d33b0a2db360
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
+  - src/lib/paperclip/client.ts
+  - src/lib/paperclip/config.ts
+  - src/lib/paperclip/agent-map.ts
+  - src/lib/paperclip/mission-engine.ts
+  - src/lib/paperclip/paperclip-mission-engine.ts
+  - src/lib/paperclip/reconciler.ts
+  - src/lib/paperclip/watermark.ts
+  - src/lib/paperclip/dispatch-worker.ts
+  - src/lib/missions/mission-acl.ts
+  - src/lib/missions/format.ts
+  - src/lib/state/mission-tasks-repo.ts
+  - src/adapters/dashboard/missions.ts
+  - src/adapters/dashboard/paperclip-dispatch.ts
+  - src/adapters/dashboard/handler.ts
+  - src/lib/tools/mission-tools.ts
+  - src/lib/tools/paperclip-tools.ts
+  - src/lib/tools/privacy-tools.ts
   - src/lib/state/kill-switches-repo.ts
+  - scripts/mission.ts
   - tests/fixtures/paperclip-bootstrap.ts
   - vendor/paperclip/Dockerfile
   - vendor/paperclip/updated-since.patch
@@ -15,18 +33,36 @@ implemented_by:
   - infra/lib/filesystem-stack.ts
   - infra/lib/network-stack.ts
   - infra/lib/secrets-stack.ts
+  - infra/lib/paperclip-stack.ts
+  - infra/bin/app.ts
   - infra/lib/constants.ts
+  - .github/workflows/deploy.yml
   - scripts/deploy.ts
   - scripts/teardown.ts
+  - scripts/cost-estimate.mjs
   - scripts/lib/cost-gate.ts
   - scripts/lib/lifecycle/deploy-phases.ts
+  - web/src/pages/Missions.tsx
+  - web/src/lib/glossary.ts
 tested_by:
   - src/lib/paperclip/mission-projection.test.ts
+  - src/lib/paperclip/client.test.ts
+  - src/lib/paperclip/paperclip-mission-engine.test.ts
   - src/lib/paperclip/client.paperclip.integration.test.ts
+  - src/lib/paperclip/reconciler.test.ts
+  - src/lib/paperclip/dispatch-worker.test.ts
+  - src/adapters/dashboard/missions.test.ts
+  - src/adapters/dashboard/paperclip-dispatch.test.ts
+  - src/lib/tools/mission-tools.test.ts
+  - src/lib/tools/paperclip-tools.test.ts
+  - src/lib/missions/format.test.ts
   - src/adapters/dashboard/authz-matrix.test.ts
   - src/lib/state/kill-switches-repo.test.ts
   - infra/lib/database-stack.test.ts
   - infra/lib/filesystem-stack.test.ts
+  - infra/lib/paperclip-stack.test.ts
+  - scripts/lib/cost-gate.test.ts
+  - scripts/lib/lifecycle/paperclip-image-pipeline.test.ts
 decisions:
   - docs/adr/0010-paperclip-work-engine.md
   - docs/adr/0009-mission-container-model.md
@@ -52,7 +88,7 @@ Read in this order:
 | 1 | [HANDOFF.md](HANDOFF.md) | Where the work stands right now, and the single next action |
 | 2 | [ADR 0010](../../adr/0010-paperclip-work-engine.md) | The ratified decisions — DL-1 … DL-9 verbatim, the hard constraints, the 2026-08-18 patch amendment |
 | 3 | [plan-audit.md](plan-audit.md) | The 16 wrong citations and 4 structural defects in the plan — **read before the plan, not after** |
-| 4 | [implementation-plan.md](implementation-plan.md) | The §1–§34 design study and the 10-phase build sheet for everything not yet built |
+| 4 | [implementation-plan.md](implementation-plan.md) | The historical §1–§34 design study, phased build sheet and append-only execution addenda |
 | 5 | [handoffs/](handoffs/2026-08-18-codex-review.md) | Session history: what was already tried, and why it failed |
 
 **Source code is the ultimate truth for present behavior.** Where a document
@@ -72,71 +108,86 @@ maintained since. Two things have already overtaken it:
 - **[plan-audit.md](plan-audit.md) corrects 16 of its citations**, two of which
   are paths that do not exist. Check a citation there before you follow it.
 
-## 2. What paperclip does today
+## 2. What Paperclip does today
 
-Verified and in `development`:
+Present in the current source and working tree:
 
-- **A pure projection** (`src/lib/paperclip/mission-projection.ts`) translating
-  Paperclip's issue shape to Netzar's legacy Mission shape, with typed rejection
-  of unassigned issues and neutralization of hostile text.
-- **A patched, pinned artifact** (`vendor/paperclip/`) —
-  `netzer-paperclip:2026.722.0-netzar.1`, built from the immutable upstream
-  digest plus a committed 37-line `updatedSince` patch, recompiled in-image by
-  the `tsc` the image already ships.
-- **A disposable local integration harness** (`docker-compose.paperclip.yml`):
-  that patched image plus PostgreSQL 17, driven by
-  `npm run test:paperclip:up` / `:down` / `:all`.
-- **An authenticated, idempotent, secret-safe bootstrap fixture**
-  (`tests/fixtures/paperclip-bootstrap.ts`) provisioning one company, two mapped
-  HTTP agents, and three API keys.
-- **Two live contract probes**: I3 (the `updatedSince` strict millisecond
-  watermark) and FI-4 (fabricated run ids die at the `heartbeat_runs` foreign
-  key with SQLSTATE 23503). Both green against the patched image.
-- **The `paperclip_disabled` kill switch**, registered in all three
-  hand-maintained places in `src/lib/state/kill-switches-repo.ts` (registry now
-  41), plus a pinned four-route mission authorization matrix guarding the future
-  route swap.
-- **Phase 1 infrastructure, as code only, and gated off**: `CCE-Database`
-  (Aurora Serverless v2 PG 17) and `CCE-Filesystem` (encrypted EFS + log group)
-  are synthesized **only when `CCE_PAPERCLIP_ENABLED=1`**, which is unset
-  everywhere. `cdk ls` returns 15 stacks with the flag off and 17 with it on.
-  Ungated and therefore present in every environment: the `PaperclipSg` on port
-  3100 and the `/claudeclaw/paperclip` secret with `REPLACE_ME` placeholders —
-  both already deployed to staging, both `RETAIN` with fixed names, so removing
-  them from the template now would orphan them (see the Phase 1 audit session
-  log, **P16**). The `better_auth_secret` field is populated by deploy phase b
-  when `PAPERCLIP_BETTER_AUTH_SECRET` is set; the other three stay `REPLACE_ME`
-  until a later phase mints them against the running instance. The second ECR
-  repository is created in deploy phase a **only when armed**, and deleted by
-  teardown. The cost gate prices the substrate only when it is armed. `cdk synth` is clean and
-  `CCE-Compute` has **zero** Paperclip references.
+- **A patched, pinned artifact and disposable live harness.**
+  `vendor/paperclip/` builds `netzer-paperclip:2026.722.0-netzar.1` from an
+  immutable upstream digest plus the approved `updatedSince` patch;
+  `docker-compose.paperclip.yml` runs it with PostgreSQL 17. The bootstrap paths
+  create exactly one company, mapped HTTP agents and their API keys without
+  logging secrets.
+- **A typed HTTP client and Mission engine.** Every operation crosses
+  Paperclip's authenticated API; Netzar never reads its Postgres directly.
+  Pagination, rate limits, circuit breaking, idempotent writes, per-actor key
+  selection and the `paperclip_disabled` kill switch live in the shared client
+  boundary.
+- **Durable observation plus low-latency dispatch.** The reconciler polls the
+  patched `updatedSince` feed with overlap-and-dedupe and ships in observing
+  mode. The inbound dispatch route acknowledges with 202, durably claims a
+  `(runId, issueId)` pair, and hands the genuine Paperclip run id to the worker;
+  it never fabricates one.
+- **The Missions anti-corruption layer.** The existing four
+  `/api/missions*` contracts and capability gates are served through a
+  `MissionEngine`, with the legacy handlers retained as one whole router-level
+  rollback path. There is no per-request fallback from Paperclip to DynamoDB.
+  Mission provenance is recorded on the Netzar side so Paperclip-origin work is
+  included in privacy exports.
+- **Cross-surface mission parity.** Dashboard, Jarvis, Telegram, Slack, Discord
+  and CLI formatting share the same mission vocabulary. Assignment push is an
+  honest notification path; the two native Paperclip verbs are exposed through
+  the approved `paperclip_*` tools; successful mutations write one audit record.
+- **The widened public Mission model.** The board and every text surface use six
+  ordered states (`open`, `in_progress`, `blocked`, `in_review`, `done`,
+  `cancelled`) and four priority bands (`critical`, `high`, `medium`, `low`).
+  The old public `dueAt` / `due_at` field is removed. The Missions page renders
+  all six lanes, and `scripts/mission.ts` uses the real list/create routes and a
+  bounded owner-board scan for `show`.
+- **Default-install infrastructure in source.** `CCE-Database`,
+  `CCE-Filesystem` and `CCE-Paperclip` are always part of the CDK stack set.
+  Their resources provision at T1–T3, while an ordinary T0 Hobby install stays
+  exempt; the workflow uses a one-directional environment override so Tier 0
+  staging still exercises Paperclip. `CCE_PAPERCLIP_ENABLED` no longer controls
+  synthesis or cost. During rollout it remains only the router switch between
+  the Paperclip and retained legacy handlers.
+- **A same-run fresh-install path.** The deploy workflow builds the pinned image,
+  applies exclusive Paperclip IAM before consumers need it, populates the
+  deploy-owned secret fields, lands the service parked, runs migrations and
+  starts it in one workflow run. The money gate includes Aurora, EFS and the fixed
+  `desiredCount: 1` Paperclip task wherever the substrate provisions; teardown
+  routes the three stacks through the normal CDK destroy path.
+- **An internal Paperclip operator console.** The shipped React board is served
+  in authenticated mode, but it is not attached to Netzar's ALB and is never
+  linked from the Netzar SPA. Operators reach port 3100 only through an
+  AWS-authenticated ECS Exec/SSM tunnel. This network boundary contains the
+  pinned artifact's open email-signup route until upstream provides a safe
+  signup control or a separately reviewed access-controlled listener exists.
 
-It is **not yet**: a Paperclip client, a reconciler, an ACL over
-`/api/missions*`, agent tools, or any Missions UI change. **Nothing is
-deployed.** No AWS resource has been created and no production runtime behavior
-has changed.
+This is **source evidence, not deployment evidence**. The Phase 8 commit is
+local, Phase 9 still has uncommitted work under final review, and none of the
+current Paperclip service/default-install changes has been verified in AWS.
 
 ## 3. Current status and current source commit
 
-**Source evidence only.** Verified at commit
-`6996f64efaace96bb4b19246e4a870be341290c1` on
-`fix/paperclip-phase2-readiness` — the Phase 2 readiness fixes, cut from
-`development` at `5418497` (the squash-merge of
-[PR #81](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/81),
-the Phase 1 over-engineering audit).
+**Source evidence only.** The current branch is
+`feature/paperclip-phase-1-5`. Phases 0–7 are in its history; Phase 8 passed its
+independent execution critic and is committed locally as `7220d3e`. Phase 9 is
+the active working-tree change: default provisioning, same-run deploy safety,
+six-state/four-priority projection widening and CLI repair are implemented and
+under final propagation and critic review. The legacy router and
+`CCE_PAPERCLIP_ENABLED` remain intentionally present until the separately
+reviewed retirement gate has two clean production weeks of evidence.
 
-Deployment evidence **does not exist**. The Phase 1 stacks have never been
-`cdk diff`ed or deployed against the real account; those steps are deliberately
-gated on an explicit user go-ahead because they create billable resources.
-Source evidence and deployment evidence are not the same thing and are not
-conflated anywhere in this folder.
+Deployment evidence **does not exist for the current work**. No AWS claim on
+this page is inferred from synth or unit tests, and no current Paperclip
+service/default-install change has been promoted or verified in staging.
+Source evidence and deployment evidence are different facts.
 
-Phases complete: §33 first milestone (1A–1D), Phase 0, Phase 1 **code**
-(audited and corrected 2026-08-19; Phase 2 code blockers cleared 2026-08-20).
-Phase 1 steps **5–8** and Phases 2–10 are unstarted; step 5 is the `cdk diff`
-the plan lists before the deploy. **Step 7, the ARM64 question, is already
-answered** — the pinned digest is a multi-arch index carrying `linux/arm64`,
-so no `docker buildx` run is owed. See [HANDOFF](HANDOFF.md).
+Still not implemented in the required execution order: Phase 8.5, the Four
+Pillars work in Phases 10–12, and the final legacy retirement. The
+volatile pass/fail counts and exact next action belong in
+[HANDOFF.md](HANDOFF.md), not this index.
 
 ## 4. Source of truth
 
@@ -162,17 +213,20 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 
 | Area | Verified location | Present behavior |
 |---|---|---|
-| Projection | `src/lib/paperclip/mission-projection.ts` | Pure issue→Mission mapping; throws typed `UnassignedIssueError`; neutralizes hostile text |
-| Harness | `docker-compose.paperclip.yml` | Builds and runs the patched pinned image + Postgres 17; `npm run test:paperclip:up/down/all` |
-| Patched artifact | `vendor/paperclip/` | Immutable digest + 37-line `updatedSince` patch, recompiled in-image by `tsc`; LF pinned in `.gitattributes` |
-| Bootstrap | `tests/fixtures/paperclip-bootstrap.ts` | Better Auth first-admin flow, company/agents/keys provisioning, `/dev/shm` credential cache (mode 0600), fail-closed idempotency |
-| Kill switch | `src/lib/state/kill-switches-repo.ts` | `paperclip_disabled` in the union (`:109`), `ALL_KILL_SWITCHES` (`:152`, 41 total), and `KILL_SWITCH_META` (`:299`, Integrations) |
-| Authz pin | `src/adapters/dashboard/authz-matrix.test.ts` | Four-route mission matrix, coarse-envelope pin, decision-level stripped-capability tests |
-| Database substrate | `infra/lib/database-stack.ts` | Aurora Serverless v2 PG 17, min 0.5 ACU, deletion-protected, RETAIN, 14-day backups, generated credentials at `/claudeclaw/paperclip-db`; 5432 admitted from `PaperclipSg` **only** |
-| Filesystem substrate | `infra/lib/filesystem-stack.ts` | Encrypted EFS with automatic backups, access point pinned to posix 1000:1000 at `/paperclip`, the `/claudeclaw/paperclip` log group |
-| Network | `infra/lib/network-stack.ts` | `PaperclipSg` on port 3100 from the ALB — its own port, not a `PORT=3000` reuse — without touching the Fargate SG |
-| Secrets and names | `infra/lib/secrets-stack.ts`, `infra/lib/constants.ts`, `scripts/lib/lifecycle/deploy-phases.ts` | `/claudeclaw/paperclip` seeded `REPLACE_ME` by CDK; deploy phase b **merges** a real `better_auth_secret` in (generated once by `npm run setup`) without disturbing the three keys minted later; suffix-aware names via `buildResourceNames()` |
-| Deploy and cost | `scripts/deploy.ts`, `scripts/lib/cost-gate.ts` | Both stacks join deploy phase a **only when `CCE_PAPERCLIP_ENABLED=1`**, which `cdkEnvBag` forwards and `SYNTH_INPUT_ALLOWLIST` replays; the Paperclip ECR repo is created in phase a when armed and deleted by `scripts/teardown.ts` (the out-of-band catalog only **reports**, it never deletes); the cost gate lists and prices the substrate only when armed, and the budget default is back to 600 |
+| Projection and public domain | `src/lib/paperclip/mission-projection.ts`, `src/lib/state/mission-tasks-repo.ts` | Seven Paperclip states project into six ordered Mission states (only `backlog`/`todo` collapse to `open`); priority is the four-band enum end to end; unassigned issues reject with a typed error; Paperclip text is neutralized before prompting; public `dueAt` is gone |
+| Client and engine | `src/lib/paperclip/client.ts`, `config.ts`, `agent-map.ts`, `mission-engine.ts`, `paperclip-mission-engine.ts` | Authenticated API boundary with pagination, timeout/rate-limit errors, retry-safe writes, circuit breaking, actor-key selection and no synthesized run ids |
+| Reconciler | `src/lib/paperclip/reconciler.ts`, `watermark.ts` | Observing poller over the patched feed; overlaps the stored max timestamp, dedupes `(id, updatedAt)`, refuses corrupt or unfiltered feeds, and advances the watermark conditionally |
+| Inbound dispatch | `src/adapters/dashboard/paperclip-dispatch.ts`, `src/lib/paperclip/dispatch-worker.ts` | Constant-time shared-secret check, fast 202 acknowledgement, durable one-shot claim, genuine run-id propagation, refusal-aware retry/recovery |
+| Missions ACL and privacy | `src/lib/missions/mission-acl.ts`, `src/adapters/dashboard/missions.ts`, `src/lib/tools/privacy-tools.ts` | Preserves the four `/api/missions*` envelopes/capability gates, resolves the public 8-character reference without silent ambiguity, and joins Netzar-side provenance into privacy exports |
+| Mission surfaces and tools | `src/lib/missions/format.ts`, `src/lib/tools/mission-tools.ts`, `src/lib/tools/paperclip-tools.ts` | One status/priority vocabulary across chat surfaces; assignment notification parity; exact approved Paperclip verbs; one audit record per successful mutation |
+| Dashboard and CLI | `web/src/pages/Missions.tsx`, `web/src/lib/glossary.ts`, `scripts/mission.ts` | Six ordered kanban lanes, four priority labels and no due-date rendering; CLI list uses `owner`, create sends the actual route body, and show scans bounded real owner boards because no detail route exists |
+| Harness and artifact | `docker-compose.paperclip.yml`, `vendor/paperclip/` | Builds and runs the immutable pinned image plus the approved `updatedSince` patch with PostgreSQL 17; `npm run test:paperclip:up/down/all` |
+| Bootstrap | `tests/fixtures/paperclip-bootstrap.ts`, `scripts/paperclip-bootstrap.ts` | Better Auth first-admin flow; exactly-one-company check; company/agent/key provisioning; secret-safe, fail-closed idempotency |
+| Kill switch and authz pin | `src/lib/state/kill-switches-repo.ts`, `src/adapters/dashboard/authz-matrix.test.ts` | `paperclip_disabled` is permanent and checked at the transport/ACL boundary; the four mission routes keep their coarse authorization envelopes and capability decisions |
+| Database and filesystem | `infra/lib/database-stack.ts`, `infra/lib/filesystem-stack.ts` | Aurora Serverless v2 PG 17 (0.5 ACU floor, tiered ceiling, deletion protection, RETAIN, backups) and encrypted EFS/logging; resources are empty at ordinary T0 and provisioned at T1+ or the environment override |
+| Service and reachability | `infra/lib/paperclip-stack.ts`, `infra/lib/network-stack.ts`, `infra/bin/app.ts` | Fixed `desiredCount: 1` ARM64 task, Cloud Map discovery at `paperclip.claudeclaw.internal:3100`, dedicated SG reachability, one-company bootstrap contract, and the same named stack set regardless of router-flag value |
+| Deploy workflow | `.github/workflows/deploy.yml`, `scripts/lib/lifecycle/deploy-phases.ts` | Pinned image build, early exclusive IAM, secret population, first bootstrap/migration and full redeploy occur in the same workflow run; migration/park escape hatches remain explicit |
+| Provisioning, cost and teardown | `infra/lib/constants.ts`, `scripts/deploy.ts`, `scripts/lib/cost-gate.ts`, `scripts/cost-estimate.mjs`, `scripts/teardown.ts` | One predicate provisions Paperclip at T1+ or the staging override; the router flag does not change synth; the money gate includes Aurora/EFS/Paperclip Fargate wherever provisioned; teardown sends all three stacks through CDK destroy |
 
 ## 5b. Using the client (`src/lib/paperclip/client.ts`)
 
@@ -255,32 +309,41 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
 
 - One Netzar deployment maps to one Paperclip company (DL-5).
 - Unassigned Paperclip issues are rejected by the projection with a typed error;
-  the future ACL filters them rather than inventing an owner.
-- `updatedSince` is a strict greater-than watermark at **millisecond**
-  resolution (`updated_at >= watermark + 1ms`), requires an explicit UTC offset,
-  and is served by `issues_company_updated_idx`. A naive `>` is wrong: storage
-  is microsecond `timestamptz`, callers only ever observe truncated values.
+  the ACL filters them rather than inventing an owner.
+- The reconciler queries `updatedSince` from
+  `max processed updatedAt - poll_overlap_ms` and dedupes `(id, updatedAt)`
+  client-side. That overlap is load-bearing because Postgres stores microseconds
+  while the API exposes millisecond-truncated timestamps; the old `+1ms`
+  watermark rule is superseded.
 - Paperclip run ids are **never** synthesized (ADR 0010 hard constraint 2; a
   source assertion in the integration test forbids `randomUUID` anywhere in
   `src/lib/paperclip/`).
-- `paperclip_disabled` fails open on DDB errors like the other 40 switches and
-  will gate every future Paperclip call path.
+- `paperclip_disabled` remains a permanent emergency control. It is evaluated at
+  every client invocation and at the ACL refusal boundary; a disabled engine is
+  never disguised as a successful legacy fallback.
 - Netzar never touches Paperclip's Postgres (DL-2). Every read and write crosses
   an authenticated HTTP boundary.
+- Public Missions have six ordered states and four priority bands. `dueAt` is no
+  longer part of the public Mission, tool or dashboard contract.
+- The Paperclip board is an operator-only break-glass surface. Use a named AWS
+  identity, resolve the running `claudeclaw[-suffix]-paperclip` task and its
+  `paperclip-server` runtime id, then open an
+  `AWS-StartPortForwardingSession` session to remote port `3100`. Browse only
+  `http://localhost:3100`, use an individually named Paperclip account, and
+  close the session when finished. Shared logins and public ALB/hostname rules
+  are not supported while the pinned artifact allows unauthenticated signup.
 
 ## 7. Known runtime risks and approved next work
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| Phase 1 stacks have never been `cdk diff`ed against the real account | [HANDOFF](HANDOFF.md) — synth-only evidence | Phase 1 steps 6–8, gated on an explicit user deploy go-ahead |
-| ~~ARM64 buildability of the patched image is unanswered~~ **RESOLVED 2026-08-20** | The pinned digest `sha256:6b9daa3c…` is an OCI image index whose `linux/arm64` child manifest is `sha256:6ab3c816…`, read from GHCR. The Dockerfile pins the index; the two differing is correct | None. The base image is multi-arch, and the whole compute plane is ARM64 already (`compute-stack.ts` `CpuArchitecture.ARM64`) |
-| **Nothing builds or pushes the patched Paperclip image** | `.github/workflows/deploy.yml` has no build step; `vendor/paperclip/Dockerfile` is built only by `docker-compose.paperclip.yml` for the local test harness | [Phase 1.5 — the Paperclip image pipeline](phase-1.5-image-pipeline.md): extend `scripts/lib/lifecycle/cloud-build.ts` (the Docker-free CodeBuild path) to build it in the operator's own account. Specified 2026-08-20, not yet built. |
-| **Aurora is untiered: a Tier 0 install provisions the production cluster** | `infra/lib/database-stack.ts` has zero `TIERS`/`props.tier` references | Tier-gate `serverlessV2Min/MaxCapacity`; keep `deletionProtection` and `RETAIN` (**P17**, **M19**) — decided 2026-08-20, not yet built |
-| The patch must be re-evaluated on every artifact re-pin | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Drop the patch the release upstream ships `updatedSince` |
-| Node-vs-Postgres clock skew can stamp an update at or before an observed watermark | [Session handoff §3.1](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | Reconciler must overlap polls rather than trust exact watermarks; owned by the client/reconciler phase |
-| **The plan contradicts itself on dual-write and on the `PAPERCLIP_ENABLED` fall-through** | [plan-audit.md](plan-audit.md) P1-C6, P1-C7 | An author decision is required **before** Phase 4. Rollout (§30) and cutover (§25/§27) were written to different premises. |
-| **The plan's central `MissionEngine` interface is orphaned**, and §29's POC drops ~530 specified lines | [plan-audit.md](plan-audit.md) P1-G1, P1-G2 | Propagate the indirection or rewrite §13.2 against C1/C2; add the missing §27 rows |
-| Later phases (client, reconciler, ACL, tools, UI, rollout) are unstarted | [HANDOFF](HANDOFF.md) | Follow [the plan's](implementation-plan.md) §26 phases in order |
+| Phase 9 has source/test evidence but no AWS evidence | [HANDOFF](HANDOFF.md) records the exact focused results and explicitly says no deployment/staging evidence exists | Finish the execution critic and full validation before any promotion; verify the same-run bootstrap/migrate/redeploy path in staging |
+| Paperclip is a single service task | [ADR 0010](../../adr/0010-paperclip-work-engine.md) DL-8 and `infra/lib/paperclip-stack.ts` pin `desiredCount: 1` with no autoscaling | Keep the pin until upstream supports shared node identity; expect a restart gap rather than pretending this is HA |
+| The first T1+ install creates an always-on database/task floor | [Cost guide](../../cost-guide.md) and `scripts/cost-estimate.mjs` price about $104/month for the Paperclip substrate | Keep Paperclip out of ordinary T0; require the existing money confirmation before deploy and show the Paperclip lines in that gate |
+| The vendored `updatedSince` patch can diverge from upstream | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Re-evaluate every artifact re-pin and drop the patch when an upstream release implements the proven contract |
+| Node-vs-Postgres clock skew beyond the configured overlap can still lose a row | `src/lib/paperclip/watermark.ts` documents the exact limit; overlap fixes truncation, not unbounded clock skew | Monitor watermark lag and keep `paperclip/poll_overlap_ms` sized from observed clocks |
+| Legacy retirement is not yet allowed | [bar-and-phases.md](bar-and-phases.md) Phase 9 requires two clean production weeks and a separately reviewed final commit | Keep the router switch, legacy handlers and `paperclip_disabled`; delete only after the production evidence gate |
+| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order after the Phase 4.5 execution critic passes |
 
 ## 8. Exact focused and full validation commands
 
@@ -293,8 +356,8 @@ suite skips rather than fails.
 ```powershell
 npm run test:paperclip:up
 npx vitest run src/lib/paperclip/client.paperclip.integration.test.ts --config vitest.integration.config.ts
-npx vitest run src/lib/paperclip/mission-projection.test.ts src/adapters/dashboard/authz-matrix.test.ts src/lib/state/kill-switches-repo.test.ts
-npx vitest run infra/lib/database-stack.test.ts infra/lib/filesystem-stack.test.ts
+npx vitest run src/lib/paperclip/mission-projection.test.ts src/lib/paperclip/client.test.ts src/lib/paperclip/paperclip-mission-engine.test.ts src/lib/paperclip/reconciler.test.ts src/lib/paperclip/dispatch-worker.test.ts src/lib/paperclip/readme.test.ts src/adapters/dashboard/missions.test.ts src/adapters/dashboard/paperclip-dispatch.test.ts src/lib/missions/format.test.ts src/lib/tools/mission-tools.test.ts src/lib/tools/paperclip-tools.test.ts scripts/mission.test.ts
+npx vitest run infra/lib/database-stack.test.ts infra/lib/filesystem-stack.test.ts infra/lib/paperclip-stack.test.ts infra/bin/app.stack-set.test.ts scripts/lib/cost-gate.test.ts scripts/lib/lifecycle/paperclip-image-pipeline.test.ts --maxWorkers=1 --minWorkers=1
 npm run test:paperclip:down
 ```
 
@@ -308,6 +371,18 @@ node scripts/ci/feature-knowledge.mjs
 node scripts/ci/docs-links.mjs
 ```
 
+Phase 9 also requires both application typechecks and builds after the focused
+suite. Exact most-recent results and any environmental full-suite baseline
+belong in [HANDOFF.md](HANDOFF.md); this index lists commands, not transient
+pass counts.
+
+```powershell
+npm run typecheck
+npm run build
+npm --prefix web run typecheck
+npm --prefix web run build
+```
+
 Full pre-push suite: see
 [development.md — How to develop a new feature](../../../development.md#how-to-develop-a-new-feature-end-to-end),
 step 7. Run the **full** `npm test`, never a scoped run.
@@ -316,7 +391,8 @@ step 7. Run the **full** `npm test`, never a scoped run.
 
 - [Operational HANDOFF](HANDOFF.md) — current state and next action
 - [Phase 1.5 — the Paperclip image pipeline](phase-1.5-image-pipeline.md) — the
-  approved work definition for the last blocker on a verifiable Phase 2
+  historical work definition for the image pipeline now implemented by the
+  deploy lifecycle
 - [Implementation plan](implementation-plan.md) and its [audit](plan-audit.md)
 - [ADR 0010 — Paperclip is the missions work engine](../../adr/0010-paperclip-work-engine.md)
 - [Feature knowledge framework](../README.md)

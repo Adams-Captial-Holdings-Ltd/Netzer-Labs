@@ -130,9 +130,48 @@ async function fireTask(task: ScheduledTask): Promise<void> {
     history,
     surface: 'system',
   });
+  // A TURN REFUSED BEFORE ANY MODEL WORK MUST NOT CONSUME THE FIRE.
+  //
+  // Same defect Phase 6 closed on the dispatch path, same cause: `runAgentTurn`
+  // has three gates that refuse by RETURNING a canned notice rather than
+  // throwing (the emergency kill phrase, the `sessions_frozen` maintenance
+  // switch, the turn-level rate limit). Because they return, this function used
+  // to finish normally — the notice was appended to the session as words the
+  // agent never said, delivered to the user as the answer to their reminder,
+  // audited `result: 'ok'`, then `markFired` advanced the schedule and
+  // `handleMessage` returned true so the SQS message was DELETED. A one-minute
+  // maintenance freeze permanently consumed the user's scheduled work, and
+  // every surface reported success.
+  //
+  // Detection is the typed `refusal` marker and nothing else — the refusal
+  // texts are prose that may be reworded, and their zero cost/zero token
+  // metrics are also what a cheap or cached real answer looks like.
+  //
+  // A retryable refusal did NO work, so it is neither an answer nor a failed
+  // attempt: THROW, and let the `catch` in `handleMessage` do exactly what it
+  // already does for a transient failure — put GSI1PK back to STATUS#active so
+  // the row is claimable again, and return false so the message is left for the
+  // visibility timeout to redeliver. That catch IS this path's equivalent of
+  // the dispatch worker's `releaseWork`; reusing it is why this fix is three
+  // lines and not a second release path.
+  //
+  // Only two of the three can reach here, and the third is unreachable rather
+  // than unhandled: this turn declares no `origin`, so it is `origin: 'machine'`
+  // and the kill-phrase gate (`'human_chat'` only) never runs. `sessions_frozen`
+  // and `rate_limited` are both retryable. A non-retryable refusal is therefore
+  // not produced today; if a future kind is, it falls through as terminal and is
+  // delivered to the user like a blocked turn, because a user told nothing
+  // cannot tell a refused reminder from a lost one.
+  if (result.refusal?.retryable) {
+    throw new Error(
+      `scheduled turn refused before any model work (${result.refusal.kind})`,
+    );
+  }
   // Guardrail-blocked turns are skipped: a persisted block notice poisons the
-  // session and re-trips the guardrail on later turns.
-  if (!result.blocked) {
+  // session and re-trips the guardrail on later turns. A refusal notice is not
+  // the agent speaking either — `AgentTurnResponse` says a caller writing
+  // session history has to check BOTH, because neither flag implies the other.
+  if (!result.blocked && result.refusal === undefined) {
     const now = Math.floor(Date.now() / 1000);
     await appendTurns(task.agentId, task.chatId, [
       { role: 'user', text: `[scheduled] ${task.promptText}`, ts: now },

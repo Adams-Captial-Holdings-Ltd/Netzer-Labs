@@ -20,8 +20,8 @@
  * written at column 0 inside their own block so the slice needs no dedent.
  */
 import { readFile } from 'node:fs/promises';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { PaperclipClient } from './client.js';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { PaperclipClient, __resetPaperclipCompanyPin } from './client.js';
 import { PaperclipDisabledError, PaperclipError, PaperclipRatelimitedError } from './error.js';
 import { paperclipIssue, paperclipTestClient } from './test-helpers.js';
 
@@ -66,6 +66,14 @@ function fakeFetch(body: unknown, status = 200): typeof fetch {
 }
 
 describe('A2-23(a): every documented snippet compiles, runs, and matches the README', () => {
+  // The README's `construct` snippet names its own illustrative company id,
+  // while every other snippet here uses the shared test client's. That is two
+  // companies in one process, which the one-company invariant in `client.ts`
+  // refuses by design — so the pin is cleared between snippets. Documentation
+  // examples are the one legitimate reason to hold two, and they never make a
+  // request against each other.
+  beforeEach(__resetPaperclipCompanyPin);
+
   it('construct', () => {
 // CODE_SECTION: construct
 const paperclip = new PaperclipClient({

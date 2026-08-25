@@ -15,10 +15,7 @@
  * back on every read, so `createdByChat` is restored before the export filter
  * ever sees it and `privacy-tools.ts` keeps its one-line filter unchanged.
  *
- * `assignmentReason` and `dueAt` ride along because they have the same problem
- * for a different reason: `missionToIssueCreate` sends neither and
- * `ProjectedMission` carries neither, yet `web/src/pages/Missions.tsx` renders
- * both. One write, one join, three fields recovered.
+ * `assignmentReason` rides along because Paperclip has no matching issue field.
  *
  * NO NEW TABLE AND NO CDK EDIT. These rows live in the existing mission-tasks
  * table on a partition key no mission query touches (`listMissionsForAgent`
@@ -47,7 +44,6 @@ export interface MissionProvenance {
   createdByChat: string;
   createdByAgent: string;
   assignmentReason?: string;
-  dueAt?: string;
 }
 
 function pk(missionId: string): string {
@@ -65,7 +61,6 @@ export async function putMissionProvenance(row: MissionProvenance): Promise<void
         createdByChat: row.createdByChat,
         createdByAgent: row.createdByAgent,
         ...(row.assignmentReason ? { assignmentReason: row.assignmentReason } : {}),
-        ...(row.dueAt ? { dueAt: row.dueAt } : {}),
       },
     }),
   );
@@ -108,6 +103,5 @@ function toProvenance(i: Record<string, unknown>): MissionProvenance | undefined
     createdByChat: String(i.createdByChat ?? ''),
     createdByAgent: String(i.createdByAgent ?? ''),
     ...(i.assignmentReason ? { assignmentReason: String(i.assignmentReason) } : {}),
-    ...(i.dueAt ? { dueAt: String(i.dueAt) } : {}),
   };
 }

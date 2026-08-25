@@ -12,9 +12,9 @@ import { useAgentNames } from '../lib/useAgentNames';
 
 // Mirrors the Mission row the missions repo returns (see
 // src/lib/state/mission-tasks-repo.ts -> toMission). The owner agent is
-// `ownerAgent` and the long-form text is `body`; assignmentReason/dueAt are
-// optional and only present when the repo (Haiku auto-assign / due date) set
-// them. Older callers referenced `owner`/`description` which never matched the
+// `ownerAgent` and the long-form text is `body`; assignmentReason is optional
+// and present only when the repo (Haiku auto-assign) sets it. Older callers
+// referenced `owner`/`description` which never matched the
 // wire shape, so the status route was building a path with `undefined` — kept
 // the real field names here and derive the owner for the status route from
 // `ownerAgent`.
@@ -25,10 +25,9 @@ interface Mission {
   createdByChat?: string;
   title?: string;
   body?: string;
-  priority?: number;
+  priority?: 'critical' | 'high' | 'medium' | 'low';
   status: string;
   assignmentReason?: string;
-  dueAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -305,8 +304,7 @@ export function Missions() {
                       <span title={m.status}>
                         <Badge variant={statusBadgeVariant(m.status)}>{statusLabel(m.status)}</Badge>
                       </span>
-                      {m.priority != null && <Badge variant="warning">P{m.priority}</Badge>}
-                      {m.dueAt && <Badge variant="info">Due {fmtDate(m.dueAt)}</Badge>}
+                      {m.priority != null && <Badge variant="warning">{statusLabel(m.priority)}</Badge>}
                     </div>
                     <div class="flex gap-2 pt-2 border-t border-border" onClick={(e) => e.stopPropagation()}>
                       {(col.key === 'open' || col.key === 'blocked') && (
@@ -385,8 +383,7 @@ export function Missions() {
               <span title={detail.status}>
                 <Badge variant={statusBadgeVariant(detail.status)}>{statusLabel(detail.status)}</Badge>
               </span>
-              {detail.priority != null && <Badge variant="warning">P{detail.priority}</Badge>}
-              {detail.dueAt && <Badge variant="info">Due {fmtDate(detail.dueAt)}</Badge>}
+              {detail.priority != null && <Badge variant="warning">{statusLabel(detail.priority)}</Badge>}
             </div>
 
             {detail.body && (
@@ -411,12 +408,6 @@ export function Missions() {
                 <div>
                   <p class="text-caption text-secondary font-medium mb-1">Created</p>
                   <p class="text-body-sm text-primary">{fmtDate(detail.createdAt)}</p>
-                </div>
-              )}
-              {detail.dueAt && (
-                <div>
-                  <p class="text-caption text-secondary font-medium mb-1">Due</p>
-                  <p class="text-body-sm text-primary">{fmtDate(detail.dueAt)}</p>
                 </div>
               )}
             </div>

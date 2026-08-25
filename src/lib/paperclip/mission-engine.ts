@@ -23,9 +23,9 @@
  *
  *  PROJECTION. Every returned `ProjectedMission` comes from
  *  `mission-projection.ts`'s `issueToMission`, imported and never re-derived.
- *  Both round-trips are LOSSY and that is deliberate: `toPriorityScore(
- *  toPriorityBand(73)) === 80`, `blocked` collapses to `open` and `in_review` to
- *  `in_progress`. An implementation must not paper over that.
+ *  Phase 9 makes priority and the six shared statuses exact. The remaining
+ *  intentional status narrowing is Paperclip `backlog` and `todo` both reading
+ *  as Mission `open`; assignment still distinguishes those states.
  *
  *  ERRORS. Everything below rejects with a `PaperclipError` subclass. The kill
  *  switch surfaces as `PaperclipDisabledError` from inside the transport, so an

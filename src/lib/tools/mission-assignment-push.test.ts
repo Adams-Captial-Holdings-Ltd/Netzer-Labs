@@ -67,14 +67,14 @@ const MISSION: Mission = {
   createdByChat: 'owner:emmanuel',
   title: 'Ship the reconciler',
   body: 'With a watermark overlap.',
-  priority: 80,
+  priority: 'high',
   status: 'open',
   createdAt: '2026-08-20T10:00:00.000Z',
   updatedAt: '2026-08-20T10:00:00.000Z',
 };
 
 /** The exact sentence formatAssignmentPush produces for MISSION. */
-const EXPECTED = 'Mission [abc12345] "Ship the reconciler" assigned to ops by research (P80).';
+const EXPECTED = 'Mission [abc12345] "Ship the reconciler" assigned to ops by research (high priority).';
 
 const ARGS = { title: 'Ship the reconciler', body: 'With a watermark overlap.', owner: 'ops' };
 

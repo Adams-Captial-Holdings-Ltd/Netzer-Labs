@@ -1,4 +1,4 @@
-import type { Mission, MissionStatus } from '../state/mission-tasks-repo.js';
+import type { Mission, MissionPriority, MissionStatus } from '../state/mission-tasks-repo.js';
 import { MISSION_STATUSES } from '../state/mission-tasks-repo.js';
 
 export type PaperclipIssueStatus =
@@ -10,7 +10,7 @@ export type PaperclipIssueStatus =
   | 'done'
   | 'cancelled';
 
-export type PriorityBand = 'critical' | 'high' | 'medium' | 'low';
+export type PriorityBand = MissionPriority;
 
 export interface PaperclipIssueView {
   id: string;
@@ -133,32 +133,6 @@ export function toMissionStatus(status: PaperclipIssueStatus): MissionStatus {
   throw new Error(`Unsupported Paperclip issue status: ${String(status)}`);
 }
 
-export function toPriorityBand(score: number): PriorityBand {
-  const clamped = Math.max(0, Math.min(100, score));
-  if (clamped >= 90) return 'critical';
-  if (clamped >= 70) return 'high';
-  if (clamped >= 40) return 'medium';
-  return 'low';
-}
-
-/**
- * Total: the `default` is not dead code, it is the A2-17 guarantee. `priority`
- * is typed `PriorityBand`, but it arrives off a wire row, and without this rung
- * a band outside the four returns `undefined` from a function declared
- * `number` — which then flows into a `Mission.priority` and silently breaks
- * every comparison downstream. 50 is `medium`, the same value the missions repo
- * defaults to.
- */
-export function toPriorityScore(priority: PriorityBand): number {
-  switch (priority) {
-    case 'critical': return 95;
-    case 'high': return 80;
-    case 'medium': return 50;
-    case 'low': return 20;
-    default: return 50;
-  }
-}
-
 function uuidForSlug(slug: string, agents: AgentIdMap): string {
   const uuid = agents.toUuid(slug);
   if (!uuid) throw new UnknownAgentError({ slug }, agents.knownSlugs());
@@ -203,7 +177,7 @@ export function missionToIssueCreate(
     title: mission.title,
     description: mission.body,
     assigneeAgentId: uuidForSlug(mission.ownerAgent, agents),
-    priority: toPriorityBand(mission.priority),
+    priority: mission.priority,
     idempotencyKey: `netzar-mission:${idGenerator()}`,
   };
 }
@@ -222,7 +196,7 @@ export function issueToMission(issue: PaperclipIssueView, agents: AgentIdMap): P
     createdByChat: 'paperclip',
     title: issue.title,
     body,
-    priority: toPriorityScore(issue.priority),
+    priority: issue.priority,
     status: toMissionStatus(issue.status),
     createdAt: issue.createdAt,
     updatedAt: issue.updatedAt,

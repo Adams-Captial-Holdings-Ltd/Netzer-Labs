@@ -34,7 +34,7 @@ const BASE: Mission = {
   createdByChat: '42',
   title: 'Fix the reconciler',
   body: '',
-  priority: 50,
+  priority: 'medium',
   status: 'open',
   createdAt: '2026-08-21T10:00:00.000Z',
   updatedAt: '2026-08-21T10:00:00.000Z',
@@ -97,10 +97,10 @@ describe('the measurement itself, recorded so it cannot quietly change', () => {
     expect(AMP_BOARD.length).toBeLessThanOrEqual(3000);
     // The numbers the header quotes. Equality, not an inequality: the whole
     // point is that a source-length check cannot see these.
-    expect(AMP_CARD.length).toBe(1059);
-    expect(toTelegramHtml(AMP_CARD).length).toBe(5055);
-    expect(AMP_BOARD.length).toBe(2175);
-    expect(toTelegramHtml(AMP_BOARD).length).toBe(9315);
+    expect(AMP_CARD.length).toBe(1071);
+    expect(toTelegramHtml(AMP_CARD).length).toBe(5067);
+    expect(AMP_BOARD.length).toBe(2220);
+    expect(toTelegramHtml(AMP_BOARD).length).toBe(9360);
     expect(toTelegramHtml(AMP_CARD).length).toBeGreaterThan(TELEGRAM_MAX_CHARS);
     expect(toTelegramHtml(AMP_BOARD).length).toBeGreaterThan(TELEGRAM_MAX_CHARS);
   });
@@ -108,8 +108,8 @@ describe('the measurement itself, recorded so it cannot quietly change', () => {
 
 describe('sendMessage bounds on the rendered length, not the source', () => {
   it.each([
-    ['a mission card whose HTML render is 5055', AMP_CARD],
-    ['a mission board whose HTML render is 9315', AMP_BOARD],
+    ['a mission card whose HTML render is 5067', AMP_CARD],
+    ['a mission board whose HTML render is 9360', AMP_BOARD],
   ])('delivers %s instead of losing it', async (_name, text) => {
     const res = await sendMessage('research', 42, text, { replyToMessageId: 10 });
 

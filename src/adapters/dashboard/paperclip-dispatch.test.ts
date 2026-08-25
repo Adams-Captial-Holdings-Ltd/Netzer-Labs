@@ -327,7 +327,7 @@ describe('the claim survives a concurrent duplicate and does NOT survive a trans
     createdByChat: 'paperclip',
     title: 'Ship the thing',
     body: 'Details of the thing.',
-    priority: 50,
+    priority: 'medium',
     status: 'open',
     createdAt: '2026-08-21T00:00:00.000Z',
     updatedAt: '2026-08-21T00:00:00.000Z',

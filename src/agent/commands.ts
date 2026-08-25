@@ -376,7 +376,7 @@ async function missionCommand(
         createdByChat: chatId,
         title: arg,
         body: arg,
-        priority: 50,
+        priority: 'medium',
         assignmentReason: 'opened from a chat command',
       });
       return { reply: formatMissionCard(mission) };

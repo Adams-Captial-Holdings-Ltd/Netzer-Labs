@@ -57,6 +57,7 @@ import {
   TAGS,
   TIERS,
   bucketName,
+  paperclipProvisioned,
 } from './constants.js';
 import {
   cloudFrontOriginSecret,
@@ -502,13 +503,46 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         CCE_SECRET_DB_ENCRYPTION_ARN: props.secrets.dbEncryptionSecret.secretArn,
         CCE_SECRET_BEDROCK_GUARDRAILS_ARN: props.secrets.bedrockGuardrailsSecret.secretArn,
         CCE_SECRET_VENDOR_KEYS_ARN: props.secrets.vendorKeysSecret.secretArn,
-        // Phase 7 makes this a RUNTIME flag as well as a synth-time one: it is
-        // what `paperclipRoutingEnabled()` reads to decide whether the
+        // Since Phase 9 this is a RUNTIME flag and NOTHING ELSE: it is what
+        // `paperclipRoutingEnabled()` reads to decide whether the
         // `/api/missions*` ACL is registered in front of the legacy handlers.
-        // Coupling the two is deliberate — the ACL has nothing to talk to
-        // unless the same flag put the Paperclip substrate in the account —
-        // and an unset value leaves the legacy stack serving.
+        // It no longer decides what synth produces — the Paperclip stacks are
+        // always constructed and tier-gated internally — so provisioning the
+        // engine and serving from it are now separately switchable, which is
+        // the whole point: the substrate lands first and the router flips
+        // later, as its own reviewed change. Unset (or anything but '1'/true)
+        // leaves the legacy stack serving, which stays the safe default.
         CCE_PAPERCLIP_ENABLED: process.env.CCE_PAPERCLIP_ENABLED ?? '',
+        // WHERE the engine is, which is a different question from whether the
+        // router is on above. This did not exist anywhere under infra/ before:
+        // PAPERCLIP_BASE_URL was read by src/lib/paperclip/config.ts and set by
+        // nothing, so a standard install provisioned a Paperclip the
+        // orchestrator had no address for.
+        //
+        // It is the Cloud Map record paperclip-stack registers, built from the
+        // same RESOURCE_NAMES constant rather than passed across stacks:
+        // CCE-Compute is created BEFORE CCE-Paperclip (Paperclip imports this
+        // stack's cluster and listener), so a reference the other way is a
+        // cycle. This is the pattern RESOURCE_NAMES exists for — deterministic
+        // names so the task can be configured without a CDK output.
+        //
+        // IT DOES NOT FIGHT THE RUNTIME-CONFIG PLANE, and that was checked
+        // against the reader rather than assumed. `loadPaperclipConfig()` in
+        // src/lib/paperclip/config.ts resolves
+        // `baseUrl: configured ?? env.PAPERCLIP_BASE_URL`, where `configured`
+        // is runtime-config `paperclip/base_url` — which
+        // scripts/lib/seed-defaults.ts deliberately does NOT seed ("an instance
+        // URL's default is absence, not a tunable"). So this env var is what
+        // the client actually reads today, and an operator can still override
+        // it with a config write, no deploy, exactly as C-19 intends.
+        //
+        // Gated on the SAME predicate that decides whether the engine is
+        // provisioned at all. At Tier 0 there is no Paperclip, and setting a
+        // URL there would turn `PaperclipDisabledError` ("no base URL", with
+        // the remediation) into a DNS failure inside a fetch.
+        ...(paperclipProvisioned(props.tier)
+          ? { PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl }
+          : {}),
       },
       secrets: {
         SLACK_BOT_TOKEN: EcsSecret.fromSecretsManager(slackSecret, 'bot_token'),

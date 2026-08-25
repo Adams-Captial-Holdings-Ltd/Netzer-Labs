@@ -27,15 +27,15 @@
  * `toEqual`. `identifier` returns the day a consumer needs it and the envelope
  * test is widened deliberately, not as a side effect.
  *
- * WHAT PAPERCLIP CANNOT SUPPLY. `createdByChat`, `assignmentReason` and `dueAt`
- * have NO Paperclip source at all (`issueToMission` hardcodes the first and
- * omits the other two). They come back off the provenance row written at create
+ * WHAT PAPERCLIP CANNOT SUPPLY. `createdByChat` and `assignmentReason` have no
+ * Paperclip source (`issueToMission` hardcodes the first and omits the other).
+ * They come back off the provenance row written at create
  * time — see `src/lib/state/mission-provenance-repo.ts` for why that is a
  * compliance gate and not a nicety.
  *
  * KNOWN, DOCUMENTED LOSSES on the Paperclip path, none of them papered over:
- *   - `priority` quantizes. `toPriorityScore(toPriorityBand(73)) === 80`; the
- *     SPA renders `P80` where it rendered `P73`. The type is unchanged.
+ *   - Priority no longer quantizes: Phase 9 made the shared Mission domain use
+ *     Paperclip's four exact bands.
  *   - `status` narrows, but ONLY where the narrowing is recoverable. Phase 9
  *     gave `blocked` and `in_review` their own lanes, so those two no longer
  *     collapse; what remains is `backlog` and `todo` both arriving as `open`,
@@ -72,6 +72,7 @@ import {
   reassignMission as repoReassignMission,
   updateMissionStatus as repoUpdateMissionStatus,
   type Mission,
+  type MissionPriority,
   type MissionStatus,
 } from '../state/mission-tasks-repo.js';
 import {
@@ -88,12 +89,10 @@ import { MISSION_RESOLVE_WINDOW, formatAmbiguousRef, resolveMissionRef } from '.
 /**
  * THE ROUTER-LEVEL ROLLOUT FLAG (C-8).
  *
- * It is spelled `CCE_PAPERCLIP_ENABLED` rather than inventing a second name
- * because that variable already means "the Paperclip substrate exists": deploy
- * phase a synthesizes the Database, Filesystem and Paperclip stacks only when
- * it is `1`. An ACL armed without a Paperclip to talk to is a 503 generator, so
- * coupling the router flag to the substrate flag is the correct direction — and
- * an unset variable leaves the legacy stack serving, which is the safe default.
+ * Phase 9 installs the Paperclip substrate independently of this flag. During
+ * the temporary rollout window `CCE_PAPERCLIP_ENABLED` selects only which
+ * mission router serves requests; unset still leaves the legacy router serving.
+ * The flag is removed only in the separately gated retirement change.
  *
  * Read per call, never cached: an operator flipping a task definition gets a new
  * process anyway, and a memo here would only make tests fight each other.
@@ -130,13 +129,11 @@ export function __setMissionEngineForTest(engine: MissionEngine | undefined): vo
  * (`mission-tasks-repo.ts`), because `JSON.stringify` serialises in insertion
  * order and "byte-for-byte" is the phase's defining constraint.
  *
- * `assignmentReason` and `dueAt` are CONDITIONALLY SPREAD, exactly as the repo
- * spreads them: the contract is an ABSENT KEY on absence, never `null` and
- * never `undefined`.
+ * `assignmentReason` is conditionally spread: the contract is an absent key on
+ * absence, never `null` and never `undefined`.
  */
 export function toWireMission(projected: ProjectedMission, provenance?: MissionProvenance): Mission {
   const assignmentReason = provenance?.assignmentReason;
-  const dueAt = provenance?.dueAt;
   return {
     id: projected.id,
     ownerAgent: projected.ownerAgent,
@@ -150,7 +147,6 @@ export function toWireMission(projected: ProjectedMission, provenance?: MissionP
     priority: projected.priority,
     status: projected.status,
     ...(assignmentReason ? { assignmentReason } : {}),
-    ...(dueAt ? { dueAt } : {}),
     createdAt: projected.createdAt,
     updatedAt: projected.updatedAt,
   };
@@ -314,9 +310,8 @@ export interface CreateBoardMissionArgs {
   createdByChat: string;
   title: string;
   body: string;
-  priority?: number;
+  priority?: MissionPriority;
   assignmentReason?: string;
-  dueAt?: string;
 }
 
 /**
@@ -361,10 +356,9 @@ export async function createBoardMission(args: CreateBoardMissionArgs): Promise<
     createdByChat: args.createdByChat,
     title: args.title,
     body: args.body,
-    priority: args.priority ?? 50,
+    priority: args.priority ?? 'medium',
     status: 'open',
     ...(args.assignmentReason ? { assignmentReason: args.assignmentReason } : {}),
-    ...(args.dueAt ? { dueAt: args.dueAt } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -374,7 +368,6 @@ export async function createBoardMission(args: CreateBoardMissionArgs): Promise<
     createdByChat: args.createdByChat,
     createdByAgent: args.createdByAgent,
     ...(args.assignmentReason ? { assignmentReason: args.assignmentReason } : {}),
-    ...(args.dueAt ? { dueAt: args.dueAt } : {}),
   };
   try {
     await putMissionProvenance(provenance);

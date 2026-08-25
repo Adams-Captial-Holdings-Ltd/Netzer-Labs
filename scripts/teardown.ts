@@ -734,7 +734,27 @@ async function main(): Promise<void> {
     await runner.mutate(`cdk destroy --all --force (${cdkStacks.length} stacks)`, async () => {
       const code = await run('npx', ['cdk', 'destroy', '--all', '--force'], {
         cwd: REPO_ROOT,
-        env: { ...process.env, ...Object.fromEntries(Object.entries(env).filter(([, v]) => v !== undefined)) } as NodeJS.ProcessEnv,
+        env: {
+          ...process.env,
+          ...Object.fromEntries(Object.entries(env).filter(([, v]) => v !== undefined)),
+          // infra/bin/app.ts refuses to SYNTHESIZE an empty Paperclip substrate
+          // at a tier that provisions none, because deploying those stacks empty
+          // would orphan a retained Aurora cluster out of CloudFormation while
+          // leaving the stacks behind. This command is the one context where the
+          // answer is unambiguous: it destroys the stacks outright, and this
+          // script's own plan owns what the RETAIN'd resources do next. Without
+          // it a Tier 0 teardown could not even synth.
+          CCE_PAPERCLIP_TEARDOWN: '1',
+          // And the environment-scoped provisioning override CLEARED, in the
+          // same breath and for the same reason. `...process.env` above would
+          // otherwise carry a staging operator's override straight into this
+          // synth, which would render the substrate POPULATED — and
+          // `cdk destroy` would then fail on the Aurora cluster's deletion
+          // protection instead of removing the stacks and leaving the retained
+          // resources to this script's own plan. Declaring the teardown while
+          // still asking for the cluster is not a coherent request.
+          CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: '',
+        } as NodeJS.ProcessEnv,
       });
       if (code !== 0) throw new Error(`cdk destroy exited ${code}`);
     });
@@ -785,8 +805,8 @@ async function main(): Promise<void> {
   // tolerates not-found.
   //
   // There are TWO cloud builds, one per ECR repo: the orchestrator's, and
-  // the Paperclip image build added in Phase 1.5 (gated on
-  // CCE_PAPERCLIP_ENABLED, so absent on unarmed installs). Sweeping only
+  // the Paperclip image build added in Phase 1.5 (built at the tiers that
+  // provision Paperclip, so absent on a Tier 0 install). Sweeping only
   // the orchestrator repo would leave `claudeclaw[-suffix]-paperclip-cloud-build`,
   // its role, its role policy and its log group behind forever - the same
   // defect class as the ungated ECR repo (M23) and the catalog-reports-but-
@@ -814,10 +834,10 @@ async function main(): Promise<void> {
     });
   }
   // Paperclip work engine (ADR 0010): a SECOND repo, created by deploy
-  // phase a only when CCE_PAPERCLIP_ENABLED=1, so it is absent on most
-  // installs. It has to be deleted explicitly here: the out-of-band
-  // catalog is a REPORT (printed above), not an executor, so a catalog
-  // row alone would leave an armed install paying for an orphan repo.
+  // phase a at the tiers that provision Paperclip (T1+ since Phase 9), so it
+  // is present on most installs and absent on Tier 0. It has to be deleted
+  // explicitly here: the out-of-band catalog is a REPORT (printed above), not
+  // an executor, so a catalog row alone would leave an orphan repo behind.
   {
     const paperclipRepo = buildResourceNames(suffix).paperclipEcrRepo;
     await runner.mutate(`ecr:DeleteRepository ${paperclipRepo} --force (if present)`, async () => {

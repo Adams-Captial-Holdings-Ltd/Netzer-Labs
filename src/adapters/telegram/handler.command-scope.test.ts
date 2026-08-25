@@ -131,7 +131,7 @@ const MISSION = {
   createdByChat: '42',
   title: 'Fix the reconciler',
   body: 'Fix the reconciler',
-  priority: 50,
+  priority: 'medium',
   status: 'open' as const,
   createdAt: '2026-08-21T10:00:00.000Z',
   updatedAt: '2026-08-21T10:00:00.000Z',

@@ -2,149 +2,172 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-08-21
-as_of_commit: fa59609
+observed_at: 2026-08-24
+as_of_commit: 7220d3eef301f9b3f527b9916922d33b0a2db360
 ---
 
 # Paperclip integration handoff
 
-- **Branch: `feature/paperclip-phase-1-5`.** Phases 1 and 1.5 are **merged**
-  into `development` as
-  [PR #88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88),
-  squashed, 9/9 CI checks green. **Phases 2, 4, 5, 6 and 7** are committed on the
-  branch and open as
-  [PR #89](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/89).
-- **Deployment: nothing.** No AWS resource has been created by this work. The
-  session made read-only AWS calls only. `development` deploys nothing.
-- **Phases complete (7 of 14):** §33 first milestone, Phase 0, Phase 1
-  (substrate code), Phase 1 (contract probes and wire types), Phase 3 (image
-  pipeline, this plan's 1.5), **2** (client), **4** (service stack and tenant
-  bootstrap), **5** (reconciler), **6** (inbound dispatch) and **7** (ACL
-  cutover).
-- **Not built:** Phase 8 (cross-surface parity) is in its gauntlet and
-  uncommitted. **Phases 4.5, 8.5, 9 and the Four Pillars (10-12) are not
-  started.** Phase 4.5 was deliberately deferred as a side branch; the
-  reconciler was the critical path for 6, 7 and 8.
-- **Paperclip is still an opt-in add-on.** `npx cdk ls` prints **15** stacks
-  with `CCE_PAPERCLIP_ENABLED` unset and **18** with it set. Making those two
-  lists identical is **Phase 9**, which is not started - so a client deploying
-  Netzar today does not get Paperclip.
+- **Branch:** `feature/paperclip-phase-1-5`; next merge target:
+  `development`. The branch reaches no AWS environment.
+- **Source state:** Phase 8 is committed locally at
+  `7220d3eef301f9b3f527b9916922d33b0a2db360`; the branch is one commit ahead of
+  its upstream and is not pushed. Phase 9 and the SSM-only Phase 4.5 operator
+  console are complete in the dirty tree; explicitly excluded user/tooling
+  files remain untouched. Existing PR
+  [#89](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/89)
+  targets `development`; its remote state was not re-queried this session.
+- **Deployment:** none. No deployment command has run in this session and this
+  feature branch deploys nowhere.
 
-## The single next action
+## Current objective and required order
 
-**Build Phase 9, install by default** - it is the one thing the original brief
-led with and the only phase that makes Paperclip part of a standard Netzar
-install. Its acceptance is precise: `npx cdk ls` prints the same stack set with
-and without `CCE_PAPERCLIP_ENABLED`, asserted by a test; the money gate prices
-Paperclip unconditionally at the tiers that get it; teardown routes the new
-stacks through `cdk-destroy`.
+Audit the real shipped and uncommitted Paperclip code against the
+[implementation plan](implementation-plan.md), its
+[audit corrections](plan-audit.md), and
+[ADR 0010](../../adr/0010-paperclip-work-engine.md); fix every confirmed miss
+and complete the remaining work in this order:
 
-Two blockers stand between here and a staging deploy, and **neither is code**:
-the orphaned `/claudeclaw-staging/paperclip` log group must be deleted first
-(**M19**, **P21**) or the stack rolls back at exactly the point it did on
-2026-08-19; and CI populates **no** secrets (**A26**), so the
-`Populate Paperclip secret` step added in Phase 4 only runs when the repository
-variable `CCE_PAPERCLIP_ENABLED` is set to `1`.
+1. Phase 8 — complete and committed locally as `7220d3e`.
+2. Phase 9 — install Paperclip by default.
+3. Phase 4.5.
+4. Phase 8.5.
+5. The Four Pillars and Phases 10 through 12, in plan order.
+6. Promote through `development` → `qa` → `staging`, verify staging, and
+   prepare the staging-to-production promotion PR.
 
-**Validate in BOTH configurations from now on.** Six phases were validated with
-the flag off before Phase 7 caught it (**M44**); `npm test` and
-`CCE_PAPERCLIP_ENABLED=1 npm test` are both part of this feature's pre-push
-list.
+Do not dispatch a production deployment without a separate, explicit human
+go-ahead.
 
-## What changed on 2026-08-21
+## Current in-progress work
 
-### Committed on the branch, in PR #89
+**Deployment preparation.** Phase 9 and Phase 4.5 have passed their focused
+execution critics. The operator console is served in authenticated mode but
+has no ALB listener, public hostname, ALB security-group ingress or Netzar SPA
+link; operators use a named AWS identity and an ECS Exec/SSM tunnel to port
+3100. This deliberately contains the pinned artifact's open signup route.
 
-| Commit | What |
-|---|---|
-| `c230a0a` | Phase 2 — the client, its errors, config, agent map and the mission-engine seam. Shipped at round 5; **15 of 15 blind judges** picked it over Linear's own `error.ts` with the order flipped each round |
+**Phase 9 — default installation and deploy safety.** Phase 8 passed the
+execution critic and was committed as `7220d3e`. It now provides identical
+mission commands across chat surfaces, honest assignment-push delivery, the
+exact two native Paperclip verbs, genuine run-id propagation, and one audit
+record per successful mutation. The pinned artifact disproved the stale claim
+that `/api/issues/{id}/children` accepts an array: it accepts one object and
+rejects an array, so the subtask tool uses the already proven idempotent company
+issue-create route with `parentId`.
 
-### Merged
+The independent Phase 9 critic accepted the tier defaults, Tier 0 exemption,
+staging override, service discovery/reachability, one-company invariant, six
+status lanes, P30 retry classification, cost model, rollback, kill switch, and
+teardown. Work has resumed from the interrupted state:
 
-| Commit | What |
-|---|---|
-| `b0f6979` | Phase 1 — one wire-types file, **21 live contract probes**, the real 475-path OpenAPI snapshot, and a committed characterization of the answers a future artifact bump could silently flip |
-| `7e17a7c` | Phase 1.5 — the patched image builds on **one** path across both deploy drivers, content-addressed so unrelated commits do not rebuild it, plus the staging IAM grants |
-| `78715f6` | [The bar and phase decomposition](bar-and-phases.md), §35 of the plan, the session handoff |
-| `45a96a8` | The deploy-pipeline diagram split (a node-budget fix) |
+1. The same-run bootstrap/migrate/exclusive-redeploy step and early exclusive
+   IAM application are present. The complete workflow contract now passes
+   **67/67** after the interrupted occurrence-count cleanup; the workflow also
+   parses as valid YAML and its stale two-run/prior-IAM guidance is corrected.
+2. Four-band priority and public `dueAt` removal are fully propagated. Legacy
+   GSI rows remain correctly ordered through representative 095/080/050/020
+   ranks; the CLI scans owner boards serially through real routes; both shipped
+   dashboards render six lanes and plain bands; mission-tool schemas use the
+   canonical status array. The expanded domain suite passes **24 files / 479
+   tests**, including the mounted real-fetch CLI probe.
+3. The full Tier 0 staging-override synth assertion now proves internal URL,
+   Cloud Map registration, and orchestrator-to-Paperclip SG ingress together;
+   `infra/bin/app.stack-set.test.ts` passes **6/6**.
+4. The local cost gate now carries the parsed Tier 0 provisioning override into
+   its summary, fallback, and estimator child environment. Its focused suite
+   passes **18/18** and the real estimator includes Aurora, EFS, and Paperclip
+   Fargate for that configuration.
 
-### The three findings most worth carrying forward
+## Blockers and unresolved evidence
 
-1. **Paperclip silently ignores unknown query parameters.** An unpatched build
-   answers `updatedSince` with a **200 and the full unfiltered list**. That is a
-   silent data-correctness trap and the failure a reconciler is least able to
-   detect. Guarded by the A1-8 boot probe, which must run before the reconciler
-   starts.
-2. **The pinned image already ships its built UI.** `/app/ui/dist` exists; the
-   server looks at `../ui-dist`. One symlink and `SERVE_UI=true` serves the real
-   SPA — verified, `GET /` 200 with a 6,484,747-byte bundle. §16.6's "rebuild it
-   in Preact" ruling is amended: its four reasons argue for controlling *access*
-   to that UI, not rewriting it. See [Part F](bar-and-phases.md).
-3. **A readiness gate can be catastrophic in the other direction.** Phase 4's
-   critic found the service's existence recomputed each deploy from a
-   gitignored, machine-local file whose failure default was **DELETE** — so a CI
-   deploy would have torn down a running Paperclip service and exited 0. Same
-   shape as the cloudflared post-mortem.
+- Phase 9 implementation and focused execution are coherent. The independent
+  execution critic returned **PASS** after rerunning code, synth, workflow,
+  CLI-router, typecheck/build, and documentation gates. No confirmed Phase 9
+  implementation finding remains.
+- The remaining dirty tree still mixes Paperclip work with unrelated files.
+  Commits must remain path-scoped and the staged index must be checked before
+  every commit.
+- No deployment or staging evidence exists for the current work.
 
-## Blockers
+## Last commands actually run
 
-1. **Phase 4 is rejected and uncommitted.** Its fix round is the next thing to
-   finish. Until it lands, the tree cannot change branches cleanly.
-2. **The `qa → staging` merge IS the deploy.** `CCE_PAPERCLIP_ENABLED=1` is
-   already set at repo level and staging deploys automatically on push to
-   `staging`. It creates a retained, deletion-protected Aurora cluster billing
-   from creation. This is a deliberate author decision (Paperclip is a
-   chargeable extra, every tier, no Tier 0 carve-out) — but it should happen
-   once, after Phase 4.
-3. **CI populates no secrets** (**A26**). `put-secret-value` appears zero times
-   in `.github/workflows/deploy.yml`, so `/claudeclaw-staging/paperclip` stays
-   `REPLACE_ME` on the CI path. A container treating it as essential fails its
-   rollout the way the cloudflared connector did.
-4. **Open self-registration**, probed live: `POST /api/auth/sign-up/email`
-   returns **200 with no credential** even in
-   `PAPERCLIP_DEPLOYMENT_MODE=authenticated`. This matters the moment the UI is
-   reachable.
-5. **Before Phase 7**, the GDPR hole (**C-11**) must be closed:
-   `privacy-tools.ts` filters a subject's missions by `createdByChat === chatId`
-   while the projection hardcodes `'paperclip'`, so every Paperclip-origin
-   mission silently vanishes from a user's data export.
+- Phase 8 focused suite, flag off and on: **15 files, 330 tests passed** in
+  each state.
+- Pinned Paperclip integration: client contracts **2/2 passed**; permanent
+  Phase 8 route probes **2/2 passed** with 21 unrelated cases filtered.
+- `npm run typecheck`, `npm run build`, web typecheck, and web build: **passed**.
+- Full flag-on `npm test`: the exact recorded Windows baseline after deleting
+  the 12-test throwaway probe — 223 files passed, 6 failed, 1 skipped; 2,854
+  tests passed, 7 failed, 6 skipped. The same six environmental files failed.
+- Full flag-off `npm test`: the same six environmental failures plus two
+  audit-writer timing/call-count failures under suite contention. The audit
+  writer then passed **10/10** alone and **24/24** beside the new Paperclip tool
+  tests, so it is recorded as a transient full-suite failure, not hidden.
+- `git diff --cached --check` passed and an independent critic approved the
+  exact 41-file Phase 8 index before commit.
+- Phase 9 workflow-focused test after resumption: **67/67 passed**.
+- Phase 9 Tier 0 combined synth proof: **6/6 passed**.
+- Phase 9 cost-gate regression: **18/18 passed**.
+- Phase 9 expanded domain/CLI/UI suite: **24 files, 479 tests passed**.
+- Phase 9 non-domain workflow/infra/cost/teardown suite: **6 files, 169 tests
+  passed**.
+- Root typecheck/build and web typecheck/build: **passed** on the Phase 9 tree.
+- Feature knowledge, documentation links (**1,071**), and executable README
+  snippets (**4/4**) passed before this phase-close wording update.
+- Independent Phase 9 execution critic: **PASS**; no actionable implementation
+  finding remains.
+- `.github/workflows/deploy.yml` parsed successfully with the repository's
+  installed YAML parser after stale two-run/prior-IAM guidance was removed.
+- Full `npm test`: **225 files passed, 6 failed, 1 skipped; 2,850 tests passed,
+  7 failed, 6 skipped**. All six failing files are the recorded Windows
+  parser/path/`sh` baseline; no Paperclip test failed.
+- Phase 4.5 stack and network regression: **54/54 passed**. Root typecheck,
+  feature-knowledge, documentation links (**1,071**) and diff check passed.
+- `npm run local:test:integration` could not start its local services because
+  Docker is not installed; 64 tests skipped and nine setup hooks timed out.
 
-## Two blockers that turned out to be stale
+## Smallest next action
 
-Both were carried across three handoffs and neither exists. Verified read-only
-against the account on 2026-08-21: **zero** log groups matching `paperclip`,
-**zero** EFS filesystems. Nothing needs deleting before a staging deploy. This
-is **M26** repeating — a blocker phrased as work-to-do was a question that could
-be answered by looking.
+Create and inspect the path-scoped Phase 9/4.5 commit, then push the existing
+feature PR through `development` and the documented QA/staging promotion path.
 
-## Remaining phases
+## Guardrails for the resuming Claude session
 
-In order, from [the decomposition](bar-and-phases.md): **2** (the client, judged
-against Linear's SDK — the largest unbuilt piece), **4/4.5** (in flight), **5**
-(reconciler), **6** (dispatch), **7** (ACL cutover), **8** (cross-surface
-parity), **8.5** (org and goals), **8.6** (delegation), **9** (install by
-default), and **10–12** (the three Paperclip pillars Netzar surfaces as the
-Agentic OS).
+- Follow `implementation-plan.md` as source of truth and the correction/evidence
+  order recorded in the session handoff. Do not re-plan settled architecture or
+  create `.planning/` state.
+- Do not redo Phase 8 or amend `7220d3e` without a new executable regression.
+- Only the exact stale Phase 9 guidance in `.env.example` and `CLAUDE.md` is in
+  scope; preserve every unrelated edit in those files. Do not touch the two
+  root-level handoffs, `.agents/`, or `skills-lock.json`.
+- Do not commit, push, merge, or deploy until the full pre-push validation is
+  run and the staged Phase 9 boundary is inspected.
+- Continue only in the recorded order: Phase 9 → 4.5 → 8.5 → 10–12 → audit →
+  `development`/QA/staging promotion. Never deploy production without a new,
+  explicit human instruction.
 
 ## Session log index
 
 Newest first. Every session working in this folder adds one file to
-`handoffs/`, copied from the
-[session handoff template](../HANDOFF-TEMPLATE.md), and links it here.
+`handoffs/` from the [session handoff template](../HANDOFF-TEMPLATE.md).
 
 | Session | Date | Summary |
 |---|---|---|
-| [Paperclip end to end](handoffs/2026-08-21-paperclip-end-to-end.md) | 2026-08-21 | Established the three-part bar from primary sources; built and landed Phases 1 and 1.5 through a builder/critic gauntlet; proved the shipped UI serves; found the staging IAM gap and the DELETE-default readiness gate |
-| [Image pipeline and Phase 2](handoffs/2026-08-20-image-pipeline-and-phase-2.md) | 2026-08-20 | Interrupted session; its ledger is carried forward |
-| [Phase 2 readiness](handoffs/2026-08-20-phase-2-readiness.md) | 2026-08-20 | Verified the blocker list instead of trusting it; proved the ARM64 precondition was already met |
-| [Phase 1 ponytail audit](handoffs/2026-08-19-phase-1-ponytail-audit.md) | 2026-08-19 | Found the `CCE_PAPERCLIP_ENABLED` gate was mirrored in one place of five and failed silently |
-| [Org transfer, OIDC and staging deploy](handoffs/2026-08-19-org-transfer-oidc-and-staging-deploy.md) | 2026-08-19 | Diagnosed the red staging deploy to the org's immutable OIDC subject claims |
-| [Documentation consolidation](handoffs/2026-08-19-docs-consolidation.md) | 2026-08-19 | Vendored the implementation plan and its audit into the repo |
-| [updated-since patch + Phase 0/1](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | 2026-08-18 | Resolved the I3 blocker via the approved artifact patch; wrote ADR 0010 |
-| [Codex deep dive](handoffs/2026-08-18-codex-review.md) | 2026-08-18 | The origin session; proved the pinned release has no `updatedSince` |
+| [Completion audit](handoffs/2026-08-24-paperclip-completion-audit.md) | 2026-08-24 | Closed/committed Phase 8 and records the exact interrupted Phase 9 state for resumption |
+| [Phase 8 and 9](handoffs/2026-08-22-paperclip-phase-8-and-9.md) | 2026-08-22 | Recorded Phase 8/9 verification state and the mixed uncommitted worktree |
+| [Phase 5 reconciler](handoffs/2026-08-21-phase-5-reconciler.md) | 2026-08-21 | Built the observing reconciler and carried its round-two state |
+| [Phases 2 through 9](handoffs/2026-08-21-paperclip-phases-2-to-9.md) | 2026-08-21 | Continued the phase gauntlets and recorded the open Phase 8 state |
+| [Paperclip end to end](handoffs/2026-08-21-paperclip-end-to-end.md) | 2026-08-21 | Established the end-to-end bar and landed the early phases |
+| [Phase 2 readiness](handoffs/2026-08-20-phase-2-readiness.md) | 2026-08-20 | Verified prerequisites and the ARM64 artifact condition |
+| [Image pipeline and Phase 2](handoffs/2026-08-20-image-pipeline-and-phase-2.md) | 2026-08-20 | Recorded the image-pipeline and client work |
+| [Phase 1 ponytail audit](handoffs/2026-08-19-phase-1-ponytail-audit.md) | 2026-08-19 | Found incomplete feature-flag propagation |
+| [OIDC and staging](handoffs/2026-08-19-org-transfer-oidc-and-staging-deploy.md) | 2026-08-19 | Diagnosed the org-transfer OIDC deployment failure |
+| [Documentation consolidation](handoffs/2026-08-19-docs-consolidation.md) | 2026-08-19 | Brought the plan and audit into the repository |
+| [updatedSince patch and Phase 0](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | 2026-08-18 | Added the approved artifact patch and ADR 0010 |
+| [Codex review](handoffs/2026-08-18-codex-review.md) | 2026-08-18 | Established the original release-contract finding |
 
 Authorities: [README](README.md),
-[the bar and phase decomposition](bar-and-phases.md),
-[ADR 0010](../../adr/0010-paperclip-work-engine.md),
-[ADR 0009](../../adr/0009-mission-container-model.md),
-[implementation plan](implementation-plan.md), [plan audit](plan-audit.md).
+[implementation plan](implementation-plan.md), [plan audit](plan-audit.md),
+[ADR 0010](../../adr/0010-paperclip-work-engine.md), and
+[today's session handoff](handoffs/2026-08-24-paperclip-completion-audit.md).

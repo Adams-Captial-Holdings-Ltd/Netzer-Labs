@@ -277,7 +277,7 @@ export function registerMissionRoutes(router: Hono<DashboardEnv>, deps: MissionR
   // ── R2 ────────────────────────────────────────────────────────────────────
   // 201, not 200. `assignmentReason` is ALWAYS present on this route's row —
   // one of 'explicit assignment', the Haiku reason, or the degraded default —
-  // and `dueAt` is never set by it. Auto-assign failure is NOT an error path:
+  // Auto-assign failure is NOT an error path:
   // it is caught, logged and degrades to `main` with a 201.
   router.post('/missions', async (c) => {
     const denied = await gates(c, 'agents:write');

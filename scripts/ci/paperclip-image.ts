@@ -108,8 +108,8 @@ async function describeDigest(repo: string, tag: string, region: string): Promis
       `${r.stderr.trim()}\n` +
       `The deploy role needs ecr:DescribeImages on ${repo} (infra/lib/iam-stack.ts, cicdRole\n` +
       'sid EcrPushAppImages). That grant is applied by the CDK deploy LATER IN THIS JOB, so it\n' +
-      'must land in an unarmed deploy BEFORE CCE_PAPERCLIP_ENABLED is set - and cicdRole is\n' +
-      'created only by the PROD IAM stack, so a staging arm needs a production IAM deploy first.',
+      'must land in an EARLIER deploy than the first one at a tier that provisions Paperclip\n' +
+      '(T1+). cicdRole is created only by the PROD IAM stack, so staging needs a prod deploy first.',
   );
 }
 

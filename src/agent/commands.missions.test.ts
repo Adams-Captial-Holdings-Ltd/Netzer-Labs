@@ -69,7 +69,7 @@ const ROW: Mission = {
   createdByChat: 'owner:emmanuel',
   title: 'Ship the reconciler',
   body: 'With a watermark overlap.',
-  priority: 80,
+  priority: 'high',
   status: 'open',
   createdAt: '2026-08-20T10:00:00.000Z',
   updatedAt: '2026-08-20T10:00:00.000Z',
@@ -89,7 +89,7 @@ describe('/missions', () => {
     const out = await runCommand('research', 'owner:emmanuel', '/missions');
     expect(listByStatusMock).toHaveBeenCalledWith('research', 'open', 15);
     expect(out?.reply).toBe(
-      '1 Open mission for research:\n[abc12345] P80 Open — Ship the reconciler',
+      '1 Open mission for research:\n[abc12345] High Open — Ship the reconciler',
     );
   });
 
@@ -122,7 +122,7 @@ describe('/mission', () => {
   it('renders one card for a resolved 8-char ref', async () => {
     const out = await runCommand('research', 'owner:emmanuel', '/mission abc12345');
     expect(out?.reply).toContain('[abc12345] Ship the reconciler');
-    expect(out?.reply).toContain('Open · P80 · owner research');
+    expect(out?.reply).toContain('Open · High priority · owner research');
   });
 
   it('REFUSES an ambiguous ref on a read, the same answer the mutation gives', async () => {
@@ -198,7 +198,7 @@ describe('/mission', () => {
       createdByChat: 'owner:emmanuel',
       title: 'Ship the reconciler',
       body: 'Ship the reconciler',
-      priority: 50,
+      priority: 'medium',
       assignmentReason: 'opened from a chat command',
     });
     expect(out?.reply).toContain('[abc12345] Ship the reconciler');
