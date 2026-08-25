@@ -12,7 +12,7 @@ import {
   GatewayVpcEndpoint,
   GatewayVpcEndpointAwsService,
 } from 'aws-cdk-lib/aws-ec2';
-import { TIERS, TAGS, RESOURCE_NAMES, bucketName } from './constants.js';
+import { TIERS, TAGS, RESOURCE_NAMES, PAPERCLIP_PORT, bucketName } from './constants.js';
 import type { BaseStackProps, NetworkOutputs } from './interfaces.js';
 import { CfnFlowLog } from 'aws-cdk-lib/aws-ec2';
 
@@ -115,15 +115,19 @@ export class NetworkStack extends Stack implements NetworkOutputs {
       description: 'Paperclip server task (single-node, stateful)',
       allowAllOutbound: true, // needs NAT egress for npm-installed agent CLIs
     });
+    // The only application path in. The operator console is reached through
+    // the ECS Exec/SSM tunnel, which needs no ALB security-group rule. The
+    // orchestrator resolves
+    // `paperclip.<app>.internal` (Cloud Map, see paperclip-stack.ts) and
+    // connects on this rule.
+    //
+    // NO matching egress rule here. FargateSg is `allowAllOutbound: true`, and
+    // CDK DROPS an explicit egress rule on such a group (it only warns), so
+    // adding one would be a line that reads like a control and is not one.
     this.paperclipSecurityGroup.addIngressRule(
-      this.albSecurityGroup,
-      Port.tcp(3100),
-      'ALB to Paperclip',
-    );
-    this.albSecurityGroup.addEgressRule(
-      this.paperclipSecurityGroup,
-      Port.tcp(3100),
-      'ALB to Paperclip',
+      this.fargateSecurityGroup,
+      Port.tcp(PAPERCLIP_PORT),
+      'Orchestrator to Paperclip',
     );
 
     this.endpointsSecurityGroup = new SecurityGroup(this, 'EndpointsSg', {

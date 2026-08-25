@@ -45,7 +45,8 @@ function ingressRules(template: Template): IngressProps[] {
   ).map((r) => r.Properties as IngressProps);
 }
 
-function auroraMaxAcuAt(tier: 0 | 1 | 2 | 3): number {
+/** The cluster's MAX ACU at this tier, or undefined where none is created. */
+function auroraMaxAcuAt(tier: 0 | 1 | 2 | 3): number | undefined {
   const app = new App();
   const network = new NetworkStack(app, 'CCE-Network', { tier, env: ENV });
   const db = new DatabaseStack(app, 'CCE-Database', {
@@ -56,17 +57,23 @@ function auroraMaxAcuAt(tier: 0 | 1 | 2 | 3): number {
   });
   const cluster = Object.values(
     Template.fromStack(db).findResources('AWS::RDS::DBCluster'),
-  )[0] as { Properties: { ServerlessV2ScalingConfiguration: { MaxCapacity: number } } };
-  return cluster.Properties.ServerlessV2ScalingConfiguration.MaxCapacity;
+  )[0] as
+    | { Properties: { ServerlessV2ScalingConfiguration: { MaxCapacity: number } } }
+    | undefined;
+  return cluster?.Properties.ServerlessV2ScalingConfiguration.MaxCapacity;
 }
 
 const { network, database } = synth();
 const dbJson = JSON.stringify(database.toJSON());
 
 describe('DatabaseStack (Paperclip Aurora)', () => {
-  it('tiers the Aurora ceiling but never the floor', () => {
-    // A Hobby install must not be able to burst to a production-sized bill.
-    expect(auroraMaxAcuAt(0)).toBe(1);
+  it('tiers the Aurora ceiling but never the floor, and skips Tier 0 entirely', () => {
+    // Tier 0 Hobby creates NO cluster: the ceiling is tiered but the FLOOR is
+    // not (0.5 is the lowest non-zero ACU and bills continuously), so the only
+    // way to keep ~$50/mo of always-on Aurora off a Hobby install is not to
+    // provision one. The stack still exists and resolves cleanly — this is the
+    // SecurityStack/BackupStack shape, not an omitted stack.
+    expect(auroraMaxAcuAt(0)).toBeUndefined();
     expect(auroraMaxAcuAt(1)).toBe(2);
     // Tier 2 keeps the value that used to be hardcoded for every tier.
     expect(auroraMaxAcuAt(2)).toBe(4);
@@ -124,14 +131,16 @@ describe('NetworkStack regression (orchestrator untouched by Paperclip)', () => 
     expect(fargateRules[0].Description).toBe('ALB to Fargate');
   });
 
-  it('gives Paperclip its own SG with exactly one 3100 ingress from the ALB', () => {
+  it('gives Paperclip its own SG with 3100 ingress from only the orchestrator', () => {
     const paperclipRules = ingressRules(network).filter((r) =>
       /PaperclipSg/.test(JSON.stringify(r.GroupId)),
     );
     expect(paperclipRules).toHaveLength(1);
-    expect(paperclipRules[0].FromPort).toBe(3100);
-    expect(paperclipRules[0].ToPort).toBe(3100);
-    expect(paperclipRules[0].Description).toBe('ALB to Paperclip');
+    for (const rule of paperclipRules) {
+      expect(rule.FromPort).toBe(3100);
+      expect(rule.ToPort).toBe(3100);
+    }
+    expect(paperclipRules.map((r) => r.Description)).toEqual(['Orchestrator to Paperclip']);
   });
   it('keeps every security group description ASCII', () => {
     // EC2 rejects GroupDescription outside ASCII ("Character sets beyond

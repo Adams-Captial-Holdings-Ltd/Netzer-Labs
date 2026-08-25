@@ -10,8 +10,6 @@ import {
   neutralizeForPrompt,
   toIssueStatus,
   toMissionStatus,
-  toPriorityBand,
-  toPriorityScore,
   type AgentIdMap,
   type PaperclipIssueView,
 } from './mission-projection.js';
@@ -24,7 +22,7 @@ const agentMap: AgentIdMap = {
 
 const mission = (overrides: Partial<Mission> = {}): Mission => ({
   id: 'mission-1', ownerAgent: 'haiku', createdByAgent: 'main', createdByChat: 'chat-1',
-  title: 'Ship projection', body: 'mission body', priority: 73, status: 'open',
+  title: 'Ship projection', body: 'mission body', priority: 'high', status: 'open',
   createdAt: '2026-08-18T10:00:00.000Z', updatedAt: '2026-08-18T11:00:00.000Z',
   ...overrides,
 });
@@ -40,6 +38,11 @@ describe('mission status projection', () => {
   it.each([
     ['open', true, 'todo'], ['open', false, 'backlog'], ['done', true, 'done'],
     ['done', false, 'done'], ['cancelled', true, 'cancelled'], ['cancelled', false, 'cancelled'],
+    // Phase 9: reachable from Netzar at all for the first time. Neither takes
+    // an assignee check - unlike `in_progress`, neither has an unowned twin in
+    // Paperclip's vocabulary for an unassigned row to fall back to.
+    ['blocked', true, 'blocked'], ['blocked', false, 'blocked'],
+    ['in_review', true, 'in_review'], ['in_review', false, 'in_review'],
   ] as const)('maps %s with assignee=%s to %s', (status, assigned, expected) => {
     expect(toIssueStatus(status, assigned)).toBe(expected);
   });
@@ -49,17 +52,34 @@ describe('mission status projection', () => {
   });
 
   it('maps every Paperclip status explicitly', () => {
+    // SIX of the seven now map to a lane of their own. The regression this
+    // guards is the one Phase 9 closed: `blocked` answered `open` and
+    // `in_review` answered `in_progress`, so a stalled mission was
+    // indistinguishable from an un-started one on every surface at once, and
+    // the loss was invisible because both answers are valid statuses.
     expect(toMissionStatus('backlog')).toBe('open');
     expect(toMissionStatus('todo')).toBe('open');
     expect(toMissionStatus('in_progress')).toBe('in_progress');
-    expect(toMissionStatus('in_review')).toBe('in_progress');
-    expect(toMissionStatus('blocked')).toBe('open');
+    expect(toMissionStatus('in_review')).toBe('in_review');
+    expect(toMissionStatus('blocked')).toBe('blocked');
     expect(toMissionStatus('done')).toBe('done');
     expect(toMissionStatus('cancelled')).toBe('cancelled');
   });
 
-  it.each(['open', 'in_progress', 'done', 'cancelled'] as const)('round-trips %s through assigned issue status', (status) => {
+  it.each(['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const)('round-trips %s through assigned issue status', (status) => {
     expect(toMissionStatus(toIssueStatus(status, true))).toBe(status);
+  });
+
+  it('the SEVEN engine statuses collapse only where Mission carries the fact elsewhere', () => {
+    // The whole projection, stated as a partition. Every Paperclip status maps
+    // to a Mission status; only `backlog`/`todo` share one, and that pair is
+    // recoverable because the split IS the assignee, which `toIssueStatus`
+    // rebuilds from `hasAssignee`. Nothing else is lossy any more.
+    const ENGINE = ['backlog', 'todo', 'blocked', 'in_progress', 'in_review', 'done', 'cancelled'] as const;
+    const lossless = ENGINE.filter((e) => toIssueStatus(toMissionStatus(e), true) === e);
+    expect(lossless).toEqual(['todo', 'blocked', 'in_progress', 'in_review', 'done', 'cancelled']);
+    // `backlog` is the one survivor, and it survives as its unassigned self.
+    expect(toIssueStatus(toMissionStatus('backlog'), false)).toBe('backlog');
   });
 
   it('throws for archived instead of silently treating it as open', () => {
@@ -72,28 +92,27 @@ describe('mission status projection', () => {
 });
 
 describe('priority projection', () => {
-  it.each([[89, 'high'], [90, 'critical'], [69, 'medium'], [70, 'high'], [39, 'low'], [40, 'medium'], [0, 'low'], [100, 'critical'], [-5, 'low'], [1000, 'critical']] as const)(
-    'maps score %i to %s', (score, expected) => expect(toPriorityBand(score)).toBe(expected),
-  );
-
-  it.each([['critical', 95], ['high', 80], ['medium', 50], ['low', 20]] as const)(
-    'maps %s to representative score %i', (band, expected) => expect(toPriorityScore(band)).toBe(expected),
-  );
-
-  it.each(['critical', 'high', 'medium', 'low'] as const)('keeps the %s band stable across the lossy round-trip', (band) => {
-    expect(toPriorityBand(toPriorityScore(band))).toBe(band);
-  });
-
-  it('documents the accepted lossy score conversion', () => {
-    expect(toPriorityScore(toPriorityBand(73))).toBe(80);
+  it.each(['critical', 'high', 'medium', 'low'] as const)('round-trips %s exactly', (priority) => {
+    const body = missionToIssueCreate(mission({ priority }), agentMap, () => 'priority');
+    expect(body.priority).toBe(priority);
+    expect(issueToMission(issue({ priority }), agentMap).priority).toBe(priority);
   });
 });
 
 describe('field projection', () => {
-  it('maps Mission body to create description and creates a deterministic idempotency key', () => {
+  it('A1-13: the create body omits status so the server default applies, and keys deterministically', () => {
     const body = missionToIssueCreate(mission(), agentMap, () => 'request-uuid');
-    expect(body).toEqual({ title: 'Ship projection', description: 'mission body', assigneeAgentId: 'agent-haiku', priority: 'high', status: 'todo', idempotencyKey: 'netzar-mission:request-uuid' });
-    expect(missionToIssueCreate(mission(), agentMap, () => 'request-uuid').idempotencyKey).toBe('netzar-mission:request-uuid');
+    // `toEqual` is the assertion: an extra key fails it, which is what keeps
+    // `status` off the wire. A1-13 omits it so the server picks the default; no
+    // probe has ever SENT `status` on a create, and WHICH status an omitted
+    // create lands in is UNVERIFIED - the A1-17 characterization only entitles
+    // "todo or backlog", via a 200 checkout with `expectedStatuses:
+    // ['todo','backlog']` on an unassigned row. This test pins the body shape,
+    // not the server's default.
+    expect(body).toEqual({ title: 'Ship projection', description: 'mission body', assigneeAgentId: 'agent-haiku', priority: 'high', idempotencyKey: 'netzar-mission:request-uuid' });
+    expect(body).not.toHaveProperty('status');
+    // Deterministic, never random: the server retains keys for 7 days.
+    expect(missionToIssueCreate(mission({ status: 'done' }), agentMap, () => 'request-uuid')).toEqual(body);
   });
 
   it('rejects unknown Mission owners with the slug and known choices', () => {
@@ -107,7 +126,7 @@ describe('field projection', () => {
 
   it('maps issue description back to Mission body and preserves the ISO timestamps', () => {
     const projected = issueToMission(issue(), agentMap);
-    expect(projected).toMatchObject({ id: 'issue-1', identifier: 'NZR-42', ownerAgent: 'haiku', createdByAgent: 'main', body: 'issue body', createdAt: '2026-08-18T10:00:00.000Z', updatedAt: '2026-08-18T11:00:00.000Z', bodyTruncated: false });
+    expect(projected).toMatchObject({ id: 'issue-1', identifier: 'NZR-42', ownerAgent: 'haiku', createdByAgent: 'main', body: 'issue body', priority: 'high', createdAt: '2026-08-18T10:00:00.000Z', updatedAt: '2026-08-18T11:00:00.000Z', bodyTruncated: false });
     expect(Number.isFinite(Date.parse(projected.createdAt))).toBe(true);
     expect(Number.isFinite(Date.parse(projected.updatedAt))).toBe(true);
     expect(projected).not.toHaveProperty('dueAt');

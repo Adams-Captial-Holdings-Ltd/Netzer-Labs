@@ -9,6 +9,7 @@ import { DynamoStack } from '../lib/dynamo-stack.js';
 import { IamStack } from '../lib/iam-stack.js';
 import { GuardrailsStack } from '../lib/guardrails-stack.js';
 import { ComputeStack } from '../lib/compute-stack.js';
+import { PaperclipStack } from '../lib/paperclip-stack.js';
 import { ObservabilityStack } from '../lib/observability-stack.js';
 import { MessagingStack } from '../lib/messaging-stack.js';
 import { SecurityStack } from '../lib/security-stack.js';
@@ -19,8 +20,7 @@ import { CodeBuildStack } from '../lib/codebuild-stack.js';
 import { CostGuardrailsStack } from '../lib/cost-guardrails-stack.js';
 import { PowerSwitchStack } from '../lib/power-switch-stack.js';
 import { DemoResetStack } from '../lib/demo-reset-stack.js';
-import { APP_NAME_SUFFIX } from '../lib/constants.js';
-import type { DeployTier } from '../lib/constants.js';
+import { APP_NAME_SUFFIX, clampTier, paperclipProvisioned } from '../lib/constants.js';
 
 const app = new App();
 
@@ -29,10 +29,13 @@ const env = {
   region: process.env.CDK_DEFAULT_REGION ?? process.env.AWS_REGION ?? 'us-east-1',
 };
 
-// Tier is read from either DEPLOY_TIER (legacy) or the new CCE_TIER env.
-const tier = Number(
-  process.env.CCE_TIER ?? process.env.DEPLOY_TIER ?? '1',
-) as DeployTier;
+// Tier is read from either DEPLOY_TIER (legacy) or the new CCE_TIER env,
+// through the SAME parser scripts/lib/cost-gate.ts prices from. It was a bare
+// `Number(... ?? '1')`, which read a blank tier as `Number('') === 0` — Hobby
+// to CDK and Standard to the deploy driver, i.e. two answers to "does this
+// install provision Aurora". clampTier guards the empty string and the
+// out-of-range value; see infra/lib/constants.ts.
+const tier = clampTier(process.env.CCE_TIER ?? process.env.DEPLOY_TIER);
 const stackPrefix = process.env.CDK_STACK_NAME ?? 'CCE';
 const powerReservedConcurrency = Number(
   process.env.CCE_POWER_RESERVED_CONCURRENCY ?? '5',
@@ -51,29 +54,80 @@ const storage = new StorageStack(app, `${stackPrefix}-Storage`, baseProps);
 const guardrails = new GuardrailsStack(app, `${stackPrefix}-Guardrails`, baseProps);
 
 // Paperclip work engine substrate (ADR 0010): Aurora + EFS/log group.
-// Foundation-phase stacks (scripts/deploy.ts phase a); no Paperclip
-// service yet — that arrives in a later phase.
+// Foundation-phase stacks (scripts/deploy.ts phase a).
 //
-// Off by default. Nothing consumes these stacks yet, but ungated they put
-// first-time Aurora and EFS creation on the path of every routine app deploy:
-// on 2026-08-19 that failed staging and orphaned a retained EFS while the
-// orchestrator itself had shipped fine. Arm it deliberately, when someone is
-// watching, with CCE_PAPERCLIP_ENABLED=1. Phase 2 wires the service and can
-// flip the default.
-if (process.env.CCE_PAPERCLIP_ENABLED === '1') {
-  const database = new DatabaseStack(app, `${stackPrefix}-Database`, {
-    ...baseProps,
-    vpc: network.vpc,
-    paperclipSecurityGroup: network.paperclipSecurityGroup,
-  });
-  database.addDependency(network);
-  const filesystem = new FilesystemStack(app, `${stackPrefix}-Filesystem`, {
-    ...baseProps,
-    vpc: network.vpc,
-    paperclipSecurityGroup: network.paperclipSecurityGroup,
-  });
-  filesystem.addDependency(network);
+// Part of a standard install since Phase 9, and gated the way SecurityStack
+// and BackupStack below already are: ALWAYS CONSTRUCTED, tier-gated INSIDE
+// the stack (paperclipProvisioned — Tier 0 Hobby creates nothing,
+// Tier 1+ provisions). The stack list is therefore identical in every
+// configuration, which is the property the old env gate could not offer:
+// `cdk deploy A B C` errors only when NO name matches, so a phase-a list
+// naming CCE-Database while synth had omitted it exited 0 having created no
+// Aurora — a green deploy with nothing behind it (M22).
+//
+// CCE_PAPERCLIP_ENABLED no longer reaches synth. It survives only as the
+// RUNTIME router flag the orchestrator task reads (mission-acl.ts), forwarded
+// by compute-stack; provisioning the engine and serving /api/missions from it
+// are separate decisions that retire on separate schedules.
+// ── The DOWNGRADE direction, and it is the destructive one ────────────
+//
+// Because the three stacks are now ALWAYS in the assembly, a Tier 0
+// `cdk deploy --all` does not SKIP a previously provisioned substrate — it
+// UPDATES it to an empty template. Both deploy drivers pass
+// `--require-approval never`, so nothing prompts. What that costs, once:
+//
+//   - The Aurora cluster and the EFS filesystem are RETAIN'd and
+//     deletion-protected, so they survive the update but leave CloudFormation
+//     control: still billing, still undeletable without a console visit.
+//   - `/claudeclaw/paperclip-db` is DeletionPolicy Delete with a FIXED name,
+//     so it enters a 7-day recovery window that BLOCKS re-creating it — the
+//     substrate cannot simply be re-armed by setting the tier back.
+//
+// Before Phase 9 an un-armed config OMITTED these stacks and so could never
+// touch a deployed one. Emptying them has to be DECLARED, the same way
+// CCE_PAPERCLIP_BOOTSTRAP declares the first armed deploy. This repository has
+// already shipped a gate whose failure default was DELETE once, and it is
+// recorded as its worst near-miss; both directions of this one are explicit.
+//
+// ── The ENVIRONMENT-SCOPED provisioning override ──────────────────────
+//
+// `paperclipProvisioned` is the tier OR CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE=1
+// (see constants.ts). The override composes with this guard in the only way
+// that is safe: it can only ever make the answer TRUE, so with it set Tier 0
+// PROVISIONS and this guard does not fire — there is no empty substrate to
+// declare. Without it Tier 0 provisions nothing and still refuses to empty one.
+if (!paperclipProvisioned(tier) && process.env.CCE_PAPERCLIP_TEARDOWN !== '1') {
+  throw new Error(
+    [
+      `Tier ${tier} provisions no Paperclip work engine, so ${stackPrefix}-Database, ` +
+        `${stackPrefix}-Filesystem and ${stackPrefix}-Paperclip synthesize EMPTY at this tier.`,
+      'If they were ever deployed at Tier 1+, deploying them empty ORPHANS a retained, ' +
+        'deletion-protected Aurora cluster and EFS filesystem out of CloudFormation ' +
+        'control (still billing, still undeletable from here), and puts the fixed-name ' +
+        'paperclip-db secret into a 7-day recovery window that blocks re-creating it.',
+      'Set CCE_PAPERCLIP_TEARDOWN=1 to declare that this deployment has no Paperclip ' +
+        'substrate to lose (a fresh Tier 0 install, or a deliberate teardown), or set ' +
+        'CCE_TIER to 1 or higher to keep it.',
+      'To KEEP this environment at Tier 0 and still provision the substrate — what ' +
+        'staging does, so production is not the first environment ever to run the ' +
+        'engine — set CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE=1 instead. It only ever ' +
+        'provisions; it can never empty one.',
+    ].join('\n'),
+  );
 }
+
+const database = new DatabaseStack(app, `${stackPrefix}-Database`, {
+  ...baseProps,
+  vpc: network.vpc,
+  paperclipSecurityGroup: network.paperclipSecurityGroup,
+});
+database.addDependency(network);
+const filesystem = new FilesystemStack(app, `${stackPrefix}-Filesystem`, {
+  ...baseProps,
+  vpc: network.vpc,
+  paperclipSecurityGroup: network.paperclipSecurityGroup,
+});
+filesystem.addDependency(network);
 
 // Depends on storage (for KMS keys)
 const secrets = new SecretsStack(app, `${stackPrefix}-Secrets`, {
@@ -114,6 +168,50 @@ const compute = new ComputeStack(app, `${stackPrefix}-Compute`, {
   logsBucket: storage.logsBucket,
   messaging,
 });
+
+// Paperclip work engine service (ADR 0010 Phase 2 / bar-and-phases Phase 4 +
+// 4.5). Instantiated AFTER Compute because it reuses Compute's ECS cluster.
+// The operator console is deliberately SSM-tunnel-only while upstream email
+// self-registration remains open; it never attaches to Compute's public ALB.
+//
+// On the SAME tier gate as the substrate above, and constructed the same way:
+// always declared, creating nothing at Tier 0. The three Filesystem outputs
+// are undefined there, which the stack tolerates because it returns before it
+// reads them.
+const paperclip = new PaperclipStack(app, `${stackPrefix}-Paperclip`, {
+  ...baseProps,
+  vpc: network.vpc,
+  paperclipSecurityGroup: network.paperclipSecurityGroup,
+  cluster: compute.cluster,
+  fileSystem: filesystem.paperclipFileSystem,
+  accessPoint: filesystem.paperclipAccessPoint,
+  logGroup: filesystem.paperclipLogGroup,
+  paperclipSecret: secrets.paperclipSecret,
+  // Env is read HERE, never inside the stack. Both deploy drivers forward
+  // the digest (scripts/deploy.ts via cdkEnvBag, CI via the Paperclip build
+  // step's output); an empty value renders an unpullable placeholder, which
+  // fails loudly rather than floating a mutable tag.
+  imageDigest: process.env.CCE_PAPERCLIP_IMAGE_DIGEST?.trim() || undefined,
+  // M33. The ONE flag that changes runtime behaviour, and it is deliberately
+  // OPT-IN with the safe default: unset means DesiredCount 1, so a fresh
+  // clone, a CI runner or a second engineer's machine can never scale the
+  // service down by accident, and no template ever OMITS it. Set to 1 while
+  // the database has not been migrated yet — by an operator, or by a deploy
+  // driver on the one path where it has AFFIRMATIVELY established that the
+  // stack does not exist, which it then clears in the same run. See the M33
+  // table in paperclip-stack.ts. Still never set from a probe that FAILED:
+  // "I could not find out" and "not ready" must not be the same answer.
+  bootstrapWithoutTasks: process.env.CCE_PAPERCLIP_BOOTSTRAP === '1',
+});
+// Explicit, not inferred. CDK only infers a dependency where a value
+// actually crosses stacks, and no listener value crosses into Paperclip — so
+// without these the Paperclip service could be created
+// before the cluster, the EFS mount targets or the secret exist.
+paperclip.addDependency(network);
+paperclip.addDependency(secrets);
+paperclip.addDependency(database);
+paperclip.addDependency(filesystem);
+paperclip.addDependency(compute);
 
 // Observability depends on storage (logsKey + logsBucket)
 const observability = new ObservabilityStack(app, `${stackPrefix}-Observability`, {
@@ -250,6 +348,7 @@ const powerSwitch = new PowerSwitchStack(app, `${stackPrefix}-PowerSwitch`, {
 });
 
 void guardrails;
+void paperclip;
 void powerSwitch;
 void costGuardrails;
 void compute;

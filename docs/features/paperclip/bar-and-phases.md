@@ -783,17 +783,20 @@ supported contract. Use them, pin the artifact, and re-verify on every re-pin �
 
 ### F.3 Delegation and co-owned projects — what the artifact actually supports
 
-Verified against the live 475-path document and by probe on 2026-08-21. Per **A1-16**, routes are cited
-by method and path only.
+Verified against the live 475-path document and by probe on 2026-08-21, then corrected by a pinned
+live request probe on 2026-08-24. Per **A1-16**, routes are cited by method and path only.
 
 **R1 — delegation works today, with zero Paperclip changes, in two calls an agent can make itself:**
 `POST /api/issues/{id}/children` (carrying `assigneeAgentId`) then `POST /api/agents/{id}/wakeup`. Both
 are `actor: board_or_agent`.
 
-**The turn-budget win:** `POST /api/issues/{id}/children` accepts an **array** of children, each with
-its **own** `assigneeAgentId`. A fan-out to five agents costs **one** tool turn, not five — decisive
-against `TOOL_TURN_LIMIT = 8`. `wakeup` takes an `idempotencyKey`, so the second call is safe to retry
-and the tool can be at-least-once without duplicating work.
+**Corrected request shape:** `POST /api/issues/{id}/children` accepts **one child object** and rejects
+an array. A title-only object defaults to backlog, medium, unassigned and `requestDepth: 1`; an
+explicit `assigneeAgentId` persists. Therefore the route itself provides no five-child/one-request
+turn-budget win. `wakeup` takes an `idempotencyKey`, so that call is safe to retry. Phase 8's native
+single-child verb uses the already idempotency-proven company issue-create route with `parentId`
+instead: it preserves the same child relation without claiming replay safety the `/children` route
+has not demonstrated.
 
 **The trap in the surface — do not use `suggest_tasks` for autonomous delegation.**
 `POST /api/issues/{id}/interactions` with kind `suggest_tasks` looks perfect: a whole task tree, per-task

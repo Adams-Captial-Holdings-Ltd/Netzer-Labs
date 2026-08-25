@@ -31,6 +31,7 @@ import {
   pingBedrockModel,
   classifyBedrockError,
 } from './lib/aws-checks.js';
+import { clampTier, paperclipProvisioned } from '../infra/lib/constants.js';
 import { checkDocker } from './lib/docker-check.js';
 import { validateSlackToken, validateSlackSigningSecret } from './lib/slack-check.js';
 import { validateTelegramToken } from './lib/telegram-check.js';
@@ -968,6 +969,15 @@ async function q12WriteArtifacts(state: SetupState): Promise<void> {
   const existing: Record<string, string> = existsSync(envPath)
     ? parseEnvFile(readFileSync(envPath, 'utf-8'))
     : {};
+  // Did the .env we are about to overwrite already record a tier that
+  // PROVISIONS the Paperclip substrate? Undefined (a fresh file) is not that.
+  const priorTier = existing.CCE_TIER ?? existing.DEPLOY_TIER;
+  // Read through the SAME predicate synth uses, against the EXISTING .env:
+  // a Tier 0 environment that carries CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE has
+  // a provisioned substrate to lose exactly like a Tier 1 one, so it must not
+  // be handed a free CCE_PAPERCLIP_TEARDOWN=1 below.
+  const priorTierProvisioned =
+    priorTier !== undefined && paperclipProvisioned(clampTier(priorTier), existing);
   const updated: Record<string, string> = {
     ...existing,
     AWS_ACCOUNT_ID: state.awsAccountId ?? '',
@@ -980,6 +990,20 @@ async function q12WriteArtifacts(state: SetupState): Promise<void> {
     CDK_STACK_NAME: state.cdkStackName ?? '',
     DEPLOY_TIER: String(state.deployTier ?? 1),
     CCE_TIER: String(state.deployTier ?? 1),
+    // Tier 0 provisions no Paperclip work engine, and infra/bin/app.ts refuses
+    // to synthesize the three EMPTY substrate stacks unless the emptying is
+    // declared — because on an install that already has them, deploying them
+    // empty orphans a retained, deletion-protected Aurora cluster and EFS.
+    // A wizard run IS that declaration for a FRESH Hobby install: the operator
+    // just chose Tier 0, and there is nothing to lose. So the guard costs a
+    // first-time Hobby user nothing — the mirror of the rule that no gate may
+    // be guaranteed to fire on a first install.
+    //
+    // A DOWNGRADE is not declared for them. If this .env already records a
+    // tier that provisions the substrate, the operator types the variable out
+    // by hand after reading what it protects; re-running the wizard is not the
+    // same act as accepting that an Aurora cluster orphans.
+    CCE_PAPERCLIP_TEARDOWN: (state.deployTier ?? 1) === 0 && !priorTierProvisioned ? '1' : '',
     CCE_DAILY_COST_CAP_USD: String(state.dailyCostCapUsd ?? 50),
     CCE_COST_CAP_ENFORCED: state.costCapEnforced === false ? '0' : '1',
     DEPLOY_MANIFEST_BUCKET: state.manifestBucket ?? '',

@@ -3,6 +3,7 @@
     "sources": [
       "infra/bin/app.ts",
       "infra/lib/compute-stack.ts",
+      "infra/lib/paperclip-stack.ts",
       "infra/lib/network-stack.ts",
       "infra/lib/security-stack.ts",
       "infra/lib/constants.ts"

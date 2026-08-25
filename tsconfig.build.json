@@ -7,5 +7,5 @@
     "declaration": false
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "cdk.out", "infra", "scripts", "web", "**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "cdk.out", "infra", "scripts", "web", "**/*.test.ts", "**/test-helpers.ts"]
 }

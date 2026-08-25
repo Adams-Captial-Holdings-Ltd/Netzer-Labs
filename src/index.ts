@@ -27,6 +27,10 @@ import { startWebhookMonitor, stopWebhookMonitor } from './agent/webhook-monitor
 import { startCostWatch, stopCostWatch } from './workers/cost-watch.js';
 import { startDriftWatch, stopDriftWatch } from './workers/drift-watch.js';
 import {
+  startPaperclipReconciler,
+  stopPaperclipReconciler,
+} from './lib/paperclip/reconciler.js';
+import {
   startInvalidationListener,
   stopInvalidationListener,
 } from './lib/config/invalidation-listener.js';
@@ -87,6 +91,11 @@ async function main(): Promise<void> {
   // when CCE_CANARY_ENABLED=1. Records canary_fired audit row.
   startCanary();
   startWebhookMonitor();
+  // Paperclip durability sweep (ADR 0010 DL-3). Inert until runtime-config
+  // paperclip/reconciler_mode leaves 'off' and a base URL is configured, and it
+  // refuses to sweep at all unless the A1-8 boot probe proves the vendored
+  // updatedSince patch is present in the running Paperclip image.
+  startPaperclipReconciler();
   // Daily cost evaluator. No-ops until runtime-config cost/watch_enabled='true',
   // so this is inert until explicitly turned on.
   startCostWatch();
@@ -122,6 +131,7 @@ async function main(): Promise<void> {
     stopCostWatch();
     stopDriftWatch();
     stopWebhookMonitor();
+    stopPaperclipReconciler();
     // Close any live Jarvis voice sessions cleanly before the socket closes.
     await teardownAllJarvisSessions('shutdown').catch(() => {});
     // Await the listener teardown (unsubscribe + delete the ephemeral queue) so

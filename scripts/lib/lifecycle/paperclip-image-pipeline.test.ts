@@ -314,20 +314,25 @@ describe('buildImageRecords with the Paperclip image', () => {
     expect(record?.taskFamily).toBe('claudeclaw-staging-paperclip');
   });
 
-  it('does not make an orchestrator rollback depend on the Paperclip repo', () => {
-    // The image rollback class re-points the orchestrator service only. The
-    // Paperclip digest lives in a repo teardown deletes with --force and
-    // Phase 9 will churn; verifying it here would abort a rollback of a
-    // RUNNING service over an image no service consumes yet. Fed from the
-    // real record producer so the two cannot drift apart.
+  it('verifies the Paperclip digest in preflight now that a service consumes it', () => {
+    // INVERTED BY PHASE 4, deliberately. This assertion used to require the
+    // opposite, on the premise that "no service consumes this image yet" —
+    // verifying it would have aborted a rollback of the RUNNING orchestrator
+    // over an unused image. infra/lib/paperclip-stack.ts ended that premise:
+    // the digest now pins a live task definition, so a target manifest whose
+    // Paperclip image has been deleted out of ECR is unrestorable and must
+    // fail in preflight, before anything is touched. The handoff test at the
+    // bottom of this file is what forced the decision. Fed from the real
+    // record producer so the two cannot drift apart.
     const digest = 'sha256:' + 'b'.repeat(64);
     const images = buildImageRecords({ ...base, paperclipDigest: digest });
     const { toVerify } = collectPrivateEcrDigests(
       { imageDigest: base.imageDigest, images } as unknown as DeployManifest,
       'claudeclaw-staging-orchestrator',
     );
-    expect(toVerify.map((v) => v.digest)).toEqual([base.imageDigest]);
-    expect(toVerify.some((v) => v.repositoryName.endsWith('-paperclip'))).toBe(false);
+    expect(toVerify.map((v) => v.digest)).toEqual([base.imageDigest, digest]);
+    const paperclip = toVerify.find((v) => v.repositoryName.endsWith('-paperclip'));
+    expect(paperclip?.repositoryName).toBe('claudeclaw-staging-paperclip');
   });
 });
 
@@ -335,8 +340,32 @@ describe('buildImageRecords with the Paperclip image', () => {
 // The gate, on BOTH deploy drivers
 // ─────────────────────────────────────────────────────────────────────
 
-describe('CCE_PAPERCLIP_ENABLED gate (scripts/deploy.ts)', () => {
+describe('Paperclip tier gate (scripts/deploy.ts)', () => {
+  // Phase 9 moved the gate off CCE_PAPERCLIP_ENABLED and onto the TIER, so
+  // Paperclip installs as part of a standard install at Tier 1+. The variable
+  // this block is still named after must no longer decide anything here.
   const gated = blockAfter(DEPLOY_TS, 'if (paperclipEnabled) {');
+
+  it('derives the gate from the tier, not from the env flag', () => {
+    expect(DEPLOY_TS).toContain(
+      'const paperclipEnabled = paperclipProvisioned(clampTier(env.DEPLOY_TIER), env);',
+    );
+    // The one surviving read is the cdkEnvBag forward, which reaches the
+    // orchestrator task definition as the RUNTIME router flag. If a second
+    // read appears, some driver is gating provisioning on it again.
+    expect(DEPLOY_TS.split('env.CCE_PAPERCLIP_ENABLED').length - 1).toBe(1);
+  });
+
+  it('names both substrate stacks in phase a unconditionally', () => {
+    // `cdk deploy` errors only when NO pattern matches, so while synth could
+    // omit a stack this list named, the missing one was dropped SILENTLY and
+    // the deploy reported success having created no Aurora (M22). Both halves
+    // are now unconditional, which is what makes that impossible.
+    expect(DEPLOY_TS).toContain('`${prefix}-Database`,');
+    expect(DEPLOY_TS).toContain('`${prefix}-Filesystem`,');
+    // The spread-a-conditional-array form the phase-a list used to carry.
+    expect(DEPLOY_TS).not.toContain('paperclipEnabled ? [');
+  });
 
   it('builds and pushes the Paperclip image only inside the gate', () => {
     expect(gated).toContain('runCloudBuild(');
@@ -417,13 +446,38 @@ describe('CCE_PAPERCLIP_ENABLED gate (scripts/deploy.ts)', () => {
 // exercised locally and the path that reaches staging and production.
 // ─────────────────────────────────────────────────────────────────────
 
-describe('CCE_PAPERCLIP_ENABLED gate (.github/workflows/deploy.yml)', () => {
+describe('Paperclip tier gate (.github/workflows/deploy.yml)', () => {
   // CI does not run scripts/deploy.ts. A build present in only one driver is
   // absent from the path that reaches staging and production.
   const step = workflowStep('Build + Push Paperclip (native ARM64 CodeBuild)');
 
-  it('is gated on the same variable as the ECR repo create', () => {
-    expect(step).toContain("if: vars.CCE_PAPERCLIP_ENABLED == '1'");
+  it('is gated on the tier, like the ECR repo create and like synth', () => {
+    // Same gate on both drivers and in the CDK app: the tier. A CI step still
+    // keyed on CCE_PAPERCLIP_ENABLED would build no image for a Tier 1+ deploy
+    // whose task definitions do get created, i.e. a service pinned to a digest
+    // that was never pushed.
+    //
+    // The condition is now the OUTPUT of one step that reads
+    // TierShape.paperclipEnabled, not four hand-copied `CCE_TIER != '0'`
+    // comparisons. Those agreed with the table only because Tier 0 is the
+    // sole false today; the day another tier opts out they would build and
+    // migrate an engine CDK does not provision.
+    expect(step).toContain("if: steps.tiergate.outputs.paperclip_enabled == '1'");
+    expect(WORKFLOW).not.toContain("if: vars.CCE_PAPERCLIP_ENABLED == '1'");
+    expect(WORKFLOW).not.toContain('if [ "$CCE_PAPERCLIP_ENABLED" = "1" ]');
+    // No step may go back to re-deriving the gate from the tier by hand.
+    expect(WORKFLOW).not.toContain("if: env.CCE_TIER != '0'");
+    expect(WORKFLOW).not.toContain('if [ "$CCE_TIER" != "0" ]; then');
+    // Every Paperclip step moves together — early IAM, the ECR repo create,
+    // this build, secret population and migration. One resolved condition.
+    expect(
+      WORKFLOW.split("if: steps.tiergate.outputs.paperclip_enabled == '1'").length - 1,
+    ).toBe(4);
+    expect(WORKFLOW).toContain('if [ "$PAPERCLIP_TIER_ENABLED" = "1" ]; then');
+    // And NOT the bare spelling: the plan's unbuilt router flag is called
+    // PAPERCLIP_ENABLED, so that name must not appear in the workflow at all.
+    expect(WORKFLOW).not.toContain('$PAPERCLIP_ENABLED');
+    expect(WORKFLOW).toContain('run: npx tsx scripts/ci/tier-gate.ts');
   });
 
   it('drives the SAME cloud-build module the local driver uses', () => {
@@ -442,7 +496,9 @@ describe('CCE_PAPERCLIP_ENABLED gate (.github/workflows/deploy.yml)', () => {
     expect(step).toContain(
       "CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}",
     );
-    expect(WORKFLOW.split("CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}").length - 1).toBe(2);
+    // Image build, early IAM, main deploy and bootstrap redeploy must all select
+    // the same environment; none may invent a suffix locally.
+    expect(WORKFLOW.split("CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}").length - 1).toBe(4);
   });
 
   it('bounds the step, which the emulated build never did', () => {
@@ -839,4 +895,200 @@ describe('Phase 4 handoff (arms itself when infra/lib/paperclip-stack.ts lands)'
       ).not.toContain('if (img.containerName === PAPERCLIP_CONTAINER_NAME)');
     },
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// THE FIRST INSTALL, on BOTH deploy drivers.
+//
+// Phase 9 made the Paperclip substrate part of a standard install, which
+// moved the phase b.5 bootstrap interlock from a deliberately armed path onto
+// the DEFAULT one. On a first install CCE-Paperclip does not exist yet, so the
+// interlock was GUARANTEED to fire — on the local driver after phase a had
+// already created the RETAIN'd, deletion-protected Aurora, the EFS and a ~30
+// minute ARM build, and on CI before `CDK deploy` ran at all, so the stack was
+// never created and the next run deferred identically. A permanent deadlock
+// that blocked the whole deploy, orchestrator included, until an operator set
+// a variable whose own documentation said "FIRST ARMED DEPLOY ONLY" — a
+// concept Phase 9 deleted.
+//
+// The rule both drivers now follow: "deferred because it does not exist yet"
+// and "the migration ran and failed" are DIFFERENT ANSWERS. Only the second
+// may abort.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('Paperclip first install (scripts/deploy.ts)', () => {
+  it('does not abort phase b.5 when there is nothing to migrate yet', () => {
+    // The exact abort that made a first install impossible.
+    expect(DEPLOY_TS).not.toContain('this is not a declared bootstrap deploy');
+    expect(DEPLOY_TS).not.toContain("!migrated && env.CCE_PAPERCLIP_BOOTSTRAP !== '1'");
+  });
+
+  it('arms DesiredCount 0 for phase d instead, then clears it', () => {
+    expect(DEPLOY_TS).toContain('paperclipFirstInstall = true;');
+    expect(DEPLOY_TS).toContain("env.CCE_PAPERCLIP_BOOTSTRAP = '1';");
+    expect(DEPLOY_TS).toContain("env.CCE_PAPERCLIP_BOOTSTRAP = '';");
+  });
+
+  it('arms DesiredCount 0 only on an affirmative "it is not there"', () => {
+    // RANK 3, the local half of the split the CI driver has always had (see the
+    // deploy.yml block below: defer_bootstrap vs plain defer).
+    // resolvePaperclipMigrationTargets used to return a single `null` for two
+    // very different states, and phase b.5 read any falsy answer as first
+    // install: it armed CCE_PAPERCLIP_BOOTSTRAP, phase d UPDATED CCE-Paperclip
+    // to DesiredCount 0 — SCALING A RUNNING WORK ENGINE TO ZERO — and the
+    // re-probe after phase d answered identically, so the deploy aborted with
+    // the engine down. This repository has shipped a gate whose failure default
+    // was DELETE once and records it as its worst near-miss; this is the second
+    // one, closed.
+    expect(DEPLOY_TS).toContain("return 'stack-absent';");
+    expect(DEPLOY_TS).toContain("return 'outputs-absent';");
+    // 'stack-absent' is the ONLY negative answer that may arm the flag: only
+    // there has the driver established that no service exists to scale down.
+    expect(DEPLOY_TS).toContain("if (targets === 'stack-absent') {");
+    expect(DEPLOY_TS).toContain("return 'first-install';");
+    expect(DEPLOY_TS).toContain("if (targets === 'outputs-absent') {");
+    expect(DEPLOY_TS).toContain("return 'defer';");
+    // And the arming site tests for that one answer, never for falsiness — the
+    // exact shape that conflated them.
+    expect(DEPLOY_TS).toContain("if (migrated === 'first-install') {");
+    expect(DEPLOY_TS).not.toContain('if (!migrated) {');
+  });
+
+  it('migrates AFTER phase d and starts the service in the same invocation', () => {
+    const tail = blockAfter(DEPLOY_TS, 'if (paperclipFirstInstall) {');
+    expect(tail).toContain('runPaperclipMigration(');
+    // The re-deploy that lifts DesiredCount off 0. Without it the deploy would
+    // end with a parked service and need a second run after all.
+    expect(tail).toContain('stacks: [`${prefix}-Paperclip`],');
+    // And by then the stack DOES exist, so a deferral is no longer benign.
+    expect(tail).toContain('DeployAbort');
+  });
+});
+
+describe('Paperclip first install (.github/workflows/deploy.yml)', () => {
+  const step = workflowStep('Migrate Paperclip database');
+
+  it('applies this environment IAM stack exclusively before any Paperclip consumer', () => {
+    const iamName = 'Apply IAM grants before Paperclip operations';
+    const iam = workflowStep(iamName);
+    expect(iam).toContain('${{ steps.cfg.outputs.stack_name }}-Iam');
+    expect(iam).toContain('--exclusively');
+    const iamAt = WORKFLOW.indexOf(`      - name: ${iamName}`);
+    for (const consumer of [
+      'Ensure ECR repo exists',
+      'Build + Push Paperclip (native ARM64 CodeBuild)',
+      'Populate Paperclip secret',
+      'Migrate Paperclip database',
+    ]) {
+      expect(iamAt, `IAM must precede ${consumer}`).toBeLessThan(
+        WORKFLOW.indexOf(`      - name: ${consumer}`),
+      );
+    }
+  });
+
+  it('never exits 1 for a state a first install is guaranteed to be in', () => {
+    // The step runs BEFORE `CDK deploy`, so exiting 1 here blocks the entire
+    // deploy — orchestrator included — and the next run reaches the same
+    // branch. Both defer helpers exit 0.
+    expect(step).toContain('defer_bootstrap() {');
+    expect(step).not.toContain('This is not a declared bootstrap deploy');
+    const defers = step.slice(step.indexOf('defer() {'), step.indexOf('# 1. database_url'));
+    expect(defers).not.toContain('exit 1');
+  });
+
+  it('arms DesiredCount 0 only on an affirmative "it is not there"', () => {
+    // The branch where the stack EXISTS but has not published its outputs
+    // deliberately keeps plain defer(): a stack that exists may have a running
+    // service, and this flag would scale it to zero. That is the M33 line.
+    expect(step).toContain('defer "$STACK exists but has not published the migration outputs yet."');
+    expect(step).toContain('defer_bootstrap "$STACK does not exist yet');
+    expect(step).toContain('echo "bootstrap=1" >> "$GITHUB_OUTPUT"');
+  });
+
+  it('feeds that output into the CDK deploy step', () => {
+    const deploy = workflowStep('CDK deploy');
+    expect(deploy).toContain('steps.pcmigrate.outputs.bootstrap');
+    // The operator variable still wins, so a deliberate park is still possible.
+    expect(deploy).toContain("vars.CCE_PAPERCLIP_BOOTSTRAP == '1'");
+  });
+
+  it('migrates and redeploys the parked Paperclip stack in the same workflow run', () => {
+    const finishName = 'Complete fresh Paperclip bootstrap';
+    const finish = workflowStep(finishName);
+    expect(finish).toContain("if: steps.pcmigrate.outputs.bootstrap == '1'");
+    expect(finish).toContain("CCE_PAPERCLIP_BOOTSTRAP: ''");
+    expect(finish).toContain('aws secretsmanager put-secret-value');
+    expect(finish).toContain('aws ecs run-task');
+    expect(finish).toContain('npx cdk deploy "$STACK"');
+    expect(finish).toContain('--exclusively');
+
+    const populateAt = finish.indexOf('aws secretsmanager put-secret-value');
+    const migrateAt = finish.indexOf('aws ecs run-task');
+    const redeployAt = finish.indexOf('npx cdk deploy "$STACK"');
+    expect(populateAt).toBeLessThan(migrateAt);
+    expect(migrateAt).toBeLessThan(redeployAt);
+
+    const mainDeployAt = WORKFLOW.indexOf('      - name: CDK deploy');
+    const finishAt = WORKFLOW.indexOf(`      - name: ${finishName}`);
+    const rolloutAt = WORKFLOW.indexOf('      - name: Force ECS rollout');
+    expect(mainDeployAt).toBeLessThan(finishAt);
+    expect(finishAt).toBeLessThan(rolloutAt);
+  });
+});
+
+describe('Paperclip teardown guard (.github/workflows/deploy.yml)', () => {
+  it('never declares the Tier 0 emptying, on any path', () => {
+    const deploy = workflowStep('CDK deploy');
+    // infra/bin/app.ts refuses to synth an empty substrate unless this says so,
+    // and NOTHING in CI says so any more. Staging used to, because staging was
+    // a Tier 0 environment with no substrate; it now PROVISIONS one via the
+    // override below, so a standing TEARDOWN=1 there would pre-authorize
+    // emptying the very Aurora cluster the override creates the moment anyone
+    // dropped the override. A production dispatch that picks tier 0 must stop,
+    // and so must a staging deploy that has lost its override.
+    expect(deploy).toContain("CCE_PAPERCLIP_TEARDOWN: ''");
+    expect(deploy).not.toContain("CCE_PAPERCLIP_TEARDOWN: ${{ env.TARGET_ENV");
+    expect(deploy).not.toContain('CCE_PAPERCLIP_TEARDOWN: ${{ env.CCE_TIER');
+  });
+});
+
+describe('Paperclip environment-scoped provisioning override (.github/workflows/deploy.yml)', () => {
+  // THE REPOSITORY OWNER'S DECISION: staging stays pinned to Tier 0 so nothing
+  // else scales up, and provisions the substrate anyway — otherwise the tier CI
+  // pins staging to is exactly the tier that provisions no engine, and
+  // production would be the first environment ever to run one.
+  const OVERRIDE = 'CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE';
+  const STAGING_EXPR =
+    "${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '1' || '' }}";
+
+  it('is set at WORKFLOW scope, from the same staging expression as CCE_TIER', () => {
+    // Workflow scope, not step scope, and that is the load-bearing part: the
+    // "Resolve the Paperclip tier gate" step reads this to emit the ONE boolean
+    // the ECR-repo create, the image build, the secret populate and the
+    // migration all gate on. A step-scoped override would leave that gate
+    // answering 0 while the CDK deploy provisioned Aurora — a service pinned to
+    // an image CI never built, the M22 shape one layer down.
+    const header = WORKFLOW.slice(0, WORKFLOW.indexOf('jobs:'));
+    expect(header).toContain(`${OVERRIDE}: ${STAGING_EXPR}`);
+    // Same staging test CCE_TIER uses, so a production dispatch cannot pick it
+    // up — and NOT derived from CCE_TIER, which would make it a tier flag.
+    expect(WORKFLOW).not.toContain(`${OVERRIDE}: \${{ env.CCE_TIER`);
+  });
+
+  it('reaches synth through the CDK deploy step', () => {
+    expect(workflowStep('CDK deploy')).toContain(`${OVERRIDE}: \${{ env.${OVERRIDE} }}`);
+  });
+
+  it('is one-directional: nothing in CI can set it to turn provisioning OFF', () => {
+    // The whole reason it is not a resurrection of CCE_PAPERCLIP_ENABLED. The
+    // only literal value this workflow ever assigns is '1' (or empty), never
+    // '0' — an OFF value is what let a green deploy land with no Aurora behind
+    // it, and this variable has none.
+    expect(WORKFLOW).not.toContain(`${OVERRIDE}: '0'`);
+    // Exactly two ASSIGNMENTS: the workflow env block and the CDK deploy step.
+    // A third would be a step quietly answering the provisioning question for
+    // itself, which is how the four hand-copied `CCE_TIER != '0'` gates the
+    // tier-gate step replaced got out of step with the table in the first place.
+    expect(WORKFLOW.split(`${OVERRIDE}: `).length - 1).toBe(2);
+  });
 });

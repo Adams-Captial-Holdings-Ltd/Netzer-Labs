@@ -547,17 +547,36 @@ export function hasDefinition(term: string | null | undefined): boolean {
 
 /**
  * Plain-English labels for the snake_case / lower-case status enums that show up
- * on the dashboard's status badges. A leader should read "In progress", not
+ * on the dashboard's status badges. A leader should read "In Progress", not
  * "in_progress".
  *
- * Covers the mission statuses (open | in_progress | done | cancelled) plus the
- * other status tokens seen on the covered tabs. Keys are normalized on lookup,
- * so callers can pass the raw on-screen value.
+ * Covers the mission statuses (open | in_progress | blocked | in_review | done
+ * | cancelled) plus the other status tokens seen on the covered tabs. Keys are
+ * normalized on lookup, so callers can pass the raw on-screen value.
+ *
+ * THE SIX MISSION LABELS ARE A THIRD COPY, and they carry the pointer both
+ * other copies carry: `COLUMNS` in `web/src/pages/Missions.tsx` (the kanban
+ * column headers) and `MISSION_STATUS_LABEL` in `src/lib/missions/format.ts`
+ * (what every chat surface says). Change one, change all three in the same PR —
+ * the way `humanize.ts` and `Chat.tsx` point at each other for the turn footer.
+ * This copy is the one that had drifted: it spelled `in_progress` "In progress"
+ * while the column header beside it said "In Progress", and `Missions.tsx`
+ * renders BOTH on one screen (the card badge and the detail drawer call
+ * `statusLabel()`, the column header reads `COLUMNS`). Same board, same status,
+ * two spellings, and the chat copy's own header asserted this function agreed
+ * with it.
  */
 const STATUS_LABELS: Record<string, string> = {
-  // Mission statuses.
+  // Mission statuses, in the board's lane order (the repository owner's
+  // decision: the story of a task). `blocked` and `in_review`
+  // arrived with Phase 9, when the projection stopped collapsing them into
+  // `open` and `in_progress`. Nothing in web/ type-checks this list against
+  // the server's MissionStatus - a source scan in `src/lib/missions/
+  // format.test.ts` does, and it fails if this copy is the one left behind.
   open: 'Open',
-  in_progress: 'In progress',
+  in_progress: 'In Progress',
+  blocked: 'Blocked',
+  in_review: 'In Review',
   done: 'Done',
   cancelled: 'Cancelled',
   // Generic states that appear on status-style badges elsewhere.
