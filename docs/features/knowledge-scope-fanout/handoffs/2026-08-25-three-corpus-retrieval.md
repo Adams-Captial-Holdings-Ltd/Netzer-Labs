@@ -20,7 +20,7 @@ supersedes: none
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping), `fix/*` and `development` both deploy nothing |
 | Commit at session start | `06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710` |
-| Commit at session end | none yet — no commit made at time of writing |
+| Commit at session end | `476e25bf6e8f8fcf255022e9fa726907035aa379` |
 | Pushed | no |
 | PR | none |
 | Deployed | no |
@@ -102,7 +102,9 @@ must invalidate that cache between cases.
 - [x] Confirmed the defect mechanism from source and from live staging state
 - [x] Recorded the pre-change baseline
 - [x] Created the feature folder and this session handoff before writing code
-- [ ] Source change and guards — in progress at time of writing; see section 6
+- [x] Scope-resolution fix and its guard, committed as `476e25b`, mutation-verified
+- [ ] Three-corpus fan-out in `s3_vectors_search` — NOT written; see section 6
+- [ ] End-to-end retrieval proof — NOT run; harness built but never executed
 
 ### 4.2 Files modified
 
@@ -112,8 +114,15 @@ must invalidate that cache between cases.
 | `docs/features/knowledge-scope-fanout/HANDOFF.md` | New | Volatile state and session index |
 | `docs/features/knowledge-scope-fanout/handoffs/2026-08-25-three-corpus-retrieval.md` | New | This log |
 
-Source files are being changed as this is written; the final list is recorded
-before the session closes.
+Source changes committed in `476e25b`:
+
+| File | Change | Rationale |
+|---|---|---|
+| `src/lib/config/agent-loader.ts` | +6/-1 — hoist the `agent.yaml` read into `loadAgent` | Makes an agent own scope resolve on the builtin-fallback path |
+| `src/lib/config/agent-loader.scope.test.ts` | New, 84 lines | Pins the fix by driving the real `loadAgent`; fails when the fix is reverted |
+
+Left untracked on purpose: `e2e-three-corpus.ts` at the repository root, the
+end-to-end harness. See the open question in the feature [HANDOFF](../HANDOFF.md).
 
 ### 4.3 Decisions made
 
@@ -205,9 +214,10 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ### 6.1 Smallest next action
 
-Open `src/lib/config/agent-loader.ts` and confirm the hoisted
-`fetchKnowledgeScope` call in `loadAgent` is present and that
-`src/lib/config/agent-loader.scope.test.ts` fails when it is reverted.
+Open `src/lib/tools/vector-tools.ts` and replace the scope construction at
+roughly lines 97-111 with the single de-duped list that serves as both the
+fan-out and the read allowlist. The exact snippet is in the feature
+[HANDOFF](../HANDOFF.md) under "The next action, concretely".
 
 ### 6.2 Immediate next steps
 
@@ -255,17 +265,26 @@ Open `src/lib/config/agent-loader.ts` and confirm the hoisted
 
 ## 7. Verification actually performed
 
-| Command | Baseline (before changes) | After changes |
+| Command | Baseline (before changes) | After `476e25b` |
 |---|---|---|
-| `npm run typecheck` | not run at baseline | see below |
-| `npm test` | **fail** — 5 files / 1 test failed of 235 files / 2897 tests; exit 1 | see below |
-| `npm run build` | not run at baseline | see below |
-| `npm --prefix web run typecheck` | not run at baseline | see below |
-| `npm --prefix web run build` | not run at baseline | see below |
-| `npm run local:test:integration` | not run at baseline | see below |
-| `node scripts/ci/docs-links.mjs` | not run at baseline | see below |
-| `node scripts/ci/feature-knowledge.mjs` | **pass** — `feature-knowledge: OK` | see below |
-| `git diff --check` | not run at baseline | see below |
+| `npm run typecheck` | not run at baseline | **pass** — clean |
+| `npm test` | **fail** — 5 files / 1 test failed of 235 files / 2897 tests; exit 1 | **not run** |
+| `npm run build` | not run at baseline | **not run** |
+| `npm --prefix web run typecheck` | not run at baseline | **not run** |
+| `npm --prefix web run build` | not run at baseline | **not run** |
+| `npm run local:test:integration` | not run at baseline | **not run** — Floci was never started this session |
+| `node scripts/ci/docs-links.mjs` | not run at baseline | **pass** — 115 files, 1246 internal links |
+| `node scripts/ci/feature-knowledge.mjs` | **pass** — `feature-knowledge: OK` | **pass** — `feature-knowledge: OK` |
+| `git diff --check` | not run at baseline | **not run** |
+
+Checks that were additionally run against `476e25b`, all of them actually
+executed:
+
+| Check | Result |
+|---|---|
+| `npx vitest run src/lib/config/agent-loader.scope.test.ts` | **pass** — 4/4 |
+| Mutation: revert the hoisted read, re-run the guard | **2 failed / 2 passed** — the two tests pinning the defect fail, the two controls hold |
+| `npx vitest run src/lib/config/ src/lib/tools/ src/lib/vectors/ src/lib/media/` | **pass** — 23 files, 209 tests |
 
 The baseline `npm test` failures, enumerated so a later run can be compared
 against them rather than against an assumption:
@@ -285,8 +304,11 @@ known Windows-only Vitest limitation, and the `.mjs` validators they wrap run
 clean under plain `node`, which is how the documentation gates were still
 verified here.
 
-Anything not run, and why: the live three-corpus retrieval against real AWS is
-blocked on the open gap report in section 6.3 and has **not** been run. No
+Anything not run, and why: the session was stopped partway through at the user's
+request, before the three-corpus fan-out was written, so six of the nine gate
+commands were never run and are recorded as `not run` rather than guessed at.
+The live three-corpus retrieval has **not** been run either — the harness exists
+at `e2e-three-corpus.ts` and was never executed against anything. No
 claim about deployed behaviour is made anywhere in this feature's documents.
 
 ## 8. Environment state
