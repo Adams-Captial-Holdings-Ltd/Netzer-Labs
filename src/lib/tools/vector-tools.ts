@@ -55,7 +55,7 @@ tools.register('s3_vectors_search', {
         scope: {
           type: 'string',
           description:
-            "Optional narrowing override. When omitted, this agent searches its own knowledge scope plus the shared corpus. Only those two scopes may be named here; other agents' scopes are not searchable.",
+            "Optional narrowing override. When omitted, this agent searches all three corpora it can read: its own knowledge scope, the default corpus, and the shared corpus. Naming one of those three narrows the search to just it; other agents' scopes are not searchable.",
         },
         tag_filter: {
           type: 'array',
@@ -80,7 +80,7 @@ tools.register('s3_vectors_search', {
 
     // Resolve the agent's own knowledge scope first. A model-supplied `scope`
     // may only narrow the search to a corpus this agent is already entitled
-    // to (its own scope or the shared one); accepting arbitrary names here
+    // to (one of the three corpora in the list below); accepting arbitrary names here
     // would let a prompted agent read another agent's private corpus.
     let ownScope = DEFAULT_KNOWLEDGE_SCOPE;
     if (ctx.agentId) {
@@ -94,21 +94,19 @@ tools.register('s3_vectors_search', {
         };
       }
     }
-    let primaryScope = ownScope;
+    // One list is both the fan-out and the read allowlist, so the two cannot
+    // drift. The Set de-dups when the agent's own scope is itself the default
+    // or the shared corpus, so no corpus is ever scanned twice.
+    let scopes = [...new Set([ownScope, DEFAULT_KNOWLEDGE_SCOPE, SHARED_KNOWLEDGE_SCOPE])];
     if (typeof args.scope === 'string' && args.scope) {
-      if (args.scope !== ownScope && args.scope !== SHARED_KNOWLEDGE_SCOPE) {
+      if (!scopes.includes(args.scope)) {
         return {
-          text: `Scope '${args.scope}' is not searchable from this agent. Allowed: '${ownScope}' or '${SHARED_KNOWLEDGE_SCOPE}'.`,
+          text: `Scope '${args.scope}' is not searchable from this agent. Allowed: ${scopes.map((s) => `'${s}'`).join(', ')}.`,
           isError: true,
         };
       }
-      primaryScope = args.scope;
+      scopes = [args.scope];
     }
-    // De-dup so we don't scan the same corpus twice when an agent's own scope
-    // is already "shared" (or the caller pointed scope at the shared corpus).
-    const scopes = primaryScope === SHARED_KNOWLEDGE_SCOPE
-      ? [SHARED_KNOWLEDGE_SCOPE]
-      : [primaryScope, SHARED_KNOWLEDGE_SCOPE];
 
     let queryEmbedding: number[];
     try {

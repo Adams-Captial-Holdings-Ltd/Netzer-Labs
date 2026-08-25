@@ -75,10 +75,30 @@ describe('ingest_document scope containment', () => {
 });
 
 describe('s3_vectors_search scope containment', () => {
-  it('searches own scope plus shared by default', async () => {
+  // Every agent reads three corpora in one query: its own, the default, and
+  // the shared one. When its own scope IS one of the other two the list
+  // collapses, so no corpus is ever scanned twice.
+  it.each([
+    ['research-corpus', ['research-corpus', 'default', 'shared']],
+    ['default', ['default', 'shared']],
+    ['shared', ['shared', 'default']],
+  ] as const)('fans out over three corpora when own scope is %s', async (ownScope, expected) => {
+    loadAgentMock.mockResolvedValue({ knowledgeScope: ownScope });
     await tools.invoke('s3_vectors_search', { query: 'q' }, ctx);
-    const scopes = searchMock.mock.calls.map((c) => c[0].scope).sort();
-    expect(scopes).toEqual(['research-corpus', 'shared']);
+    const scopes = searchMock.mock.calls.map((c) => c[0].scope);
+    expect(scopes).toEqual(expected);
+    expect(scopes.length).toBe(new Set(scopes).size);
+  });
+
+  it('allows narrowing to default explicitly', async () => {
+    const out = await tools.invoke(
+      's3_vectors_search',
+      { query: 'q', scope: 'default' },
+      ctx,
+    );
+    expect(out.isError).toBeFalsy();
+    const scopes = searchMock.mock.calls.map((c) => c[0].scope);
+    expect(scopes).toEqual(['default']);
   });
 
   it('refuses an arbitrary scope override', async () => {
