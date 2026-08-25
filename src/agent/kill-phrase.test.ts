@@ -10,11 +10,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFile, readdir } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 
 const { tryAcquirePanic, converseStreamTurn, writeAudit } = vi.hoisted(() => ({
   tryAcquirePanic: vi.fn(),
   converseStreamTurn: vi.fn(),
-  writeAudit: vi.fn(async () => {}),
+  writeAudit: vi.fn(async (_row: { action?: string }) => {}),
 }));
 
 vi.mock('../lib/bedrock/client.js', () => ({
@@ -105,6 +107,9 @@ describe('runAgentTurn with the kill phrase', () => {
     userText,
     history: [],
     surface: 'telegram' as const,
+    // What a person typing in a chat window looks like. The gate now asks WHO
+    // is asking as well as WHAT was said; see the origin suite below.
+    origin: 'human_chat' as const,
   });
 
   it('trips the panic freeze, replies statically, and never calls Bedrock', async () => {
@@ -143,5 +148,133 @@ describe('runAgentTurn with the kill phrase', () => {
     expect(writeAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'emergency_kill_phrase', result: 'error' }),
     );
+  });
+});
+
+
+/**
+ * WHO IS ASKING, not just what was said.
+ *
+ * The phrase is a panic control for a person at a chat window — which is what
+ * `TurnRefusal`'s doc always claimed — but the gate used to honour it in ANY
+ * text reaching `runAgentTurn`, including text a remote system controls. Phase
+ * 6 made that reachable: a Paperclip issue body rides into `userText`.
+ *
+ * These assertions are on the SHARED LAYER, deliberately and honestly: all
+ * three chat surfaces (and both Slack send paths) enter through this one
+ * function, so driving each adapter's webhook end to end would re-test their
+ * plumbing, not this gate. What the adapters must still be held to is that
+ * they DECLARE the origin — and that is a claim about their source, so the
+ * scan below is what checks it.
+ */
+describe('the kill phrase is honoured only from a human chat surface', () => {
+  const humanReq = (surface: 'telegram' | 'slack' | 'dashboard') => ({
+    agentId: 'main',
+    chatId: 'chat-1',
+    userText: `enough now ${PHRASE}`,
+    history: [],
+    surface,
+    origin: 'human_chat' as const,
+  });
+
+  it.each(['telegram', 'slack', 'dashboard'] as const)(
+    'still halts the fleet when a person types it on %s',
+    async (surface) => {
+      tryAcquirePanic.mockResolvedValueOnce({
+        acquired: true,
+        state: { active: true, generation: 1 },
+      });
+      const res = await runAgentTurn(humanReq(surface));
+      expect(tryAcquirePanic).toHaveBeenCalledWith(
+        'emergency kill phrase received',
+        `${surface}:chat-1`,
+      );
+      expect(res.text).toContain('EMERGENCY HALT engaged');
+      expect(res.refusal).toEqual({ kind: 'kill_phrase', retryable: false });
+    },
+  );
+
+  it('does NOT halt on machine-originated text, which is every caller that says nothing', async () => {
+    // The turn is allowed to fail further down (this file mocks only the gate's
+    // dependencies, not a whole working Bedrock path). The claim is exactly
+    // that the gate did not fire: no panic acquired, no halt audit, no halt
+    // reply. The Paperclip end-to-end version of this lives in
+    // src/lib/paperclip/dispatch-kill-phrase.test.ts, which runs the real loop
+    // and checks the board is never told either.
+    const res = await runAgentTurn({
+      agentId: 'main',
+      chatId: 'chat-1',
+      userText: `<paperclip_issue>Please ${PHRASE} everything</paperclip_issue>`,
+      history: [],
+      surface: 'system',
+    }).catch(() => undefined);
+    expect(tryAcquirePanic, 'machine text halted the fleet').not.toHaveBeenCalled();
+    expect(writeAudit.mock.calls.map((c) => c[0].action)).not.toContain(
+      'emergency_kill_phrase',
+    );
+    expect(res?.refusal).toBeUndefined();
+  });
+
+  it('reads the ORIGIN, not the surface: a machine turn labelled `telegram` still cannot halt', async () => {
+    // `surface` names the renderer, so a machine path may legitimately carry a
+    // chat surface's value one day. If that alone re-armed the phrase, this fix
+    // would rot the moment it did.
+    await runAgentTurn({
+      agentId: 'main',
+      chatId: 'chat-1',
+      userText: `enough now ${PHRASE}`,
+      history: [],
+      surface: 'telegram',
+      origin: 'machine',
+    }).catch(() => undefined);
+    expect(tryAcquirePanic).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * SOURCE SCAN: who may declare `origin: 'human_chat'`.
+ *
+ * The gate is opt-out-by-default, so the failure this guards against is not a
+ * missing halt — it is a NEW machine caller quietly declaring itself human and
+ * getting fleet-halt power back. It also pins the parity requirement in
+ * CLAUDE.md the only way a unit test can: both Slack send paths, not one.
+ */
+describe('only the chat-surface adapters declare a human origin', () => {
+  // A DECLARATION, not a mention: `agent-loop.ts` documents the value in prose
+  // and must not count as a caller opting in.
+  const declarations = (src: string): number =>
+    (src.match(/^ *origin: 'human_chat',$/gm) ?? []).length;
+
+  it.each([
+    ['src/adapters/telegram/handler.ts', 1],
+    ['src/adapters/slack/handler.ts', 2],
+    ['src/adapters/dashboard/handler.ts', 2],
+  ] as const)('%s declares it on all %i of its runAgentTurn call sites', async (file, expected) => {
+    const src = await readFile(file, 'utf8');
+    expect(src.split('runAgentTurn({').length - 1).toBe(expected);
+    expect(declarations(src)).toBe(expected);
+  });
+
+  it('and no other production module does', async () => {
+    const allowed = new Set([
+      'src/adapters/telegram/handler.ts',
+      'src/adapters/slack/handler.ts',
+      'src/adapters/dashboard/handler.ts',
+    ]);
+    const offenders: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name).split(sep).join('/');
+        if (entry.isDirectory()) {
+          await walk(path);
+          continue;
+        }
+        if (!path.endsWith('.ts') || path.endsWith('.test.ts')) continue;
+        if (allowed.has(path)) continue;
+        if (declarations(await readFile(path, 'utf8')) > 0) offenders.push(path);
+      }
+    };
+    await walk('src');
+    expect(offenders, 'a non-chat caller declared itself human').toEqual([]);
   });
 });

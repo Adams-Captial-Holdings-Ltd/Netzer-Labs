@@ -143,10 +143,9 @@ export function classifyCatalog(entries: CatalogEntry[]): {
 
 /**
  * Stack suffixes the CURRENT app would synthesize, mirroring
- * infra/bin/app.ts (CodeBuild and the Paperclip substrate are the opt-in
- * stacks today). Used ONLY to choose cdk-destroy vs direct DeleteStack —
- * never to decide WHAT to destroy. The destroy set comes from live CFN +
- * the manifest.
+ * infra/bin/app.ts (CodeBuild and DemoReset are the only opt-in stacks
+ * left). Used ONLY to choose cdk-destroy vs direct DeleteStack — never to
+ * decide WHAT to destroy. The destroy set comes from live CFN + the manifest.
  */
 export const ALWAYS_ON_STACK_SUFFIXES: readonly string[] = [
   'Network',
@@ -163,6 +162,24 @@ export const ALWAYS_ON_STACK_SUFFIXES: readonly string[] = [
   'Chaos',
   'Extensions',
   'CostGuardrails',
+  // PowerSwitch. infra/bin/app.ts builds it unconditionally (no flag, no
+  // tier gate), but this list omitted it, so `currentAppStackNames` returned
+  // one fewer name than `cdk ls` on EVERY invocation — armed or not. A live
+  // CCE-PowerSwitch was therefore classified "not in the current app" and
+  // routed to direct DeleteStack instead of cdk destroy. Found by making the
+  // colocated test assert an exact length instead of `toContain`, which is
+  // why that test now counts rather than spot-checks.
+  'PowerSwitch',
+  // Paperclip work engine substrate (ADR 0010). ALWAYS-ON since Phase 9: the
+  // three stacks are constructed at every tier and gated internally, so
+  // `npx cdk ls` prints all three whether or not the tier provisions any
+  // resources into them. They belong here rather than behind a conditional
+  // for a concrete reason: this list only chooses the DESTROY METHOD, and the
+  // Aurora cluster carries deletionProtection, which the direct-DeleteStack
+  // path a "not in the current app" classification selects cannot delete.
+  'Database',
+  'Filesystem',
+  'Paperclip',
 ] as const;
 
 export function currentAppStackNames(
@@ -171,13 +188,11 @@ export function currentAppStackNames(
 ): string[] {
   const names = ALWAYS_ON_STACK_SUFFIXES.map((s) => `${stackPrefix}-${s}`);
   if (env.CCE_CODEBUILD_ENABLED === '1') names.push(`${stackPrefix}-CodeBuild`);
-  // Paperclip substrate (ADR 0010), gated in infra/bin/app.ts. Worth
-  // mirroring rather than leaving out: the Aurora cluster carries
-  // deletionProtection, and the direct-DeleteStack path this choice selects
-  // cannot delete it.
-  if (env.CCE_PAPERCLIP_ENABLED === '1') {
-    names.push(`${stackPrefix}-Database`, `${stackPrefix}-Filesystem`);
-  }
+  // Counts, since an earlier version of this comment got them wrong and the
+  // wrong number hid a missing stack: 18 always-on, matching `npx cdk ls` in
+  // EVERY configuration now that the Paperclip stacks are tier-gated inside
+  // rather than omitted from the assembly. CodeBuild and DemoReset are
+  // separately gated and absent from that run.
   return names;
 }
 

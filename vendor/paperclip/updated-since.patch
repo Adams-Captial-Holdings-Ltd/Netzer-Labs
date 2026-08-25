@@ -58,11 +58,11 @@ index e128102..7616727 100644
    sortField?: "updated";
    sortDir?: "asc" | "desc";
 +  /**
-+   * Only issues whose updatedAt is strictly newer than this watermark, at
-+   * millisecond resolution. Compiled as `updated_at >= watermark + 1ms` because
-+   * updated_at stores microseconds while API callers only ever observe
-+   * millisecond-truncated values; a plain `>` would re-return a row at its own
-+   * watermark. Served by issues_company_updated_idx.
++   * Only issues whose updatedAt is strictly newer than this watermark, at ms
++   * resolution: `updated_at >= watermark + 1ms`, because updated_at stores
++   * microseconds while callers only see ms-truncated values. THE SAME
++   * TRUNCATION MAKES THIS LOSSY IN [T, T+1ms): a caller must pass
++   * (maxProcessed - overlap) and dedupe on (id, updatedAt). See ADR 0010.
 +   */
 +  updatedSince?: Date;
  }

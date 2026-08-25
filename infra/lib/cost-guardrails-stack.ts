@@ -2,7 +2,7 @@ import { Stack, Tags, CfnOutput } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { CfnAnomalyMonitor, CfnAnomalySubscription } from 'aws-cdk-lib/aws-ce';
 import { CfnBudget } from 'aws-cdk-lib/aws-budgets';
-import { APP, TAGS } from './constants.js';
+import { APP, TAGS, paperclipProvisioned } from './constants.js';
 import type { BaseStackProps } from './interfaces.js';
 
 /**
@@ -27,7 +27,8 @@ import type { BaseStackProps } from './interfaces.js';
  *   CCE_COST_ALERT_EMAIL    recipient for anomaly + budget alerts. When unset,
  *                           the monitor/budget are still created but with no
  *                           subscribers (set the email and redeploy to arm).
- *   CCE_MONTHLY_BUDGET_USD  monthly budget ceiling in USD (default 600).
+ *   CCE_MONTHLY_BUDGET_USD  monthly budget ceiling in USD (default 710 at the
+ *                           tiers that provision Paperclip, 600 at Tier 0).
  *   CCE_ANOMALY_MIN_USD     min anomaly impact to alert on (default 25).
  */
 export class CostGuardrailsStack extends Stack {
@@ -35,12 +36,25 @@ export class CostGuardrailsStack extends Stack {
     super(scope, id, props);
 
     const email = process.env.CCE_COST_ALERT_EMAIL?.trim();
-    // Back to 600. It was raised to 650 for the Paperclip substrate, which is
-    // opt-in (CCE_PAPERCLIP_ENABLED) and off by default, so the raise loosened
-    // this alarm by $50 for every deployment that has no Aurora and no EFS.
-    // Anyone arming the substrate early can set CCE_MONTHLY_BUDGET_USD; raise
-    // the default when the gate's default flips in ADR 0010 Phase 2.
-    const monthlyBudgetUsd = Number(process.env.CCE_MONTHLY_BUDGET_USD ?? '600');
+    // Tiered, because the Paperclip substrate now is. Phase 9 made it part of
+    // a standard install at Tier 1+ (TierShape.paperclipEnabled), so the
+    // ceiling has to cover roughly $110/mo of always-on Aurora floor + EFS +
+    // its Fargate task there — while Tier 0, which provisions none of it,
+    // keeps the tighter 600. A single default would have to pick one of those
+    // to be wrong: raising it globally loosened this alarm by $110 for every
+    // Hobby install, which is the exact mistake the 650 default made at $50.
+    //
+    // WHERE 710 COMES FROM: 600, plus the Paperclip delta this repository's own
+    // estimator reports — `node scripts/cost-estimate.mjs --tier=1` now carries
+    // the Aurora min-ACU floor, EFS and the engine's Fargate task as line items
+    // gated on this same TierShape field, and they total ~$104/mo at the T1
+    // shape. Rounded up to 710 for headroom. It is an ESTIMATE from published
+    // us-east-1 unit prices, not a Pricing API query, and a CDK stack cannot
+    // spawn the estimator at synth time — so when those prices are edited there,
+    // re-run it and update this default in the same PR.
+    const monthlyBudgetUsd = Number(
+      process.env.CCE_MONTHLY_BUDGET_USD ?? (paperclipProvisioned(props.tier) ? '710' : '600'),
+    );
     const anomalyMinUsd = Number(process.env.CCE_ANOMALY_MIN_USD ?? '25');
 
     // ── Cost Anomaly Detection ────────────────────────────────────────

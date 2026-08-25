@@ -1,21 +1,23 @@
 # Cost guide: what each tier actually costs
 
-> Running Netzar OS Enterprise has a fixed monthly floor (the always-on AWS plumbing: Fargate tasks, NAT gateways, the load balancer) and a variable part (Bedrock tokens, which the built-in daily cost cap keeps bounded). The floor ranges from roughly $65 to $95 a month at the Hobby tier up to $300-plus at the Enterprise tier before any real traffic, with stated assumptions below. The numbers on this page age, so the repo ships a small recalculable estimator, `scripts/cost-estimate.mjs`, whose unit prices are an editable block at the top; trust the script over any prose snapshot.
+> Running Netzar OS Enterprise has a fixed monthly floor (the always-on AWS plumbing: Fargate tasks, NAT gateways, the load balancer, and at Standard tier or above the Paperclip work engine) and a variable part (Bedrock tokens, which the built-in daily cost cap keeps bounded). The estimator currently puts that floor at about $82 a month for Hobby and about $410 for Enterprise before real traffic. The numbers on this page age, so the repo ships a small recalculable estimator, `scripts/cost-estimate.mjs`, whose unit prices are an editable block at the top; trust the script over any prose snapshot.
 
-**As of:** 2026-06. **Region assumption:** us-east-1. **Traffic profile assumption:** light (about 50 agent turns/day, ~1 ALB LCU, single-digit GB of logs). All figures USD, on-demand pricing, before taxes.
+**As of:** 2026-07. **Region assumption:** us-east-1. **Traffic profile assumption:** light (about 50 agent turns/day, ~1 ALB LCU, single-digit GB of logs). All figures USD, on-demand pricing, before taxes.
 
 ## What each tier actually provisions
 
 This table is read directly from `TIERS` in [`infra/lib/constants.ts`](../infra/lib/constants.ts), the single source of truth CDK deploys from. The cost-relevant columns only:
 
-| Tier | Label | Fargate (min tasks x size) | NAT | Log retention | Flow Logs | WAF | X-Ray | CloudFront | WORM audit bucket | GuardDuty + Config | Daily cap default |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| T0 | Hobby | 1 x 0.5 vCPU / 1 GB | 1 | 7 days | no | no | no | no | no | no | $5 |
-| T1 | Standard | 2 x 1 vCPU / 2 GB | 2 | 30 days | yes | no | no | no | no | no | $50 |
-| T2 | Pro | 2 x 2 vCPU / 4 GB (scale to 10) | 2 | 90 days | yes | yes | yes | no | yes | no | $200 |
-| T3 | Enterprise | 3 x 2 vCPU / 4 GB (scale to 20) | 2 | 365 days | yes | yes | yes | yes | yes | yes (T3) | $1000 |
+| Tier | Label | Netzar Fargate (min tasks x size) | Paperclip work engine | NAT | Log retention | Flow Logs | WAF | X-Ray | CloudFront | WORM audit bucket | GuardDuty + Config | Daily cap default |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| T0 | Hobby | 1 x 0.5 vCPU / 1 GB | no by default | 1 | 7 days | no | no | no | no | no | no | $5 |
+| T1 | Standard | 2 x 1 vCPU / 2 GB | yes | 2 | 30 days | yes | no | no | no | no | no | $50 |
+| T2 | Pro | 2 x 2 vCPU / 4 GB (scale to 10) | yes | 2 | 90 days | yes | yes | yes | no | yes | no | $200 |
+| T3 | Enterprise | 3 x 2 vCPU / 4 GB (scale to 20) | yes | 2 | 365 days | yes | yes | yes | yes | yes | yes (T3) | $1000 |
 
 Every tier also carries: an ALB, 3 customer-managed KMS keys, 6 Secrets Manager secrets, ~31 on-demand DynamoDB tables, 6 S3 buckets, 9 CloudWatch alarms + a dashboard, and (with a domain) a Route 53 hosted zone. Tasks run on ARM64 Fargate, which is roughly 20% cheaper than x86.
+
+At T1–T3, Paperclip adds one fixed `desiredCount: 1` ARM64 Fargate task (2 vCPU / 4 GB, no autoscaling), an Aurora Serverless v2 cluster whose 0.5 ACU floor bills continuously, and EFS state. Under the estimator's storage assumptions those three lines add about **$104/month**. A normal T0 Hobby install deliberately omits them. The deploy workflow's one-directional `CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE=1` is reserved for provisioning the substrate in a specific lower-tier environment (currently staging); it does not change the standard T0 product shape.
 
 ## Fixed-floor ranges per tier
 
@@ -23,18 +25,18 @@ Computed by the estimator under the stated assumptions, then widened into honest
 
 | Tier | Estimator floor | Honest range | What dominates |
 |---|---|---|---|
-| T0 Hobby | ~$82/mo | **$65 to $95** | NAT ($33) + ALB ($22): the network plumbing costs more than the compute ($14) |
-| T1 Standard | ~$159/mo | **$130 to $180** | 2 NAT ($66) + 2 tasks ($58) + ALB ($22) |
-| T2 Pro | ~$230/mo | **$230 to $400** | 2 bigger tasks ($115) + NAT; the top of the range is autoscaling above the 2-task minimum under load |
-| T3 Enterprise | ~$306/mo | **$300 to $800** | 3 tasks ($173) + NAT; the top of the range is real traffic: more tasks, GuardDuty/Config volume pricing, CloudFront egress, 365-day log storage |
+| T0 Hobby | $81.74/mo | **$65 to $95** | NAT ($33) + ALB ($22): the network plumbing costs more than the compute ($14); Paperclip is not provisioned |
+| T1 Standard | $263.31/mo | **$250 to $310** | Paperclip (~$104) + 2 NAT ($66) + 2 Netzar tasks ($58) + ALB ($22) |
+| T2 Pro | $333.58/mo | **$330 to $500** | Paperclip (~$104) + 2 bigger Netzar tasks ($115) + NAT; autoscaling above the 2-task minimum raises the working total |
+| T3 Enterprise | $410.18/mo | **$400 to $900** | Paperclip (~$104) + 3 Netzar tasks ($173) + NAT; the upper range includes real traffic, more tasks, GuardDuty/Config volume pricing, CloudFront egress, and 365-day log storage |
 
 ### Reconciling with the README's numbers
 
-The repository README quotes ~$50 / ~$140 / ~$350 / ~$500-800 per tier. Those are operational observations from the live deployment, not a parts-list calculation, and they reconcile like this:
+Older repository estimates quote roughly $50 / $140 / $350 / $500–800 per tier. They predate Paperclip becoming part of the standard T1+ source configuration. No deployment evidence exists yet for that default Paperclip service configuration, so the new T1+ figures above are estimator-backed floors, not observed bills. They reconcile like this:
 
-- **T1 ~$140** matches the estimator's ~$159 floor within noise; the live install's gateway endpoints (free) keep NAT data low. Treat $130-180 as the honest band.
-- **T0 ~$50** is optimistic against the parts list: the ALB ($22/mo) and one NAT ($33/mo) alone exceed it. A genuinely sub-$60 T0 requires very low NAT data and riding CloudWatch free tiers. Budget $65-95.
-- **T2 ~$350 and T3 ~$500-800** sit above the estimator floors (~$230 / ~$306) because production carries more than the light-traffic profile: autoscaled tasks above the minimum, heavier log ingest, real GuardDuty/Config event volume, and data transfer. The floor is what you pay while idle; the README figures are what a working install tends to cost.
+- **T0 ~$50** is optimistic against the parts list: the ALB ($22/mo) and one NAT ($33/mo) alone exceed it. A genuinely sub-$60 T0 requires very low NAT data and riding CloudWatch free tiers. Budget $65–95.
+- **T1's old ~$140 figure** excluded the Paperclip substrate. The current estimator is ~$263: its prior ~$159 floor plus about $104 for Aurora, EFS, and the Paperclip task.
+- **T2 and T3** likewise move from prior floors of about $230 / $306 to about $334 / $410 before load. Autoscaled Netzar tasks, heavier log ingest, GuardDuty/Config volume pricing, data transfer, and Paperclip database growth can raise the actual bill.
 
 One repeated real-world lesson encoded in the defaults: **VPC interface endpoints are the single biggest optional line.** They are opt-in (`CCE_PRIVATE_ENDPOINTS=1`, default OFF) because the full set measured roughly $175/month on the original deployment; with NAT present, tasks already reach every AWS API. Turn them on only when PrivateLink isolation is a requirement, and re-run the estimator with `privateEndpoints: true` to see the impact.
 

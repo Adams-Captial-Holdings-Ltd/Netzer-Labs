@@ -55,6 +55,28 @@ env:
   # default is '3' (Enterprise, ~$306/mo), which a careless staging dispatch
   # would otherwise provision. Production still honours the input.
   CCE_TIER: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '0' || github.event.inputs.tier || '3' }}
+  # THE REPOSITORY OWNER'S DECISION, and the reason staging is the environment
+  # this variable exists for. Staging stays pinned to Tier 0 above — nothing
+  # else about staging scales up — but Tier 0 is exactly the tier that
+  # provisions no Paperclip, so without this staging would never grow the
+  # substrate and PRODUCTION would be the first environment ever to run the
+  # engine. Staging is where this gets validated.
+  #
+  # It is an ENVIRONMENT-SCOPED PROVISIONING OVERRIDE, not a feature flag. It
+  # answers "provision the substrate even though this tier would not", and it is
+  # ONE-DIRECTIONAL: there is no value of it that empties a substrate a tier
+  # provisions, which is what separates it from CCE_PAPERCLIP_ENABLED, the
+  # general-purpose gate Phase 9 deleted. See `paperclipProvisioned` in
+  # infra/lib/constants.ts.
+  #
+  # Set from the SAME staging expression CCE_TIER uses, so a production dispatch
+  # can never pick it up — and set HERE, at workflow scope, rather than on the
+  # CDK deploy step, because `scripts/ci/tier-gate.ts` has to read it too. That
+  # step emits the one boolean the ECR-repo create, the image build, the secret
+  # populate and the migration all gate on; if it could not see this, staging
+  # would deploy an Aurora cluster and a service pinned to an image CI never
+  # built — the M22 shape, one layer down.
+  CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '1' || '' }}
 
 jobs:
   source-guard:
@@ -154,12 +176,52 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Rank 7. The Paperclip gate, emitted ONCE from `paperclipProvisioned`
+      # — the predicate infra/bin/app.ts actually deploys from, which is the
+      # tier OR the environment-scoped override in the env block at the top.
+      # Four steps below used to re-derive it as `CCE_TIER != '0'`, which agrees
+      # with the table only because Tier 0 is the sole false today: the day
+      # another tier opts out, CI would build and migrate an engine CDK does not
+      # provision — and on staging, which is Tier 0 AND provisions, it would get
+      # that backwards today.
+      - name: Resolve the Paperclip tier gate
+        id: tiergate
+        run: npx tsx scripts/ci/tier-gate.ts
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/ClaudeClawGitHubDeploy
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: github-actions-deploy-${{ github.run_id }}
+
+      # Paperclip's ECR, CodeBuild, secret-population and migration calls run
+      # before the main `cdk deploy --all`. Apply this environment's additions
+      # to the shared deploy role first, in the same job, so a newly introduced
+      # grant is available to the first workflow run that consumes it.
+      - name: Apply IAM grants before Paperclip operations
+        if: steps.tiergate.outputs.paperclip_enabled == '1'
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          DOMAIN_NAME: ${{ steps.cfg.outputs.public_host }}
+          CCE_DEPLOY_MODE: infra-only
+          CDK_STACK_NAME: ${{ steps.cfg.outputs.stack_name }}
+          DEPLOY_TIER: ${{ env.CCE_TIER }}
+          CCE_TIER: ${{ env.CCE_TIER }}
+          CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}
+          CCE_CICD_ENABLED: '1'
+          CCE_PAPERCLIP_TEARDOWN: ''
+          CCE_GITHUB_OWNER: ${{ github.repository_owner }}
+          CCE_GITHUB_REPO: ${{ github.event.repository.name }}
+          CCE_GITHUB_OWNER_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_owner_id || '' }}
+          CCE_GITHUB_REPO_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_id || '' }}
+          CCE_GITHUB_DEPLOY_REFS: refs/heads/production,refs/heads/staging
+          CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
+        run: |
+          npx cdk deploy "${{ steps.cfg.outputs.stack_name }}-Iam" \
+            --exclusively \
+            --require-approval never
 
       - name: Login to ECR
         id: ecr
@@ -172,7 +234,13 @@ jobs:
         env:
           ECR_REPO: ${{ steps.cfg.outputs.ecr_repo }}
           PAPERCLIP_ECR_REPO: ${{ steps.cfg.outputs.paperclip_ecr_repo }}
-          CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
+          # Spelled PAPERCLIP_TIER_ENABLED, not PAPERCLIP_ENABLED: the plan and
+          # its audit discuss a `PAPERCLIP_ENABLED` router flag at length, and
+          # that flag was never built — it was collapsed into
+          # CCE_PAPERCLIP_ENABLED (src/lib/missions/mission-acl.ts). A bare
+          # PAPERCLIP_ENABLED here would make a grep look like the router flag
+          # shipped. This is only "does this TIER provision the substrate".
+          PAPERCLIP_TIER_ENABLED: ${{ steps.tiergate.outputs.paperclip_enabled }}
         run: |
           # scripts/deploy.ts does this for local deploys; the CI
           # workflow never did, so the first staging deploy hit a 403
@@ -214,9 +282,12 @@ jobs:
             aws ecr create-repository --repository-name "$1" --image-scanning-configuration scanOnPush=true --image-tag-mutability MUTABLE --region "$AWS_REGION" --no-cli-pager
           }
           ensure_repo "$ECR_REPO"
-          # Paperclip work engine (ADR 0010): same gate as the substrate
-          # stacks, so an unarmed deploy still creates nothing.
-          if [ "$CCE_PAPERCLIP_ENABLED" = "1" ]; then
+          # Paperclip work engine (ADR 0010): the SAME gate the substrate
+          # stacks use since Phase 9 — TierShape.paperclipEnabled, resolved
+          # once by the "Resolve the Paperclip tier gate" step above rather
+          # than re-spelled as a tier comparison here. A tier that provisions
+          # no Paperclip needs no repo to push an image into.
+          if [ "$PAPERCLIP_TIER_ENABLED" = "1" ]; then
             ensure_repo "$PAPERCLIP_ECR_REPO"
           fi
 
@@ -291,23 +362,28 @@ jobs:
       # platform succeeds quietly and produces amd64 that crash-loops on
       # Fargate with "exec format error".
       #
-      # Same gate as the ECR repo create above: with CCE_PAPERCLIP_ENABLED
-      # unset this step never runs, so an unarmed deploy creates no CodeBuild
-      # project, starts no build and pushes no image.
+      # Same gate as the ECR repo create above, and since Phase 9 that gate is
+      # `paperclipProvisioned`: the tier, OR the environment-scoped override. A
+      # configuration that provisions no Paperclip never runs this step and so
+      # creates no CodeBuild project, starts no build and pushes no image.
+      # NOTE for this repository's own pipeline: staging runs at CCE_TIER 0 but
+      # carries CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE=1 (see the env block at the
+      # top), so staging DOES build the image and DOES provision the substrate —
+      # it is the environment the engine is validated in, which is the whole
+      # point of the override. A Tier 0 install without it builds nothing.
       #
-      # IAM, and it is the same ordering trap the ECR grants carry: this step
-      # needs cicdRole's PaperclipCloudBuild* statements (infra/lib/iam-stack.ts)
-      # to stage the source zip, create/start the CodeBuild project and pass its
-      # role. Those are applied by the CDK deploy LATER IN THIS JOB, so they
-      # must land in a prior UNARMED deploy before CCE_PAPERCLIP_ENABLED is set,
-      # and cicdRole is created only by the PROD IAM stack, so a staging arm
-      # depends on a production IAM deploy having run first.
+      # IAM. This step needs cicdRole's PaperclipCloudBuild* statements
+      # (infra/lib/iam-stack.ts) to stage the source zip, create/start the
+      # CodeBuild project and pass its role. The exclusive IAM deploy above
+      # applies this environment's grants before any Paperclip consumer runs,
+      # including on the first workflow run.
       #
       # timeout-minutes is belt and braces: runCloudBuild gives up at 35
       # minutes and the CodeBuild project times out at 30, so this only catches
       # a hung AWS CLI.
       - name: Build + Push Paperclip (native ARM64 CodeBuild)
-        if: vars.CCE_PAPERCLIP_ENABLED == '1'
+        id: paperclipimg
+        if: steps.tiergate.outputs.paperclip_enabled == '1'
         timeout-minutes: 45
         env:
           PAPERCLIP_ECR_REPO: ${{ steps.cfg.outputs.paperclip_ecr_repo }}
@@ -379,6 +455,458 @@ jobs:
             echo "CCE_PUBLIC_BOOTSTRAP=1 (see assertPublicEntrypointRenderable)."
           fi
 
+      # Populate the Paperclip secret BEFORE the CDK deploy that starts the
+      # service. `put-secret-value` appeared ZERO times in this workflow until
+      # now (ledger A26): CI populated no secrets at all, for any feature. The
+      # Paperclip task definition injects `database_url` and
+      # `better_auth_secret` as ECS secret FIELDS, and a missing field is a
+      # ResourceInitializationError at task START, so an armed deploy without
+      # this step could not start a task at all.
+      #
+      # Ordering. The secret itself is created by CCE-Secrets, ungated, on
+      # every deploy, so on any environment that has ever deployed it already
+      # exists and this step can run first. The Aurora credentials secret is
+      # created by CCE-Database, which only exists once the feature is armed,
+      # so on the FIRST deploy of a standard install there is nothing to
+      # compose a URL from. The migrate step below sees the absence and arms
+      # CCE_PAPERCLIP_BOOTSTRAP for the main CDK deploy, which lands the stack
+      # with DesiredCount 0. The completion step then composes the URL, migrates,
+      # and starts it in this same workflow run. No operator variable is needed.
+      #
+      # Failure directions, both stated deliberately (M33):
+      #  - a secret that does not exist yet: SKIP. Nothing deployed on that run
+      #    depends on its contents, and creating it here would collide with the
+      #    CloudFormation resource that owns the name.
+      #  - a secret that exists but cannot be READ or WRITTEN (AccessDenied):
+      #    HARD FAIL. This is the corrected cloudflared idiom directly above:
+      #    "not ready" and "I could not find out" must not be the same answer.
+      #    Failing here changes nothing; guessing would start a service against
+      #    REPLACE_ME.
+      #  - a value already present: LEAVE IT. Every write is a read-modify-write
+      #    merge, because PutSecretValue swaps the whole string and would
+      #    otherwise wipe the reconciler, agent and dispatch keys that
+      #    scripts/paperclip-bootstrap.ts minted against the running instance.
+      #
+      # No secret value is ever echoed: values move through jq and a file, and
+      # only FIELD NAMES are printed.
+      #
+      # M34. The deploy role needs secretsmanager:GetSecretValue and
+      # PutSecretValue on claudeclaw[-staging]/paperclip*. Those statements
+      # exist in both environment branches of infra/lib/iam-stack.ts and the
+      # exclusive IAM deploy above applies them before this step. Read failures
+      # still fail closed; the code is a plan and the live role is the fact.
+      - name: Populate Paperclip secret
+        if: steps.tiergate.outputs.paperclip_enabled == '1'
+        env:
+          APP_SLUG: ${{ env.TARGET_ENV == 'staging' && 'claudeclaw-staging' || 'claudeclaw' }}
+          # The one owner of better_auth_secret. Same spelling as .env, so a
+          # local deploy and a CI deploy converge on one value instead of
+          # rotating each other's. Unset is tolerated (warn + skip), never fatal.
+          PAPERCLIP_BETTER_AUTH_SECRET: ${{ secrets.PAPERCLIP_BETTER_AUTH_SECRET }}
+        run: |
+          set -uo pipefail
+          SECRET="/$APP_SLUG/paperclip"
+          DB_SECRET="/$APP_SLUG/paperclip-db"
+          umask 077
+          read_secret() {
+            set +e
+            out=$(aws secretsmanager get-secret-value --secret-id "$1" \
+                    --region "$AWS_REGION" --query SecretString --output text 2>&1)
+            rc=$?
+            set -e
+            printf '%s' "$out"
+            return $rc
+          }
+
+          if ! current=$(read_secret "$SECRET"); then
+            case "$current" in
+              *ResourceNotFoundException*)
+                echo "$SECRET does not exist yet; CCE-Secrets creates it in this deploy."
+                echo "The migrate step below arms CCE_PAPERCLIP_BOOTSTRAP for this run, so"
+                echo "the service lands with DesiredCount 0 before this workflow finishes it."
+                exit 0
+                ;;
+              *)
+                echo "::error::Could not read $SECRET; refusing to guess."
+                echo "The deploy role needs secretsmanager:GetSecretValue and PutSecretValue" >&2
+                echo "on $SECRET and $DB_SECRET. Read the LIVE role before granting (M34)." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          printf '%s' "$current" > current.json
+          cp current.json before.json
+
+          # better_auth_secret has exactly ONE owner: the operator-held
+          # PAPERCLIP_BETTER_AUTH_SECRET, the same value and the same spelling
+          # `npm run setup` mints into .env and phase (b) writes via
+          # scripts/lib/lifecycle/deploy-phases.ts.
+          #
+          # This step used to mint its own with `openssl rand -hex 32` when the
+          # field was REPLACE_ME. That made TWO independent minters for one
+          # value: CI would mint, then the next LOCAL deploy would merge .env's
+          # different value over it, silently rotating the auth secret and
+          # logging every Paperclip user out — while both sides' comments
+          # claimed it was "minted once, then never touched". A value no
+          # operator can see and no second driver can reproduce is not owned.
+          #
+          # So CI consumes, never mints. Absent -> defer with instructions,
+          # the same shape as the missing-secret paths above; a deploy is not
+          # failed over a value the operator can set in one place.
+          if [ "$(jq -r '.better_auth_secret // "REPLACE_ME"' current.json)" = "REPLACE_ME" ]; then
+            if [ -n "${PAPERCLIP_BETTER_AUTH_SECRET:-}" ]; then
+              printf '%s' "$PAPERCLIP_BETTER_AUTH_SECRET" > auth.txt
+              jq --rawfile v auth.txt '.better_auth_secret = $v' current.json > next.json
+              mv next.json current.json
+              rm -f auth.txt
+              echo "wrote better_auth_secret from the repo secret (value not shown)"
+            else
+              echo "::warning::$SECRET still has better_auth_secret=REPLACE_ME."
+              echo "Set the repository secret PAPERCLIP_BETTER_AUTH_SECRET (the same value"
+              echo "'npm run setup' writes to .env as PAPERCLIP_BETTER_AUTH_SECRET), then"
+              echo "re-run. Generate one with: openssl rand -hex 32"
+              echo "Paperclip sign-in stays broken until it is set; nothing else is blocked."
+            fi
+          fi
+
+          # database_url: composed from the Aurora-generated secret, which is
+          # RDS-managed and carries no URL form. Absent on the first armed
+          # deploy, when CCE-Database has not been created yet.
+          #
+          # ?sslmode=require is load-bearing, not decoration. Aurora runs the
+          # default parameter group (rds.force_ssl=1) and the image's driver
+          # connects in plaintext unless the URL says otherwise; probed
+          # 2026-08-21 against a hostssl-only Postgres 17, the migration fails
+          # "no pg_hba.conf entry ... no encryption" without it and exits 0
+          # with it. `require` not `verify-full` — the image carries no RDS CA
+          # bundle. This is a HAND MIRROR of PAPERCLIP_DB_URL_TLS_SUFFIX in
+          # scripts/deploy.ts, because CI never runs that file (M27); the two
+          # are pinned together by a test in infra/lib/paperclip-stack.test.ts.
+          if db=$(read_secret "$DB_SECRET"); then
+            printf '%s' "$db" > db.json
+            if [ "$(jq -r '(.host // "") != "" and (.username // "") != "" and (.password // "") != ""' db.json)" = "true" ]; then
+              jq -s '.[0] + {database_url: ("postgres://" + (.[1].username | @uri) + ":"
+                     + (.[1].password | @uri) + "@" + .[1].host + ":"
+                     + ((.[1].port // 5432) | tostring) + "/" + (.[1].dbname // "paperclip")
+                     + "?sslmode=require")}' \
+                 current.json db.json > next.json
+              mv next.json current.json
+              echo "composed database_url from $DB_SECRET"
+            else
+              echo "::warning::$DB_SECRET has no host/username/password yet; database_url unchanged"
+            fi
+            rm -f db.json
+          else
+            case "$db" in
+              *ResourceNotFoundException*)
+                echo "$DB_SECRET does not exist yet; Aurora lands in this deploy."
+                ;;
+              *)
+                echo "::error::Could not read $DB_SECRET; refusing to guess."
+                echo "$db" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [ "$(jq -S -c . current.json)" = "$(jq -S -c . before.json)" ]; then
+            echo "$SECRET already current; nothing written."
+          else
+            aws secretsmanager put-secret-value --secret-id "$SECRET" \
+              --secret-string "file://current.json" --region "$AWS_REGION" \
+              --no-cli-pager > /dev/null
+            echo "wrote $SECRET (fields: $(jq -r 'keys | join(", ")' current.json))"
+          fi
+          rm -f current.json before.json
+
+      # Run Paperclip's schema migration BEFORE the CDK deploy that rolls the
+      # service. This step is the CI half of `scripts/deploy.ts` phase b.5.
+      #
+      # WHY IT HAS TO EXIST HERE AT ALL (M27, the fourth time). The deploy
+      # driver has TWO homes and CI is not `scripts/deploy.ts`: this workflow
+      # hand-mirrors each phase and then runs `npx cdk deploy --all`. Phase b.5
+      # lived only in the script, so on the one path that actually reaches
+      # staging and production the migration simply never ran. The service
+      # deliberately does NOT carry PAPERCLIP_MIGRATION_AUTO_APPLY, so nothing
+      # else would have migrated it either: a CI deploy with
+      # CCE_PAPERCLIP_BOOTSTRAP clear would have started an essential
+      # container against an empty schema, failed its rollout, and left
+      # CCE-Paperclip in UPDATE_ROLLBACK next to RETAIN + deletionProtection
+      # substrate.
+      #
+      # ORDERING. Before `CDK deploy`, because that deploy is what sets
+      # DesiredCount 1 and CloudFormation waits for the service to reach steady
+      # state; migrating after it is migrating after the rollout has already
+      # failed. On upgrades this step uses the task definition the previous
+      # deploy created. On a fresh install no task definition exists yet, so it
+      # arms bootstrap and the completion step uses the definition the main
+      # deploy creates, all within this workflow run:
+      #
+      #   before main deploy -> this step finds no stack, exits 0, and sets
+      #     bootstrap=1.
+      #     Aurora, EFS and the whole Paperclip stack land with DesiredCount 0.
+      #     No task starts, nothing fails, and the migration task definition
+      #     now exists.
+      #   after main deploy -> the completion step composes database_url,
+      #     migrates, clears bootstrap, and redeploys Paperclip to start it.
+      #
+      # NAMED CONSEQUENCE, not hidden: an image bump that INTRODUCES a
+      # migration is the same two-deploy shape, because this step runs the
+      # previous digest's migrate task definition. Ship the new image with
+      # CCE_PAPERCLIP_BOOTSTRAP=1 (the operator variable still works and still
+      # wins), then clear it. `vendor/paperclip` is
+      # content-tagged and changes only when its Dockerfile or its patch
+      # changes, so this is rare and deliberate rather than routine.
+      #
+      # M33, all three directions:
+      #  - stack/secret AFFIRMATIVELY not there (first install): defer_bootstrap
+      #    — exit 0 and arm DesiredCount 0 for this job's CDK deploy. The
+      #    completion step resumes after it. Safe precisely because nothing is
+      #    running yet, so the flag has no service to scale down.
+      #  - stack there but its migration outputs are not: plain defer — exit 0
+      #    and change nothing. Deliberately does NOT arm the flag: a stack that
+      #    exists may have a running service.
+      #  - stack unreadable, or the migration job exits non-zero: HARD FAIL,
+      #    BEFORE `CDK deploy`. The running service keeps running on its
+      #    current task definition and this workflow has changed nothing. It
+      #    never removes a resource, never scales one down, and never lets the
+      #    deploy proceed on a guess.
+      #
+      # The exit code alone is deliberately NOT trusted as proof that Aurora
+      # was migrated, so database_url is verified non-empty and
+      # non-placeholder here, before the job is started. Only its PRESENCE is
+      # checked; the value is never bound to a variable and never printed.
+      #
+      # That guard was written against a suspected false green: the resolver
+      # falling back to an EMBEDDED postgres when DATABASE_URL is empty and
+      # still exiting 0. PROBED 2026-08-21 and the suspicion was WRONG in the
+      # safe direction — the fallback is reached but exits 1, because the
+      # container runs as root and embedded-postgres refuses to. The check
+      # stays anyway: the thing that makes it exit 1 is a root check, not a
+      # refusal to migrate the wrong database, so it stops protecting anything
+      # the day the task definition gains a non-root `user`.
+      #
+      # What the same probe DID prove load-bearing is ?sslmode=require on the
+      # composed URL (see the step above). Without it this job cannot connect
+      # to a force_ssl Aurora at all.
+      - name: Migrate Paperclip database
+        id: pcmigrate
+        if: steps.tiergate.outputs.paperclip_enabled == '1'
+        env:
+          APP_SLUG: ${{ env.TARGET_ENV == 'staging' && 'claudeclaw-staging' || 'claudeclaw' }}
+          STACK: ${{ steps.cfg.outputs.stack_name }}-Paperclip
+        run: |
+          set -uo pipefail
+          SECRET="/$APP_SLUG/paperclip"
+
+          # RANK 1. There is nothing to migrate YET — not "the migration
+          # failed", which is always a hard exit 1 further down. Since Phase 9
+          # made the substrate part of a standard install, this is the
+          # GUARANTEED state of a first deploy at a tier that provisions it,
+          # and this step runs BEFORE `CDK deploy`. Exiting 1 here therefore
+          # blocked the entire deploy — orchestrator included — on every first
+          # run, and the next run deferred identically: a permanent deadlock
+          # until an operator set a variable whose own documentation said
+          # "FIRST ARMED DEPLOY ONLY", a concept Phase 9 deleted.
+          #
+          # So exit 0 and carry on with the deploy, printing what happens next.
+          #
+          # defer_bootstrap() additionally arms CCE_PAPERCLIP_BOOTSTRAP for the
+          # `CDK deploy` step below, so the service lands with DesiredCount 0
+          # and no task starts against an unmigrated database. It is used ONLY
+          # on branches that have established AFFIRMATIVELY that the stack
+          # cannot be running — the secret CCE-Secrets creates is absent, or
+          # Aurora has never been composed into it, or the stack does not
+          # exist. On those branches there is no service for DesiredCount 0 to
+          # scale down, which is what keeps this clear of M33: an unreadable
+          # probe still exits 1, and "I could not find out" is never read as
+          # "not ready".
+          defer() {
+            echo "$1"
+            echo "Nothing to migrate yet. This deploy continues; re-run it once"
+            echo "$STACK has published its migration outputs."
+            exit 0
+          }
+
+          defer_bootstrap() {
+            echo "$1"
+            echo "First install: the CDK deploy in this job will land $STACK with"
+            echo "DesiredCount 0, so no task starts against an unmigrated database."
+            echo "This workflow then composes database_url, migrates the schema,"
+            echo "and starts the service in its completion step."
+            echo "bootstrap=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          # 1. database_url must actually be there. The step above composes it;
+          #    an EMPTY field would silently migrate a throwaway embedded
+          #    postgres and exit 0.
+          set +e
+          raw=$(aws secretsmanager get-secret-value --secret-id "$SECRET" \
+            --region "$AWS_REGION" --query SecretString --output text 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            case "$raw" in
+              *ResourceNotFoundException*)
+                # CCE-Secrets creates this secret, so its absence means the
+                # deploy that creates CCE-Paperclip has not run either.
+                defer_bootstrap "$SECRET does not exist yet."
+                ;;
+              *)
+                echo "::error::Could not read $SECRET; refusing to guess." >&2
+                echo "The deploy role needs secretsmanager:GetSecretValue on $SECRET." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          have=$(printf '%s' "$raw" | jq -r 'if (.database_url // "") == "" or .database_url == "REPLACE_ME" then "no" else "yes" end')
+          unset raw
+          if [ "$have" != "yes" ]; then
+            # The step above composes database_url from the Aurora secret and
+            # skips only when THAT does not exist, i.e. CCE-Database has never
+            # deployed. No Paperclip task can be healthy without it either.
+            defer_bootstrap "$SECRET has no database_url yet; Aurora has not been composed into it."
+          fi
+
+          # 2. Locate the migration job from the LIVE stack outputs. The same
+          #    four outputs scripts/deploy.ts reads, from CloudFormation rather
+          #    than a gitignored cdk-outputs.json, so the lookup answers
+          #    identically on a runner, a fresh clone and a laptop.
+          set +e
+          out=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+            --region "$AWS_REGION" --query 'Stacks[0].Outputs' --output json 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            case "$out" in
+              *ValidationError*)
+                defer_bootstrap "$STACK does not exist yet, so there is no migration task definition."
+                ;;
+              *)
+                echo "::error::Could not read $STACK; refusing to guess." >&2
+                echo "$out" >&2
+                echo "The deploy role needs cloudformation:DescribeStacks. An unreadable" >&2
+                echo "probe must never be treated as 'not deployed' (2026-08-14)." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          get() {
+            printf '%s' "$out" | jq -r --arg k "$1" '(.[]? | select(.OutputKey==$k) | .OutputValue) // ""'
+          }
+          CLUSTER=$(get PaperclipClusterName)
+          FAMILY=$(get PaperclipMigrateTaskDefFamily)
+          SUBNETS=$(get PaperclipMigrateSubnets)
+          SG=$(get PaperclipMigrateSecurityGroup)
+          if [ -z "$CLUSTER" ] || [ -z "$FAMILY" ] || [ -z "$SUBNETS" ] || [ -z "$SG" ]; then
+            defer "$STACK exists but has not published the migration outputs yet."
+          fi
+
+          # 3. Run it, wait, read the container exit code. Nothing is passed as
+          #    a RunTask override: overrides are readable verbatim in
+          #    `aws ecs describe-tasks`, and DATABASE_URL reaches the container
+          #    as an ECS secret instead.
+          echo "Running $FAMILY on $CLUSTER"
+          TASK=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$FAMILY" \
+            --launch-type FARGATE \
+            --count 1 \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" \
+            --region "$AWS_REGION" \
+            --query 'tasks[0].taskArn' --output text)
+          if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then
+            echo "::error::Paperclip migration returned no task ARN." >&2
+            exit 1
+          fi
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK" --region "$AWS_REGION"
+          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+            --region "$AWS_REGION" --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$EXIT" != "0" ]; then
+            REASON=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+              --region "$AWS_REGION" --query 'tasks[0].stoppedReason' --output text)
+            echo "::error::Paperclip migration exited $EXIT ($REASON). Refusing to deploy." >&2
+            echo "Logs: aws logs tail /$APP_SLUG/paperclip --log-stream-name-prefix migrate" >&2
+            exit 1
+          fi
+          echo "Paperclip schema is migrated."
+
+      # THE MONEY, PRINTED ON THE ONE RUN THAT SPENDS IT.
+      #
+      # Since Phase 9 the Paperclip substrate installs BY DEFAULT, so the next
+      # `cdk deploy --all` of any tier that provisions it silently creates an
+      # Aurora cluster, an EFS filesystem and an always-on 2 vCPU / 4 GB Fargate
+      # task -- on a cluster that is RETAIN + deletionProtection: true and so
+      # not casually reversible. The LOCAL driver names that figure on its
+      # confirmation screen (scripts/lib/cost-gate.ts, resourceSummary +
+      # estimateLine). This job runs `cdk deploy --all` unattended and showed a
+      # human nothing at all, which is the gap.
+      #
+      # IT IS A NOTICE, NEVER A GATE. `continue-on-error: true` plus a `|| exit 0`
+      # on the estimator: the install path stays unattended, and a broken or
+      # renamed estimator must never be the thing that stops a deploy. It writes
+      # to $GITHUB_STEP_SUMMARY only -- it prompts nothing and blocks nothing.
+      #
+      # WHEN. Only when the substrate is being NEWLY provisioned: the tier
+      # provisions it (`tiergate`), AND the migrate step above AFFIRMATIVELY
+      # established that it is not there yet. That second half is `pcmigrate`'s
+      # own `bootstrap` output, which is set ONLY on its defer_bootstrap
+      # branches -- the CCE-Secrets secret is absent, database_url was never
+      # composed from Aurora, or CCE-Paperclip does not exist -- every one of
+      # which means CCE-Database has never deployed. Reusing that signal rather
+      # than adding a second `describe-db-clusters` probe also means there is
+      # one answer to "is the substrate there", not two that can disagree; and
+      # an unreadable probe still exits 1 in that step rather than reaching
+      # here. A run that merely UPDATES an existing cluster prints nothing,
+      # because it is not spending anything new.
+      #
+      # WHERE THE NUMBER COMES FROM. `scripts/cost-estimate.mjs --json` -- the
+      # same estimator scripts/lib/cost-gate.ts parses for its primary money
+      # line -- read for the line items it labels "(Paperclip...)", which is
+      # exactly the delta this deploy adds. cost-gate.ts exports no bare figure
+      # to import: its "~$110/mo" lives inside a prose string in the FALLBACK
+      # branch of estimateLine(), reachable only when the estimator has already
+      # failed. Summing the estimator's own line items is therefore the closest
+      # thing to the single source, and it recalculates instead of becoming a
+      # second hardcoded copy of the number.
+      - name: Note the added Paperclip cost (job summary)
+        # ONE condition, not two. `bootstrap` can only ever be '1' when the
+        # step that writes it ran, and that step is itself gated on
+        # `steps.tiergate.outputs.paperclip_enabled`, so re-stating the tier
+        # gate here would be a second copy of an implication that already
+        # holds. When pcmigrate is skipped the output is '', not '1'.
+        if: steps.pcmigrate.outputs.bootstrap == '1'
+        continue-on-error: true
+        run: |
+          set +e
+          node scripts/cost-estimate.mjs --json > pc-cost.json || exit 0
+          node -e '
+          const j = JSON.parse(require("fs").readFileSync("pc-cost.json", "utf8"));
+          const tier = Number(process.env.CCE_TIER);
+          const row = j.results.find((r) => r.tier === tier);
+          const lines = (row ? row.lines : []).filter((l) => l.label.includes("(Paperclip"));
+          if (!lines.length) process.exit(0);
+          const total = Math.round(lines.reduce((a, l) => a + l.usd, 0));
+          const out = [
+            "### Paperclip work engine: first provisioning",
+            "",
+            "This run creates the Paperclip substrate for the first time in this account.",
+            "It adds roughly **$" + total + "/mo** of always-on cost at tier " + tier + " (" + row.label + "):",
+            "",
+            ...lines.map((l) => "- " + l.label + " - $" + l.usd + "/mo"),
+            "",
+            "Estimated by `scripts/cost-estimate.mjs` (unit prices as of " + j.asOf + "), the",
+            "same estimator the local deploy gate prices from. The Aurora cluster and the EFS",
+            "filesystem are RETAIN + deletionProtection, so lowering the tier later does NOT",
+            "remove them. Notice only: nothing was blocked and nothing prompted.",
+            "",
+          ];
+          for (const line of out) console.log(line);
+          ' >> "$GITHUB_STEP_SUMMARY"
+          rm -f pc-cost.json
+          exit 0
+
       - name: CDK deploy
         env:
           CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
@@ -399,10 +927,55 @@ jobs:
           # Pin the task definition to the image we just pushed (never `latest`).
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
           CCE_CICD_ENABLED: '1'
-          # Paperclip Aurora/EFS substrate, off unless the variable says 1.
-          # Forwarded so arming it is `gh variable set CCE_PAPERCLIP_ENABLED
-          # --body 1` plus a redeploy, not a code change and a ladder trip.
+          # Paperclip ROUTER flag, and only that since Phase 9: the substrate
+          # itself is provisioned by CCE_TIER above. This variable reaches the
+          # orchestrator task definition (compute-stack.ts) where
+          # paperclipRoutingEnabled() reads it, so `gh variable set
+          # CCE_PAPERCLIP_ENABLED --body 1` plus a redeploy still flips
+          # /api/missions over to the engine, and `--body 0` forces it back to
+          # the legacy handlers without touching any infrastructure.
           CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
+          # Pin both Paperclip task definitions to the image the build step
+          # above just resolved. Absent until now, so synth fell back to an
+          # unpullable placeholder TAG: a task definition that could never
+          # start. Same shape as M22/M27, one layer down.
+          CCE_PAPERCLIP_IMAGE_DIGEST: ${{ steps.paperclipimg.outputs.digest }}
+          # M33. The ONLY Paperclip flag that changes runtime behaviour, and it
+          # is safe when absent. Unset (the default, and the value on every
+          # fresh clone and unconfigured runner) means DesiredCount 1: an
+          # existing service keeps running. An operator can set it to 1 to park
+          # the service for a migration-bearing image upgrade or emergency.
+          # It can scale Paperclip down; it can never delete it, because the
+          # service is unconditional in the template either way. Never derived
+          # from a probe: the rejected version of this gate defaulted an
+          # unreadable probe to "omit the service", and on THIS workflow, where
+          # the variable did not exist at all, that would have deleted a
+          # running service on every armed deploy and gone green.
+          # On a standard first install the migrate step arms it automatically
+          # after affirmatively establishing that the stack is absent. The
+          # completion step migrates and clears it in this same workflow run.
+          CCE_PAPERCLIP_BOOTSTRAP: ${{ vars.CCE_PAPERCLIP_BOOTSTRAP == '1' && '1' || steps.pcmigrate.outputs.bootstrap }}
+          # The environment-scoped provisioning override. Declared in the
+          # workflow-level `env:` block (see the comment there for why), so it
+          # is already in this step's environment; forwarded explicitly all the
+          # same, because THIS is the step where it decides whether Aurora and
+          # EFS exist, and every other variable that does is listed here.
+          CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: ${{ env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE }}
+          # The OTHER direction (Rank 3). At a tier that provisions no
+          # Paperclip, infra/bin/app.ts REFUSES to synth unless the emptying is
+          # declared — because these stacks are now always in the assembly, so
+          # a Tier 0 `cdk deploy --all` UPDATES a provisioned substrate to an
+          # empty template and orphans a retained, deletion-protected Aurora
+          # and EFS.
+          #
+          # DELIBERATELY UNSET ON EVERY PATH, including staging, which used to
+          # declare it. Staging now PROVISIONS via the override above, so it has
+          # no empty substrate to declare — and a standing TEARDOWN=1 there would
+          # pre-authorize emptying the very Aurora cluster the override is about
+          # to create, the moment anyone removed the override. A production
+          # dispatch that picks tier 0 must still stop, and now so must a staging
+          # deploy that has lost its override.
+          CCE_PAPERCLIP_TEARDOWN: ''
           CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
           # Must be forwarded or a CI deploy silently UNDOES the public
           # dashboard: synth resolves the feature off, drops the cloudflared
@@ -448,6 +1021,122 @@ jobs:
           CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
         run: |
           npx cdk deploy --all \
+            --require-approval never \
+            --outputs-file cdk-outputs.json
+
+      # A first install reaches the main deploy without a migration task
+      # definition, so that deploy intentionally parks Paperclip at zero. The
+      # stack and Aurora now exist: compose the database URL, migrate with the
+      # task definition just published, then redeploy only Paperclip with the
+      # bootstrap flag cleared. A deliberate operator park still wins.
+      - name: Complete fresh Paperclip bootstrap
+        if: steps.pcmigrate.outputs.bootstrap == '1' && vars.CCE_PAPERCLIP_BOOTSTRAP != '1'
+        env:
+          APP_SLUG: ${{ env.TARGET_ENV == 'staging' && 'claudeclaw-staging' || 'claudeclaw' }}
+          STACK: ${{ steps.cfg.outputs.stack_name }}-Paperclip
+          PAPERCLIP_BETTER_AUTH_SECRET: ${{ secrets.PAPERCLIP_BETTER_AUTH_SECRET }}
+          CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          DOMAIN_NAME: ${{ steps.cfg.outputs.public_host }}
+          CCE_DEPLOY_MODE: infra-only
+          CDK_STACK_NAME: ${{ steps.cfg.outputs.stack_name }}
+          DEPLOY_TIER: ${{ env.CCE_TIER }}
+          CCE_TIER: ${{ env.CCE_TIER }}
+          CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}
+          CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
+          CCE_CICD_ENABLED: '1'
+          CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
+          CCE_PAPERCLIP_IMAGE_DIGEST: ${{ steps.paperclipimg.outputs.digest }}
+          CCE_PAPERCLIP_BOOTSTRAP: ''
+          CCE_PAPERCLIP_TEARDOWN: ''
+          CCE_ANOMALY_MONITOR_ARN: ${{ vars.CCE_ANOMALY_MONITOR_ARN }}
+          CCE_PUBLIC_ACCESS: ${{ vars.CCE_PUBLIC_ACCESS }}
+          CCE_PUBLIC_HOSTNAME: ${{ vars.CCE_PUBLIC_HOSTNAME }}
+          CCE_PUBLIC_CONNECTOR_READY: ${{ steps.pubready.outputs.ready }}
+          CCE_DASHBOARD_URL: ${{ vars.CCE_DASHBOARD_URL }}
+          CCE_EMAIL_FROM: ${{ vars.CCE_EMAIL_FROM }}
+          CCE_SES_CONFIG_SET: ${{ vars.CCE_SES_CONFIG_SET }}
+          CCE_OPS_ALERT_EMAIL: ${{ vars.CCE_OPS_ALERT_EMAIL }}
+          CCE_GITHUB_OWNER: ${{ github.repository_owner }}
+          CCE_GITHUB_REPO: ${{ github.event.repository.name }}
+          CCE_GITHUB_OWNER_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_owner_id || '' }}
+          CCE_GITHUB_REPO_ID: ${{ vars.CCE_GITHUB_IMMUTABLE_SUBJECT == '1' && github.repository_id || '' }}
+          CCE_GITHUB_DEPLOY_REFS: refs/heads/production,refs/heads/staging
+          CCE_GITHUB_DEPLOY_ENVIRONMENTS: production,staging
+        run: |
+          set -euo pipefail
+          SECRET="/$APP_SLUG/paperclip"
+          DB_SECRET="/$APP_SLUG/paperclip-db"
+          umask 077
+
+          current=$(aws secretsmanager get-secret-value --secret-id "$SECRET" \
+            --region "$AWS_REGION" --query SecretString --output text)
+          db=$(aws secretsmanager get-secret-value --secret-id "$DB_SECRET" \
+            --region "$AWS_REGION" --query SecretString --output text)
+          if [ "$(printf '%s' "$db" | jq -r '(.host // "") != "" and (.username // "") != "" and (.password // "") != ""')" != "true" ]; then
+            echo "::error::$DB_SECRET has no host/username/password after the bootstrap deploy." >&2
+            exit 1
+          fi
+          printf '%s' "$current" > current.json
+          printf '%s' "$db" > db.json
+          unset current db
+          jq -s '.[0] + {database_url: ("postgres://" + (.[1].username | @uri) + ":"
+                 + (.[1].password | @uri) + "@" + .[1].host + ":"
+                 + ((.[1].port // 5432) | tostring) + "/" + (.[1].dbname // "paperclip")
+                 + "?sslmode=require")}' \
+             current.json db.json > next.json
+          if [ "$(jq -r '.better_auth_secret // "REPLACE_ME"' next.json)" = "REPLACE_ME" ] && [ -n "${PAPERCLIP_BETTER_AUTH_SECRET:-}" ]; then
+            printf '%s' "$PAPERCLIP_BETTER_AUTH_SECRET" > auth.txt
+            jq --rawfile v auth.txt '.better_auth_secret = $v' next.json > merged.json
+            mv merged.json next.json
+            rm -f auth.txt
+          fi
+          aws secretsmanager put-secret-value --secret-id "$SECRET" \
+            --secret-string "file://next.json" --region "$AWS_REGION" \
+            --no-cli-pager > /dev/null
+          rm -f current.json db.json next.json
+          echo "Composed Paperclip database_url after the bootstrap deploy (value not shown)."
+
+          out=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+            --region "$AWS_REGION" --query 'Stacks[0].Outputs' --output json)
+          get() {
+            printf '%s' "$out" | jq -r --arg k "$1" '(.[]? | select(.OutputKey==$k) | .OutputValue) // ""'
+          }
+          CLUSTER=$(get PaperclipClusterName)
+          FAMILY=$(get PaperclipMigrateTaskDefFamily)
+          SUBNETS=$(get PaperclipMigrateSubnets)
+          SG=$(get PaperclipMigrateSecurityGroup)
+          if [ -z "$CLUSTER" ] || [ -z "$FAMILY" ] || [ -z "$SUBNETS" ] || [ -z "$SG" ]; then
+            echo "::error::$STACK did not publish complete migration outputs." >&2
+            exit 1
+          fi
+
+          echo "Running $FAMILY on $CLUSTER"
+          TASK=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$FAMILY" \
+            --launch-type FARGATE \
+            --count 1 \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" \
+            --region "$AWS_REGION" \
+            --query 'tasks[0].taskArn' --output text)
+          if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then
+            echo "::error::Paperclip migration returned no task ARN." >&2
+            exit 1
+          fi
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK" --region "$AWS_REGION"
+          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+            --region "$AWS_REGION" --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$EXIT" != "0" ]; then
+            REASON=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+              --region "$AWS_REGION" --query 'tasks[0].stoppedReason' --output text)
+            echo "::error::Paperclip migration exited $EXIT ($REASON). Refusing to start the service." >&2
+            echo "Logs: aws logs tail /$APP_SLUG/paperclip --log-stream-name-prefix migrate" >&2
+            exit 1
+          fi
+          echo "Paperclip schema is migrated; starting the service."
+          npx cdk deploy "$STACK" \
+            --exclusively \
             --require-approval never \
             --outputs-file cdk-outputs.json
 

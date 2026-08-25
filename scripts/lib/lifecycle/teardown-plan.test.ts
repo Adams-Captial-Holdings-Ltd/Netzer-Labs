@@ -121,20 +121,66 @@ describe('stack plan: live + manifest, not a fresh synth', () => {
     expect(plan.find((s) => s.name === 'CCE-Network')?.method).toBe('cdk-destroy');
   });
 
-  it('mirrors the Paperclip gate so a live Aurora stack takes the cdk-destroy path', () => {
-    // The Aurora cluster carries deletionProtection. If the substrate is
-    // armed but this list omits CCE-Database, the stack is classified as
-    // "not in the current app" and routed to direct DeleteStack, which
-    // cannot delete a deletion-protected cluster.
-    expect(currentAppStackNames('CCE', {})).not.toContain('CCE-Database');
-    const armed = currentAppStackNames('CCE', { CCE_PAPERCLIP_ENABLED: '1' });
-    expect(armed).toContain('CCE-Database');
-    expect(armed).toContain('CCE-Filesystem');
+  it('always lists the Paperclip stacks so a live Aurora takes the cdk-destroy path', () => {
+    // The Aurora cluster carries deletionProtection. A stack this list omits
+    // is classified "not in the current app" and routed to direct
+    // DeleteStack, which cannot delete a deletion-protected cluster.
+    //
+    // UNCONDITIONAL since Phase 9. The three Paperclip stacks are constructed
+    // at every tier and gated INSIDE (TierShape.paperclipEnabled), so `cdk ls`
+    // prints them in every configuration and this list must too — including
+    // for an install that later dropped to Tier 0, where the stacks are empty
+    // but the RETAIN'd cluster from its Tier 1 past is still very much alive.
+    const names = currentAppStackNames('CCE', {});
+    expect(names).toContain('CCE-Database');
+    expect(names).toContain('CCE-Filesystem');
+    expect(names).toContain('CCE-Paperclip');
+    // The old env gate is gone, and must not come back through the back door:
+    // this list may not vary with CCE_PAPERCLIP_ENABLED, which is now a
+    // runtime router flag that provisions nothing.
+    expect(currentAppStackNames('CCE', { CCE_PAPERCLIP_ENABLED: '1' })).toEqual(names);
+    expect(currentAppStackNames('CCE', { CCE_PAPERCLIP_ENABLED: '0' })).toEqual(names);
+
+    // EQUALITY, not toContain. `toContain` only proves the names you thought
+    // to name are present; it cannot see a stack nobody remembered. This list
+    // spot-checked three Paperclip names and passed while silently missing
+    // CCE-PowerSwitch, so it returned 17 names where `cdk ls` prints 18 and
+    // the comment above it claimed the counts already agreed.
+    //
+    // This literal is the verified output of `npx cdk ls` (18, and now the
+    // same 18 with CCE_PAPERCLIP_ENABLED unset, '0' and '1' — see
+    // infra/bin/app.stack-set.test.ts, which synthesizes the app for real
+    // rather than transcribing it). If you add a stack to infra/bin/app.ts,
+    // this test fails until this list is updated — which is the whole point:
+    // the failure is the reminder.
+    expect(names).toHaveLength(18);
+    expect([...names].sort()).toEqual(
+      [
+        'CCE-Backup',
+        'CCE-Chaos',
+        'CCE-Compute',
+        'CCE-CostGuardrails',
+        'CCE-Database',
+        'CCE-Dynamo',
+        'CCE-Extensions',
+        'CCE-Filesystem',
+        'CCE-Guardrails',
+        'CCE-Iam',
+        'CCE-Messaging',
+        'CCE-Network',
+        'CCE-Observability',
+        'CCE-Paperclip',
+        'CCE-PowerSwitch',
+        'CCE-Security',
+        'CCE-Secrets',
+        'CCE-Storage',
+      ].sort(),
+    );
 
     const plan = planStacks({
       liveStackNames: ['CCE-Network', 'CCE-Database'],
       manifestStacks: ['CCE-Network', 'CCE-Database'],
-      currentAppStacks: armed,
+      currentAppStacks: names,
     });
     expect(plan.find((s) => s.name === 'CCE-Database')?.method).toBe('cdk-destroy');
   });

@@ -10,7 +10,7 @@ import {
   Credentials,
 } from 'aws-cdk-lib/aws-rds';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
-import { RESOURCE_NAMES, TAGS, TIERS } from './constants.js';
+import { RESOURCE_NAMES, TAGS, TIERS, paperclipProvisioned } from './constants.js';
 import type { BaseStackProps, DatabaseOutputs } from './interfaces.js';
 
 export interface DatabaseStackProps extends BaseStackProps {
@@ -29,15 +29,26 @@ export interface DatabaseStackProps extends BaseStackProps {
  * system of record for work items. Rollback of the stack must never take
  * the data with it (the plan's Phase 1 rollback notes the explicit
  * override that removing it requires).
+ *
+ * TIER-GATED INTERNALLY, like SecurityStack's WAF and BackupStack's export
+ * Lambda: the stack is always constructed so the stack list is identical in
+ * every configuration, and at Tier 0 it resolves cleanly while creating
+ * nothing. See TierShape.paperclipEnabled for why Hobby is out.
  */
 export class DatabaseStack extends Stack implements DatabaseOutputs {
-  public readonly paperclipDbCluster: DatabaseCluster;
-  public readonly paperclipDbSecret: ISecret;
-  public readonly paperclipDbSecurityGroup: SecurityGroup;
+  public readonly paperclipDbCluster: DatabaseCluster | undefined;
+  public readonly paperclipDbSecret: ISecret | undefined;
+  public readonly paperclipDbSecurityGroup: SecurityGroup | undefined;
 
   constructor(scope: Construct, id: string, props: DatabaseStackProps) {
     super(scope, id, props);
     Object.entries(TAGS).forEach(([k, v]) => this.tags.setTag(k, v));
+
+    // Tier 0 (Hobby): no Aurora, no security group, no generated secret. The
+    // stack still exists, so `cdk deploy` names something real and a later
+    // tier bump creates the cluster instead of the deploy silently skipping a
+    // name that never synthesized.
+    if (!paperclipProvisioned(props.tier)) return;
 
     this.paperclipDbSecurityGroup = new SecurityGroup(this, 'PaperclipDbSg', {
       vpc: props.vpc,

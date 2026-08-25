@@ -844,6 +844,76 @@
       "surface": "env",
       "id": "EMERGENCY_KILL_PHRASE",
       "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "CCE_PAPERCLIP_ENABLED",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_BASE_URL",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_COMPANY_ID",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_AGENT_KEYS_JSON",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_RECONCILER_KEY",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_DISPATCH_SECRET",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_DEFAULT_AGENT",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_READ_TIMEOUT_MS",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_WRITE_TIMEOUT_MS",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "paperclip/poll_interval_ms",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "paperclip/poll_overlap_ms",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "paperclip/poll_page_limit",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "paperclip/reconciler_mode",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "runtime-config-key",
+      "id": "paperclip/enabled_agents",
+      "introduced": "v1.9.0"
     }
   ]
 }

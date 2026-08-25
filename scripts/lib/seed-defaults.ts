@@ -148,6 +148,53 @@ export const SEED_DEFAULTS: SeedRow[] = [
     value: '[]',
     description: 'Durable intended alert-recipient record (JSON array of {email,addedBy,addedAt}).',
   },
+  // THE ONE DELIBERATE EXCEPTION TO RULE 1, stated rather than hidden: these
+  // five rows have NO reader yet. The reconciler that consumes them is Phase 5,
+  // and its reader ships beside the poll loop that calls it — where an overlap
+  // of 2000 ms can be pinned by a sweep that loses rows without it, instead of
+  // by an assertion that 2000 equals 2000 one file over. Rule 2 still binds the
+  // Phase 5 reader: its fallbacks must equal the values below, so seeding stays
+  // behavior-neutral on the day the reader lands.
+  //
+  // `paperclip/base_url` is NOT here on purpose: an instance URL's default is
+  // absence, not a tunable — the same call the `power/url` precedent makes.
+  // `paperclip/reconciler_watermark` is NOT here for rule 3's reason: it is
+  // runtime STATE, and its default is absence semantics.
+  {
+    category: 'paperclip',
+    key: 'poll_interval_ms',
+    value: '15000',
+    description: 'Reconciler poll cadence in milliseconds; reader is Number(raw), positive values only.',
+  },
+  // The 2000 ms is not arbitrary: `updatedSince` is a STRICT greater-than
+  // against a millisecond-truncated stamp, so a row re-queried at its own
+  // updatedAt does not come back and only an overlap recovers it. Proven by the
+  // probe "C-2 (BLOCKING): a truncated watermark loses rows, and
+  // overlap-and-dedupe delivers them exactly once".
+  {
+    category: 'paperclip',
+    key: 'poll_overlap_ms',
+    value: '2000',
+    description: 'Milliseconds subtracted from the watermark before each poll, so a truncated stamp loses no rows.',
+  },
+  {
+    category: 'paperclip',
+    key: 'poll_page_limit',
+    value: '500',
+    description: 'Issue-list page size per poll. Above the server maximum is silently clamped, never rejected.',
+  },
+  {
+    category: 'paperclip',
+    key: 'reconciler_mode',
+    value: 'shadow',
+    description: 'shadow | live | off. C-7: shadow READ comparator only — nothing is written on either side.',
+  },
+  {
+    category: 'paperclip',
+    key: 'enabled_agents',
+    value: '[]',
+    description: 'JSON array of Netzar agent slugs the reconciler acts for. Empty means none.',
+  },
 ];
 
 /**

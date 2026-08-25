@@ -17,17 +17,45 @@ import { emitToolMetric } from '../../observability/emf.js';
 export interface ToolContext {
   agentId: string;
   chatId: string;
+  /** Genuine caller-held Paperclip run id. Ordinary chat turns omit it. */
+  runId?: string;
   /** Speaker id if known (Slack user / Telegram chat); used for audit attribution. */
   userId?: string;
   /** Surface this turn came from — lets tools tailor side effects. */
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
   /**
-   * Surface-native reply id (Telegram chat id; "slack:<channel>[:threadTs]").
+   * Surface-native reply id. On every surface that runs more than one bot it
+   * ALSO carries the identity that owns the conversation:
+   *   "<chatId>:bot-<agentId>"                 Telegram (always; /tg/:agentId)
+   *   "slack:<channel>:app-<agentId>[:<ts>]"   Slack per-agent app
+   *   "slack:<channel>[:<ts>]"                 Slack main bot (one identity)
+   *
+   * THE IDENTITY SEGMENT IS ROUTING METADATA, NEVER A chat_id/channel. Do not
+   * hand this field to an adapter raw, and do not pass `agentId` as the sender
+   * beside it: `agentId` is the TURN's agent (a sticky default such as `main`),
+   * not the bot whose webhook received the message, and sending as it delivers
+   * over the wrong token — a 403, or the text posted into a different
+   * conversation. Parse with parseTelegramChatId/parseSlackChatId, or just call
+   * deliverToReplyChat (lib/scheduler/delivery.ts), which does both.
+   *
    * chatId may be a principal alias (owner:*) that no API can deliver to —
    * tools that schedule future sends (schedule_task) stamp THIS as the
-   * delivery target.
+   * delivery target, identity segment included, and it round-trips to DDB.
    */
   replyChatId?: string;
+  /**
+   * Whose mission board the mission tools address, when that is not `agentId`.
+   * Set by a surface that runs more than one bot per conversation and whose
+   * agent picker can answer as somebody else (Telegram: the sticky default
+   * answers `main` inside `/tg/research/webhook`). Absent means `agentId`.
+   *
+   * WHY A TOOL MUST NOT JUST READ `agentId` FOR A BOARD: `/missions` already
+   * scopes on the receiving bot (`CommandScope.boardAgentId`), so a tool that
+   * scopes on the turn agent puts TWO BOARDS in one conversation — the command
+   * prints a ref that `list_missions` then reports as belonging to nobody, and
+   * `create_mission` writes where `/mission new` does not.
+   */
+  boardAgentId?: string;
   /** Agent-to-agent delegation depth; ask_agent refuses past 1. */
   delegationDepth?: number;
 }

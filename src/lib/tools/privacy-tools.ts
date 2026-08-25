@@ -37,8 +37,8 @@ import {
   deleteInterAgentTask,
 } from '../state/inter-agent-tasks-repo.js';
 import {
-  listMissionsForAgent,
-} from '../state/mission-tasks-repo.js';
+  listMissionsForExport,
+} from '../missions/mission-acl.js';
 
 function spec(name: string, description: string, schema: unknown): BedrockTool {
   return {
@@ -84,7 +84,21 @@ export async function exportChatData(
     listMemoriesForChat(agentId, chatId, 500),
     listScheduledTasksForAgent(agentId, 500),
     listInbox(agentId, 200, ['queued', 'delivered', 'completed']),
-    listMissionsForAgent(agentId, 200),
+    // C-11 / M31, THE BLOCKING GATE — and it has TWO halves, both of which end
+    // in the same silent failure: a subject-access export that looks complete
+    // and is not.
+    //
+    //  1. `issueToMission` hardcodes an unconditional `createdByChat:
+    //     'paperclip'`, which matches no real chat id, so the filter below
+    //     would drop every Paperclip-origin mission. The ACL restores the real
+    //     value from the Netzar-side provenance row before the rows arrive
+    //     here, which is why that filter is still one unchanged line.
+    //  2. Reading the BOARD would drop every mission that predates the
+    //     cutover, because the board is Paperclip-only once the flag is on.
+    //     `listMissionsForExport` unions both substrates — always both, never
+    //     conditionally — so a right-of-access answer does not shrink because
+    //     an operator changed backends.
+    listMissionsForExport(agentId, 200),
   ]);
   return {
     agentId,

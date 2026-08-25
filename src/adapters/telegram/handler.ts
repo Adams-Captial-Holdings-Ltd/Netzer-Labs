@@ -39,6 +39,7 @@ import { appendTurns, getSession } from '../../lib/state/sessions-repo.js';
 import { loadAgent } from '../../lib/config/agent-loader.js';
 import { resolveModel } from '../../lib/bedrock/models.js';
 import { publishTurn } from '../../lib/warroom/publisher.js';
+import { haltWarroomOnKillPhrase } from '../../lib/warroom/kill-phrase.js';
 import { getMeeting } from '../../lib/warroom/meetings-repo.js';
 import { orchestrateWarroomTurn } from '../../lib/warroom/orchestrator.js';
 import { resolveOwnerChatId } from '../../lib/identity/owner-alias.js';
@@ -145,11 +146,79 @@ async function handleMessage(
   const targetAgentId = picked.agentId;
   let userText = picked.cleanText || rawText;
 
+  // A MISSION COMMAND ACTS ON THE BOARD OF THE BOT THAT RECEIVED IT (CLAUDE.md,
+  // "chat surface parity"). `pickAgent` answers "who should TALK", and its two
+  // fallbacks — the `sticky` line above, which can only ever read `'main'`, and
+  // Rule 4's `'main'` default — are blind to which bot token answered.
+  // `/mission new …` typed at the research bot therefore reached `runCommand`
+  // as `'main'` and `createBoardMission({ownerAgent:'main'})`: the mission
+  // landed on main's board and `/mission done <id>` transitioned main's rows.
+  // That is data corruption, not a rendering difference — Slack's per-agent app
+  // passes its own `agentId` to `runCommand` (handler.ts,
+  // `handlePerAgentSlackEvent`) and got the same command right, so the two
+  // surfaces disagreed about whose board a user was editing.
+  //
+  // The BOARD scope is therefore the BOT IDENTITY, except when the message
+  // OPENS BY ADDRESSING an agent — `/research /missions`, `@research /missions`
+  // — in which case the person out-ranks the token they happened to type it at.
+  //
+  // "Opens by addressing", not "names anywhere", and the difference is load
+  // bearing (`picked.addressed`, see picker.ts). Rule 2 of the picker matches
+  // `@agent` ANYWHERE in the message, so scoping on `reason === 'mention'`
+  // handed `/mission new Ask @main to review the ACL`, typed at the research
+  // bot, straight back to main's board — the same wrong-board corruption in a
+  // new disguise — and stored the title as "Ask to review the ACL", because
+  // `cleanText` deletes the marker it thought was routing. `/mission new` is
+  // the first command in this repo whose argument is free-form prose, so an
+  // `@agent` inside it is content and must be treated as content: when the
+  // message is not addressed, the command runs on the receiving bot's board AND
+  // on the RAW text, so nothing is silently deleted from what the user wrote.
+  // (Feeding the raw text also un-breaks `/warroom @ops planning`, whose
+  // `parseMentions` was being starved by the picker stripping the first `@ops`.)
+  const boardAgentId = picked.addressed ? picked.agentId : botAgentId;
+  // The picker's `cleanText` is only trustworthy when what it stripped really
+  // WAS an addressee; otherwise the command must see exactly what was typed.
+  const commandText = picked.addressed ? userText : rawText;
+
+  // PARITY GAP, DELIBERATE (see CLAUDE.md, "chat surface parity"). ONLY the
+  // board scope moves to the bot identity. The SESSION scope — `runCommand`'s
+  // first argument — stays `targetAgentId`, so `/newchat`, `/reset`, `/status`,
+  // `/context`, `/warroom`, `/endroom` and `/model` still answer for the agent
+  // ordinary chat in this conversation uses, which on a non-main Telegram bot
+  // is `'main'` and not the bot the user typed at.
+  //
+  // THE TWO SCOPES GENUINELY CANNOT BE SEPARATED HERE, and this is the reason
+  // rather than a preference. Those seven commands are not one-shots against a
+  // named object the way `/mission` is: they read and WRITE the very session
+  // and agent records the next ordinary message reads. Their scope is therefore
+  // not free — it is whatever `getSession`/`appendTurns` use below, and that is
+  // the pre-existing `'main'` hardcode on the sticky line (one session per chat,
+  // keyed on main). Pointing them at `botAgentId` while chat still keys on
+  // `'main'` is strictly worse than leaving them: it was measured to make
+  // `/newchat` reply "Conversation cleared." while the history survived,
+  // `/status` report `history: 0 turn(s)` against a live session, and `/warroom`
+  // set a flag on a session the war-room check 40 lines below never reads, so
+  // the room never engaged and left an orphaned `active` meeting row.
+  //
+  // THE MISSING PRIMITIVE is per-bot sessions: one session row per
+  // (botAgentId, chatId) instead of the single `'main'`-keyed row. Closing it
+  // means migrating every existing Telegram conversation's history to a new key,
+  // which is a session-model change and not this phase.
+  //
+  // THE FALLBACK, and it is real: on the main bot — where the overwhelming
+  // majority of these commands are typed, because it is the bot with the whole
+  // command surface — the two scopes coincide and every command is correct. On
+  // a per-agent bot the session commands act on the session that bot's chat
+  // actually uses, so the reply and the behaviour agree even though the agent
+  // named in it is not the bot's. Nothing is silently written to the wrong
+  // place; the id shown is just `main`'s.
+  const sessionAgentId = targetAgentId;
+
   // Slash command router only when there's no attachment — attachments
   // always go to the agent loop (a photo caption that starts with '/'
   // is data, not a command).
   if (!attachment) {
-    const cmd = await runCommand(targetAgentId, chatId, userText);
+    const cmd = await runCommand(sessionAgentId, chatId, commandText, { boardAgentId });
     if (cmd) {
       if (cmd.forwardedAgentId && cmd.forwardedText) {
         return handleMessage(
@@ -161,7 +230,29 @@ async function handleMessage(
         );
       }
       if (cmd.reply) {
-        await sendMessage(botAgentId, replyChatId, cmd.reply, { replyToMessageId: replyTo });
+        // THE RESULT IS NOT DISCARDED (A3-10). This was the last link in the
+        // silent-loss chain: an oversize reply was rejected by Telegram, the
+        // rejection was thrown away here, and the command reported success to
+        // nobody. `sendMessage` now bounds on the RENDERED length so the reply
+        // arrives, but if it still cannot be delivered the only honest thing
+        // left is to say so loudly — there is no second channel to apologise
+        // on, since the channel is the thing that failed.
+        const sent = await sendMessage(botAgentId, replyChatId, cmd.reply, {
+          replyToMessageId: replyTo,
+        });
+        if (!sent.ok) {
+          logger.error(
+            {
+              agentId: botAgentId,
+              boardAgentId,
+              sessionAgentId,
+              chatId: replyChatId,
+              replyChars: cmd.reply.length,
+              error: truncateForLog(sent.error ?? '', 200),
+            },
+            'command reply undelivered; the user saw nothing',
+          );
+        }
       }
       return;
     }
@@ -173,6 +264,20 @@ async function handleMessage(
     const room = await getMeeting(wrCheck.activeWarroomId).catch(() => null);
     if (room?.status === 'active') {
       try {
+        // A person is typing into a live room, so the emergency kill phrase must
+        // work here exactly as it does outside one. It is checked on the RAW
+        // message, before publishTurn — the orchestrator only ever sees an
+        // assembled transcript. Shared with the dashboard entry point so the two
+        // cannot drift; see src/lib/warroom/kill-phrase.ts.
+        const halt = await haltWarroomOnKillPhrase({
+          meetingId: room.meetingId,
+          rawText,
+          surface: 'telegram',
+        });
+        if (halt) {
+          await sendMessage(botAgentId, replyChatId, halt, { replyToMessageId: replyTo });
+          return;
+        }
         const turn = await publishTurn(room.meetingId, userId ?? chatId, 'user', rawText);
         void sendChatAction(botAgentId, replyChatId, 'typing');
         // Fan the turn out to the room's agents and deliver each reply back to
@@ -317,7 +422,36 @@ async function handleMessage(
       onChunk,
       onToolEvent,
       surface: 'telegram',
-      replyChatId,
+      // A person typed this in a chat window. `origin` is the ONLY thing that
+      // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
+      // and this is one of the five chat-surface call sites allowed to say so.
+      origin: 'human_chat',
+      // THE `bot-` SEGMENT IS THIS SURFACE'S IDENTITY, the exact mirror of the
+      // `app-` segment Slack's per-agent path stamps, and CLAUDE.md's "chat
+      // surface parity" is why it is here rather than only there. Telegram runs
+      // ONE BOT PER AGENT (`.env.example`: "Telegram tokens (one per agent)";
+      // this route is `/tg/:agentId/webhook`), and every call this handler
+      // makes passes `botAgentId` so it answers as the bot that was written to.
+      // An out-of-band push built later from `replyChatId` has no handler to
+      // inherit that from, and the turn agent is NOT it — the sticky default
+      // routinely answers as `main` inside the research bot's chat. Omit the
+      // segment and the push goes out over the wrong bot's token: 403 "bot
+      // can't initiate conversation with a user", or delivery into the user's
+      // DM with that other bot, since a private chat_id is the user id.
+      replyChatId: `${replyChatId}:bot-${botAgentId}`,
+      // AND THE TOOLS ADDRESS THE SAME BOARD THE COMMANDS DO. `boardAgentId` is
+      // the exact counterpart of the `{ boardAgentId }` handed to `runCommand`
+      // above, and it is here because the command half alone left ONE
+      // CONVERSATION WITH TWO BOARDS: `/missions` at the research bot listed
+      // `[abc12345]` while `list_missions`, one message later in the same chat,
+      // answered "No Open missions for main" — the ref this phase teaches the
+      // user to copy, refused by the agent standing next to the board that
+      // printed it — and `create_mission` wrote where `/mission new` did not.
+      // Same class as the command defect: data corruption, not a rendering
+      // difference. Slack's per-agent path passes ONE id to both `runCommand`
+      // and `runAgentTurn` and was already right, so before this the two
+      // surfaces disagreed about whose board a user was editing.
+      boardAgentId,
       ...(userId ? { userId } : {}),
       ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
     });

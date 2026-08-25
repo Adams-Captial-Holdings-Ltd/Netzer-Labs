@@ -18,6 +18,7 @@ vi.mock('../state/identities-repo.js', () => ({
 
 import {
   parseSlackChatId,
+  parseTelegramChatId,
   resolveDeliveryTarget,
   deliverScheduledReply,
 } from './delivery.js';
@@ -61,6 +62,22 @@ describe('parseSlackChatId', () => {
     expect(parseSlackChatId('slack:C0123:U0456:1234567890.123')).toEqual({
       channel: 'C0123',
       threadTs: '1234567890.123',
+    });
+  });
+});
+
+describe('parseTelegramChatId', () => {
+  it('parses the bare id and the bot-carrying id, groups included', () => {
+    // The same scheme as `app-` on Slack: one marked segment, everything else
+    // untouched, so ids stamped before it existed keep resolving.
+    expect(parseTelegramChatId('42')).toEqual({ chatId: '42' });
+    expect(parseTelegramChatId('42:bot-research')).toEqual({
+      chatId: '42',
+      botAgentId: 'research',
+    });
+    expect(parseTelegramChatId('-1001234567890:bot-main')).toEqual({
+      chatId: '-1001234567890',
+      botAgentId: 'main',
     });
   });
 });
@@ -134,6 +151,22 @@ describe('deliverScheduledReply', () => {
       'hello',
     );
     expect(sendTelegramMock).toHaveBeenCalledWith('main', '42', 'hello', {});
+  });
+
+  it('sends over the BOT in the target, not the task agent, when the id names one', async () => {
+    // `schedule_task` stamps `ctx.replyChatId` as the delivery target, so a
+    // brief asked for in the research bot's chat carries `:bot-research` —
+    // while `task.agentId` is the turn's agent and can be a sticky default.
+    // Tomorrow's brief must arrive from the bot the person was talking to.
+    await deliverScheduledReply(
+      task({
+        agentId: 'main',
+        chatId: 'owner:emmanuel',
+        deliveryTarget: { surface: 'telegram', chatId: '42:bot-research' },
+      }),
+      'hello',
+    );
+    expect(sendTelegramMock).toHaveBeenCalledWith('research', '42', 'hello', {});
   });
 
   it('no-ops when there is no target', async () => {

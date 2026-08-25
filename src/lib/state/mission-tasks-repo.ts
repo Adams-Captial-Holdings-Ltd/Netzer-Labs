@@ -8,7 +8,7 @@
  * Schema:
  *   PK = AGENT#<ownerAgent>
  *   SK = MISSION#<isoCreated>#<id>
- *   GSI1PK = STATUS#<open|in_progress|done|cancelled>#AGENT#<owner>
+ *   GSI1PK = STATUS#<open|in_progress|blocked|in_review|done|cancelled>#AGENT#<owner>
  *   GSI1SK = PRIORITY#<padded>#<isoCreated>
  */
 
@@ -25,15 +25,48 @@ const TABLE = process.env.TABLE_MISSION_TASKS ?? 'claudeclaw-mission-tasks';
 
 /** Runtime list of valid mission statuses; the type below derives from it so
  * the two can never drift. Used to validate inbound status mutations before
- * they reach the status field and the GSI1PK partition key. */
+ * they reach the status field and the GSI1PK partition key.
+ *
+ * THE ORDER IS THE BOARD'S LANE ORDER, left to right, and it is contract: the
+ * `invalid_status` 400 serialises `valid: MISSION_STATUSES` verbatim, and
+ * `MISSION_STATUS_WORDS` builds the `/missions [...]` help line from it.
+ *
+ * `blocked` and `in_review` (Phase 9) are the two Paperclip statuses this list
+ * used to have no room for, so `toMissionStatus` collapsed them into `open`
+ * and `in_progress` and a stalled mission read as merely un-started.
+ *
+ * THE ORDER IS THE REPOSITORY OWNER'S DECISION, and the rationale is the point:
+ * it reads as the STORY OF A TASK — you start it (open), you work it
+ * (in_progress), you get stuck (blocked), you unstick it and send it for review
+ * (in_review), it lands (done). It also keeps the four original lanes — open,
+ * in_progress, done, cancelled — in their existing RELATIVE positions, so
+ * nobody has to relearn a board they already know; the two new lanes are
+ * inserted between them rather than displacing them.
+ *
+ * WIDENING THIS LIST ALSO WIDENS THE LEGACY DYNAMODB PATH, deliberately.
+ * `MISSION_STATUSES` is what the dashboard's status route validates against
+ * before a value reaches the `status` attribute and the GSI1PK partition key,
+ * so a legacy install will now ACCEPT `blocked`/`in_review` writes. That is
+ * the right call and it is not a widening of what the legacy path can PRODUCE:
+ * nothing on it mints either value (Haiku assignment opens `open`, the repo's
+ * own transitions are the four old words), so the only way one arrives is an
+ * operator pressing a lane button that the very same six-lane board draws.
+ * Accepting a status the board can render and refusing it in the store would
+ * be the drift this constant exists to prevent — and the guard still keeps
+ * arbitrary strings out of the partition key, which is the whole job. */
 export const MISSION_STATUSES = [
   'open',
   'in_progress',
+  'blocked',
+  'in_review',
   'done',
   'cancelled',
 ] as const;
 
 export type MissionStatus = (typeof MISSION_STATUSES)[number];
+
+export const MISSION_PRIORITIES = ['critical', 'high', 'medium', 'low'] as const;
+export type MissionPriority = (typeof MISSION_PRIORITIES)[number];
 
 export interface Mission {
   id: string;
@@ -42,19 +75,29 @@ export interface Mission {
   createdByChat: string;
   title: string;
   body: string;
-  /** 0-100, higher = more urgent. */
-  priority: number;
+  priority: MissionPriority;
   status: MissionStatus;
   /** Optional rationale Haiku gave for picking the owner. */
   assignmentReason?: string;
-  /** Optional ISO deadline. */
-  dueAt?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-function padPriority(n: number): string {
-  return String(Math.max(0, Math.min(100, Math.round(n)))).padStart(3, '0');
+function priorityRank(priority: MissionPriority): string {
+  // Keep the legacy 000-100 sort-key scale so pre-Phase-9 numeric rows and new
+  // four-band rows remain correctly interleaved in the same GSI partition.
+  return String({ critical: 95, high: 80, medium: 50, low: 20 }[priority]).padStart(3, '0');
+}
+
+/** Reads pre-Phase-9 numeric DynamoDB rows without leaking the retired domain. */
+export function normalizeMissionPriority(value: unknown): MissionPriority {
+  if (MISSION_PRIORITIES.includes(value as MissionPriority)) return value as MissionPriority;
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 'medium';
+  if (score >= 90) return 'critical';
+  if (score >= 70) return 'high';
+  if (score >= 40) return 'medium';
+  return 'low';
 }
 
 export async function createMission(args: {
@@ -63,13 +106,12 @@ export async function createMission(args: {
   createdByChat: string;
   title: string;
   body: string;
-  priority?: number;
+  priority?: MissionPriority;
   assignmentReason?: string;
-  dueAt?: string;
 }): Promise<Mission> {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
-  const priority = args.priority ?? 50;
+  const priority = args.priority ?? 'medium';
   const mission: Mission = {
     id,
     ownerAgent: args.ownerAgent,
@@ -80,7 +122,6 @@ export async function createMission(args: {
     priority,
     status: 'open',
     ...(args.assignmentReason ? { assignmentReason: args.assignmentReason } : {}),
-    ...(args.dueAt ? { dueAt: args.dueAt } : {}),
     createdAt,
     updatedAt: createdAt,
   };
@@ -91,7 +132,7 @@ export async function createMission(args: {
         PK: `AGENT#${args.ownerAgent}`,
         SK: `MISSION#${createdAt}#${id}`,
         GSI1PK: `STATUS#open#AGENT#${args.ownerAgent}`,
-        GSI1SK: `PRIORITY#${padPriority(priority)}#${createdAt}`,
+        GSI1SK: `PRIORITY#${priorityRank(priority)}#${createdAt}`,
         ...mission,
       },
     }),
@@ -194,7 +235,7 @@ export async function reassignMission(
         PK: `AGENT#${newOwner}`,
         SK: `MISSION#${moved.createdAt}#${moved.id}`,
         GSI1PK: `STATUS#${moved.status}#AGENT#${newOwner}`,
-        GSI1SK: `PRIORITY#${padPriority(moved.priority)}#${moved.createdAt}`,
+        GSI1SK: `PRIORITY#${priorityRank(moved.priority)}#${moved.createdAt}`,
         ...moved,
       },
     }),
@@ -219,10 +260,9 @@ function toMission(i: Record<string, unknown>): Mission {
     createdByChat: String(i.createdByChat ?? ''),
     title: String(i.title ?? ''),
     body: String(i.body ?? ''),
-    priority: Number(i.priority ?? 50),
+    priority: normalizeMissionPriority(i.priority),
     status: (i.status as MissionStatus | undefined) ?? 'open',
     ...(i.assignmentReason ? { assignmentReason: String(i.assignmentReason) } : {}),
-    ...(i.dueAt ? { dueAt: String(i.dueAt) } : {}),
     createdAt: String(i.createdAt ?? ''),
     updatedAt: String(i.updatedAt ?? i.createdAt ?? ''),
   };
