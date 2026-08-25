@@ -195,7 +195,7 @@ export const BEDROCK_MODELS = {
   opus1m: 'us.anthropic.claude-opus-4-7-1m',
   sonnet: 'us.anthropic.claude-sonnet-4-6',
   sonnet1m: 'us.anthropic.claude-sonnet-4-6-1m',
-  haiku: 'us.anthropic.claude-haiku-4-5',
+  haiku: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
   embedTitanV2: 'amazon.titan-embed-text-v2:0',
 } as const;
 
