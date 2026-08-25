@@ -200,7 +200,7 @@ Verify the builder's uncommitted Phase-0 extraction: from
    `npm --prefix web run build`, and full `npm test` (compare against §7
    baseline — anything new is a regression to fix).
 2. Commit in small conventional commits (docs folder first), per
-   [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+   [CONTRIBUTING.md](../../../../CONTRIBUTING.md).
 3. Rerun the fixed LibreChat bar capture script (QA assets folder, §8):
    it must select the "Netzar Mock" endpoint before sending, and log in per
    themed context. Freeze the resulting set — critics reuse it for every phase.
