@@ -57,6 +57,7 @@ import {
   TAGS,
   TIERS,
   bucketName,
+  paperclipProvisioned,
 } from './constants.js';
 import {
   cloudFrontOriginSecret,
@@ -232,6 +233,19 @@ export class ComputeStack extends Stack implements ComputeOutputs {
       'VendorKeysSecretImport',
       props.secrets.vendorKeysSecret.secretArn,
     );
+    // Paperclip bridge credentials (ADR 0010). Safe to inject on day one even
+    // though the fields still read REPLACE_ME: secrets-stack.ts creates all
+    // three (`agent_keys`, `reconciler_key`, `dispatch_secret`) with the
+    // secret itself, and src/config/env.ts declares each with
+    // optionalNonPlaceholder(), so a placeholder resolves to "unset" rather
+    // than to a bad credential. A missing FIELD would be different in kind: it
+    // fails the task at START with a ResourceInitializationError. That is the
+    // cloudflared rollout failure, and it is why these are added now rather
+    // than left for a later "when the values exist" commit.
+    const paperclipSecret = reimportSecret(
+      'PaperclipSecretImport',
+      props.secrets.paperclipSecret.secretArn,
+    );
 
     // Grant exec role secretsmanager + KMS decrypt manually
     const allSecretArns = [
@@ -241,6 +255,21 @@ export class ComputeStack extends Stack implements ComputeOutputs {
       props.secrets.dbEncryptionSecret.secretArn,
       props.secrets.bedrockGuardrailsSecret.secretArn,
       props.secrets.vendorKeysSecret.secretArn,
+      // Paperclip work engine (ADR 0010). The execution role grants on a FIXED
+      // ARN list, so a secret this task definition later injects but that is
+      // missing from this list fails the task at START with a
+      // ResourceInitializationError — before any container runs, so it reads as
+      // a rollout failure, not an application error. Granted here ahead of the
+      // Phase 2 client's EcsSecret lines for exactly the reason the cloudflared
+      // token grant is held open unconditionally: re-attaching an injection
+      // must be a one-step change, never permission-plus-container.
+      props.secrets.paperclipSecret.secretArn,
+      // The Aurora-generated credentials secret. Named, not passed: DatabaseStack
+      // is gated off and is not a prop of this stack, and taking it as one would
+      // make the whole compute plane depend on a flag. The trailing `-*` covers
+      // Secrets Manager's six-character ARN suffix, which is not knowable at
+      // synth time.
+      `arn:aws:secretsmanager:${region}:${account}:secret:${RESOURCE_NAMES.secrets.paperclipDb}-*`,
     ];
     taskExecutionRole.addToPolicy(
       new PolicyStatement({
@@ -475,6 +504,46 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         CCE_SECRET_DB_ENCRYPTION_ARN: props.secrets.dbEncryptionSecret.secretArn,
         CCE_SECRET_BEDROCK_GUARDRAILS_ARN: props.secrets.bedrockGuardrailsSecret.secretArn,
         CCE_SECRET_VENDOR_KEYS_ARN: props.secrets.vendorKeysSecret.secretArn,
+        // Since Phase 9 this is a RUNTIME flag and NOTHING ELSE: it is what
+        // `paperclipRoutingEnabled()` reads to decide whether the
+        // `/api/missions*` ACL is registered in front of the legacy handlers.
+        // It no longer decides what synth produces — the Paperclip stacks are
+        // always constructed and tier-gated internally — so provisioning the
+        // engine and serving from it are now separately switchable, which is
+        // the whole point: the substrate lands first and the router flips
+        // later, as its own reviewed change. Unset (or anything but '1'/true)
+        // leaves the legacy stack serving, which stays the safe default.
+        CCE_PAPERCLIP_ENABLED: process.env.CCE_PAPERCLIP_ENABLED ?? '',
+        // WHERE the engine is, which is a different question from whether the
+        // router is on above. This did not exist anywhere under infra/ before:
+        // PAPERCLIP_BASE_URL was read by src/lib/paperclip/config.ts and set by
+        // nothing, so a standard install provisioned a Paperclip the
+        // orchestrator had no address for.
+        //
+        // It is the Cloud Map record paperclip-stack registers, built from the
+        // same RESOURCE_NAMES constant rather than passed across stacks:
+        // CCE-Compute is created BEFORE CCE-Paperclip (Paperclip imports this
+        // stack's cluster and listener), so a reference the other way is a
+        // cycle. This is the pattern RESOURCE_NAMES exists for — deterministic
+        // names so the task can be configured without a CDK output.
+        //
+        // IT DOES NOT FIGHT THE RUNTIME-CONFIG PLANE, and that was checked
+        // against the reader rather than assumed. `loadPaperclipConfig()` in
+        // src/lib/paperclip/config.ts resolves
+        // `baseUrl: configured ?? env.PAPERCLIP_BASE_URL`, where `configured`
+        // is runtime-config `paperclip/base_url` — which
+        // scripts/lib/seed-defaults.ts deliberately does NOT seed ("an instance
+        // URL's default is absence, not a tunable"). So this env var is what
+        // the client actually reads today, and an operator can still override
+        // it with a config write, no deploy, exactly as C-19 intends.
+        //
+        // Gated on the SAME predicate that decides whether the engine is
+        // provisioned at all. At Tier 0 there is no Paperclip, and setting a
+        // URL there would turn `PaperclipDisabledError` ("no base URL", with
+        // the remediation) into a DNS failure inside a fetch.
+        ...(paperclipProvisioned(props.tier)
+          ? { PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl }
+          : {}),
       },
       secrets: {
         SLACK_BOT_TOKEN: EcsSecret.fromSecretsManager(slackSecret, 'bot_token'),
@@ -501,6 +570,20 @@ export class ComputeStack extends Stack implements ComputeOutputs {
           'brave_search_api_key',
         ),
         EXA_API_KEY: EcsSecret.fromSecretsManager(vendorKeysSecret, 'exa_api_key'),
+        // Paperclip bridge (ADR 0010). C-19: the SHIPPED field spellings win.
+        // `agent_keys` is a JSON STRING because one secret field injects as
+        // one env var, hence the _JSON suffix on the variable but not on the
+        // field. `agent_keys_json` / `dispatch_token` are the plan's wrong
+        // variants and a field mismatch is a task that cannot START.
+        PAPERCLIP_AGENT_KEYS_JSON: EcsSecret.fromSecretsManager(paperclipSecret, 'agent_keys'),
+        PAPERCLIP_RECONCILER_KEY: EcsSecret.fromSecretsManager(
+          paperclipSecret,
+          'reconciler_key',
+        ),
+        PAPERCLIP_DISPATCH_SECRET: EcsSecret.fromSecretsManager(
+          paperclipSecret,
+          'dispatch_secret',
+        ),
         SERPER_API_KEY: EcsSecret.fromSecretsManager(vendorKeysSecret, 'serper_api_key'),
         GOOGLE_GEMINI_API_KEY: EcsSecret.fromSecretsManager(
           vendorKeysSecret,

@@ -48,6 +48,7 @@
     "support-bundle": "tsx scripts/support-bundle.ts",
     "dashboard:tunnel": "tsx scripts/dashboard-tunnel.ts",
     "warp:setup": "tsx scripts/warp-setup.ts",
+    "paperclip:bootstrap": "tsx scripts/paperclip-bootstrap.ts",
     "public:setup": "tsx scripts/public-setup.ts",
     "email:setup": "tsx scripts/email-setup.ts",
     "deploy": "tsx scripts/deploy.ts",

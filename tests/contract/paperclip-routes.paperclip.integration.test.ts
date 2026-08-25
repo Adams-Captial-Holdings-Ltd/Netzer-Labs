@@ -511,6 +511,29 @@ async function revokeStrayKeys(): Promise<string[]> {
   return revoked;
 }
 
+/**
+ * Remove rows created by the Phase 8 mutation probes through a board session.
+ * The wider Phase 1 suite deliberately leaves its rows in the disposable
+ * database, but these probes create parent/child and checked-out state that can
+ * affect later ownership tests if it survives a focused test rerun.
+ */
+async function deleteProbeIssues(issueIds: string[]): Promise<void> {
+  for (const issueId of [...issueIds].reverse()) {
+    const response = await paperclipAdminRequest(`/api/issues/${issueId}`, { method: 'DELETE' });
+    expect(
+      [200, 204, 404],
+      `cleanup DELETE /api/issues/${issueId} returned HTTP ${response.status}`,
+    ).toContain(response.status);
+  }
+}
+
+function recordBody(body: unknown, label: string): Record<string, unknown> {
+  if (body === null || Array.isArray(body) || typeof body !== 'object') {
+    throw new Error(`${label} did not return an object body: ${JSON.stringify(body)}`);
+  }
+  return body as Record<string, unknown>;
+}
+
 describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artifact route contracts', () => {
   beforeAll(async () => {
     fixture = await bootstrapPaperclip();
@@ -1210,6 +1233,298 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     expect(typeof workProduct.id).toBe('string');
     expect(typeof workProduct.status).toBe('string');
   }, 60_000);
+
+  it('Phase 8 (BLOCKING): /children accepts one run-less object and persists its parent and assignee', async () => {
+    const cleanup: string[] = [];
+    try {
+      const parent = await createdUnassignedIssue(`Phase 8 child parent ${Date.now()}`);
+      cleanup.push(parent.id);
+
+      // The summary says "Create child issues", but the committed document
+      // declares one object. Drive both wire shapes so a future implementation
+      // cannot infer "array" from the plural route description.
+      const arrayBody = await probe<PaperclipErrorBody>(
+        `/api/issues/${parent.id}/children`,
+        fixture.agents.main.key,
+        {
+          method: 'POST',
+          body: JSON.stringify([{ title: 'Phase 8 array child', status: 'backlog' }]),
+        },
+      );
+      expectNotServerError('POST /api/issues/{id}/children with an array', arrayBody);
+      expectErrorEnvelope(arrayBody);
+
+      // Settle the real required fields from a live validation envelope rather
+      // than treating the OpenAPI `required` array as runtime evidence.
+      const missingFields = await probe<PaperclipErrorBody>(
+        `/api/issues/${parent.id}/children`,
+        fixture.agents.main.key,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      expectNotServerError('POST /api/issues/{id}/children with no fields', missingFields);
+      expectErrorEnvelope(missingFields);
+
+      const defaulted = await probe<unknown>(
+        `/api/issues/${parent.id}/children`,
+        fixture.agents.main.key,
+        {
+          method: 'POST',
+          body: JSON.stringify({ title: `Phase 8 defaulted child ${Date.now()}` }),
+        },
+      );
+      expect(defaulted.status, `title-only child creation failed: ${describeFailure(defaulted)}`).toBe(201);
+      const defaultedChild = recordBody(defaulted.body, 'title-only child create');
+      expect(typeof defaultedChild.id).toBe('string');
+      cleanup.push(defaultedChild.id as string);
+      const defaultedDetail = await probe<Record<string, unknown>>(
+        `/api/issues/${defaultedChild.id as string}`,
+        fixture.reconcilerKey,
+      );
+      expect(defaultedDetail.status).toBe(200);
+      expect(defaultedDetail.body.parentId).toBe(parent.id);
+
+      const title = `Phase 8 delegated child ${Date.now()}`;
+      const created = await probe<unknown>(
+        `/api/issues/${parent.id}/children`,
+        fixture.agents.main.key,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            title,
+            description: 'Created by the permanent Phase 8 contract probe',
+            status: 'backlog',
+            priority: 'high',
+            assigneeAgentId: fixture.agents.research.id,
+          }),
+        },
+      );
+      expect(created.status, `child creation failed: ${describeFailure(created)}`).toBe(201);
+
+      const responseContainer = Array.isArray(created.body) ? 'array' : 'object';
+      const rows = Array.isArray(created.body) ? created.body : [created.body];
+      expect(rows, 'one object request must create exactly one child').toHaveLength(1);
+      const child = recordBody(rows[0], 'child create');
+      expect(typeof child.id).toBe('string');
+      cleanup.push(child.id as string);
+
+      const detail = await probe<Record<string, unknown>>(
+        `/api/issues/${child.id as string}`,
+        fixture.reconcilerKey,
+      );
+      expect(detail.status).toBe(200);
+      expect(detail.body.title).toBe(title);
+      expect(detail.body.status).toBe('backlog');
+      expect(detail.body.parentId).toBe(parent.id);
+      expect(detail.body.assigneeAgentId).toBe(fixture.agents.research.id);
+
+      const listed = await probe<Array<Record<string, unknown>>>(
+        companyIssues(`parentId=${parent.id}&limit=25`),
+        fixture.reconcilerKey,
+      );
+      expect(listed.status).toBe(200);
+      expect(listed.body.map((row) => row.id).sort()).toEqual(
+        [defaultedChild.id, child.id].sort(),
+      );
+
+      expectCharacterized('phase8ChildCreateContract', {
+        'array request': outcomeOf(arrayBody),
+        'empty object request': {
+          ...outcomeOf(missingFields),
+          details: detailsOf(missingFields.body),
+        },
+        'title-only request': {
+          status: defaulted.status,
+          responseContainer: Array.isArray(defaulted.body) ? 'array' : 'object',
+          defaults: {
+            description: defaultedDetail.body.description,
+            status: defaultedDetail.body.status,
+            priority: defaultedDetail.body.priority,
+            assigneeAgentId: defaultedDetail.body.assigneeAgentId,
+            requestDepth: defaultedDetail.body.requestDepth,
+          },
+          parentIdPersisted: defaultedDetail.body.parentId === parent.id,
+        },
+        'single object request': {
+          auth: 'agent bearer; X-Paperclip-Run-Id omitted',
+          status: created.status,
+          responseContainer,
+          responseKeys: Object.keys(child).sort(),
+          persisted: {
+            title: detail.body.title === title,
+            description: detail.body.description === 'Created by the permanent Phase 8 contract probe',
+            status: detail.body.status,
+            priority: detail.body.priority,
+            parentId: detail.body.parentId === parent.id,
+            assigneeAgentId: detail.body.assigneeAgentId === fixture.agents.research.id,
+          },
+        },
+      });
+    } finally {
+      await deleteProbeIssues(cleanup);
+    }
+  }, 120_000);
+
+  it('Phase 8 (CHARACTERIZATION): checkout and work-product bodies plus the failed-run ownership boundary', async () => {
+    const cleanup: string[] = [];
+    try {
+      const completionTarget = await createdUnassignedIssue(
+        `Phase 8 completion target ${Date.now()}`,
+        { status: 'backlog' },
+      );
+      cleanup.push(completionTarget.id);
+      expect(completionTarget.status).toBe('backlog');
+
+      const completionRunId = await acquireRunId();
+      const completionHeaders = { [PAPERCLIP_RUN_ID_HEADER]: completionRunId };
+      const checkoutRequest = {
+        agentId: fixture.agents.main.id,
+        expectedStatuses: ['backlog'],
+      };
+      const checkedOut = await probe<unknown>(
+        `/api/issues/${completionTarget.id}/checkout`,
+        fixture.agents.main.key,
+        {
+          method: 'POST',
+          headers: completionHeaders,
+          body: JSON.stringify(checkoutRequest),
+        },
+      );
+      expect(checkedOut.status, `checkout failed: ${describeFailure(checkedOut)}`).toBe(200);
+      const checkoutBody = recordBody(checkedOut.body, 'checkout');
+      expect(checkoutBody.id).toBe(completionTarget.id);
+
+      const afterCheckout = await probe<Record<string, unknown>>(
+        `/api/issues/${completionTarget.id}`,
+        fixture.reconcilerKey,
+      );
+      expect(afterCheckout.status).toBe(200);
+      expect(afterCheckout.body.status).toBe('in_progress');
+      expect(afterCheckout.body.assigneeAgentId).toBe(fixture.agents.main.id);
+
+      const checkoutRunId = afterCheckout.body.checkoutRunId;
+      const executionRunId = afterCheckout.body.executionRunId;
+      expect(typeof checkoutRunId, 'checkout must persist its genuine initiating run id').toBe('string');
+      expect(typeof executionRunId, 'checkout must persist a genuine issue execution run id').toBe('string');
+      const executionHeaders = { [PAPERCLIP_RUN_ID_HEADER]: executionRunId as string };
+      let activeRun = await probe<unknown>(`/api/issues/${completionTarget.id}/active-run`, fixture.reconcilerKey);
+      for (let attempt = 0; attempt < 40 && activeRun.body !== null; attempt += 1) {
+        await sleep(25);
+        activeRun = await probe<unknown>(`/api/issues/${completionTarget.id}/active-run`, fixture.reconcilerKey);
+      }
+      expect(activeRun.status).toBe(200);
+      expect(activeRun.body, 'the port-9 fixture run should have finished before ownership is characterized').toBeNull();
+
+      const workProductTarget = await createdUnassignedIssue(`Phase 8 work-product target ${Date.now()}`);
+      cleanup.push(workProductTarget.id);
+      const workProductRequest = {
+        type: 'document',
+        provider: 'netzar',
+        externalId: `phase8-contract-${workProductTarget.id}`,
+        title: 'Phase 8 completion evidence',
+        status: 'ready_for_review',
+        isPrimary: true,
+        summary: 'Permanent contract evidence created under a genuine run',
+      };
+      const workProductResult = await probe<unknown>(
+        `/api/issues/${workProductTarget.id}/work-products`,
+        fixture.agents.main.key,
+        {
+          method: 'POST',
+          body: JSON.stringify(workProductRequest),
+        },
+      );
+      expect(workProductResult.status, `work-product creation failed: ${describeFailure(workProductResult)}`).toBe(201);
+      const workProduct = recordBody(workProductResult.body, 'work-product create');
+      expect(typeof workProduct.id).toBe('string');
+      expect(workProduct.issueId).toBe(workProductTarget.id);
+      expect(workProduct.type).toBe(workProductRequest.type);
+      expect(workProduct.provider).toBe(workProductRequest.provider);
+      expect(workProduct.title).toBe(workProductRequest.title);
+
+      const listedWorkProducts = await probe<unknown>(
+        `/api/issues/${workProductTarget.id}/work-products`,
+        fixture.reconcilerKey,
+      );
+      expect(listedWorkProducts.status).toBe(200);
+      expect(Array.isArray(listedWorkProducts.body)).toBe(true);
+      const persistedWorkProduct = (listedWorkProducts.body as Array<Record<string, unknown>>)
+        .find((row) => row.id === workProduct.id);
+      expect(persistedWorkProduct).toBeDefined();
+
+      const done = await probe<PaperclipErrorBody>(
+        `/api/issues/${completionTarget.id}`,
+        fixture.agents.main.key,
+        {
+          method: 'PATCH',
+          headers: executionHeaders,
+          body: JSON.stringify({ status: 'done' }),
+        },
+      );
+      expectNotServerError('PATCH status=done after the fixture adapter run failed', done);
+      expectErrorEnvelope(done);
+
+      const released = await probe<PaperclipErrorBody>(
+        `/api/issues/${completionTarget.id}/release`,
+        fixture.agents.main.key,
+        { method: 'POST', headers: executionHeaders },
+      );
+      expectNotServerError('release after the fixture adapter run failed', released);
+      expectErrorEnvelope(released);
+
+      const afterRelease = await probe<Record<string, unknown>>(
+        `/api/issues/${completionTarget.id}`,
+        fixture.reconcilerKey,
+      );
+      expect(afterRelease.status).toBe(200);
+
+      expectCharacterized('phase8RunMutationContract', {
+        checkout: {
+          request: {
+            header: PAPERCLIP_RUN_ID_HEADER,
+            body: { agentId: '<actor agent id>', expectedStatuses: ['backlog'] },
+          },
+          status: checkedOut.status,
+          responseKeys: Object.keys(checkoutBody).sort(),
+          persisted: {
+            status: afterCheckout.body.status,
+            assigneeIsActor: afterCheckout.body.assigneeAgentId === fixture.agents.main.id,
+            checkoutRunIsInboundRun: afterCheckout.body.checkoutRunId === completionRunId,
+            executionRunDiffersFromCheckoutRun: executionRunId !== completionRunId,
+            activeRunBodyAfterAdapterFailure: activeRun.body,
+          },
+        },
+        workProduct: {
+          requestKeys: Object.keys(workProductRequest).sort(),
+          status: workProductResult.status,
+          responseKeys: Object.keys(workProduct).sort(),
+          persisted: {
+            status: persistedWorkProduct?.status,
+            externalId: persistedWorkProduct?.externalId === workProductRequest.externalId,
+            isPrimary: persistedWorkProduct?.isPrimary,
+            summary: persistedWorkProduct?.summary === workProductRequest.summary,
+            createdByAgentIsActor: persistedWorkProduct?.createdByAgentId === fixture.agents.main.id,
+            createdByRunId: persistedWorkProduct?.createdByRunId ?? null,
+          },
+        },
+        'PATCH status=done': {
+          request: { header: `${PAPERCLIP_RUN_ID_HEADER}: <failed issue execution run id>`, body: { status: 'done' } },
+          ...outcomeOf(done),
+        },
+        release: {
+          request: { header: `${PAPERCLIP_RUN_ID_HEADER}: <failed issue execution run id>`, body: null },
+          ...outcomeOf(released),
+          persisted: {
+            status: afterRelease.body.status,
+            assigneeIsActor: afterRelease.body.assigneeAgentId === fixture.agents.main.id,
+            executionRunPreserved: afterRelease.body.executionRunId === executionRunId,
+            checkoutRunPreserved: afterRelease.body.checkoutRunId === checkoutRunId,
+          },
+        },
+      });
+    } finally {
+      await deleteProbeIssues(cleanup);
+    }
+  }, 180_000);
 
   it('C-3 (CHARACTERIZATION): which agent write shapes require X-Paperclip-Run-Id', () => {
     // The requirement is per-route AND per-issue-state: checkout always needs a

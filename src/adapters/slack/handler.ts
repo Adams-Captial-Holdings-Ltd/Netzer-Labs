@@ -176,7 +176,36 @@ export function buildSlackRouter(): Hono {
       });
     }
 
-    // Run command synchronously and reply ephemerally
+    // Run command synchronously and reply ephemerally.
+    //
+    // Parity gap, deliberate (see CLAUDE.md, "chat surface parity"). The agent
+    // id here is HARDCODED 'main'. Every agent-scoped command is therefore
+    // answered for 'main': /model edits main's model, and the missions commands
+    // added in this phase (/missions, /mission) read and write MAIN'S board,
+    // never the board of whichever agent the user last spoke to.
+    //
+    // THE MISSING PRIMITIVE, stated precisely rather than as "Slack gives us
+    // nothing". The message path DOES resolve an agent, and it resolves it from
+    // the MESSAGE TEXT: `pickAgent(rawText, sticky)` reads an @mention, and its
+    // `sticky` input is `getSession('main', chatId)`, which by construction can
+    // only ever yield 'main'. A slash-command payload's `text` is the command's
+    // ARGUMENTS ("all", "done abc12345") — an @mention there would be an
+    // argument, not an addressee — so the one resolver this repo has is fed
+    // nothing to resolve. What is genuinely absent is a channel-or-user → agent
+    // binding; per-agent apps carry it in the URL of their own event endpoint,
+    // which this workspace-level endpoint is not.
+    //
+    // The fallback, and it is a real one: the same command typed as an ordinary
+    // message ("@research /missions" in a DM or channel) routes through the
+    // message path and reaches the addressed agent, with the identical reply,
+    // because both call the same `runCommand`.
+    //
+    // UNVERIFIED, and stated rather than glossed: that fallback is proven on
+    // the RAW text this handler receives. No probe in this repo drives a real
+    // Slack client, and a real client with the per-agent app installed
+    // autocompletes a typed "@research" into a `<@U…>` user mention, which
+    // `stripSlackMentions` removes before `pickAgent` ever sees it. Whether the
+    // fallback survives that autocomplete is untested here.
     const result = await runCommand('main', `slack:${channel}`, `${command} ${text}`);
     return c.json({
       response_type: 'ephemeral',
@@ -335,11 +364,31 @@ async function handlePerAgentSlackEvent(
   if (!ev.files?.length) {
     const cmd = await runCommand(agentId, chatId, userText);
     if (cmd && cmd.reply) {
-      await postMessage(channel, cmd.reply, {
+      // THE RESULT IS NOT DISCARDED (A3-10), mirroring the identical site on
+      // Telegram (`telegram/handler.ts`, same comment). `postMessage` NEVER
+      // THROWS: a missing or placeholder token and the `slack_posting` kill
+      // switch both come back as `{ ok: false, error }`, so an unsent command
+      // reply was previously lost in total silence, on Slack only. There is no
+      // second channel to apologise on — the channel is the thing that failed —
+      // so the honest remedy is to say so where an operator can see it.
+      //
+      // Only the ERROR half of A3-10 is mirrored: the oversize half is
+      // unreachable here. Slack's ceiling is ~40000 and `mrkdwn` does not
+      // escape-expand, so a reply bounded at MISSION_REPLY_MAX_CHARS (3000)
+      // source characters cannot exceed it. Telegram needs splitting because
+      // its HTML render expands by up to 5x against a 4096 cap; Slack does not,
+      // and adding a splitter here would be dead code.
+      const sent = await postMessage(channel, cmd.reply, {
         threadTs: ev.thread_ts,
         persona: { displayName: agent.displayName, iconUrl: agent.iconUrl },
         tokenOverride: botToken,
       });
+      if (!sent.ok) {
+        logger.error(
+          { agentId, channel, replyChars: cmd.reply.length, error: sent.error },
+          'command reply undelivered; the user saw nothing',
+        );
+      }
       return;
     }
   }
@@ -428,7 +477,21 @@ async function handlePerAgentSlackEvent(
       onChunk,
       onToolEvent,
       surface: 'slack',
-      replyChatId: `slack:${channel}${ev.thread_ts ? `:${ev.thread_ts}` : ''}`,
+      // A person typed this in a chat window. `origin` is the ONLY thing that
+      // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
+      // and this is one of the five chat-surface call sites allowed to say so.
+      origin: 'human_chat',
+      // THE `app-` SEGMENT IS THIS PATH'S IDENTITY, and it is the whole of
+      // CLAUDE.md's "Slack has TWO send paths" warning applied to out-of-band
+      // pushes. Everything this handler sends carries `tokenOverride: botToken`
+      // so it appears as THIS agent's own Slack app; a push built later from
+      // `replyChatId` has no handler to inherit that from, so the id records
+      // which app owns the conversation and `deliverToReplyChat` resolves the
+      // token back. Omit it and the assignment push arrives from the MAIN bot —
+      // or, when the main bot is not in this channel, not at all. The main-bot
+      // path below deliberately emits NO segment: the workspace token is right
+      // there.
+      replyChatId: `slack:${channel}:app-${agentId}${ev.thread_ts ? `:${ev.thread_ts}` : ''}`,
       ...(ev.user ? { userId: ev.user } : {}),
       ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
     });
@@ -539,10 +602,44 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
   // Slash command routing inside a regular message (rare, but supported).
   // Skipped when files are attached — a caption starting with '/' is data,
   // not a command (parity with the Telegram handler).
+  //
+  // MIRRORED FROM TELEGRAM (CLAUDE.md, "chat surface parity"), including the
+  // TWO SCOPES. A mission command acts on the board of the bot that received it
+  // unless the message OPENS by addressing an agent; every other command stays
+  // on the SESSION scope, because it reads and writes the same session records
+  // the ordinary turn below does. This endpoint IS the workspace bot and its
+  // identity is 'main' — that is why the literal is not a fallback but this
+  // bot's own name, the Slack analogue of Telegram's `botAgentId` (the
+  // per-agent apps carry theirs in their URL; a workspace-level endpoint has no
+  // segment to carry one because there is only ever one of it).
+  //
+  // The board half is therefore a near no-op here — but the TEXT half is not.
+  // Scoping on `targetAgentId`/`cleanText` sent `/mission new Ask @research
+  // about the reconciler` to research's board and stored the title as "Ask
+  // about the reconciler", the same content-as-routing mistake Telegram had.
+  // Same words, same user, must mean the same thing on every surface.
+  //
+  // And the session half is not a no-op either: `targetAgentId` is the picker's
+  // answer, so a mid-sentence `@ops` makes it 'ops' while the board literal is
+  // 'main'. Keeping `/newchat` and friends on `targetAgentId` is what keeps
+  // them pointed at the session `getSession`/`appendTurns` use below — the same
+  // rule Telegram's call site states at length.
+  const boardAgentId = picked.addressed ? picked.agentId : 'main';
+  const commandText = picked.addressed ? userText : rawText;
   if (!ev.files?.length) {
-    const cmd = await runCommand(targetAgentId, chatId, userText);
+    const cmd = await runCommand(targetAgentId, chatId, commandText, { boardAgentId });
     if (cmd && cmd.reply) {
-      await postMessage(channel, cmd.reply, { threadTs: ev.thread_ts });
+      // THE RESULT IS NOT DISCARDED (A3-10) — the main bot's half of the same
+      // mirror, see the per-agent path above for why `postMessage` returning
+      // `{ ok: false }` rather than throwing is what made this silent, and why
+      // only the error half of A3-10 applies on Slack.
+      const sent = await postMessage(channel, cmd.reply, { threadTs: ev.thread_ts });
+      if (!sent.ok) {
+        logger.error(
+          { agentId: targetAgentId, boardAgentId, channel, replyChars: cmd.reply.length, error: sent.error },
+          'command reply undelivered; the user saw nothing',
+        );
+      }
       return;
     }
   }
@@ -648,7 +745,28 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
       onChunk,
       onToolEvent,
       surface: 'slack',
+      // A person typed this in a chat window. `origin` is the ONLY thing that
+      // lets the emergency kill phrase halt the fleet, it defaults to 'machine',
+      // and this is one of the five chat-surface call sites allowed to say so.
+      origin: 'human_chat',
+      // NO `app-` segment, deliberately: this is the workspace bot, and an
+      // out-of-band push delivered with `SLACK_BOT_TOKEN` is delivered by the
+      // same identity that posted every other message in this thread. The
+      // per-agent path above is the one that has to say who it is.
       replyChatId: `slack:${channel}${ev.thread_ts ? `:${ev.thread_ts}` : ''}`,
+      // AND THE TOOLS ADDRESS THE SAME BOARD THE COMMANDS DO — the exact
+      // counterpart of the `{ boardAgentId }` handed to `runCommand` above, and
+      // the same one-line gap Telegram had: the command half alone left ONE
+      // CONVERSATION WITH TWO BOARDS. `/mission new ask @research about it`
+      // wrote to MAIN's board (a mid-sentence mention is not an address, so the
+      // scope is this bot) while `hey there @research open one for me` sent the
+      // tool to RESEARCH's, because without this the tool falls back to
+      // `ctx.agentId` — the picker's answer. It is the RECEIVING BOT that wins,
+      // for the same reason as on Telegram and for one more that is specific
+      // here: this endpoint IS the workspace bot and its identity is 'main', so
+      // the board a person sees in this conversation is main's whatever the
+      // picker did with their prose.
+      boardAgentId,
       ...(userId ? { userId } : {}),
       ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
     });

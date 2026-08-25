@@ -32,6 +32,13 @@ const UNIT_PRICES = {
   albHour: 0.0225,
   albLcuHour: 0.008,
   interfaceEndpointPerAzHour: 0.01, // opt-in via CCE_PRIVATE_ENDPOINTS
+  // Paperclip work engine substrate (ADR 0010), provisioned at the tiers whose
+  // TierShape.paperclipEnabled is true. Aurora Serverless v2 bills by ACU-hour
+  // and the FLOOR is not tiered (database-stack.ts holds serverlessV2MinCapacity
+  // at 0.5 on every tier), so the floor bills 24/7.
+  auroraAcuHour: 0.12,
+  auroraStoragePerGbMonth: 0.1,
+  efsStandardPerGbMonth: 0.3,
   // Storage / crypto / secrets
   kmsKeyMonth: 1.0,
   secretMonth: 0.4,
@@ -74,6 +81,11 @@ const ASSUMPTIONS = {
   flowLogsGbPerMonth: 1,
   s3StorageGb: 5,
   ecrStorageGb: 2,
+  paperclipAuroraMinAcu: 0.5, // mirrors serverlessV2MinCapacity in database-stack.ts
+  paperclipAuroraStorageGb: 10,
+  paperclipEfsGb: 5,
+  paperclipTaskCpu: 2048, // infra/lib/paperclip-stack.ts PaperclipTaskDef
+  paperclipTaskMemMb: 4096,
   ddbWritesPerMonthMillions: 0.5,
   ddbReadsPerMonthMillions: 2,
   alarmCount: 9,
@@ -94,10 +106,10 @@ const ASSUMPTIONS = {
 
 // ── TIER SHAPES (mirror of infra/lib/constants.ts TIERS, keep in sync) ──
 const TIER_SHAPES = {
-  0: { label: 'Hobby', cpu: 512, memMb: 1024, minTasks: 1, nat: 1, waf: false, cloudFront: false, flowLogs: false, xray: false, worm: false, guardDutyConfig: false, dailyCapDefault: 5 },
-  1: { label: 'Standard', cpu: 1024, memMb: 2048, minTasks: 2, nat: 2, waf: false, cloudFront: false, flowLogs: true, xray: false, worm: false, guardDutyConfig: false, dailyCapDefault: 50 },
-  2: { label: 'Pro', cpu: 2048, memMb: 4096, minTasks: 2, nat: 2, waf: true, cloudFront: false, flowLogs: true, xray: true, worm: true, guardDutyConfig: false, dailyCapDefault: 200 },
-  3: { label: 'Enterprise', cpu: 2048, memMb: 4096, minTasks: 3, nat: 2, waf: true, cloudFront: true, flowLogs: true, xray: true, worm: true, guardDutyConfig: true, dailyCapDefault: 1000 },
+  0: { label: 'Hobby', cpu: 512, memMb: 1024, minTasks: 1, nat: 1, waf: false, cloudFront: false, flowLogs: false, xray: false, worm: false, guardDutyConfig: false, paperclip: false, dailyCapDefault: 5 },
+  1: { label: 'Standard', cpu: 1024, memMb: 2048, minTasks: 2, nat: 2, waf: false, cloudFront: false, flowLogs: true, xray: false, worm: false, guardDutyConfig: false, paperclip: true, dailyCapDefault: 50 },
+  2: { label: 'Pro', cpu: 2048, memMb: 4096, minTasks: 2, nat: 2, waf: true, cloudFront: false, flowLogs: true, xray: true, worm: true, guardDutyConfig: false, paperclip: true, dailyCapDefault: 200 },
+  3: { label: 'Enterprise', cpu: 2048, memMb: 4096, minTasks: 3, nat: 2, waf: true, cloudFront: true, flowLogs: true, xray: true, worm: true, guardDutyConfig: true, paperclip: true, dailyCapDefault: 1000 },
 };
 
 const round = (n) => Math.round(n * 100) / 100;
@@ -129,6 +141,33 @@ function estimateTier(tier) {
   add('DynamoDB on-demand', A.ddbWritesPerMonthMillions * P.ddbWritePerMillion + A.ddbReadsPerMonthMillions * P.ddbReadPerMillion, 'light traffic');
   if (A.hasDomain) add('Route 53 hosted zone', P.route53HostedZoneMonth);
   if (t.flowLogs) add('VPC Flow Logs', A.flowLogsGbPerMonth * P.flowLogsPerGb, `${A.flowLogsGbPerMonth} GB/mo assumed`);
+  // Paperclip work engine (ADR 0010). Gated on the SAME per-tier field CDK
+  // deploys from (TierShape.paperclipEnabled), so this line appears at exactly
+  // the tiers that provision the substrate. Before it existed, fixedMonthlyUsd
+  // under-reported T1+ by roughly $110 and the deploy gate patched over the gap
+  // with a prose note — while cost-guardrails-stack.ts derived its tiered budget
+  // default from a figure this estimator did not produce.
+  // The environment-scoped provisioning override folded in, so the estimator
+  // this repository's own money gate spawns cannot quote a Tier 0 floor that
+  // omits an Aurora cluster the same run is about to create. Mirrors
+  // `paperclipProvisioned` in infra/lib/constants.ts (this script cannot import
+  // TypeScript); one-directional there and one-directional here.
+  if (t.paperclip || process.env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE === '1') {
+    const pcVcpu = A.paperclipTaskCpu / 1024;
+    const pcGb = A.paperclipTaskMemMb / 1024;
+    add(
+      'Aurora Serverless v2 floor (Paperclip)',
+      A.paperclipAuroraMinAcu * P.auroraAcuHour * H +
+        A.paperclipAuroraStorageGb * P.auroraStoragePerGbMonth,
+      `min ${A.paperclipAuroraMinAcu} ACU bills 24/7; the ceiling is tiered, the floor is not`,
+    );
+    add('EFS (Paperclip state)', A.paperclipEfsGb * P.efsStandardPerGbMonth, `${A.paperclipEfsGb} GB assumed`);
+    add(
+      `Fargate x1 (Paperclip, ${pcVcpu} vCPU / ${pcGb} GB, ARM64)`,
+      (pcVcpu * P.fargateVcpuHour + pcGb * P.fargateGbHour) * H,
+      'desiredCount 1, no autoscaling',
+    );
+  }
   if (t.waf) add('WAFv2 (ACL + 4 rules + requests)', P.wafWebAclMonth + 4 * P.wafRuleMonth + A.wafMillionRequestsPerMonth * P.wafPerMillionRequests);
   if (t.xray) add('X-Ray', A.xrayMillionTracesPerMonth * P.xrayPerMillionTraces, 'light tracing');
   if (t.cloudFront) add('CloudFront', A.cloudFrontGbOutPerMonth * P.cloudFrontPerGbOut, 'free tier may cover this entirely');

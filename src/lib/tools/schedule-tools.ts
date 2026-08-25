@@ -166,6 +166,15 @@ tools.register('schedule_task', {
     // may be a principal alias (owner:*) no chat API can deliver to. This is
     // what makes "brief me every morning at 8" from an aliased owner chat
     // actually arrive (see src/lib/scheduler/delivery.ts).
+    //
+    // STORED VERBATIM, IDENTITY SEGMENT AND ALL. On a surface with more than
+    // one bot the id carries which one owns the chat (`:bot-<agentId>` on
+    // Telegram, `:app-<agentId>` on Slack), so tomorrow's brief goes out over
+    // the same bot the person asked for it in rather than over `ctx.agentId`,
+    // which is the turn's agent and can be a sticky default. `send()` in
+    // delivery.ts is the one consumer and it parses both shapes; an id without
+    // a segment — a legacy row, or a target typed into the dashboard's form —
+    // still falls back to the task's agent.
     const deliveryTarget =
       (ctx.surface === 'telegram' || ctx.surface === 'slack') && ctx.replyChatId
         ? { surface: ctx.surface, chatId: ctx.replyChatId }

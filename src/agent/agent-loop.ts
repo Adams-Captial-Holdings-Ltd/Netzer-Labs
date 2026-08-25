@@ -82,9 +82,42 @@ export interface AttachmentBlock {
   name?: string;
 }
 
+/**
+ * WHO AUTHORED `userText` — and nothing else.
+ *
+ * This is deliberately NOT `surface`, which names the RENDERER. A
+ * machine-driven turn can legitimately want a chat surface's rendering, audit
+ * and delivery shape, so reading authorship off `surface` would silently hand
+ * fleet-halt power to any such caller. The one decision that hangs off this
+ * type is whether the emergency kill phrase is honoured (see `runAdmittedTurn`).
+ *
+ *   'human_chat' — a PERSON typed this into a chat window, and the WHOLE of
+ *                  `userText` is what they typed. Exactly five call sites set
+ *                  it and they are the only `runAgentTurn` callers that may:
+ *                  Telegram, both Slack send paths, and the dashboard chat
+ *                  console's streamed and non-streamed routes.
+ *   'machine'    — the text was assembled by us or handed to us by a remote
+ *                  system: a scheduled prompt, a War Room transcript, an
+ *                  `ask_agent` delegation, a Paperclip issue body.
+ *
+ * 'machine' IS THE DEFAULT, and that is the point of the field: a new caller
+ * that never thinks about this gets the safe behaviour. Gaining the ability to
+ * halt the fleet requires typing the words `origin: 'human_chat'`.
+ *
+ * A person's message can still reach a 'machine' turn — a War Room turn wraps
+ * the human's latest line in a multi-speaker transcript — so this type is NOT
+ * the only place the kill phrase is honoured. It is the only place it is
+ * honoured on a `runAgentTurn` request. The War Room checks the human's RAW
+ * message at its entry points instead (`src/lib/warroom/kill-phrase.ts`);
+ * see `engageEmergencyHalt` for why the transcript is the wrong thing to test.
+ */
+export type TurnOrigin = 'human_chat' | 'machine';
+
 export interface AgentTurnRequest {
   agentId: string;
   chatId: string;
+  /** Genuine caller-held Paperclip run id. Chat turns leave this absent. */
+  runId?: string;
   userText: string;
   history: Turn[];
   modelOverride?: string;
@@ -100,6 +133,11 @@ export interface AgentTurnRequest {
    */
   onToolEvent?: (event: { name: string; callIndex: number }) => void;
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
+  /**
+   * Who authored `userText`. Absent means 'machine' — see `TurnOrigin` for why
+   * that default is the safe one and why this is not inferred from `surface`.
+   */
+  origin?: TurnOrigin;
   /** Inline attachments (image, PDF) sent with the user message. */
   attachments?: AttachmentBlock[];
   /**
@@ -137,6 +175,26 @@ export interface AgentTurnRequest {
    * target even when chatId is a principal alias (owner:*).
    */
   replyChatId?: string;
+  /**
+   * WHOSE MISSION BOARD THE TOOLS ADDRESS, when that is not `agentId`.
+   *
+   * The exact counterpart of `CommandScope.boardAgentId` in
+   * `src/agent/commands.ts`, and it exists for the same reason one conversation
+   * must not have two boards: `/missions` acts on the board of the BOT that
+   * received the message, so `list_missions` in that same chat has to answer
+   * from the same board or the ref the board reply teaches the user to copy is
+   * refused by the agent standing next to it.
+   *
+   * `agentId` is the SESSION scope (whose history and records this turn uses);
+   * this is the BOARD scope (a remote object named by an agent id). They differ
+   * only where a surface runs more than one bot AND the picker can answer as
+   * someone else — Telegram, where the sticky default answers `main` inside
+   * `/tg/research/webhook`. A surface with one identity per conversation omits
+   * it and the two coincide, which is why Slack's per-agent apps (which pass
+   * one id to both `runCommand` and `runAgentTurn`) and the dashboard pass
+   * nothing and are correct by construction.
+   */
+  boardAgentId?: string;
   /** Agent-to-agent delegation depth (ask_agent). Default 0. */
   delegationDepth?: number;
   /**
@@ -265,6 +323,18 @@ async function buildSystemPrompt(
         // Neutralize angle brackets so a note can't close </hive_context> and
         // inject pseudo-structure into the system prompt (boundary defense for
         // every note source, manual or auto-promoted).
+        //
+        // THIS IS THE PRECEDENT PHASE 6 REUSED, and the reuse is the DISCIPLINE,
+        // not the bytes: escape angle brackets at INTERPOLATION (here, inside the
+        // .map() that builds the prompt), never at storage, on every
+        // attacker-influenced field. The Paperclip boundary calls
+        // `neutralizeForPrompt` (src/lib/paperclip/mission-projection.ts), which
+        // is the same discipline with a different substitution — HTML entities
+        // rather than the guillemets below. The two are NOT byte-identical and
+        // deliberately were not forced to be: `neutralizeForPrompt`'s output is
+        // frozen by an exact-equality test, and rewriting either one to match the
+        // other would change shipped prompt bytes on a surface no probe covers.
+        // What matters, and what is enforced, is that there is no THIRD scheme.
         const safe = e.content.slice(0, 280).replace(/</g, '‹').replace(/>/g, '›');
         return `- [${day}] (${where}) ${safe}`;
       })
@@ -304,6 +374,32 @@ async function buildSystemPrompt(
   return sections.join('\n\n');
 }
 
+/**
+ * Why a turn was refused BEFORE any model call, and whether resubmitting the
+ * same turn could go differently. See `AgentTurnResponse.refusal`, which is the
+ * only place this is ever set.
+ *
+ * `kind` names the gate, one per pre-model short-circuit in `runAgentTurn`:
+ *
+ *   'kill_phrase'     — the emergency kill phrase was typed in a chat surface
+ *                       (`origin: 'human_chat'`, the only origin that gate
+ *                       honours); the fleet is now halted on purpose. A
+ *                       machine-originated turn never produces this kind.
+ *   'sessions_frozen' — the `sessions_frozen` maintenance kill switch is on.
+ *   'rate_limited'    — the per-identity turn rate limit had no token left.
+ *
+ * `retryable` is what a caller branches on, and it is a property of the CAUSE,
+ * not of the text: `true` means the cause is cured by time or by an operator
+ * (a freeze is lifted, a rate-limit window rolls over), so an identical
+ * resubmission of this very turn can succeed. `false` means the refusal is the
+ * intended terminal outcome of this exact input — resubmitting the kill phrase
+ * just halts the fleet again.
+ */
+export interface TurnRefusal {
+  kind: 'kill_phrase' | 'sessions_frozen' | 'rate_limited';
+  retryable: boolean;
+}
+
 export interface AgentTurnResponse {
   text: string;
   modelId: string;
@@ -319,6 +415,31 @@ export interface AgentTurnResponse {
    * safety note rather than attributing the words to the agent.
    */
   blocked?: boolean;
+  /**
+   * Set — and set ONLY — when this turn was refused by one of `runAgentTurn`'s
+   * three pre-model gates (the emergency kill phrase, the `sessions_frozen`
+   * maintenance switch, the per-identity rate limit). On those paths `text` is
+   * a canned enforcement notice, NOT the agent speaking, and every metric on
+   * this response is zero because no model ever ran.
+   *
+   * DISTINCT FROM `blocked`, which stays guardrail-only and is never set here.
+   * A guardrail block is a verdict on the message; a refusal is a verdict on
+   * the moment. A caller that must not attribute `text` to the agent — anything
+   * writing session history, which is replayed to the model as words the agent
+   * said — has to check BOTH, because neither implies the other.
+   *
+   * Callers that hold a one-shot claim, lease or dedupe key over the turn MUST
+   * branch on `refusal.retryable`: a retryable refusal means this attempt did
+   * no work and a later identical attempt can, so the claim has to be RELEASED
+   * rather than recorded as a completed turn. `retryable: false` is terminal
+   * and keeps the claim. See `TurnRefusal`.
+   *
+   * Absent on every ordinary turn, on a guardrail block, and on an empty but
+   * successful answer. Never set on any path that reached Bedrock — including
+   * the ones that THROW (`CostCapExceededError`, `KillSwitchActiveError` for
+   * `bedrock_global`), which are not refusals in this sense and are unchanged.
+   */
+  refusal?: TurnRefusal;
   /**
    * Binary artifacts tools produced this turn (generated images). Surfaces
    * deliver them natively after the text reply — Telegram sendPhoto, Slack
@@ -505,6 +626,11 @@ async function scanOutboundReply(
  * settle. Admission runs BEFORE the frozen/rate-limit refusals, so a
  * cap-blocked turn throws CostCapExceededError even when a refusal would
  * also have applied.
+ *
+ * The three refusal short-circuits RETURN NORMALLY rather than throwing, so a
+ * caller cannot tell one from a real answer by catching. Each carries
+ * `refusal` on its response — a typed marker, not prose to match on — and that
+ * is the supported way to detect them; see `AgentTurnResponse.refusal`.
  */
 export async function runAgentTurn(req: AgentTurnRequest): Promise<AgentTurnResponse> {
   const spendAdmission = await admitTurnSpend({
@@ -566,51 +692,118 @@ export function matchesKillPhrase(
   return userText.toLowerCase().includes(p.toLowerCase());
 }
 
+/**
+ * Engage the panic freeze for a kill phrase a PERSON just typed, and return the
+ * static, state-honest confirmation to show them. Snapshot + every kill switch
+ * on, exactly like the dashboard panic button. Never throws: a halt that could
+ * not be engaged is reported in the returned text, never swallowed.
+ *
+ * It lives next to the matcher so every path that honours the phrase says the
+ * SAME words. Two paths do:
+ *   - `runAdmittedTurn` below, for the five chat call sites (`origin:
+ *     'human_chat'`);
+ *   - the War Room entry points, via `src/lib/warroom/kill-phrase.ts`, which
+ *     check the human's RAW message before it is published as a transcript
+ *     line. They cannot go through the turn gate: a room turn's `userText` is
+ *     an assembled multi-speaker transcript (see `buildContextPrompt`), so
+ *     honouring the phrase there would let an AGENT's words halt the fleet and
+ *     would re-halt from a stale line on every later round.
+ */
+export async function engageEmergencyHalt(ctx: {
+  agentId: string;
+  chatId: string;
+  surface: 'telegram' | 'slack' | 'dashboard' | 'system';
+}): Promise<string> {
+  let engaged = false;
+  let alreadyActive = false;
+  try {
+    const res = await tryAcquirePanic(
+      'emergency kill phrase received',
+      `${ctx.surface}:${ctx.chatId}`,
+    );
+    engaged = res.acquired;
+    alreadyActive = !res.acquired && res.state.active;
+    if (engaged && (res.state.partialFailures?.length ?? 0) > 0) {
+      logger.error(
+        { partialFailures: res.state.partialFailures },
+        'kill phrase panic engaged with partial switch failures',
+      );
+    }
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      'kill phrase received but panic acquisition failed',
+    );
+  }
+  void writeAudit({
+    action: 'emergency_kill_phrase',
+    agentId: ctx.agentId,
+    chatId: ctx.chatId,
+    surface: ctx.surface,
+    detail: { engaged, alreadyActive },
+    result: engaged || alreadyActive ? 'blocked' : 'error',
+  });
+  return engaged
+    ? 'EMERGENCY HALT engaged. Every kill switch is on and new agent turns are frozen. Restore from the dashboard panic/kill-switch controls when you are ready.'
+    : alreadyActive
+      ? 'Emergency halt is already engaged; nothing is running. Restore from the dashboard panic/kill-switch controls.'
+      : 'Kill phrase received but the halt could NOT be engaged (state store unreachable). Use the dashboard panic button now.';
+}
+
 async function runAdmittedTurn(
   req: AgentTurnRequest,
   spendAdmission: TurnSpendAdmission,
 ): Promise<AgentTurnResponse> {
   const surface = req.surface ?? 'system';
+  // Absent = 'machine'. Opt-OUT by default: a caller gains the ability to halt
+  // the fleet only by declaring `origin: 'human_chat'` (see `TurnOrigin`).
+  const origin: TurnOrigin = req.origin ?? 'machine';
 
-  // Emergency kill phrase: typed in ANY chat surface (Telegram, Slack,
-  // dashboard chat all share this path), it trips the same panic freeze as
-  // the dashboard panic button (snapshot, then every kill switch on).
-  // Checked before ANY other work so a runaway fleet can be stopped from
-  // the nearest chat window, and before the frozen check so re-typing the
-  // phrase still gets a state-honest confirmation instead of the generic
-  // maintenance copy. The reply is static: no model call, no spend.
-  if (matchesKillPhrase(req.userText)) {
-    let engaged = false;
-    let alreadyActive = false;
-    try {
-      const res = await tryAcquirePanic('emergency kill phrase received', `${surface}:${req.chatId}`);
-      engaged = res.acquired;
-      alreadyActive = !res.acquired && res.state.active;
-      if (engaged && (res.state.partialFailures?.length ?? 0) > 0) {
-        logger.error(
-          { partialFailures: res.state.partialFailures },
-          'kill phrase panic engaged with partial switch failures',
-        );
-      }
-    } catch (err) {
-      logger.error(
-        { err: err instanceof Error ? err.message : String(err) },
-        'kill phrase received but panic acquisition failed',
-      );
-    }
-    void writeAudit({
-      action: 'emergency_kill_phrase',
+  // Emergency kill phrase: typed by a PERSON in ANY chat surface (Telegram,
+  // Slack — both send paths — and dashboard chat all share this path), it trips
+  // the same panic freeze as the dashboard panic button (snapshot, then every
+  // kill switch on). Checked before ANY other work so a runaway fleet can be
+  // stopped from the nearest chat window, and before the frozen check so
+  // re-typing the phrase still gets a state-honest confirmation instead of the
+  // generic maintenance copy. The reply is static: no model call, no spend.
+  //
+  // WHY THE ORIGIN GATE. The phrase is a panic control for a HUMAN at a chat
+  // window, which is exactly what `TurnRefusal`'s `kill_phrase` doc has always
+  // said it was. Machine-originated text is not that, and one such path now
+  // carries text a remote party controls: the Paperclip dispatch worker feeds a
+  // board issue's title and body straight into `userText`
+  // (`dispatch-worker.ts` -> `dispatchUserText`). Honouring the phrase there
+  // gives an issue the power to halt the WHOLE FLEET, and the halt confirmation
+  // is then posted back to the board — an oracle telling whoever planted the
+  // text that the phrase is valid. The same reasoning covers the other machine
+  // callers (scheduled prompts, `ask_agent` delegations, the canary): none of
+  // them is a person in a panic, and none has any business tripping an all-stop
+  // from prompt text.
+  //
+  // WAR ROOM TRANSCRIPTS ARE MACHINE TEXT — BUT A PERSON STILL TYPED SOMETHING.
+  // A room turn's `userText` is an assembled multi-speaker transcript
+  // (`buildContextPrompt`), whose latest line IS what a person just typed. It
+  // stays 'machine' here on purpose: the same blob also carries AGENTS' replies
+  // and older turns, so honouring the phrase on it would let an agent halt the
+  // fleet and would re-halt from a stale line on every later round. The human's
+  // panic control is not lost — it is checked one step EARLIER, on the raw
+  // message, at the two War Room entry points (Telegram and the dashboard) via
+  // `src/lib/warroom/kill-phrase.ts`, which calls `engageEmergencyHalt` for the
+  // identical freeze and the identical confirmation.
+  //
+  // The chat surfaces are NOT excluded, and must never be: they are the whole
+  // reason the control exists. Their five call sites — Telegram, both Slack
+  // send paths, and the dashboard chat console's streamed and non-streamed
+  // routes — declare `origin: 'human_chat'` and behave exactly as before.
+  //
+  // This does not narrow the MATCH (`matchesKillPhrase`, `MIN_KILL_PHRASE_LENGTH`
+  // are untouched); it narrows WHO IS ASKING.
+  if (origin === 'human_chat' && matchesKillPhrase(req.userText)) {
+    const text = await engageEmergencyHalt({
       agentId: req.agentId,
       chatId: req.chatId,
       surface,
-      detail: { engaged, alreadyActive },
-      result: engaged || alreadyActive ? 'blocked' : 'error',
     });
-    const text = engaged
-      ? 'EMERGENCY HALT engaged. Every kill switch is on and new agent turns are frozen. Restore from the dashboard panic/kill-switch controls when you are ready.'
-      : alreadyActive
-        ? 'Emergency halt is already engaged; nothing is running. Restore from the dashboard panic/kill-switch controls.'
-        : 'Kill phrase received but the halt could NOT be engaged (state store unreachable). Use the dashboard panic button now.';
     if (req.onChunk) req.onChunk(text);
     return {
       text,
@@ -620,6 +813,9 @@ async function runAdmittedTurn(
       inputTokens: 0,
       outputTokens: 0,
       toolCallCount: 0,
+      // NOT retryable: the halt is the intended outcome of this exact input.
+      // Replaying the phrase re-halts the fleet; it never gets an answer.
+      refusal: { kind: 'kill_phrase', retryable: false },
     };
   }
 
@@ -648,6 +844,9 @@ async function runAdmittedTurn(
       inputTokens: 0,
       outputTokens: 0,
       toolCallCount: 0,
+      // Retryable: a maintenance freeze is lifted by an operator, and the very
+      // same turn resubmitted afterwards runs normally.
+      refusal: { kind: 'sessions_frozen', retryable: true },
     };
   }
 
@@ -682,6 +881,9 @@ async function runAdmittedTurn(
       inputTokens: 0,
       outputTokens: 0,
       toolCallCount: 0,
+      // Retryable: the window rolls over on its own (`rl.resetAt`), so the same
+      // turn resubmitted after it can succeed with nothing else changed.
+      refusal: { kind: 'rate_limited', retryable: true },
     };
   }
 
@@ -874,6 +1076,7 @@ async function runAdmittedTurn(
       detail: {
         cacheReadInputTokens: initial.cacheReadInputTokens,
         cacheWriteInputTokens: initial.cacheWriteInputTokens,
+        ...(req.runId ? { runId: req.runId } : {}),
       },
       ...(req.userId ? { userId: req.userId } : {}),
       result: 'ok',
@@ -1029,7 +1232,9 @@ async function runAdmittedTurn(
         chatId: req.chatId,
         ...(req.userId ? { userId: req.userId } : {}),
         ...(req.surface ? { surface: req.surface } : {}),
+        ...(req.runId ? { runId: req.runId } : {}),
         ...(req.replyChatId ? { replyChatId: req.replyChatId } : {}),
+        ...(req.boardAgentId ? { boardAgentId: req.boardAgentId } : {}),
         ...(req.delegationDepth !== undefined ? { delegationDepth: req.delegationDepth } : {}),
       };
       const result: ToolResult = dispatchKilledMidTurn
@@ -1182,6 +1387,7 @@ async function runAdmittedTurn(
       toolCallCount,
       cacheReadInputTokens: totalCacheRead,
       cacheWriteInputTokens: totalCacheWrite,
+      ...(req.runId ? { runId: req.runId } : {}),
     },
     ...(req.userId ? { userId: req.userId } : {}),
     result: 'ok',

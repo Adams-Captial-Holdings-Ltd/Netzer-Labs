@@ -10487,3 +10487,136 @@ run — never in advance, and never from a plan.
 - [The bar and phase decomposition](bar-and-phases.md) — carries the phases that implement this section
 - [ADR 0010](../../adr/0010-paperclip-work-engine.md) and its amendment
 - [The plan audit](plan-audit.md)
+
+## 35.6 What has actually landed
+
+Appended 2026-08-21. **This section records only work that is merged and whose
+verification actually ran.** Anything in flight is named as in flight. Nothing
+here is a plan.
+
+### Merged to `development` — [PR #88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88), 9/9 CI checks green
+
+| Phase | Commit | What it is | Verified by |
+|---|---|---|---|
+| **1 — contract probes and wire types** | `b0f6979` | `src/lib/paperclip/types.ts` (the single wire-shape file), `tests/contract/paperclip-routes.paperclip.integration.test.ts`, the real 475-path `openapi.snapshot.json`, and `artifact-characterization.json` | **21/21 live probes** against `netzer-paperclip:2026.722.0-netzar.1` on a reset harness |
+| **1.5 — the image pipeline** | `7e17a7c` | `scripts/ci/paperclip-image.ts`, a parameterised `cloud-build.ts`, content-addressed tagging, teardown of all four CodeBuild resources, and the **staging** IAM grants | `npm run typecheck`, `npx cdk ls` 15 flag-off / 17 flag-on, `paperclip-image-pipeline.test.ts` |
+| **docs** | `78715f6`, `45a96a8` | `bar-and-phases.md`, §35 of this document, the session handoff, and the deploy-pipeline diagram split | `docs-links`, `feature-knowledge`, `docs-mermaid`, `diagrams-drift` all OK |
+
+Both build phases were rejected **four times** by an independent critic with
+fresh context and signed off blind on the fifth.
+
+### Not deployed
+
+**No AWS resource has been created.** `development` deploys nothing; the
+`qa → staging` promotion is deliberately being held until the Paperclip service
+exists, so there is exactly one deploy rather than an invisible substrate-only
+one. `CCE_PAPERCLIP_ENABLED=1` is already set at repo level and staging deploys
+automatically on push to `staging`, so **that merge is the deploy** and it
+creates a retained, deletion-protected Aurora cluster billing from creation.
+
+### In flight, NOT merged
+
+**Phase 4 + 4.5 — the Paperclip service and its UI.** Written and typechecking,
+with 27 new CDK assertions passing, but **rejected by its critic and not
+signed off**. Files exist uncommitted: `infra/lib/paperclip-stack.ts`,
+`infra/lib/paperclip-stack.test.ts`, `scripts/paperclip-bootstrap.ts`,
+`scripts/lib/paperclip/bootstrap-core.ts`, plus edits to `infra/bin/app.ts`,
+`compute-stack.ts`, `deploy.ts` and `vendor/paperclip/Dockerfile`.
+
+The blocking finding is worth carrying forward on its own merits — see **M33**
+in the session handoff. The service's *existence* was recomputed on every
+deploy from `cdk-outputs.json`, which is **gitignored and machine-local**, and
+the failure default was **DELETE**. On CI — the only path that reaches staging —
+the probe can never succeed, so `cdk deploy --all` would have torn down a
+running Paperclip service and its listener rule, printed "re-run the deploy",
+and **exited 0**. That is the cloudflared post-mortem repeating: a readiness
+gate that is safe in one direction and catastrophic in the other.
+
+### Corrections this work forced on documents
+
+Each was asserted from a document and disproved by running the artifact.
+
+| Claim | What the artifact does |
+|---|---|
+| `/wakeup` skip is discriminated by `'status' in response` | **Both** branches carry `status`; every success classified as a skip. Discriminate on `reason === 'wakeup_skipped'` |
+| `/issues/count` is a totals endpoint | `400` unless `attention=blocked` |
+| `X-RateLimit` rides every response | A validation-rejected search never reaches the limiter |
+| Avoid parallel **identical** list reads | Identical reads **coalesce to 200**; **distinct** keys in flight trip the 429 — the stated mitigation was backwards |
+| §16.6: rebuild the board in Preact | The pinned image ships the **built** UI at `/app/ui/dist`; the server looks at `../ui-dist`. One symlink plus `SERVE_UI=true` serves the real SPA — verified, `GET /` 200 with a 6,484,747-byte bundle |
+| ADR 0010: `updated_at >= watermark + 1ms` | Lossy under millisecond truncation. Superseded by `>= maxUpdatedAt − poll_overlap_ms` with `(id, updatedAt)` dedupe, proven by a same-millisecond probe |
+
+**A1-16 stands and was reinforced:** never cite a Paperclip source line number
+as authority. This work showed status codes are as unreliable as line numbers
+when read from a 400 KB route module at scale.
+
+---
+
+## §36 Addendum — what was actually implemented, 2026-08-21/22
+
+**Append-only, per the standing rule.** Nothing above this line was rewritten.
+This section records only what shipped, with the commit that carries it. Where
+execution contradicted this plan, the contradiction is named rather than
+smoothed over — the plan stays as written, and this addendum is the correction.
+
+The governing decision document is
+[the bar and phase decomposition](bar-and-phases.md). Precedence, unchanged: a
+green contract probe against the pinned artifact > running code > ADR 0010 >
+[`plan-audit.md`](plan-audit.md) > this plan.
+
+### §36.1 Shipped
+
+| Phase | Commit | What landed |
+|---|---|---|
+| 2 — the client | `c230a0a` | `client.ts`, `error.ts`, `config.ts`, `agent-map.ts`, `mission-engine.ts` + `paperclip-mission-engine.ts`, the 9 `PAPERCLIP_*` env keys and 5 `paperclip/*` seed rows. Zero new runtime dependencies. `paperclip_disabled` gained its first caller, checked at every `invoke`. |
+| 4 — service stack and tenant bootstrap | `60b1366` | `infra/lib/paperclip-stack.ts`, `scripts/paperclip-bootstrap.ts`, the CI secret-population and migration steps (both gated on `vars.CCE_PAPERCLIP_ENABLED == '1'`), and the staging IAM grants mirrored off the production-only role. |
+| 5 — reconciler | `575031b` | `reconciler.ts`, `watermark.ts`, `startPaperclipReconciler()` in `src/index.ts`, and the ADR 0010 amendment. Ships **observing only**. |
+| 6 — inbound dispatch | `0868252` | `paperclip-dispatch.ts` (202-ACK) + `dispatch-worker.ts`, a durable one-shot claim, and a typed `refusal` marker on `AgentTurnResponse`. |
+| 7 — ACL cutover | `0c34b76` | `src/lib/missions/mission-acl.ts` + `src/adapters/dashboard/missions.ts`, the four legacy handlers **extracted not deleted**, and a Netzar-side mission provenance row. |
+
+Phases 1 and 3 (this plan's Phase 1.5) shipped earlier in
+[PR #88](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/88).
+
+### §36.2 Where execution contradicted this plan
+
+| This plan says | What shipped, and why |
+|---|---|
+| Watermark `updated_at >= watermark + 1ms` (ADR 0010) | **Superseded.** Lossy in `[T, T+1ms)` because `updated_at` is microsecond-stored while callers observe millisecond-truncated values. Ships as `>= (max processed updatedAt − poll_overlap_ms)` with `(id, updatedAt)` dedupe. ADR amended in `575031b`. |
+| Dual-write during cutover (§30 Stage 4) | **Deleted.** Shadow **read** comparator only (C-7). |
+| `disabled-mission-engine.ts` | **Not created** (C-8). `PAPERCLIP_ENABLED` selects one whole stack at the router; a per-request fallback is forbidden, because a fallback that quietly serves legacy data makes an outage look like success. |
+| The issue list carries a total | **False.** The list is a bare array, and `/issues/count` is an *attention query* that answers `400` without `attention=blocked`. Paging to a short page is the only way to size a board. |
+| "Paperclip source changes required: **None**" | **Dead.** The pinned artifact runs with `vendor/paperclip/updated-since.patch` applied at build time. |
+| Mission tools named `mission_*` | **`paperclip_*`** (C-18). |
+
+### §36.3 Defects execution found that this plan does not contain
+
+Each was found by a fresh-context critic that **proved it by execution rather
+than by reading**, and each had passed a reading-based review first.
+
+1. **The create body sent `status`** and an `idempotencyKey` without
+   `allowDuplicate: true`, while the client auto-retries any write carrying that
+   key — a duplicate-issue-on-retry bug.
+2. **A readiness gate defaulting to delete.** Phase 4's first draft made the
+   service's existence depend on a probe reading a gitignored, machine-local
+   file; on CI it would have deleted a running service and exited 0.
+3. **Post-ack dispatch failures were permanently swallowed**, with the board
+   told "please try again shortly" when nothing ever would.
+4. **Three refusal paths return instead of throwing**, so a maintenance freeze
+   silently consumed a dispatch. 538 green tests said nothing, because every
+   test drove a rejected promise and none resolved a refusal.
+5. **Every Paperclip-origin mission would have vanished from a GDPR export** —
+   `mission-projection` hardcodes `createdByChat: 'paperclip'` while
+   `privacy-tools` filters by `createdByChat === chatId`.
+6. **Six phases were validated with the feature flag OFF.** The whole
+   integration is gated, so every "clean" run exercised the legacy path — and CI
+   does the same. Both configurations are now part of this feature's pre-push
+   list.
+
+### §36.4 Not implemented
+
+Phase 8 (cross-surface parity) is in progress. **Phases 4.5, 8.5, 9 and the
+Four Pillars (10–12) are not started.** Phase 9 is the one that makes the CDK
+stacks part of a standard install: today `npx cdk ls` prints 15 stacks with
+`CCE_PAPERCLIP_ENABLED` unset and 18 with it set, so Paperclip is still an
+opt-in add-on.
+
+Nothing has been deployed. No AWS resource was created, modified or deleted.

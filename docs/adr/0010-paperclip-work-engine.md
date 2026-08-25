@@ -55,6 +55,106 @@ strict-greater-than filter served by the pre-existing
 [`vendor/paperclip/Dockerfile`](../../vendor/paperclip/Dockerfile). No schema
 change, no other source change, no `:latest`.
 
+#### Amendment to the amendment (2026-08-21) — the filter is LOSSY, and a caller must overlap
+
+**The predicate this amendment ratified above is a correctness hazard, and this
+paragraph supersedes it.** "An indexed millisecond-resolution strict-greater-than
+filter" is compiled as `updated_at >= watermark + 1ms`. That `+1ms` exists for a
+real reason — `updated_at` stores MICROSECONDS while every API caller only ever
+observes the millisecond-truncated value, so a plain `>` would re-return a row at
+its own watermark forever. But the same truncation makes the predicate lossy in
+the other direction, and the patch's own comment is silent about it: **any row
+whose true timestamp falls in `[T, T+1ms)` and was not already in the page that
+produced `T` is lost permanently.** Concurrent writes land in the same millisecond
+routinely, so this is an everyday case, not a corner.
+
+**A caller must therefore never pass its last-seen stamp back.** The poll contract
+is: query `updatedSince = (max updatedAt actually PROCESSED) - poll_overlap_ms`,
+and deduplicate client-side on the pair `(id, updatedAt)`, comparing `updatedAt`
+as the raw string the server sent. `poll_overlap_ms` seeds to `2000`
+(`scripts/lib/seed-defaults.ts`); the implementation is
+[`src/lib/paperclip/watermark.ts`](../../src/lib/paperclip/watermark.ts) and
+[`src/lib/paperclip/reconciler.ts`](../../src/lib/paperclip/reconciler.ts).
+
+**Evidence.** The probe *"C-2 (BLOCKING): a truncated watermark loses rows, and
+overlap-and-dedupe delivers them exactly once"* re-polls a row at its own observed
+`updatedAt` and asserts the row is ABSENT; reproduces a same-millisecond collision
+between two writes and asserts that a naive watermark set to the shared stamp
+returns NEITHER sibling; then runs two overlapping polls the way the reconciler
+does and asserts that dedupe on `` `${id}@${updatedAt}` `` yields every row it
+wrote exactly once, with at least one row genuinely arriving twice.
+
+**Corollary (A8), and an honest limit on it.** Paperclip stamps `updated_at` from
+two clocks — the database's `now()` on insert, Node's `new Date()` on update — so a
+watermark is never exact and no caller may treat it as an equality. The overlap is
+load-bearing, not defensive. **But no probe measures the SIZE of that skew, so
+nothing establishes that `poll_overlap_ms` bounds it — UNVERIFIED.** What the
+overlap is proven to fix is the C-2/M30 truncation hazard, a fixed 1 ms window;
+reading it as skew insurance is a hope, not a measurement. A row stamped by the
+slower clock below a cursor the faster clock already moved past is not recovered by
+this arithmetic. Bounding it needs a probe that inserts and updates under load and
+records the observed disagreement, and that probe does not exist. `poll_overlap_ms`
+is runtime-config precisely so an operator can raise it without a deploy when one
+does.
+
+**Second, independent loss channel: PAGING MUST BE KEYSET, NOT OFFSET.** The sort
+key is the filter column and `updated_at` only ever moves forward, so under
+`sortDir=asc` any write that re-stamps a row already read moves it to the tail and
+shifts every row behind it DOWN one index. With a fixed `updatedSince` window and a
+walking `offset`, the row at the next page's first offset slides into the prefix
+already read and is never returned — while the re-stamped row IS returned, at
+wall-clock now, dragging the high-water mark past its own victim and putting it
+permanently below the next poll's `max - overlap` floor. The shift direction is
+always skip, never duplicate. This is ordinary behaviour on an active board, not an
+unlucky interleaving, and it is independent of C-2: fixing the predicate does not
+touch it.
+
+The poll therefore re-anchors every page on a VALUE: page *N+1* queries
+`updatedSince = (max updatedAt of page N) - 1ms` with `offset = 0`. A page returns
+the smallest `limit` rows at or above its floor, so every row it did NOT return is
+at or above that page's max — re-anchoring there can skip nothing, whatever moved
+meanwhile, and a re-stamped row simply reappears later in the same sweep as a new
+`(id, updatedAt)` pair. `- 1ms` makes the next window inclusive of the max and the
+rows sharing its millisecond, which costs one re-read boundary row per page.
+`offset` survives only as the fallback for the one case a value anchor cannot
+advance — a whole page inside a single millisecond — and inside such a tie group
+the skip is LIVE AGAIN, because the walk there is positional.
+
+**Correction (round 3): capping the advance at the sweep's START instant does NOT
+close that residual, and an earlier draft of this paragraph said it did.** The next
+poll's floor is `watermarkTo - poll_overlap_ms`, and `watermarkTo` is only bounded
+*above* by the sweep's start instant — it can sit far above a row skipped inside a
+tie group while still below that instant. Worked counterexample: a two-row tie at
+`11:59:50.000Z` and a third row at `11:59:56.000Z`, one tie member re-stamped
+mid-walk. The second member is never served, the cursor advances to
+`11:59:56.000Z`, the next floor becomes `11:59:54.000Z`, and the skipped row is
+permanently beneath it. The start-instant cap remains, but for its own narrower
+reason: the sweep read the board as of the instant it began, so a cursor past that
+instant would claim coverage of a window the sweep never queried.
+
+What actually closes the residual is a SECOND cap, at the tie millisecond itself.
+When the fallback fires, every row on that page sits at one stamp `S` (the patch
+serves `>= since + 1ms` and the fallback condition is `pageMax - 1 <= since`), and
+the positional walk that follows is anchored at `S - 1ms`, so every row it can drop
+carries a stamp at or above `S`. Holding the cursor at or below `S` leaves the next
+poll's floor at `S - poll_overlap_ms`, below all of them, and the row is re-read
+rather than lost. The cap is applied only when some id was observed at two
+different `updatedAt` values during the sweep, which is a NECESSARY condition for
+the skip: a shift drops a row only if the row that moved to the tail had already
+been read, and such a row is necessarily read again at its new stamp because
+`updated_at` only moves forward and the sweep pages to exhaustion. A sweep over a
+quiet board therefore advances exactly as it would without the cap. Because this
+bound holds at any page size, `poll_page_limit` needs no floor.
+
+A cold start is `now - poll_overlap_ms`, never epoch: this artifact has no totals
+endpoint (`GET .../issues/count` answers `400 "issues/count currently requires
+attention=blocked"`), so an epoch start is an unbounded page walk on the first
+tick of every fresh deploy.
+
+The patch's own doc comment on `IssueFilters.updatedSince` is amended in the same
+change to state the consequence alongside the mechanism, so the two cannot
+disagree.
+
 **Re-pin rule:** on every future artifact bump, first check whether upstream
 has implemented `updatedSince`; the patch is dropped in the same change the
 moment a release carries it natively.
@@ -150,6 +250,15 @@ bypassed the guards.
 
 **Decision.** `GET /api/companies/{cid}/issues?updatedSince=…&sortField=updated&sortDir=asc&limit=500`
 is the source of truth. The `http` adapter push is a latency hint and a run-id carrier, never delivery.
+The value passed as `updatedSince` is `(max updatedAt actually processed) - poll_overlap_ms`, NOT the
+last-seen watermark, and the caller deduplicates on `(id, updatedAt)` — see the 2026-08-21 amendment
+above, which supersedes `>= watermark + 1ms`. Paging is KEYSET — each page re-anchors `updatedSince` on
+the previous page's max rather than walking an `offset` over a fixed window, because offset paging over
+a mutable set sorted on its own filter column silently SKIPS rows (see the amendment). The sweep pages
+SERIALLY and never fans out over offsets:
+`A1-10` shape (b) is a per-actor in-flight coalescer where identical concurrent reads coalesce safely
+and DISTINCT ones are refused with `429 "Too many concurrent issue-list requests for this
+actor/client"`.
 
 **Evidence — the negative half.** No outbound webhooks: the only webhook table is
 `plugin_webhook_deliveries` (`PAPERCLIP: packages/db/src/schema/plugin_webhooks.ts`), whose header says
@@ -164,13 +273,35 @@ silently: `server/src/services/plugin-worker-manager.ts:2066-2067` opens with
 "at least once". Even the affirmative half is constrained: `ctx.http.fetch` blocks private IP ranges
 (`plugin-host-services.ts:196-200`).
 
-**Evidence — the positive half.** `updatedSince` is parsed at `server/src/routes/issues.ts:5748`,
-validated ISO-8601 at `:5815-5817`, passed through at `:5855`, and lands as
-`gt(issues.updatedAt, since)` at `server/src/services/issues.ts:5587-5591`, index-backed by
-`issues_company_updated_idx` on `(company_id, updated_at)`. Ordering is caller-controlled
-(`routes/issues.ts:5738-5745`). The push carries `{...payloadTemplate, agentId, runId, context}`
-(`server/src/adapters/http/execute.ts:13`) where `context.issueId` is set by
-`queueIssueAssignmentWakeup`'s `contextSnapshot` (`server/src/services/issue-assignment-wakeup.ts:44-48`).
+**Evidence — the positive half.** *Replaced 2026-08-21. The paragraph this supersedes claimed
+`updatedSince` lands as `gt(issues.updatedAt, since)` upstream at the pinned release. That is wrong
+twice over: the Amendment above records that upstream IGNORES the parameter entirely — the whole reason
+a patch exists — and the claim was carried by Paperclip source line numbers, which A1-16 does not accept
+as authority. Method, path, observed behaviour and the probe that proves it, instead:*
+
+`GET /api/companies/{cid}/issues?updatedSince=<ISO one hour in the future>&limit=1` answers `200 []`
+against a board the same probe first asserts is NON-EMPTY, and `?updatedSince=<ISO with no UTC offset>`
+answers `400` with an `error` string naming `updatedSince` — probe *"A1-8 (BLOCKING): updatedSince one
+hour in the future returns an empty list"*. Those two signals together are the only thing that
+distinguishes a patched image from an unpatched one, because an unpatched image answers the first with
+`200` and the FULL UNFILTERED LIST and the second with `200` as well. The filter is strict at
+millisecond resolution and lossy in `[T, T+1ms)` — probe *"C-2 (BLOCKING): a truncated watermark loses
+rows, and overlap-and-dedupe delivers them exactly once"*. Ordering is caller-controlled by name
+(`sortField=updated` is the only accepted value; anything else is a `400`), but **no probe asserts the
+ORDER of two returned rows**, so a sweep computes its high-water mark as `max()` over rows processed
+rather than reading the last row of the last page.
+
+**Consequence for any poller (BLOCKING).** Because an unimplemented query parameter is silently ignored
+rather than rejected, a reconciler cannot tell a filtered poll from an unfiltered one by its result.
+`src/lib/paperclip/reconciler.ts` therefore runs both signals above as a BOOT PROBE before its first
+sweep and REFUSES TO SWEEP — permanently, loudly, for the life of the process — if either fails.
+
+**The push payload — UNVERIFIED.** The `http` adapter push carries
+`{...payloadTemplate, agentId, runId, context}`, where `context.issueId` comes from the issue-assignment
+wakeup's context snapshot. *The two Paperclip source-line citations that carried these claims were
+removed on 2026-08-21 under A1-16: no probe drives an outbound push, so this shape is a source reading
+and not a measurement. It is recorded because DL-3 depends on the push being a run-id carrier, and it is
+marked because nothing proves it.*
 
 **Alternatives considered.** (a) Classical event-driven integration (Option F) — webhooks or an outbox.
 (b) A Paperclip plugin publishing to SQS. (c) The company live-events WebSocket as the primary feed.

@@ -93,6 +93,16 @@ export const SYNTH_INPUT_ALLOWLIST: readonly string[] = [
   'AWS_REGION',
   'CDK_STACK_NAME',
   'CCE_TIER',
+  // Both spellings, because infra/bin/app.ts reads `CCE_TIER ?? DEPLOY_TIER`
+  // and the local driver's cdkEnvBag forwards only the legacy one. The tier
+  // decides what EXISTS, not just how big it is: WAF, the audit-lock bucket,
+  // the DDB export Lambda and — since Phase 9 — the whole Paperclip substrate
+  // are provisioned by tier, so a rollback that re-synths from this manifest
+  // at a different tier would drop a deployed, deletion-protected Aurora
+  // cluster out of the assembly. That is the exact hazard the
+  // CCE_PAPERCLIP_ENABLED entry below was added for, moved to where the gate
+  // now lives.
+  'DEPLOY_TIER',
   'CCE_NAME_SUFFIX',
   'CCE_DEPLOY_MODE',
   'DOMAIN_NAME',
@@ -118,11 +128,41 @@ export const SYNTH_INPUT_ALLOWLIST: readonly string[] = [
   'HOSTED_ZONE_NAME',
   'CCE_ANOMALY_MONITOR_ARN',
   'CCE_PRIVATE_ENDPOINTS',
-  // Paperclip Aurora/EFS substrate opt-in (ADR 0010). Changes what synth
-  // produces — infra/bin/app.ts omits both stacks unless it is '1' — so a
-  // rollback that re-synths from this manifest must replay it or it would
-  // quietly drop a deployed Aurora cluster and EFS from the assembly.
+  // Paperclip ROUTER flag (ADR 0010). Since Phase 9 it no longer decides what
+  // synth produces — the tier above does that — but it is still a synth INPUT:
+  // compute-stack.ts renders it into the orchestrator task definition, where
+  // `paperclipRoutingEnabled()` reads it to choose between the Paperclip ACL
+  // and the legacy mission handlers. Replaying it keeps a rollback serving
+  // /api/missions from the same place the deploy it rolls back to did.
   'CCE_PAPERCLIP_ENABLED',
+  // The ENVIRONMENT-SCOPED provisioning override, and it belongs here for the
+  // same reason DEPLOY_TIER does: it decides what EXISTS. Staging is pinned to
+  // Tier 0 and provisions the substrate through this variable alone, so a
+  // rollback that re-synthed from a manifest without it would render the three
+  // stacks EMPTY and orphan the deployed, deletion-protected Aurora cluster the
+  // rollback was trying to restore around. One-directional, so replaying it can
+  // only ever put the substrate back — never remove one, which is the property
+  // that kept CCE_PAPERCLIP_SERVICE_READY out (see below).
+  'CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE',
+  // Phase 4. Both change what synth produces: paperclip-stack.ts pins both
+  // task definitions to the digest and reads the bootstrap flag as the
+  // service's DesiredCount. A rollback that re-synths from this manifest must
+  // replay them or it would float the image or bring a scaled-to-zero service
+  // back up against a database the operator had deliberately not migrated yet.
+  //
+  // CCE_PAPERCLIP_SERVICE_READY was here and is deliberately GONE. It belonged
+  // to the rejected design in which synth omitted the FargateService unless a
+  // probe said '1' — the M33 defect, where replaying an empty value deletes a
+  // running service. Nothing reads that name anywhere in the tree now, and it
+  // must not come back: a variable that can remove a resource has no business
+  // in a replay list. CCE_PAPERCLIP_BOOTSTRAP replaces it and can only move
+  // DesiredCount, so the worst a replay can do is scale down, recoverably.
+  //
+  // Neither is a secret: a digest and a '1' flag. The Paperclip API
+  // keys and the composed DATABASE_URL are NOT here and must never be added;
+  // they live only in Secrets Manager.
+  'CCE_PAPERCLIP_IMAGE_DIGEST',
+  'CCE_PAPERCLIP_BOOTSTRAP',
   // Private WARP access opt-in + hostname. Both change what synth produces
   // (cloudflared sidecar, Route 53 private zone, ALB ingress shape), so a
   // rollback that re-synths from this manifest must replay them or it would

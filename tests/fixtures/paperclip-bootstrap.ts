@@ -1,7 +1,41 @@
+/**
+ * Local docker-harness bootstrap for the pinned Paperclip artifact.
+ *
+ * The PROTOCOL half — board session, company, agents, API keys — lives in
+ * `scripts/lib/paperclip/bootstrap-core.ts` and is shared byte-for-byte with
+ * the deployed bootstrap (`scripts/paperclip-bootstrap.ts`), so the harness
+ * and production cannot drift apart on how Paperclip is actually called.
+ *
+ * What stays HERE is everything that is true only of a DISPOSABLE stack: the
+ * docker-exec onboarding, the in-container credential cache, and the strict
+ * "exactly two agents, exactly these keys, nothing else active" assertions.
+ * Those would be wrong on a real tenant, which is why they are not in the
+ * shared module.
+ */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import {
+  CookieJar,
+  RECONCILER_KEY_NAME,
+  agentKeyName,
+  createKey,
+  ensureAgents,
+  ensureCompany,
+  jsonResponse,
+  listActiveKeys,
+  listAgents,
+  makeBoardRequest,
+  netzarAgentId,
+  revokeKey,
+  signUpOrSignIn,
+  type AgentKeyRecord,
+  type AgentRecord,
+  type AgentSpec,
+  type CompanyRecord,
+  type PaperclipRequest,
+} from '../../scripts/lib/paperclip/bootstrap-core.js';
 
 const execFileAsync = promisify(execFile);
 const BASE_URL = process.env.PAPERCLIP_TEST_BASE_URL ?? 'http://127.0.0.1:3100';
@@ -16,34 +50,35 @@ interface DockerResult {
   stderr: string;
 }
 
-interface CompanyRecord {
-  id: string;
-  name: string;
-  issuePrefix: string;
-  requireBoardApprovalForNewAgents: boolean;
-}
-
-interface AgentRecord {
-  id: string;
-  name: string;
-  role: string;
-  status: string;
-  reportsTo: string | null;
-  adapterType: string;
-  adapterConfig: {
-    payloadTemplate?: Record<string, unknown>;
-  } | null;
-  metadata: Record<string, unknown> | null;
-}
-
-interface AgentKeyRecord {
-  id: string;
-  name: string;
-  scope?: { kind?: string };
-  responsibleUserId?: string | null;
-  revokedAt?: string | null;
-  token?: string;
-}
+/** The two Netzar agents the harness provisions, in creation order. */
+const HARNESS_AGENTS: AgentSpec[] = [
+  {
+    slug: 'main',
+    name: 'Netzar Main',
+    role: 'ceo',
+    reportsToSlug: null,
+    adapterConfig: {
+      url: 'http://127.0.0.1:9/api/paperclip/dispatch',
+      method: 'POST',
+      headers: { authorization: 'Bearer paperclip-integration-test' },
+      payloadTemplate: { netzarAgentId: 'main' },
+      timeoutMs: 1_000,
+    },
+  },
+  {
+    slug: 'research',
+    name: 'Netzar Research',
+    role: 'general',
+    reportsToSlug: 'main',
+    adapterConfig: {
+      url: 'http://127.0.0.1:9/api/paperclip/dispatch',
+      method: 'POST',
+      headers: { authorization: 'Bearer paperclip-integration-test' },
+      payloadTemplate: { netzarAgentId: 'research' },
+      timeoutMs: 1_000,
+    },
+  },
+];
 
 export interface PaperclipBootstrapAgent {
   id: string;
@@ -65,25 +100,6 @@ interface CachedPaperclipCredentials {
   reconciler: { keyId: string; token: string };
   main: { agentId: string; keyId: string; token: string };
   research: { agentId: string; keyId: string; token: string };
-}
-
-class CookieJar {
-  readonly #cookies = new Map<string, string>();
-
-  capture(response: Response): void {
-    const cookieHeaders = response.headers as Headers & { getSetCookie?: () => string[] };
-    const values = cookieHeaders.getSetCookie?.()
-      ?? (response.headers.get('set-cookie') ? [response.headers.get('set-cookie') as string] : []);
-    for (const value of values) {
-      const pair = value.split(';', 1)[0];
-      const separator = pair.indexOf('=');
-      if (separator > 0) this.#cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
-    }
-  }
-
-  header(): string {
-    return [...this.#cookies].map(([name, value]) => `${name}=${value}`).join('; ');
-  }
 }
 
 function dockerExecutable(): string {
@@ -215,44 +231,6 @@ async function enableSqlStateLogging(): Promise<void> {
   await runDocker([...psql, 'SELECT pg_reload_conf()']);
 }
 
-async function boardRequest(jar: CookieJar, pathname: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  headers.set('origin', BASE_URL);
-  if (init.body !== undefined) headers.set('content-type', 'application/json');
-  const cookie = jar.header();
-  if (cookie) headers.set('cookie', cookie);
-  const response = await fetch(`${BASE_URL}${pathname}`, { ...init, headers });
-  jar.capture(response);
-  return response;
-}
-
-async function jsonResponse<T>(response: Response, operation: string): Promise<T> {
-  if (!response.ok) throw new Error(`${operation} returned HTTP ${response.status}`);
-  try {
-    return await response.json() as T;
-  } catch {
-    throw new Error(`${operation} returned invalid JSON`);
-  }
-}
-
-async function authenticateBoardUser(jar: CookieJar): Promise<void> {
-  const signup = await boardRequest(jar, '/api/auth/sign-up/email', {
-    method: 'POST',
-    body: JSON.stringify({
-      name: 'Netzar Paperclip Integration',
-      email: ADMIN_EMAIL,
-      password: ADMIN_PASSWORD,
-    }),
-  });
-  if (signup.ok) return;
-
-  const signin = await boardRequest(jar, '/api/auth/sign-in/email', {
-    method: 'POST',
-    body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
-  });
-  if (!signin.ok) throw new Error(`Paperclip test user authentication returned HTTP ${signin.status}`);
-}
-
 async function createBootstrapInvite(containerId: string): Promise<string> {
   const onboard = await runDocker([
     'exec',
@@ -284,19 +262,23 @@ async function createBootstrapInvite(containerId: string): Promise<string> {
   return match[1];
 }
 
-async function establishAdminSession(jar: CookieJar): Promise<void> {
-  await authenticateBoardUser(jar);
+async function establishAdminSession(request: PaperclipRequest): Promise<void> {
+  await signUpOrSignIn(request, {
+    name: 'Netzar Paperclip Integration',
+    email: ADMIN_EMAIL,
+    password: ADMIN_PASSWORD,
+  });
   const health = await fetch(`${BASE_URL}/api/health`);
   const healthBody = health.ok
     ? await health.json().catch(() => null) as { bootstrapStatus?: unknown } | null
     : null;
   if (healthBody?.bootstrapStatus === 'ready') {
-    const companies = await boardRequest(jar, '/api/companies');
+    const companies = await request('/api/companies');
     if (companies.ok) return;
   }
 
   const token = await createBootstrapInvite(await paperclipContainerId());
-  const accept = await boardRequest(jar, `/api/invites/${encodeURIComponent(token)}/accept`, {
+  const accept = await request(`/api/invites/${encodeURIComponent(token)}/accept`, {
     method: 'POST',
     body: JSON.stringify({ requestType: 'human' }),
   });
@@ -306,95 +288,33 @@ async function establishAdminSession(jar: CookieJar): Promise<void> {
     throw new Error(`Paperclip bootstrap invite acceptance returned HTTP ${accept.status}${safeDetail}`);
   }
 
-  const session = await boardRequest(jar, '/api/auth/get-session');
+  const session = await request('/api/auth/get-session');
   const sessionBody = await jsonResponse<unknown>(session, 'Paperclip session verification');
   if (!JSON.stringify(sessionBody).includes('userId')) {
     throw new Error('Paperclip session verification did not return a user id');
   }
 }
 
-async function provisionCompany(jar: CookieJar): Promise<CompanyRecord> {
-  const listed = await jsonResponse<CompanyRecord[]>(
-    await boardRequest(jar, '/api/companies'),
-    'Paperclip company list',
-  );
-  if (listed.length > 1) throw new Error('Paperclip integration fixture requires exactly one company');
-
-  let company = listed[0];
-  if (!company) {
-    company = await jsonResponse<CompanyRecord>(
-      await boardRequest(jar, '/api/companies', {
-        method: 'POST',
-        body: JSON.stringify({ name: 'NZR Netzar OS' }),
-      }),
-      'Paperclip company creation',
-    );
-  }
-
-  company = await jsonResponse<CompanyRecord>(
-    await boardRequest(jar, `/api/companies/${company.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        name: 'Netzar OS',
-        requireBoardApprovalForNewAgents: false,
-      }),
-    }),
-    'Paperclip company update',
-  );
+async function provisionCompany(request: PaperclipRequest): Promise<CompanyRecord> {
+  const company = await ensureCompany(request, {
+    // The issue prefix is derived from the FIRST name and survives the
+    // rename, which is why the two differ.
+    createName: 'NZR Netzar OS',
+    displayName: 'Netzar OS',
+  });
   if (company.issuePrefix !== 'NZR') throw new Error('Paperclip company did not retain the NZR issue prefix');
   return company;
 }
 
-function netzarAgentId(agent: AgentRecord): string | undefined {
-  const value = agent.metadata?.netzarAgentId;
-  return typeof value === 'string' ? value : undefined;
-}
-
-async function createAgent(
-  jar: CookieJar,
-  companyId: string,
-  slug: 'main' | 'research',
-  reportsTo: string | null,
-): Promise<AgentRecord> {
-  return jsonResponse<AgentRecord>(
-    await boardRequest(jar, `/api/companies/${companyId}/agents`, {
-      method: 'POST',
-      body: JSON.stringify({
-        name: slug === 'main' ? 'Netzar Main' : 'Netzar Research',
-        role: slug === 'main' ? 'ceo' : 'general',
-        reportsTo,
-        adapterType: 'http',
-        adapterConfig: {
-          url: 'http://127.0.0.1:9/api/paperclip/dispatch',
-          method: 'POST',
-          headers: { authorization: 'Bearer paperclip-integration-test' },
-          payloadTemplate: { netzarAgentId: slug },
-          timeoutMs: 1_000,
-        },
-        metadata: { netzarAgentId: slug },
-      }),
-    }),
-    `Paperclip ${slug} agent creation`,
-  );
-}
-
 async function provisionAgents(
-  jar: CookieJar,
+  request: PaperclipRequest,
   companyId: string,
 ): Promise<{ main: AgentRecord; research: AgentRecord }> {
-  let listed = await jsonResponse<AgentRecord[]>(
-    await boardRequest(jar, `/api/companies/${companyId}/agents`),
-    'Paperclip agent list',
-  );
-  let main = listed.find((agent) => netzarAgentId(agent) === 'main');
-  if (!main) main = await createAgent(jar, companyId, 'main', null);
-  let research = listed.find((agent) => netzarAgentId(agent) === 'research');
-  if (!research) research = await createAgent(jar, companyId, 'research', main.id);
+  await ensureAgents(request, companyId, HARNESS_AGENTS);
 
-  listed = await jsonResponse<AgentRecord[]>(
-    await boardRequest(jar, `/api/companies/${companyId}/agents`),
-    'Paperclip agent list verification',
-  );
+  const listed = await listAgents(request, companyId);
+  let main = listed.find((agent) => netzarAgentId(agent) === 'main');
+  let research = listed.find((agent) => netzarAgentId(agent) === 'research');
   const netzarAgents = listed.filter((agent) => netzarAgentId(agent) !== undefined);
   if (netzarAgents.length !== 2) {
     throw new Error('Paperclip integration fixture requires exactly two Netzar HTTP agents');
@@ -428,36 +348,12 @@ async function provisionAgents(
   return { main, research };
 }
 
-async function listActiveKeys(jar: CookieJar, agentId: string): Promise<AgentKeyRecord[]> {
-  const listed = await jsonResponse<AgentKeyRecord[]>(
-    await boardRequest(jar, `/api/agents/${agentId}/keys`),
-    'Paperclip agent key list',
-  );
-  return listed.filter((key) => key.revokedAt == null);
-}
-
-async function createKey(
-  jar: CookieJar,
-  agentId: string,
-  name: string,
-): Promise<{ id: string; token: string }> {
-  const created = await jsonResponse<AgentKeyRecord>(
-    await boardRequest(jar, `/api/agents/${agentId}/keys`, {
-      method: 'POST',
-      body: JSON.stringify({ name, scope: { kind: 'standard' } }),
-    }),
-    'Paperclip agent key creation',
-  );
-  if (!created.token?.startsWith('pcp_')) throw new Error('Paperclip did not return a one-time API token');
-  return { id: created.id, token: created.token };
-}
-
 async function assertActiveKeys(
-  jar: CookieJar,
+  request: PaperclipRequest,
   agentId: string,
   expectedNames: string[],
 ): Promise<Map<string, AgentKeyRecord>> {
-  const active = await listActiveKeys(jar, agentId);
+  const active = await listActiveKeys(request, agentId);
   const actualNames = active.map((key) => key.name).sort();
   const requiredNames = [...expectedNames].sort();
   if (JSON.stringify(actualNames) !== JSON.stringify(requiredNames)) {
@@ -470,20 +366,20 @@ async function assertActiveKeys(
 }
 
 async function provisionKeys(
-  jar: CookieJar,
+  request: PaperclipRequest,
   companyId: string,
   agents: { main: AgentRecord; research: AgentRecord },
 ): Promise<{ reconcilerKey: string; mainKey: string; researchKey: string }> {
   const cached = await readCredentialCache();
   if (cached) {
-    const mainKeys = await assertActiveKeys(jar, agents.main.id, ['netzar-reconciler', 'netzar-agent-main']);
-    const researchKeys = await assertActiveKeys(jar, agents.research.id, ['netzar-agent-research']);
+    const mainKeys = await assertActiveKeys(request, agents.main.id, [RECONCILER_KEY_NAME, agentKeyName('main')]);
+    const researchKeys = await assertActiveKeys(request, agents.research.id, [agentKeyName('research')]);
     const validCache = cached.companyId === companyId
       && cached.main.agentId === agents.main.id
       && cached.research.agentId === agents.research.id
-      && mainKeys.get('netzar-reconciler')?.id === cached.reconciler.keyId
-      && mainKeys.get('netzar-agent-main')?.id === cached.main.keyId
-      && researchKeys.get('netzar-agent-research')?.id === cached.research.keyId
+      && mainKeys.get(RECONCILER_KEY_NAME)?.id === cached.reconciler.keyId
+      && mainKeys.get(agentKeyName('main'))?.id === cached.main.keyId
+      && researchKeys.get(agentKeyName('research'))?.id === cached.research.keyId
       && cached.reconciler.token.startsWith('pcp_')
       && cached.main.token.startsWith('pcp_')
       && cached.research.token.startsWith('pcp_');
@@ -496,8 +392,8 @@ async function provisionKeys(
   }
 
   const existing = [
-    ...(await listActiveKeys(jar, agents.main.id)),
-    ...(await listActiveKeys(jar, agents.research.id)),
+    ...(await listActiveKeys(request, agents.main.id)),
+    ...(await listActiveKeys(request, agents.research.id)),
   ];
   if (existing.length > 0) {
     throw new Error('Active Paperclip integration keys exist without the in-memory credential cache; reset the disposable stack');
@@ -505,14 +401,14 @@ async function provisionKeys(
 
   const created: Array<{ agentId: string; keyId: string }> = [];
   try {
-    const reconciler = await createKey(jar, agents.main.id, 'netzar-reconciler');
+    const reconciler = await createKey(request, agents.main.id, RECONCILER_KEY_NAME);
     created.push({ agentId: agents.main.id, keyId: reconciler.id });
-    const main = await createKey(jar, agents.main.id, 'netzar-agent-main');
+    const main = await createKey(request, agents.main.id, agentKeyName('main'));
     created.push({ agentId: agents.main.id, keyId: main.id });
-    const research = await createKey(jar, agents.research.id, 'netzar-agent-research');
+    const research = await createKey(request, agents.research.id, agentKeyName('research'));
     created.push({ agentId: agents.research.id, keyId: research.id });
-    await assertActiveKeys(jar, agents.main.id, ['netzar-reconciler', 'netzar-agent-main']);
-    await assertActiveKeys(jar, agents.research.id, ['netzar-agent-research']);
+    await assertActiveKeys(request, agents.main.id, [RECONCILER_KEY_NAME, agentKeyName('main')]);
+    await assertActiveKeys(request, agents.research.id, [agentKeyName('research')]);
     await writeCredentialCache({
       companyId,
       reconciler: { keyId: reconciler.id, token: reconciler.token },
@@ -526,22 +422,22 @@ async function provisionKeys(
     };
   } catch (error) {
     await Promise.allSettled(created.map(async ({ agentId, keyId }) => {
-      await boardRequest(jar, `/api/agents/${agentId}/keys/${keyId}`, { method: 'DELETE' });
+      await revokeKey(request, agentId, keyId);
     }));
     throw error;
   }
 }
 
-let adminJar: CookieJar | undefined;
+let adminRequest: PaperclipRequest | undefined;
 
 async function bootstrap(): Promise<PaperclipBootstrap> {
-  const jar = new CookieJar();
+  const request = makeBoardRequest(BASE_URL, new CookieJar());
   await enableSqlStateLogging();
-  await establishAdminSession(jar);
-  adminJar = jar;
-  const company = await provisionCompany(jar);
-  const agents = await provisionAgents(jar, company.id);
-  const keys = await provisionKeys(jar, company.id, agents);
+  await establishAdminSession(request);
+  adminRequest = request;
+  const company = await provisionCompany(request);
+  const agents = await provisionAgents(request, company.id);
+  const keys = await provisionKeys(request, company.id, agents);
 
   return {
     baseUrl: BASE_URL,
@@ -574,8 +470,8 @@ export function bootstrapPaperclip(): Promise<PaperclipBootstrap> {
  */
 export async function paperclipAdminRequest(pathname: string, init: RequestInit = {}): Promise<Response> {
   await bootstrapPaperclip();
-  if (!adminJar) throw new Error('Paperclip admin session is not established');
-  return await boardRequest(adminJar, pathname, init);
+  if (!adminRequest) throw new Error('Paperclip admin session is not established');
+  return await adminRequest(pathname, init);
 }
 
 export async function readPaperclipLogsSince(since: string): Promise<string> {

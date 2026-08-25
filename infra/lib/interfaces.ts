@@ -76,19 +76,24 @@ export interface SecretsOutputs {
  * DatabaseStack exports (Paperclip work engine, ADR 0010).
  * The generated DB credentials secret is re-imported by ARN downstream
  * (compute-stack.ts:200-226 pattern) to avoid cross-stack cycles.
+ *
+ * Optional for the same reason `auditLockBucket` above is: the stack is
+ * always constructed but creates nothing at Tier 0
+ * (TierShape.paperclipEnabled), so every consumer must tolerate absence.
  */
 export interface DatabaseOutputs {
-  paperclipDbCluster: IDatabaseCluster;
-  paperclipDbSecret: ISecret;
+  paperclipDbCluster: IDatabaseCluster | undefined;
+  paperclipDbSecret: ISecret | undefined;
 }
 
 /**
  * FilesystemStack exports (Paperclip work engine, ADR 0010).
+ * Undefined at Tier 0; see DatabaseOutputs.
  */
 export interface FilesystemOutputs {
-  paperclipFileSystem: IFileSystem;
-  paperclipAccessPoint: IAccessPoint;
-  paperclipLogGroup: ILogGroup;
+  paperclipFileSystem: IFileSystem | undefined;
+  paperclipAccessPoint: IAccessPoint | undefined;
+  paperclipLogGroup: ILogGroup | undefined;
 }
 
 /**

@@ -45,6 +45,7 @@
  * would additionally burn a full ARM build before failing at the push.
  */
 
+import { appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bold, fail, info, ok } from '../lib/ansi.js';
@@ -70,6 +71,21 @@ function required(name: string): string {
 }
 
 /**
+ * Hand the resolved digest to the workflow.
+ *
+ * The CDK deploy step forwards it as CCE_PAPERCLIP_IMAGE_DIGEST, which
+ * infra/bin/app.ts passes to PaperclipStack so both task definitions pin the
+ * image BY DIGEST. Without this the CI path had no digest at all and synth
+ * fell back to an unpullable placeholder tag: the same "the flag has more
+ * homes than the author enumerated" defect as M22/M27, one layer down.
+ */
+function emitDigest(digest: string): void {
+  const out = process.env.GITHUB_OUTPUT;
+  if (out) appendFileSync(out, `digest=${digest}
+`);
+}
+
+/**
  * Digest for a tag in ECR, or null when the tag is genuinely absent.
  * Anything else throws: "does not exist" and "I am not allowed to look" must
  * not be the same answer.
@@ -92,8 +108,8 @@ async function describeDigest(repo: string, tag: string, region: string): Promis
       `${r.stderr.trim()}\n` +
       `The deploy role needs ecr:DescribeImages on ${repo} (infra/lib/iam-stack.ts, cicdRole\n` +
       'sid EcrPushAppImages). That grant is applied by the CDK deploy LATER IN THIS JOB, so it\n' +
-      'must land in an unarmed deploy BEFORE CCE_PAPERCLIP_ENABLED is set - and cicdRole is\n' +
-      'created only by the PROD IAM stack, so a staging arm needs a production IAM deploy first.',
+      'must land in an EARLIER deploy than the first one at a tier that provisions Paperclip\n' +
+      '(T1+). cicdRole is created only by the PROD IAM stack, so staging needs a prod deploy first.',
   );
 }
 
@@ -133,6 +149,7 @@ async function main(): Promise<void> {
     console.log(
       ok(`Paperclip image ${bold(imageTag)} already in ${ecrRepoName}: ${existing} (build skipped)`),
     );
+    emitDigest(existing);
     return;
   }
 
@@ -187,6 +204,7 @@ async function main(): Promise<void> {
     );
   }
   console.log(ok(`Paperclip image digest: ${bold(digest)}`));
+  emitDigest(digest);
 }
 
 main().catch((err: unknown) => {

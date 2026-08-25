@@ -95,3 +95,6 @@ scripts/release/keys/
 
 # Personal session notes, never committed
 learnings/
+
+# Nested checkout from another branch — never committed (see CLAUDE.md)
+fix-windows-test-suite/

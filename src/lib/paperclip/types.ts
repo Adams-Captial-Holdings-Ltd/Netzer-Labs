@@ -56,6 +56,30 @@
  * recorded here so it is not mistaken for the gap that invites a second types
  * file. Phases 5 and 6 add them to THIS file.
  *
+ * PHASE 5 CLOSED THREE OF THEM, at the bottom of this file: `ReconcilerWatermark`,
+ * `IssueChange` and `SweepResult` now have both a reader (`reconciler.ts`,
+ * `watermark.ts`) and evidence (the C-2 probe pins the cursor's ISO form and the
+ * `(id, updatedAt)` dedupe key it is built around).
+ *
+ * PHASE 6 CLOSES TWO MORE, in the `Dispatch shapes` section at the bottom:
+ * `PaperclipDispatchBody` and `PaperclipDispatchContext`. Their reader is
+ * `parseDispatchBody` in `dispatch-worker.ts`, and their evidence is running
+ * code rather than a probe — `agentSpecs()` in
+ * `scripts/lib/paperclip/bootstrap-core.ts` writes the adapter row that
+ * produces the push, so the method, the bearer and `netzarAgentId` are ours by
+ * construction. Everything beyond that is marked UNVERIFIED on the shape
+ * itself, because NO PROBE DRIVES THE ADAPTER PUSH.
+ *
+ * `ReconcileAction` IS STILL DEFERRED after Phase 6, and this is the second
+ * phase that has had to say so. Phase 6 ships the DISPATCHER, not the
+ * reconciler: the route's outcomes (`unauthorized`, `invalid_body`,
+ * `unknown_agent`, `agent_not_enabled`, `deduplicated`, `accepted`) are the
+ * dispatcher's, and `reconciler.ts` still runs in `shadow` and still decides no
+ * action on any row. Naming a reconcile action from the dispatcher's outcome
+ * set would be the guess-wearing-a-name this paragraph warns about, dressed in
+ * a reader that is not the reader it is for. It lands with the phase that
+ * promotes the reconciler to `live`.
+ *
  * THE DEFERRAL RULE AND THE EVIDENCE RULE ARE ONE RULE, and stating them apart
  * is what made the deferral above look inconsistent with what ships. Several
  * shapes here have no reader either - `PaperclipApproval`,
@@ -83,6 +107,14 @@ import type {
 // there rather than forked here, so there is exactly one definition of each and
 // no drift between the wire module and the crossing point.
 export type { CreateIssueBody, PaperclipIssueStatus, PaperclipIssueView, PriorityBand };
+
+/**
+ * A2-19. The named promise alias that appears in every client and engine
+ * signature, the way Linear writes `LinearFetch<Response>`. It lives in this
+ * file rather than in `client.ts` so that `mission-engine.ts` - the interface
+ * every consumer depends on - can use it without importing the transport.
+ */
+export type PaperclipFetch<T> = Promise<T>;
 
 /**
  * A1-3. The run-id header spelling, pinned once. It is sent ONLY when a genuine
@@ -277,32 +309,43 @@ export type PaperclipIssueDetail = PaperclipIssue;
  * `deduplicated: true` is a SUCCESS. Proven by the probe "A1-13: replaying an
  * idempotencyKey yields one issue and deduplicated: true".
  *
- * WHAT `status` ACTUALLY DOES HERE, corrected. The bar says the projection omits
- * `status` so the server default applies (todo with an assignee, backlog
- * without). The shipped `missionToIssueCreate` does not omit it - it always
- * sends `toIssueStatus(mission.status, true)` - and that is not a bug, because
- * it also always sends an `assigneeAgentId`, so the value it sends is the value
- * the default would have produced. Only the probes here exercise the omitted
- * form: `createdUnassignedIssue` sends no `status` and the row comes back
- * `backlog`, which is how every checkout in the suite expects `todo` or
- * `backlog`. Both forms are accepted by this artifact even though the OpenAPI
- * document declares `status` required - see the A1-15 note in the file header.
+ * `status` IS OMITTED, by A1-13, and `missionToIssueCreate` omits it. The
+ * omitted form is the only one any probe exercises, and it is answered 201
+ * (`boardMutationGuard["POST /api/companies/{companyId}/issues"]`, from the
+ * A1-17 characterization probe, whose create body carries no `status`). The
+ * unassigned row that probe creates is then checked out with
+ * `expectedStatuses: ['todo','backlog']` for a recorded 200, so such a row
+ * lands in ONE OF todo or backlog.
+ *
+ * WHICH of the two, and what an ASSIGNED create defaults to, are UNVERIFIED: no
+ * probe reads `.status` off a created row and `backlog` appears zero times in
+ * artifact-characterization.json. The bar's "todo with an assignee, backlog
+ * without" is transcribed prose, not an observation - treat the default as
+ * unknown until a probe asserts the field. The failure direction is benign
+ * here: the ACL never reads the default, it re-reads the row.
+ *
+ * The OpenAPI document declares `status` required on this operation, which the
+ * omitted form contradicts and the artifact accepts anyway - see the A1-15 note
+ * in the file header. The field stays on `CreateIssueBody` as an optional
+ * because nothing has characterized what the server does with it; sending it is
+ * UNVERIFIED, and `listFilterValidation` shows an unrecognized status is a
+ * silent 200 rather than a 400, so a wrong value would not announce itself.
  */
 export interface PaperclipCreateIssueBody extends CreateIssueBody {
   /**
-   * A1-13's duplicate-guard flag. OPTIONAL, and deliberately so until a probe
-   * characterizes it.
+   * A1-13's mandatory duplicate-guard flag. Optional on the TYPE, `true` on
+   * every body this repo sends.
    *
-   * All that is established is the spelling: it is one of the 28 properties of
+   * What the flag itself does is UNVERIFIED: the A1-13 probe sends
+   * `allowDuplicate: true` on both of its calls without varying it, so it
+   * settles the `idempotencyKey` replay and nothing about the guard. What that
+   * does establish is the body shape the proven `200 + deduplicated: true`
+   * replay was observed on - `idempotencyKey` AND `allowDuplicate: true`
+   * together - which is why `createMission` sends exactly that pair on a write
+   * `client.ts` auto-retries. The spelling is also one of the 28 properties of
    * `POST /api/companies/{companyId}/issues` in the committed
-   * `tests/contract/openapi.snapshot.json`, which the A1-15 probe re-checks byte
-   * for byte. Nothing here has observed what it does. The A1-13 probe sends
-   * `allowDuplicate` on both of its calls without varying it, so it settles the
-   * `idempotencyKey` contract and nothing about the duplicate guard, and the one
-   * function in this repo that builds a create body - `missionToIssueCreate` -
-   * does not send the flag at all. A field that nothing produces and no probe
-   * characterizes is a compile-time obstacle, not a contract, so it is required
-   * of no caller until the probe named in the Phase 1 handoff exists: send
+   * `tests/contract/openapi.snapshot.json`, re-checked byte for byte by A1-15.
+   * It stays optional until the probe named in the Phase 1 handoff exists: send
    * `allowDuplicate: false` against a duplicate title and record the outcome.
    */
   allowDuplicate?: boolean;
@@ -314,6 +357,41 @@ export interface PaperclipCreateIssueBody extends CreateIssueBody {
  */
 export interface PaperclipCreateIssueResponse extends PaperclipIssue {
   deduplicated?: boolean;
+}
+
+/**
+ * `PATCH /api/issues/{id}`. THE WEAKEST SHAPE IN THIS FILE, and the marker is
+ * the point.
+ *
+ * WHERE THESE NAMES COME FROM: the committed `tests/contract/openapi.snapshot.
+ * json`, which the A1-15 probe re-checks byte for byte and which IS
+ * authoritative for request field names. That operation declares 29 properties
+ * and NO `required` array; only the six a caller here actually sends are typed,
+ * because a field nothing produces is a compile-time obstacle rather than a
+ * contract.
+ *
+ * WHAT IS NOT PROVEN, in either direction:
+ *   - The response body. The snapshot declares an opaque `200` object with
+ *     `additionalProperties: {}` and no `properties`, and no probe asserts a
+ *     single field of it. `PaperclipIssue` is the shape the client narrows TO,
+ *     not a shape anything has observed on this route.
+ *   - `status` and `assigneeAgentId`. The only PATCH any probe has ever driven
+ *     is `{title}` on an unassigned, status-omitted issue, inside the `boardMutationGuard`
+ *     characterization - and that records a 200, it does not assert one.
+ *   - The run-id rule. Plan text says a run id is needed only when the issue is
+ *     `in_progress` AND assigned to the actor; `runIdBoundary` records
+ *     `requiresRunId: false` for PATCH on an unassigned, status-omitted issue and
+ *     nothing more. That is not a per-route property.
+ *
+ * Produce the probes before narrowing anything below.
+ */
+export interface PaperclipUpdateIssueBody {
+  title?: string;
+  description?: string;
+  status?: PaperclipIssueStatus;
+  /** A uuid, or `null` to unassign. */
+  assigneeAgentId?: string | null;
+  priority?: PriorityBand;
 }
 
 /**
@@ -349,14 +427,32 @@ export interface PaperclipIssueListQuery {
   offset?: number;
   /** A1-7: the literal `updated` is the ONLY accepted value; anything else is a 400. */
   sortField?: 'updated';
+  /**
+   * UNVERIFIED, and the only field in this file that was shipping without a
+   * provenance note. The NAME is accepted — the probe "A1-7: sortField accepts
+   * only `updated`, limit over the max is clamped, limit<=0 is a 400" sends
+   * `sortDir=asc` and gets a 200 — but no probe asserts the ORDER of two
+   * returned rows, and A1-8 is this surface's own demonstration that a 200 on a
+   * parameter proves nothing about it being acted on. Nothing in `src/` sends
+   * it; a probe that reads two rows and asserts their order is what would
+   * promote this.
+   */
   sortDir?: 'asc' | 'desc';
   /**
    * Proven acted on by the probe "A1-7: the status, assigneeAgentId and
    * parentId filters are acted on, not silently ignored". An UNKNOWN status is
    * not a 400 - it is an empty 200 - so a caller that builds this from
    * unvalidated input gets silence, not an error.
+   *
+   * A SINGLE VALUE, deliberately. An earlier revision typed this
+   * `PaperclipIssueStatus | PaperclipIssueStatus[]` and the client joined an
+   * array with commas - a guess at a wire form no probe has ever sent, on a
+   * filter whose failure mode is a silent empty 200 rather than a 400. Widen
+   * it the day a probe pins the multi-value serialization; until then the
+   * domain `open`, which fans out to three Paperclip statuses, is filtered
+   * client-side or not at all.
    */
-  status?: PaperclipIssueStatus | PaperclipIssueStatus[];
+  status?: PaperclipIssueStatus;
   /**
    * A UUID, or the literal string `null` for unassigned - both proven by the
    * A1-7 filter probe. A malformed value is a 422 carrying
@@ -385,9 +481,11 @@ export interface PaperclipIssueListQuery {
    * with a 200, so the reconciler must refuse to start until the probe
    * "A1-8 (blocking): updatedSince in the future returns an empty list" is
    * green. Must be ISO 8601 with an explicit UTC offset or the patched server
-   * answers 400. The predicate the patch compiles is `updatedAt >= value + 1ms`
-   * - see the `C-2` probe for why a caller must subtract an overlap rather than
-   * pass its last-seen watermark directly.
+   * answers 400. The predicate is a STRICT `updatedAt > value`, observed by the
+   * probes "C-2 (BLOCKING): a truncated watermark loses rows" and "I3:
+   * updatedSince is a strict greater-than watermark" - which is why a caller
+   * must subtract an overlap rather than pass its last-seen watermark directly.
+   * (The ADR amendment's `>= value + 1ms` is superseded by those probes.)
    */
   updatedSince?: string;
 }
@@ -408,8 +506,14 @@ export interface PaperclipIssueListQuery {
  *   - 400 `Validation error` on an empty `expectedStatuses`
  * The two PAUSE strings the bar also names - `Project is paused because its
  * budget hard-stop was reached` and `Project is paused` - are UNVERIFIED: they
- * need a project driven to a budget hard stop, which no probe here does. Do not
- * map them from prose; produce them first.
+ * need a project driven to a budget hard stop, which no probe here does.
+ *
+ * `error.ts` maps them anyway, behind an explicit UNVERIFIED marker, because a
+ * paused 409 and an `Issue checkout conflict` 409 carry opposite remedies - stop
+ * versus retry - and collapsing both to a bare conflict makes the retry loop
+ * hammer a project that has hit its budget hard stop. Produce them with a probe
+ * when one can drive the hard stop, then delete the marker. Until then the
+ * mapping is argued, not proven, and `error.ts` says so at its definition.
  */
 export interface PaperclipCheckoutBody {
   agentId: string;
@@ -423,8 +527,12 @@ export interface PaperclipCheckoutBody {
  * observes that release demands a run id (401 `Agent run id required`) even
  * though comments and PATCH do not (C-3).
  */
-export type PaperclipCheckoutResponse = PaperclipIssue;
 export type PaperclipReleaseResponse = PaperclipIssue;
+
+// No `PaperclipCheckoutResponse`. A successful checkout body is UNVERIFIED: the
+// A1-11 probe asserts release's 200 field by field and only RECORDS checkout's
+// status code, so an alias claiming the two shapes are equal would be exactly
+// the source-read claim A1-16 refuses. Declare it with the probe that proves it.
 
 // ---------------------------------------------------------------------------
 // Comments
@@ -686,39 +794,6 @@ export type PaperclipWorkProductStatus =
   | 'archived'
   | 'draft';
 
-export type PaperclipWorkProductReviewState =
-  | 'none'
-  | 'needs_board_review'
-  | 'approved'
-  | 'changes_requested';
-
-export type PaperclipWorkProductHealth = 'unknown' | 'healthy' | 'unhealthy';
-
-/**
- * `POST /api/issues/{id}/work-products`. `type`, `provider` and `title` are
- * required; `url` must parse as a URL when present. The update route is FLAT
- * (`PATCH /api/work-products/{id}`) and takes this same shape fully partial.
- */
-export interface PaperclipCreateWorkProductBody {
-  type: PaperclipWorkProductType;
-  provider: string;
-  title: string;
-  projectId?: string | null;
-  executionWorkspaceId?: string | null;
-  runtimeServiceId?: string | null;
-  createdByRunId?: string | null;
-  externalId?: string | null;
-  summary?: string | null;
-  url?: string | null;
-  status?: PaperclipWorkProductStatus;
-  reviewState?: PaperclipWorkProductReviewState;
-  isPrimary?: boolean;
-  healthStatus?: PaperclipWorkProductHealth;
-  metadata?: unknown;
-}
-
-export type PaperclipUpdateWorkProductBody = Partial<PaperclipCreateWorkProductBody>;
-
 /**
  * The work-product row `POST /api/issues/{id}/work-products` answers with. Each
  * field is asserted on a live 201 by the probe "A1-17 (CHARACTERIZATION):
@@ -733,20 +808,6 @@ export interface PaperclipWorkProduct {
   provider: string;
   title: string;
   status: PaperclipWorkProductStatus;
-}
-
-// ---------------------------------------------------------------------------
-// Approvals
-// ---------------------------------------------------------------------------
-
-/**
- * UNVERIFIED. Neither the approval response body nor the link-approval request
- * schema was transcribable at the pinned tag, and nothing in Phase 1 reads an
- * approval. Kept minimal deliberately: take the request schema off the OpenAPI
- * snapshot and the response off a probe before anything reads a field here.
- */
-export interface PaperclipApproval {
-  id: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -812,3 +873,163 @@ export interface PaperclipHealthUnhealthy {
 }
 
 export type PaperclipHealth = PaperclipHealthOk | PaperclipHealthUnhealthy;
+
+// ── Reconciler shapes (Phase 5) ───────────────────────────────────────────
+
+/**
+ * How the reconciler behaves, from runtime-config `paperclip/reconciler_mode`.
+ * Seeded `shadow`; C-7 makes that a READ COMPARATOR — it sweeps and reports and
+ * mutates neither system's domain state. Promotion is a config write, not a
+ * deploy, which is why this is a runtime value and not an env var.
+ */
+export type PaperclipReconcilerMode = 'off' | 'shadow' | 'live';
+
+/**
+ * The poll cursor. `updatedAt` absent means "never swept", and its default is
+ * ABSENCE semantics rather than epoch — the cold start is `now - overlap`.
+ * Deliberately one field: nothing has evidence for more, and this is the whole
+ * value the next `updatedSince` is derived from.
+ */
+export interface ReconcilerWatermark {
+  /** Canonical ISO-8601 UTC (`…THH:MM:SS.sssZ`), or absent on a cold start. */
+  updatedAt?: string;
+  /**
+   * A stored value that exists but does not parse. This is NOT the same as
+   * absence and must never be collapsed into it: absence means "never swept" and
+   * cold-starting at `now - overlap` is correct, while a corrupt cursor means
+   * "swept to somewhere unknown" and cold-starting SKIPS everything between the
+   * real cursor and now. The reconciler refuses to sweep on this flag.
+   */
+  corrupt?: boolean;
+}
+
+/**
+ * One deduplicated candidate row from a sweep.
+ *
+ * `key` is `` `${id}@${updatedAt}` `` — not a convenience, a measurement. The
+ * probe "C-2 (BLOCKING): a truncated watermark loses rows, and overlap-and-
+ * dedupe delivers them exactly once" dedupes on exactly that pair, comparing
+ * `updatedAt` as the RAW ISO STRING the server sent, and shows that the pair
+ * yields every row a sweep wrote exactly once across two overlapping polls.
+ * Deduping on `id` alone would collapse two genuine revisions of one issue.
+ */
+export interface IssueChange {
+  /** `${id}@${updatedAt}`, the pair the overlap dedupes on. */
+  key: string;
+  id: string;
+  /** The raw stamp as sent, NOT normalized — the dedupe key must match bytes. */
+  updatedAt: string;
+  issue: PaperclipIssue;
+}
+
+/**
+ * The outcome of one reconcile pass. Returned by the exported pass function so
+ * a test or an admin route can drive a single sweep without a timer, and logged
+ * as the shadow comparator's whole output.
+ *
+ * `watermarkAdvanced` is the durability assertion in field form: it is `false`
+ * whenever pagination did not run to an empty page, whenever the sweep saw no
+ * rows, and whenever the conditional write lost to a peer.
+ */
+export interface SweepResult {
+  ran: boolean;
+  /** Why a pass did no work. Absent when `ran` is true. */
+  reason?:
+    | 'mode-off'
+    | 'not-configured'
+    | 'boot-probe-failed'
+    /** The probe REQUEST failed, which is not evidence either way. Retried next tick. */
+    | 'boot-probe-error'
+    | 'watermark-corrupt'
+    | 'not-leader'
+    | 'lease-lost'
+    | 'pagination-truncated';
+  mode: PaperclipReconcilerMode;
+  /** The interval this pass resolved, after the 15 s floor. The self-chaining
+   * timer schedules the next tick from it, which is what makes a
+   * `poll_interval_ms` write take effect with no restart. */
+  pollIntervalMs: number;
+  /** Rows returned across every page, BEFORE dedupe. */
+  rowsSeen: number;
+  /** Distinct `(id, updatedAt)` candidates. `rowsSeen - candidates` is the overlap. */
+  candidates: number;
+  pages: number;
+  /** The cursor the poll started from; absent on a cold start. */
+  watermarkFrom?: string;
+  /** The newest `updatedAt` actually PROCESSED — not the newest row on the board. */
+  watermarkTo?: string;
+  watermarkAdvanced: boolean;
+  /** `paperclip/enabled_agents`, reported so an operator can see whether a
+   * promotion to `live` would act on anything. Phase 6's dispatch route is the
+   * second reader: a slug absent from that list is answered 202
+   * `{ignored:'agent_not_enabled'}` rather than dispatched. */
+  enabledAgents: readonly string[];
+}
+
+// ── Dispatch shapes (Phase 6) ─────────────────────────────────────────────
+
+/**
+ * The inbound body Paperclip's `http` adapter POSTs at the dispatch route.
+ *
+ * EVERY FIELD IS OPTIONAL AND THAT IS THE MEASUREMENT, not laziness. NO PROBE
+ * DRIVES THE ADAPTER PUSH — the 21 contract probes all drive Paperclip's own
+ * `/api/**` routes and the OpenAPI snapshot documents Paperclip's server, so
+ * neither evidence tier this file accepts says anything about what arrives
+ * here. What IS established, by running code (precedence tier 2), is
+ * `agentSpecs()` in `scripts/lib/paperclip/bootstrap-core.ts`, which writes
+ * every agent's `adapter_config` as
+ *
+ *     { url, method: 'POST', headers: { authorization: `Bearer <secret>` },
+ *       payloadTemplate: { netzarAgentId: <slug> }, timeoutMs: 10_000 }
+ *
+ * so `POST`, the bearer, and a body carrying at least `netzarAgentId` are ours
+ * BY CONSTRUCTION. `issueId` is the spelling the live board uses for an issue
+ * reference in a pushed payload (probe A1-12 drives `payload: { issueId }` at
+ * `/wakeup`), and `runId` names the value the `X-Paperclip-Run-Id` header
+ * carries. WHAT PAPERCLIP MERGES INTO `payloadTemplate` BEYOND THOSE — an event
+ * kind, a comment body, a triggering user — IS UNVERIFIED, and A1-16 does not
+ * accept a vendor source read as authority for it. Unknown fields are ignored
+ * rather than transcribed into a plausible-looking field set.
+ *
+ * `parseDispatchBody` in `dispatch-worker.ts` is the only reader; it narrows
+ * this to `PaperclipDispatchContext` or answers `null`, and the route turns a
+ * `null` into 400.
+ */
+export interface PaperclipDispatchBody {
+  /** Ours by construction: `payloadTemplate: { netzarAgentId: <slug> }`. */
+  netzarAgentId?: string;
+  /** The Paperclip issue uuid. Never an 8-char prefix, never `NZR-42` (C-16). */
+  issueId?: string;
+  /**
+   * The run Paperclip already holds. A1-3 / ADR 0010 hard constraint 2: this is
+   * the ONLY thing that makes an agent actor legitimate, it arrives here, and
+   * it is NEVER synthesized. Absent or empty is a 400, not a minted id.
+   */
+  runId?: string;
+  /** Free-form key/value the push may carry. Attacker-influenced; escaped at
+   * interpolation by `neutralizeForPrompt`, never at storage. */
+  context?: Record<string, unknown>;
+}
+
+/**
+ * The validated, in-process value the route hands the worker. Post-validation,
+ * so every field is present and non-empty.
+ *
+ * A2-16 SAYS "nothing in here describes a Netzar domain object", and this shape
+ * sits closest to that line of anything in the file: it is not a wire body, it
+ * is the dispatcher's own working value. It lives here anyway because Part B
+ * Phase 1 assigned this NAME to this FILE and the C-10 paragraph above records
+ * that deferral by name — moving it would recreate exactly the gap that
+ * paragraph exists to close, and `dispatch-types.ts` is forbidden by a green
+ * test in `client.test.ts`, not merely by prose.
+ */
+export interface PaperclipDispatchContext {
+  /** Netzar agent SLUG. Cross-checked against `listKnownAgents()` by the route. */
+  netzarAgentId: string;
+  issueId: string;
+  runId: string;
+  /** `${runId}#${issueId}`, the pair the duplicate claim is keyed on. */
+  dedupeKey: string;
+  /** Raw, unescaped. The prompt boundary escapes it; storage does not. */
+  context: Record<string, string>;
+}

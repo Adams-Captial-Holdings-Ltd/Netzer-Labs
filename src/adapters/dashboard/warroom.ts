@@ -11,6 +11,7 @@ import {
 } from '../../lib/warroom/meetings-repo.js';
 import { publishTurn, getHistory } from '../../lib/warroom/publisher.js';
 import { getChannel, removeChannel } from '../../lib/warroom/events.js';
+import { haltWarroomOnKillPhrase } from '../../lib/warroom/kill-phrase.js';
 import { orchestrateWarroomTurn } from '../../lib/warroom/orchestrator.js';
 import { isKillSwitchActive } from '../../lib/state/kill-switches-repo.js';
 import { writeAudit } from '../../lib/audit/audit-writer.js';
@@ -166,6 +167,20 @@ export function buildWarroomRouter(): Hono<{ Variables: { principal: TokenPrinci
 
     const body = await c.req.json<{ speaker?: string; content?: string }>();
     if (!body.content) return c.json({ error: 'content required' }, 400);
+
+    // A person is typing into a live room, so the emergency kill phrase must
+    // work here exactly as it does in dashboard chat. Checked on the RAW
+    // message, before publishTurn — the orchestrator only ever sees an
+    // assembled transcript. Shared with the Telegram entry point so the two
+    // cannot drift; see src/lib/warroom/kill-phrase.ts. The confirmation also
+    // rides the meeting channel as a system_note, which is what the transcript
+    // renders; this body is for non-SSE clients.
+    const halt = await haltWarroomOnKillPhrase({
+      meetingId,
+      rawText: body.content,
+      surface: 'dashboard',
+    });
+    if (halt) return c.json({ halted: true, text: halt });
 
     const turn = await publishTurn(
       meetingId,

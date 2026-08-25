@@ -180,14 +180,16 @@ function fakeEcs(ops: string[], liveTaskDef: Record<string, unknown>) {
 
 const idleCfn: CfnClientLike = { stackStatus: async () => 'UPDATE_COMPLETE' };
 
-function fakeShell(calls: Array<{ cmd: string; args: string[] }>): ShellLike {
+function fakeShell(
+  calls: Array<{ cmd: string; args: string[]; env?: Record<string, string> }>,
+): ShellLike {
   return {
-    run: async (cmd, args) => {
-      calls.push({ cmd, args });
+    run: async (cmd, args, o) => {
+      calls.push({ cmd, args, env: (o as { env?: Record<string, string> } | undefined)?.env });
       return 0;
     },
-    capture: async (cmd, args) => {
-      calls.push({ cmd, args });
+    capture: async (cmd, args, o) => {
+      calls.push({ cmd, args, env: (o as { env?: Record<string, string> } | undefined)?.env });
       return { code: 0, stdout: '', stderr: '' };
     },
   };
@@ -251,7 +253,7 @@ function setup(o: SetupOptions = {}) {
   const ddbCalls: Call[] = [];
   const secretCalls: Call[] = [];
   const ops: string[] = [];
-  const shellCalls: Array<{ cmd: string; args: string[] }> = [];
+  const shellCalls: Array<{ cmd: string; args: string[]; env?: Record<string, string> }> = [];
 
   const ecr = fakeEcr(o.missingDigests ?? []);
   const ecs = fakeEcs(ops, LIVE_TASK_DEF);
@@ -588,6 +590,79 @@ describe('infra class', () => {
     expect(journalWrites.some((w) => String(w.input.Key).includes('rollback-infra-deploy-complete'))).toBe(
       true,
     );
+  });
+
+  // ── The tier, on the rebuild-from-git path ────────────────────────
+  //
+  // Since Phase 9 the tier decides what EXISTS, not just how big it is: the
+  // whole Paperclip substrate is provisioned at Tier 1+ and empty at Tier 0.
+  // This path builds the child env from `synthInputs` ALONE — process.env is
+  // deliberately not spread — so a manifest with no tier key falls through to
+  // app.ts's `?? '1'`. On a Tier 0 install that means a ROLLBACK newly creates
+  // a RETAIN'd, deletion-protected Aurora cluster. Adding DEPLOY_TIER to
+  // SYNTH_INPUT_ALLOWLIST only helps manifests written from now on; every
+  // manifest already in a state bucket was written when the list held
+  // CCE_TIER, which cdkEnvBag never set.
+  function tierlessTarget(): DeployManifest {
+    const target = mkManifest({ deployId: ID_MID, gitSha: 'b'.repeat(40) });
+    delete (target as Partial<DeployManifest>).cdkOutArchiveKey;
+    target.synthInputs = { AWS_REGION: 'ca-central-1' };
+    return target;
+  }
+
+  it('refuses a manifest that records no tier, rather than defaulting to 1', async () => {
+    const target = tierlessTarget();
+    const { deps } = setup({ target });
+    delete deps.env.CCE_TIER;
+    delete deps.env.DEPLOY_TIER;
+    const prevC = process.env.CCE_TIER;
+    const prevD = process.env.DEPLOY_TIER;
+    delete process.env.CCE_TIER;
+    delete process.env.DEPLOY_TIER;
+    try {
+      await expect(
+        runRollback(deps, opts({ rollbackClass: 'infra', rebuildFromGit: true })),
+      ).rejects.toThrow(/records no deploy tier/);
+    } finally {
+      if (prevC !== undefined) process.env.CCE_TIER = prevC;
+      if (prevD !== undefined) process.env.DEPLOY_TIER = prevD;
+    }
+  });
+
+  it('injects the exported tier under BOTH spellings when the manifest has none', async () => {
+    const target = tierlessTarget();
+    const { deps, shellCalls } = setup({ target });
+    const prevC = process.env.CCE_TIER;
+    process.env.CCE_TIER = '0';
+    try {
+      await runRollback(deps, opts({ rollbackClass: 'infra', rebuildFromGit: true }));
+    } finally {
+      if (prevC === undefined) delete process.env.CCE_TIER;
+      else process.env.CCE_TIER = prevC;
+    }
+    const synth = shellCalls.find((c) => c.cmd === 'npx' && c.args[1] === 'deploy');
+    // app.ts reads `CCE_TIER ?? DEPLOY_TIER`; the driver's cdkEnvBag forwards
+    // both from one value, and so must this.
+    expect(synth?.env?.CCE_TIER).toBe('0');
+    expect(synth?.env?.DEPLOY_TIER).toBe('0');
+  });
+
+  it('prefers the tier the manifest actually recorded', async () => {
+    const target = mkManifest({ deployId: ID_MID, gitSha: 'b'.repeat(40) });
+    delete (target as Partial<DeployManifest>).cdkOutArchiveKey;
+    target.synthInputs = { AWS_REGION: 'ca-central-1', DEPLOY_TIER: '2' };
+    const { deps, shellCalls } = setup({ target });
+    const prevC = process.env.CCE_TIER;
+    process.env.CCE_TIER = '0';
+    try {
+      await runRollback(deps, opts({ rollbackClass: 'infra', rebuildFromGit: true }));
+    } finally {
+      if (prevC === undefined) delete process.env.CCE_TIER;
+      else process.env.CCE_TIER = prevC;
+    }
+    const synth = shellCalls.find((c) => c.cmd === 'npx' && c.args[1] === 'deploy');
+    expect(synth?.env?.CCE_TIER).toBe('2');
+    expect(synth?.env?.DEPLOY_TIER).toBe('2');
   });
 });
 

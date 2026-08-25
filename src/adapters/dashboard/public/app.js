@@ -389,7 +389,7 @@ async function renderMissions() {
       <button class="action" id="msn-reload">Load</button>
     </div>
     <div id="msn-board" class="muted">loading...</div>`);
-  const STATUSES = ['open', 'in_progress', 'done', 'cancelled'];
+  const STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
   const reload = async () => {
     const owner = $('#msn-owner').value.trim() || 'main';
     const data = await api(`/missions?owner=${encodeURIComponent(owner)}`);
@@ -412,7 +412,7 @@ async function renderMissions() {
               (m) => `
             <div style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;">
               <div style="font-weight:600;">${escapeHtml(m.title)}</div>
-              <div class="small muted">p${m.priority} · by ${escapeHtml(m.createdByAgent)} · ${escapeHtml(m.id.slice(0, 8))}</div>
+              <div class="small muted">${escapeHtml(m.priority)} priority · by ${escapeHtml(m.createdByAgent)} · ${escapeHtml(m.id.slice(0, 8))}</div>
               <div class="small">${escapeHtml(m.body.slice(0, 140))}</div>
               <div class="right" style="margin-top:6px;">
                 ${STATUSES.filter((s) => s !== m.status)

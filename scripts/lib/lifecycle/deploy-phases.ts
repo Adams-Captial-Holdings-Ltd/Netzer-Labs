@@ -582,9 +582,9 @@ export interface BuildImageRecordsOptions {
   /** Full ECR repo URI for the Paperclip image (ADR 0010). */
   paperclipRepoUri?: string;
   /**
-   * Digest of the Paperclip image this deploy pushed. Absent unless
-   * CCE_PAPERCLIP_ENABLED armed the gated build, and the record is omitted
-   * entirely when it is absent, so an unarmed deploy's manifest is unchanged.
+   * Digest of the Paperclip image this deploy pushed. Absent unless the
+   * selected tier/environment provisions Paperclip and ran its build; the
+   * record is omitted entirely when no Paperclip image was built.
    */
   paperclipDigest?: string;
 }
@@ -593,7 +593,7 @@ export interface BuildImageRecordsOptions {
  * Every container in every task definition (item 9): the orchestrator task,
  * the consolidation-worker task (same image, container 'worker'), at
  * tier >= 2 the X-Ray daemon sidecar pinned by digest in compute-stack.ts,
- * and, when the gated build ran, the Paperclip server image. Rollback
+ * and, when the provisioned build ran, the Paperclip server image. Rollback
  * resolves what it is rolling back to from these records, so an image that
  * is deployed but unrecorded is an image that cannot be rolled back.
  */

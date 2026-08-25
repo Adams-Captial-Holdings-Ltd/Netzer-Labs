@@ -70,6 +70,18 @@ export function parseUpdate(
 
   if (!text && !attachment) return null;
 
+  // A TELEGRAM chat.id IS A NUMBER, AND THE IDENTITY SEGMENT IS APPENDED AFTER
+  // IT. `handler.ts` builds `<chatId>:bot-<agentId>` out of this value, and
+  // `parseTelegramChatId` reads the identity back out of the segments — so an
+  // id that arrives already carrying colons is an id that gets a vote on which
+  // bot token an out-of-band push is sent over. The forger needs
+  // TELEGRAM_WEBHOOK_SECRET to get here at all, so this is not an
+  // unauthenticated primitive; it is still the wrong shape to accept, and
+  // rejecting a non-numeric chat.id costs one line. (The other half of the
+  // belt: `parseTelegramChatId` reads the LAST `bot-` segment, so the segment
+  // trusted code appends wins even if one slipped past here.)
+  if (typeof msg.chat.id !== 'number' || !Number.isFinite(msg.chat.id)) return null;
+
   return {
     surface: 'telegram',
     agentId,

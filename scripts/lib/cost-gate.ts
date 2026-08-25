@@ -10,17 +10,13 @@
  * when the spawn or parse fails.
  */
 
-import { TIERS, type DeployTier } from '../../infra/lib/constants.js';
+import { TIERS, paperclipProvisioned, type DeployTier } from '../../infra/lib/constants.js';
 
-/** Coerce a raw DEPLOY_TIER env string to a valid tier, defaulting to 1. */
-export function clampTier(raw: string | undefined): DeployTier {
-  const trimmed = (raw ?? '').trim();
-  // Guard the empty string explicitly: Number('') is 0, which is a VALID
-  // tier, and an unset DEPLOY_TIER must mean the tier-1 default, not Hobby.
-  if (trimmed === '') return 1;
-  const n = Number(trimmed);
-  return (n === 0 || n === 1 || n === 2 || n === 3 ? n : 1) as DeployTier;
-}
+// Re-exported, not redefined. The parser moved to constants.ts so that
+// infra/bin/app.ts — which since Phase 9 lets the tier decide whether Aurora
+// EXISTS — calls the SAME function this gate prices from, instead of its own
+// bare Number() that read a blank tier as Hobby. Callers here are unchanged.
+export { clampTier } from '../../infra/lib/constants.js';
 
 /**
  * What a first deploy at this tier actually creates. Interface endpoints are
@@ -29,18 +25,30 @@ export function clampTier(raw: string | undefined): DeployTier {
 export function resourceSummary(
   tierId: DeployTier,
   privateEndpoints: boolean,
-  paperclip = false,
+  env: Record<string, string | undefined> = process.env,
 ): string {
   const shape = TIERS[tierId];
   const parts = ['ALB', `NAT x${shape.natGatewayCount}`];
   if (privateEndpoints) parts.push('VPC interface endpoints');
   parts.push('DynamoDB', 'KMS', `Fargate x${shape.fargateMinTasks}`);
-  // Paperclip work engine substrate (ADR 0010): always-on Aurora min-ACU
-  // floor + EFS. Opt-in like the endpoints above — infra/bin/app.ts
-  // synthesizes the two stacks only when CCE_PAPERCLIP_ENABLED=1, so listing
-  // them unconditionally told every operator that a routine deploy was
-  // creating an Aurora cluster it never creates.
-  if (paperclip) parts.push('Aurora Serverless v2 (Paperclip)', 'EFS');
+  // Paperclip work engine (ADR 0010): always-on Aurora min-ACU floor + EFS +
+  // the service's own Fargate task. Read through `paperclipProvisioned`, not
+  // from a separate flag the caller passes in: the same predicate
+  // infra/bin/app.ts deploys from, so this gate cannot promise an Aurora
+  // cluster synth does not create, or stay silent about one it does. That
+  // predicate is the tier OR the environment-scoped provisioning override, so
+  // a Tier 0 environment that opts in is charged for it here — the gate has to
+  // name the money whichever input turned the substrate on.
+  //
+  // The Fargate line is listed SEPARATELY from the `Fargate xN` above, not
+  // folded into that count: it is a second, independently-sized task
+  // (2 vCPU / 4 GB ARM64, desiredCount 1, no autoscaling) on its own task
+  // definition, and it is the single largest item the substrate adds. Rolling it
+  // into the orchestrator's count would hide it behind a number that looks
+  // like it only went up by one.
+  if (paperclipProvisioned(tierId, env)) {
+    parts.push('Aurora Serverless v2 (Paperclip)', 'EFS', 'Fargate x1 (Paperclip)');
+  }
   if (shape.wafEnabled) parts.push('WAF');
   if (shape.cloudFrontEnabled) parts.push('CloudFront');
   return parts.join(' + ');
@@ -49,9 +57,11 @@ export function resourceSummary(
 /**
  * Honest fixed-floor ranges per tier, lifted from docs/cost-guide.md (which
  * derives them from the estimator plus real-deployment observation). Used
- * only when the estimator spawn fails; endpoints and the Paperclip substrate
- * are priced separately below because the ranges assume both defaults off
- * (CCE_PRIVATE_ENDPOINTS and CCE_PAPERCLIP_ENABLED).
+ * only when the estimator spawn fails. They are still PRE-PAPERCLIP figures —
+ * static prose in a docs page, not something this file can recompute — so the
+ * note in estimateLine is appended to THIS branch only. The estimator itself
+ * now carries the Aurora/EFS/Fargate line items, so the note must not be
+ * appended there as well or the substrate is counted twice.
  */
 export const FALLBACK_RANGES: Record<DeployTier, string> = {
   0: '$65 to $95',
@@ -69,17 +79,27 @@ export function estimateLine(
   estimatorStdout: string | null,
   tierId: DeployTier,
   privateEndpoints: boolean,
-  paperclip = false,
+  env: Record<string, string | undefined> = process.env,
 ): string {
-  // Appended to BOTH branches, unlike the endpoints clause below. Neither
-  // branch prices the Paperclip substrate on its own: the ranges above are
-  // pre-Paperclip, and scripts/cost-estimate.mjs carries no Aurora/EFS line
-  // item at all. Adding it only to the fallback would hide the cost on the
-  // path that normally runs. Fold it into the estimator in Phase 2, when the
-  // Paperclip Fargate task lands and the figure is real.
-  const paperclipNote = paperclip
-    ? ', plus roughly $50/mo for the Paperclip Aurora min-ACU floor and EFS ' +
-      '(estimated, not verified against pricing APIs)'
+  // FALLBACK BRANCH ONLY, and that is the whole point of the change. The
+  // estimator now carries Aurora + EFS + the Paperclip Fargate task as real
+  // line items (scripts/cost-estimate.mjs, gated on the same
+  // TierShape.paperclipEnabled), so its fixedMonthlyUsd already includes them
+  // and appending this note there would bill the operator twice. The static
+  // ranges above are docs prose this file cannot recompute, so they still need
+  // it.
+  //
+  // Tier-driven since Phase 9, for the same reason resourceSummary is: the
+  // substrate installs by default at Tier 1+, so an operator at those tiers
+  // must be shown this money whether or not they have ever heard of the
+  // engine, and a Tier 0 operator must not be charged for it in the copy —
+  // unless that Tier 0 environment set CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE,
+  // which `paperclipProvisioned` folds in.
+  const paperclipEnabled = paperclipProvisioned(tierId, env);
+  const paperclipNote = paperclipEnabled
+    ? ', plus roughly $110/mo for the Paperclip work engine — about $50 for ' +
+      'the Aurora min-ACU floor and EFS, plus about $58 for its always-on ' +
+      '2 vCPU / 4 GB Fargate task (estimated, not verified against pricing APIs)'
     : '';
   if (estimatorStdout) {
     try {
@@ -89,10 +109,13 @@ export function estimateLine(
       };
       const row = parsed.results?.find((r) => r.tier === tierId);
       if (row && typeof row.fixedMonthlyUsd === 'number' && Number.isFinite(row.fixedMonthlyUsd)) {
+        // The Paperclip line items are INSIDE this figure; say so rather than
+        // adding the note, so the number and the prose cannot drift apart.
+        const paperclipIncluded = paperclipEnabled ? ', Paperclip work engine included' : '';
         return (
           `~$${Math.round(row.fixedMonthlyUsd)}/mo fixed floor ` +
-          `(scripts/cost-estimate.mjs, unit prices as of ${parsed.asOf ?? 'unknown'})` +
-          `${paperclipNote} + Bedrock token spend`
+          `(scripts/cost-estimate.mjs, unit prices as of ${parsed.asOf ?? 'unknown'}` +
+          `${paperclipIncluded}) + Bedrock token spend`
         );
       }
     } catch {
