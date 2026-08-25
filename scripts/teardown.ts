@@ -136,6 +136,7 @@ async function gatherInventory(opts: {
     rn.rawBucket,
     rn.curatedBucket,
     rn.vectorsStagingBucket,
+    rn.vectorsBucket,
     rn.logsBucket,
     rn.extensionsBucket,
   ].map((p) => bucketName(p, opts.account, opts.region));

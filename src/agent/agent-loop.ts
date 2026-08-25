@@ -32,7 +32,7 @@ import { loadAgent } from '../lib/config/agent-loader.js';
 import { tools, type ToolMedia, type ToolResult } from '../lib/tools/registry.js';
 import { mcpToolsFor, isMcpToolName, invokeMcpTool } from '../lib/mcp/mcp-tools.js';
 import { logger, truncateForLog } from '../observability/logger.js';
-import type { Turn } from '../lib/state/sessions-repo.js';
+import { NO_RESPONSE_NOTICE, type Turn } from '../lib/state/sessions-repo.js';
 import { getConfig } from '../lib/state/runtime-config-repo.js';
 import { isKillSwitchActive, KillSwitchActiveError } from '../lib/state/kill-switches-repo.js';
 import { assertBedrockAllowed } from '../lib/bedrock/guard.js';
@@ -57,6 +57,20 @@ import {
 // (e.g. Slack: search to find a DM channel, then read it), so 5 was too tight
 // — turns were hitting the cap mid-work and returning "(no response)".
 const TOOL_TURN_LIMIT = 8;
+
+/**
+ * Output-token ceiling for a tool-loop round.
+ *
+ * 1024 was too low to emit a document: `generate_document` needs the entire
+ * spec inline as tool-call JSON, so a real report ran past the ceiling and came
+ * back `stopReason: max_tokens` with no text and no usable tool call. That is
+ * what made PDF, DOCX and XLSX all appear broken at once — the ceiling is
+ * shared, the libraries were never the problem.
+ *
+ * Spend is bounded by the daily cost cap, not by this; the cap is the control
+ * that actually stops runaway cost.
+ */
+const TOOL_LOOP_MAX_TOKENS = 8192;
 
 export interface AttachmentBlock {
   /** image or document */
@@ -483,6 +497,17 @@ export function stripBlockedTurns(turns: Turn[]): Turn[] {
     out.push(t);
   }
   return out;
+}
+
+/**
+ * What to say when the model returned no text at all. `max_tokens` means the
+ * reply was cut off before it finished — generating a document is the common
+ * trigger, because the whole spec has to be emitted inline as tool-call JSON.
+ */
+export function truncatedNotice(stopReason: string | undefined): string {
+  return stopReason === 'max_tokens'
+    ? 'That reply was cut off before it finished — the answer ran past the length limit. Ask for a smaller piece (fewer sections, or one part at a time) and it will come back.'
+    : NO_RESPONSE_NOTICE;
 }
 
 function turnsToMessages(turns: Turn[]): Message[] {
@@ -1064,7 +1089,11 @@ async function runAdmittedTurn(
           chatId: req.chatId,
         });
     return {
-      text: safeText,
+      // Never return empty: a stored empty turn makes Bedrock reject every
+      // later request in this chat. `max_tokens` with no text is the reply
+      // that got cut off mid-tool-call, so say that rather than "(no
+      // response)" — it is the one case the person can actually act on.
+      text: safeText || truncatedNotice(initial.stopReason),
       modelId: initial.modelId,
       costUsd: initial.costUsd,
       latencyMs,
@@ -1130,8 +1159,8 @@ async function runAdmittedTurn(
           // converseStreamTurn already learned this and recorded the model), so
           // the tool-dispatch turns don't re-trip the ValidationException.
           inferenceConfig: modelRejectsTemperature(modelId)
-            ? { maxTokens: 1024 }
-            : { maxTokens: 1024, temperature: 0.7 },
+            ? { maxTokens: TOOL_LOOP_MAX_TOKENS }
+            : { maxTokens: TOOL_LOOP_MAX_TOKENS, temperature: 0.7 },
           ...(invocation.anthropicBeta
             ? { additionalModelRequestFields: { anthropic_beta: invocation.anthropicBeta } }
             : {}),
@@ -1268,8 +1297,8 @@ async function runAdmittedTurn(
             system: cachedSystem,
             messages: synthMessages,
             inferenceConfig: modelRejectsTemperature(modelId)
-              ? { maxTokens: 1024 }
-              : { maxTokens: 1024, temperature: 0.7 },
+              ? { maxTokens: TOOL_LOOP_MAX_TOKENS }
+              : { maxTokens: TOOL_LOOP_MAX_TOKENS, temperature: 0.7 },
             ...(invocation.anthropicBeta
               ? { additionalModelRequestFields: { anthropic_beta: invocation.anthropicBeta } }
               : {}),

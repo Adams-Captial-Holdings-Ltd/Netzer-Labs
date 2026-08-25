@@ -1,4 +1,4 @@
-<!-- drift-gate: verified against the codebase-review fixes PR (#107); mapped-source changes = retry + per-round kill-switch recheck on tool rounds, split-send fallback on the final edit, version-fenced appendTurns, streaming-redactor timeout. Steps 36/41/42 and the legend updated to match. -->
+<!-- drift-gate: verified against the empty-turn poisoning fix (PR #96); mapped-source changes = repairEmptyTurns applied in getSession, truncatedNotice on the non-tool return, and TOOL_LOOP_MAX_TOKENS raised from 1024. Step 8 and the history-poisoning note updated to match. -->
 # Request lifecycle, one Telegram message end-to-end
 
 > When a user sends a Telegram message, the webhook is verified against a shared secret (unconditionally — the old signature-bypass kill switch was removed in Wave A; a missing secret closes ingress), acknowledged immediately, and processed asynchronously: the handler posts a placeholder reply, loads the session from DynamoDB, and runs the agent loop. The loop builds a system prompt enriched with memories, hive notes, and inbox items, then streams a Bedrock Converse call (with the guardrail attached) into throttled edits of the placeholder; if the model asks for tools, it switches to a non-streaming dispatch loop of up to 8 rounds. The final text passes an outbound DLP scan, replaces the placeholder, and both turns plus usage and an audit record are persisted, unless the guardrail blocked the turn, in which case nothing is saved.
@@ -20,7 +20,7 @@ sequenceDiagram
   H->>H: resolve owner alias / canonical identity
   H-->>T: 200 ack immediately, then process async
   H->>T: send placeholder reply
-  H->>D: getSession (history + model override)
+  H->>D: getSession (history + model override, empty turns repaired on read)
   H->>L: runAgentTurn
   L->>D: kill switches: sessions_frozen, rate limit, bedrock_global, cost cap
   L->>D: build system prompt: memory recall + hive notes + agent inbox

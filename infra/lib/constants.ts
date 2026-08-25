@@ -66,6 +66,11 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
     rawBucket: `${app}-raw`,
     curatedBucket: `${app}-curated`,
     vectorsStagingBucket: `${app}-vectors-staging`,
+    // Durable home for the vector index (`index/<scope>/<docId>.jsonl`).
+    // Separate from the staging bucket ON PURPOSE: staging is disposable and
+    // carries a blanket expiry, and the two sharing a bucket is what destroyed
+    // the production knowledge base in 2026-08. Nothing may expire from here.
+    vectorsBucket: `${app}-vectors`,
     logsBucket: `${app}-logs`,
     auditLockBucket: `${app}-audit-lock`,
 

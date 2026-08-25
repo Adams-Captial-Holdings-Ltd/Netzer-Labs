@@ -1,3 +1,4 @@
+<!-- drift-gate: verified against the knowledge-durability hotfix; mapped-source changes were the VECTORS_BUCKET env value and a new RESOURCE_NAMES entry, neither of which this diagram depicts -->
 <!-- drift-gate: Phase 9 makes Paperclip part of the standard T1-T3 stack set; Phase 4.5 removes the former ALB listener path because the pinned artifact permits open signup. The diagram now shows the single task, Aurora/EFS, migration job and internal service boundary with no browser-facing ALB edge. -->
 # Architecture, compute view
 
