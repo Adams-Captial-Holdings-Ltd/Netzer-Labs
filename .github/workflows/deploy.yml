@@ -55,28 +55,6 @@ env:
   # default is '3' (Enterprise, ~$306/mo), which a careless staging dispatch
   # would otherwise provision. Production still honours the input.
   CCE_TIER: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '0' || github.event.inputs.tier || '3' }}
-  # THE REPOSITORY OWNER'S DECISION, and the reason staging is the environment
-  # this variable exists for. Staging stays pinned to Tier 0 above — nothing
-  # else about staging scales up — but Tier 0 is exactly the tier that
-  # provisions no Paperclip, so without this staging would never grow the
-  # substrate and PRODUCTION would be the first environment ever to run the
-  # engine. Staging is where this gets validated.
-  #
-  # It is an ENVIRONMENT-SCOPED PROVISIONING OVERRIDE, not a feature flag. It
-  # answers "provision the substrate even though this tier would not", and it is
-  # ONE-DIRECTIONAL: there is no value of it that empties a substrate a tier
-  # provisions, which is what separates it from CCE_PAPERCLIP_ENABLED, the
-  # general-purpose gate Phase 9 deleted. See `paperclipProvisioned` in
-  # infra/lib/constants.ts.
-  #
-  # Set from the SAME staging expression CCE_TIER uses, so a production dispatch
-  # can never pick it up — and set HERE, at workflow scope, rather than on the
-  # CDK deploy step, because `scripts/ci/tier-gate.ts` has to read it too. That
-  # step emits the one boolean the ECR-repo create, the image build, the secret
-  # populate and the migration all gate on; if it could not see this, staging
-  # would deploy an Aurora cluster and a service pinned to an image CI never
-  # built — the M22 shape, one layer down.
-  CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '1' || '' }}
 
 jobs:
   source-guard:
@@ -127,6 +105,11 @@ jobs:
     # with no jobs rather than as a syntax error.
     environment: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && 'staging' || 'production' }}
     timeout-minutes: 60
+    # Staging stays Tier 0 but provisions Paperclip so the engine is validated
+    # before production. Keep this deploy-only: the verify job must test the
+    # repository's default, unconfigured tier behaviour.
+    env:
+      CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '1' || '' }}
     steps:
       - name: Resolve env-specific values
         id: cfg
@@ -367,8 +350,8 @@ jobs:
       # configuration that provisions no Paperclip never runs this step and so
       # creates no CodeBuild project, starts no build and pushes no image.
       # NOTE for this repository's own pipeline: staging runs at CCE_TIER 0 but
-      # carries CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE=1 (see the env block at the
-      # top), so staging DOES build the image and DOES provision the substrate —
+      # carries CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE=1 (see the deploy job env
+      # above), so staging DOES build the image and DOES provision the substrate —
       # it is the environment the engine is validated in, which is the whole
       # point of the override. A Tier 0 install without it builds nothing.
       #
@@ -956,8 +939,8 @@ jobs:
           # completion step migrates and clears it in this same workflow run.
           CCE_PAPERCLIP_BOOTSTRAP: ${{ vars.CCE_PAPERCLIP_BOOTSTRAP == '1' && '1' || steps.pcmigrate.outputs.bootstrap }}
           # The environment-scoped provisioning override. Declared in the
-          # workflow-level `env:` block (see the comment there for why), so it
-          # is already in this step's environment; forwarded explicitly all the
+          # deploy-job `env:` block (see the comment there for why), so it is
+          # already in this step's environment; forwarded explicitly all the
           # same, because THIS is the step where it decides whether Aurora and
           # EFS exist, and every other variable that does is listed here.
           CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: ${{ env.CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE }}
