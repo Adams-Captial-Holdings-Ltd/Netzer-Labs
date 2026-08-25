@@ -93,6 +93,32 @@ pages. Anything larger still truncates. It now truncates *cleanly*, leaving the
 chat alive and telling the person to ask for a smaller piece, but an RFP-scale
 document needs an incremental tool, not a higher ceiling.
 
+### 2.5 Corrupt-but-successful builds now fail cleanly
+
+An adversarial pass over the builders found four cases where a build returned
+bytes, `isError` was never set, S3 accepted them, and the person received a
+presigned URL to a **broken file**. That is worse than a refusal, and it is
+precisely what the isolation bar exists to prevent — a clean tool error was
+always the required outcome. All four were confirmed by measurement before
+being fixed, and each now throws.
+
+| Case | What it produced | Now |
+|---|---|---|
+| Any codepoint outside WinAnsi in a **PDF** — Greek, Cyrillic, CJK, emoji, even a check mark | A structurally perfect PDF that opens anywhere and displays garbage | `assertPdfRenderable` throws and points at DOCX, which handles the full range |
+| C0 control characters in a **DOCX** | Correct PK magic, all 18 OPC parts, and a `word/document.xml` that is not well-formed XML | Stripped in `cellText`, matching what exceljs already did for XLSX — the two builders had disagreed on the same input |
+| A cell over 32,767 characters in an **XLSX** | A file real Excel refuses to open | `MAX_CELL_LEN` rejects it; verified at the exact boundary |
+| `rows` emitted as objects rather than arrays | Every row silently discarded, and a valid but completely **empty** workbook reported as a success | Throws, rather than `continue` |
+
+Object and array cells are also rejected instead of being coerced to the
+literal text `"[object Object]"` or `"1,2"`.
+
+The PDF limitation is worth stating plainly: `src/lib/documents/pdf.ts` uses
+pdfkit's built-in Helvetica, a Type1 font declared `/Encoding
+/WinAnsiEncoding`. Latin-1 plus the WinAnsi punctuation block renders; nothing
+else does. The real fix is embedding a Unicode TTF, which means shipping a font
+binary — a deliberate decision, not something to fold into a bug fix. Until
+then, DOCX is the answer for non-Latin content, and the error says so.
+
 ## 3. Why all three document formats failed together
 
 This is worth stating plainly, because it misled the original investigation.
@@ -128,6 +154,29 @@ could run.
 Zero errors across 450 days is not a health signal here. It is the signature of
 a feature that was never exercised, because the failure killed the chat before
 it could reach the tool's error path.
+
+### 2.4 `MAX_TOTAL_CELLS` — a build cannot kill the process
+
+The per-dimension bounds in `src/lib/documents/types.ts` do not bound their
+product, and there was no column bound at all, so `MAX_SHEETS x MAX_SHEET_ROWS
+x 20 columns` passed every check and then killed the process.
+
+Measured on Node v24 at a production-equivalent heap: **4,000,000 cells OOMs**,
+and **2,000,000 cells peaks at 1,870 MB RSS** against a 4 GB task shared with
+two sidecars. An OOM is a SIGKILL, not a catchable error — the tool's own
+try/catch cannot turn it into a tool error, and the whole chat process goes
+with it. That is precisely the outcome the isolation bar forbids.
+
+`MAX_TOTAL_CELLS` (200,000) bounds the whole spec, tables and sheets alike,
+checked as each sheet or table is accepted. Verified under a 1,592 MB heap
+ceiling that the unguarded build did not survive: the same spec now throws in
+6 ms at 106 MB with `spec exceeds 200,000 total cells ... Split it into several
+smaller documents.`
+
+**Nothing a model can currently emit comes close.** `TURN_MAX_TOKENS` (8192)
+caps a tool-call spec near 24 KB, which measures at roughly 160 MB. This bound
+exists so that raising the token ceiling later — the obvious next step for
+larger documents — cannot quietly turn a document request into a process kill.
 
 ## 4. What is NOT covered here
 

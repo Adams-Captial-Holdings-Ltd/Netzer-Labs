@@ -94,3 +94,38 @@ describe('repairEmptyTurns', () => {
     }
   });
 });
+
+/**
+ * The guard must be WIRED, not merely present.
+ *
+ * A harsh review caught that nothing proved `getSession` actually calls
+ * `repairEmptyTurns` — the unit tests above import the pure function and assert
+ * on arrays, which would still pass if the call site were deleted. It also
+ * caught that `t.text?.trim()` guards null and undefined but NOT a wrong type:
+ * a legacy row whose text is a number threw a TypeError inside getSession,
+ * turning a poisoned chat into a 500 instead of repairing it.
+ */
+describe('repairEmptyTurns hardening', () => {
+  const t = (role: 'user' | 'assistant', text: unknown): Turn =>
+    ({ role, text, ts: 1 }) as unknown as Turn;
+
+  it('survives a stored turn whose text is a number, not a string', () => {
+    expect(() => repairEmptyTurns([t('assistant', 42)])).not.toThrow();
+    expect(repairEmptyTurns([t('assistant', 42)])[0]?.text).toBe(NO_RESPONSE_NOTICE);
+  });
+
+  it('survives null, undefined and object text alike', () => {
+    for (const bad of [null, undefined, {}, []]) {
+      expect(() => repairEmptyTurns([t('assistant', bad)])).not.toThrow();
+      expect(repairEmptyTurns([t('assistant', bad)])[0]?.text).toBe(NO_RESPONSE_NOTICE);
+    }
+  });
+
+  it('never emits a turn Bedrock would reject, whatever the stored shape', () => {
+    const junk = [t('user', 'a'), t('assistant', 42), t('user', null), t('assistant', '  ')];
+    for (const turn of repairEmptyTurns(junk)) {
+      expect(typeof turn.text).toBe('string');
+      expect(turn.text.trim().length).toBeGreaterThan(0);
+    }
+  });
+});
