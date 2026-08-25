@@ -83,6 +83,29 @@ export function decideIngest(a: {
   return { ingest, pendingCount };
 }
 
+/** Stand-in for a stored turn whose text is empty. See repairEmptyTurns. */
+export const NO_RESPONSE_NOTICE = '(no response)';
+
+/**
+ * A turn with empty text makes Bedrock reject the WHOLE request
+ * ("messages: text content blocks must be non-empty"), which kills every later
+ * turn in that chat, permanently — not just the one that produced it. A reply
+ * truncated at `max_tokens` mid-tool-call stores exactly that, and generating a
+ * document is the common trigger because the whole spec is emitted inline as
+ * tool-call JSON.
+ *
+ * Applied on read, in `getSession`, for two reasons: every consumer that turns
+ * stored turns into Bedrock messages goes through there, and chats already
+ * poisoned before this fix recover on their own with no migration.
+ *
+ * Text is replaced rather than the turn dropped, because Bedrock also requires
+ * roles to alternate — removing a lone assistant turn would leave two user
+ * turns adjacent and trade one rejection for another.
+ */
+export function repairEmptyTurns(turns: Turn[]): Turn[] {
+  return turns.map((t) => (t.text?.trim() ? t : { ...t, text: NO_RESPONSE_NOTICE }));
+}
+
 export interface Turn {
   role: 'user' | 'assistant';
   text: string;
@@ -145,7 +168,7 @@ export async function getSession(
   return {
     agentId,
     chatId,
-    turns: (out.Item.turns as Turn[] | undefined) ?? [],
+    turns: repairEmptyTurns((out.Item.turns as Turn[] | undefined) ?? []),
     modelOverride: out.Item.modelOverride as string | undefined,
     updatedAt: (out.Item.updatedAt as number | undefined) ?? 0,
     lastInputTokens: out.Item.lastInputTokens as number | undefined,

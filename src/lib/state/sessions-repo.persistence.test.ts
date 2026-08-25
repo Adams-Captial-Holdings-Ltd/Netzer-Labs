@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isPersistentChat } from './sessions-repo.js';
+import { isPersistentChat, repairEmptyTurns, NO_RESPONSE_NOTICE, type Turn } from './sessions-repo.js';
 
 describe('isPersistentChat', () => {
   it('persists dashboard conversations', () => {
@@ -45,5 +45,52 @@ describe('isPersistentChat', () => {
 
   it('handles the empty string without throwing', () => {
     expect(isPersistentChat('')).toBe(false);
+  });
+});
+
+/**
+ * A chat must never be able to kill itself permanently.
+ *
+ * Production, 2026-08-24, chat dashboard:1787596504860: a request for a SWOT
+ * analysis PDF hit outputTokens 1024 / stopReason max_tokens while the model
+ * was still emitting the generate_document call, so the reply carried no text
+ * block at all. The empty assistant turn was persisted, and both following
+ * turns died on
+ *   ValidationException: messages: text content blocks must be non-empty
+ * with no reply produced — the turn simply never returned. That chat stays
+ * dead until the history is repaired, which is what this does on read.
+ */
+describe('repairEmptyTurns', () => {
+  const t = (role: 'user' | 'assistant', text: string): Turn => ({ role, text, ts: 1 });
+
+  it('replaces an empty assistant turn rather than dropping it', () => {
+    // Dropping it would leave two adjacent user turns, which Bedrock rejects
+    // just as hard as the empty block did.
+    expect(repairEmptyTurns([t('user', 'give me a pdf'), t('assistant', ''), t('user', 'hello?')])).toEqual([
+      t('user', 'give me a pdf'),
+      t('assistant', NO_RESPONSE_NOTICE),
+      t('user', 'hello?'),
+    ]);
+  });
+
+  it('treats whitespace-only text as empty', () => {
+    expect(repairEmptyTurns([t('assistant', '   \n\t ')])).toEqual([t('assistant', NO_RESPONSE_NOTICE)]);
+  });
+
+  it('survives a stored turn whose text is missing entirely', () => {
+    const legacy = [{ role: 'assistant', ts: 1 } as unknown as Turn];
+    expect(repairEmptyTurns(legacy)[0]?.text).toBe(NO_RESPONSE_NOTICE);
+  });
+
+  it('leaves a healthy transcript untouched', () => {
+    const turns = [t('user', 'hi'), t('assistant', 'hello')];
+    expect(repairEmptyTurns(turns)).toEqual(turns);
+  });
+
+  it('never emits a turn Bedrock would reject', () => {
+    const poisoned = [t('user', 'a'), t('assistant', ''), t('user', 'b'), t('assistant', '  ')];
+    for (const turn of repairEmptyTurns(poisoned)) {
+      expect(turn.text.trim().length).toBeGreaterThan(0);
+    }
   });
 });

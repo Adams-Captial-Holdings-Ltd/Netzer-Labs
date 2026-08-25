@@ -43,8 +43,8 @@ vi.mock('../lib/safety/exfil-guard.js', () => ({
 }));
 vi.mock('../lib/config/agent-loader.js', () => ({ loadAgent: vi.fn() }));
 
-import { stripBlockedTurns, GUARDRAIL_BLOCK_NOTICE } from './agent-loop.js';
-import type { Turn } from '../lib/state/sessions-repo.js';
+import { stripBlockedTurns, GUARDRAIL_BLOCK_NOTICE, truncatedNotice } from './agent-loop.js';
+import { NO_RESPONSE_NOTICE, type Turn } from '../lib/state/sessions-repo.js';
 
 const t = (role: 'user' | 'assistant', text: string): Turn => ({ role, text, ts: 1 });
 
@@ -89,5 +89,33 @@ describe('stripBlockedTurns', () => {
       t('assistant', 'hey'),
     ];
     expect(stripBlockedTurns(turns)).toEqual([t('user', 'hello?'), t('assistant', 'hey')]);
+  });
+});
+
+/**
+ * The same poisoning, reached a different way. A reply truncated at
+ * `max_tokens` mid-tool-call returns no text at all, and the empty assistant
+ * turn that gets persisted makes Bedrock reject the WHOLE request on every
+ * later turn ("messages: text content blocks must be non-empty"), so the chat
+ * is dead until /newchat. Confirmed in production 2026-08-24: asking for a
+ * SWOT analysis PDF hit outputTokens 1024 / stopReason max_tokens, and the two
+ * following turns both died on ValidationException with no reply.
+ *
+ * Generating a document is the common trigger for all three formats, because
+ * the whole spec has to be emitted inline as tool-call JSON.
+ */
+describe('truncatedNotice', () => {
+  it('never returns empty, whatever the stop reason', () => {
+    for (const r of ['max_tokens', 'end_turn', 'stop_sequence', undefined]) {
+      expect(truncatedNotice(r).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('tells the person the reply was cut off when it hit the length limit', () => {
+    expect(truncatedNotice('max_tokens')).toMatch(/cut off/i);
+  });
+
+  it('falls back to the plain notice for any other empty reply', () => {
+    expect(truncatedNotice('end_turn')).toBe(NO_RESPONSE_NOTICE);
   });
 });
