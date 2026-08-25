@@ -64,16 +64,34 @@ something smaller; otherwise it falls back to `NO_RESPONSE_NOTICE`.
 This closes the hole at its source, while `repairEmptyTurns` remains the
 backstop for anything already stored or written by a path not yet audited.
 
-### 2.3 `TOOL_LOOP_MAX_TOKENS` — documents fit in a reply again
+### 2.3 `TURN_MAX_TOKENS` — documents fit in a reply again
 
-The tool loop's per-round output ceiling was a hard-coded `1024`. That is not
+Every model call in a turn carried a hard-coded `maxTokens: 1024`. That is not
 enough to emit a document: `generate_document` requires the entire spec inline
 as tool-call JSON, so any real report ran past the ceiling and came back
 `stopReason: max_tokens` with no text and no usable tool call.
 
-The ceiling is now the named constant `TOOL_LOOP_MAX_TOKENS`, set to `8192`.
+The ceiling is now the named constant `TURN_MAX_TOKENS`, set to `8192`, and it
+is applied at **all four** model call sites — the initial streamed call and each
+tool-loop round.
+
+The initial call matters and was missed on the first attempt. It passes its
+input straight to `converseStreamTurnWithFallback`, which without an explicit
+`maxTokens` falls through to `?? 1024` in
+[`src/lib/bedrock/client.ts`](../../../src/lib/bedrock/client.ts) — and for a
+turn that never reaches tool use, that is the only call there is. Raising only
+the tool loop left production still returning `outputTokens: 1024` after
+deploying. `src/agent/agent-loop.max-tokens.test.ts` pins the initial call
+specifically, and was verified to fail when the fix is reverted.
+
 Spend remains bounded by the daily cost cap, which is the control that actually
 stops runaway cost.
+
+**This does not make documents unbounded.** At 8192 tokens, after JSON
+structural overhead, a document is roughly 4,500–5,000 words — about 10–12
+pages. Anything larger still truncates. It now truncates *cleanly*, leaving the
+chat alive and telling the person to ask for a smaller piece, but an RFP-scale
+document needs an incremental tool, not a higher ceiling.
 
 ## 3. Why all three document formats failed together
 
@@ -86,6 +104,30 @@ is what trips the output ceiling. The three builders
 (`src/lib/documents/{pdf,docx,xlsx}.ts`) were never implicated, and
 `generate_document`'s own error handling was never at fault: the tool never
 executed at all.
+
+## 3a. What the history actually shows
+
+This is recorded because it corrected the premise of the investigation.
+
+CloudWatch metrics outlive log retention. Over **450 days**, the entire life of
+the metric, `generate_document` was invoked **5 times**, all by agent `main`,
+with **zero errors**:
+
+| Date | Calls | What it was |
+|---|---|---|
+| 2026-08-12 | 1 | "PGN Test Workbook" |
+| 2026-08-15 | 1 | "PGN Consulting - Sample Report" |
+| 2026-08-24 | 3 | Including the first PDF ever generated in production |
+
+`maxTokens: 1024` dates to `355c397`, the initial release, and never held
+another value. **There was no regression.** Two toy spreadsheets fit under the
+ceiling and made the feature look shipped; every real document since exceeded
+it, truncated mid-tool-call, and destroyed its own conversation before the tool
+could run.
+
+Zero errors across 450 days is not a health signal here. It is the signature of
+a feature that was never exercised, because the failure killed the chat before
+it could reach the tool's error path.
 
 ## 4. What is NOT covered here
 

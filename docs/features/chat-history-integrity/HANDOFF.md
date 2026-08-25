@@ -15,7 +15,7 @@ as_of_commit: f64d1e04b2d85853752e393b310ef243460958dd
 | Branch | `hotfix/empty-turn-poisoning` |
 | Based on | `production` at `7319083` |
 | Next merge target | `production` |
-| Deployment state | staging deployed (image `88b5fc54c1cf`, rollout COMPLETED); production pending this hotfix |
+| Deployment state | **Live in production** — `DEPLOY_SHA 8c6a244`, task def `claudeclaw-orchestrator:11`, Tier 2 (Pro), 3/3 tasks, rollout COMPLETED. Staging on `88b5fc54c1cf`. |
 | Pushed | yes |
 | PR | [#96](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/96) into `development` (landed, promoted to staging); this hotfix into `production` |
 
@@ -34,28 +34,34 @@ silently re-tier the environment.
 
 ## What landed
 
-Three changes, all in the chat path:
+Four changes, all in the chat path, shipped in two rounds:
 
 1. `repairEmptyTurns` in `src/lib/state/sessions-repo.ts`, applied in
    `getSession`.
 2. `truncatedNotice` in `src/agent/agent-loop.ts`, applied to the non-tool
    return path.
-3. `TOOL_LOOP_MAX_TOKENS = 8192` replacing the hard-coded `1024` at both
-   tool-loop call sites.
+3. `TURN_MAX_TOKENS = 8192` replacing the hard-coded `1024` — **at all four
+   model call sites**, including the initial streamed call.
+4. `src/agent/agent-loop.max-tokens.test.ts`, which pins the initial call and
+   was verified to fail when the fix is reverted.
 
-See the [README](README.md) for what each one does and why it sits where it
-does.
+Round one shipped 1–3 but applied the ceiling to the tool loop only. Production
+proved that incomplete four minutes after deploy — still `outputTokens: 1024,
+stopReason: max_tokens`. Round two (PR #104) covered the initial call and added
+the test. See the [README](README.md) for what each one does and why.
 
 ## Live state worth knowing
 
-- **Chat `dashboard:1787596504860` (agent `elon-strategy`) is poisoned in
-  production right now.** Its stored turn 5 is an empty assistant turn. It will
-  heal by itself once change 1 is deployed; until then that chat cannot
-  produce a reply. Chat `dashboard:1787588514367` showed the same user-facing
-  symptom earlier the same day.
-- **Production output ceiling is still 1024** until this ships. Any request
-  that makes the model emit a document spec will keep truncating and keep
-  poisoning its chat.
+- **One PDF has now been generated in production** — 2026-08-24 01:48:51, 1,612
+  bytes, 138 ms, chat `dashboard:1787622506151`, agent `main`. That log line
+  (`msg: "document generated"`, `format: pdf`) had never existed before.
+- **DOCX and XLSX have still never been generated in production.** Proving those
+  two is the last outstanding item of the original bar.
+- Chat `dashboard:1787596504860` was poisoned and should now heal on read.
+  Whether it has actually produced a successful turn since the deploy was not
+  confirmed at the time of writing.
+- **Documents are still capped at roughly 10–12 pages** by the 8192-token
+  ceiling. Larger requests truncate cleanly rather than fatally.
 
 ## Open, not addressed here
 
