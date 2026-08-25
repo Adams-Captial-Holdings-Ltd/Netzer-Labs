@@ -12,7 +12,7 @@
  * missed.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { tryAcquirePanic, converseStreamTurnWithFallback, writeAudit } = vi.hoisted(() => ({
   tryAcquirePanic: vi.fn(),
