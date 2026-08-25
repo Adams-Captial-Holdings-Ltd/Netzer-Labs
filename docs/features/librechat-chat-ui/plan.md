@@ -75,37 +75,80 @@ Each phase is gated by a builder + separate blind critic comparing against the
 frozen LibreChat screenshot bar AND the product's own pages; a phase closes
 only when the critic picks ours. A dated session handoff closes every phase.
 
-- **CHATUI-000 — Phase 0: scaffolding + extraction.** Golden tests, lib/chat
-  extraction (zero visual change), dev mock-SSE Vite plugin + fixtures behind
-  `CCE_CHAT_MOCK=1`, frozen LibreChat bar screenshots, baseline recorded.
-  **Work state.** in_progress
-- **CHATUI-001 — Phase 1: theming foundation.** Alpha tokens, `.chat-md`
-  code-block chrome + scoped hljs palette, `highlight.js` dep, white-label
-  support. Chat-chunk bundle delta ≤ 70 KB gzip.
-  **Work state.** approved
-- **CHATUI-002 — Phase 2: layout shell + header.** Open canvas, shared column,
-  ChatHeader overlay; tour anchors and NEW CHAT dialog unchanged.
-  **Work state.** approved
-- **CHATUI-003 — Phase 3: message list.** MessageRow port, event renderings,
-  scroll behavior, streaming states. Includes **Phase 3b**: ToolCallsSection
-  (decision 3 above).
-  **Work state.** approved
-- **CHATUI-004 — Phase 4: composer.** Autosize card, Send↔Stop with abort
-  keeping partial text, attachments, identical disabled logic.
-  **Work state.** approved
-- **CHATUI-005 — Phase 5: agent + model picker.** CommandMenu/AgentMenu/
-  ModelMenu; gate includes the roll-call: every active agent and every model
-  plus "Agent default" reachable and selectable; deep-link preselect;
-  keyboard-only selection.
-  **Work state.** approved
-- **CHATUI-006 — Phase 6: conversation sidebar.** Date groups, delete flow
-  preserved, desktop collapse + minimal mobile drawer.
-  **Work state.** approved
-- **CHATUI-007 — Phase 7: polish, docs, ship.** Full validation suite, doc
-  owners refreshed (`delete-chat`, `persistent-workspaces`,
-  `paperclip/bar-and-phases.md` line pins), PR → `development`, promote
-  `qa` → `staging`, staging QA, final full-journey blind critic.
-  **Work state.** approved
+### CHATUI-000 — Phase 0: scaffolding + extraction
+
+Golden tests, lib/chat extraction (zero visual change), dev mock-SSE Vite
+plugin + fixtures behind `CCE_CHAT_MOCK=1`, frozen LibreChat bar screenshots,
+baseline recorded.
+
+```yaml
+work_state: in_progress
+```
+
+### CHATUI-001 — Phase 1: theming foundation
+
+Alpha tokens, `.chat-md` code-block chrome + scoped hljs palette,
+`highlight.js` dep, white-label support. Chat-chunk bundle delta ≤ 70 KB gzip.
+
+```yaml
+work_state: approved
+```
+
+### CHATUI-002 — Phase 2: layout shell + header
+
+Open canvas, shared column, ChatHeader overlay; tour anchors and NEW CHAT
+dialog unchanged.
+
+```yaml
+work_state: approved
+```
+
+### CHATUI-003 — Phase 3: message list
+
+MessageRow port, event renderings, scroll behavior, streaming states. Includes
+Phase 3b: ToolCallsSection (decision 3 above).
+
+```yaml
+work_state: approved
+```
+
+### CHATUI-004 — Phase 4: composer
+
+Autosize card, Send↔Stop with abort keeping partial text, attachments,
+identical disabled logic.
+
+```yaml
+work_state: approved
+```
+
+### CHATUI-005 — Phase 5: agent + model picker
+
+CommandMenu/AgentMenu/ModelMenu; gate includes the roll-call: every active
+agent and every model plus "Agent default" reachable and selectable; deep-link
+preselect; keyboard-only selection.
+
+```yaml
+work_state: approved
+```
+
+### CHATUI-006 — Phase 6: conversation sidebar
+
+Date groups, delete flow preserved, desktop collapse + minimal mobile drawer.
+
+```yaml
+work_state: approved
+```
+
+### CHATUI-007 — Phase 7: polish, docs, ship
+
+Full validation suite, doc owners refreshed (`delete-chat`,
+`persistent-workspaces`, `paperclip/bar-and-phases.md` line pins),
+PR → `development`, promote `qa` → `staging`, staging QA, final full-journey
+blind critic.
+
+```yaml
+work_state: approved
+```
 
 ## Verification
 
