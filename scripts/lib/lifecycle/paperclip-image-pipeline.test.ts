@@ -1061,15 +1061,17 @@ describe('Paperclip environment-scoped provisioning override (.github/workflows/
   const STAGING_EXPR =
     "${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && '1' || '' }}";
 
-  it('is set at WORKFLOW scope, from the same staging expression as CCE_TIER', () => {
-    // Workflow scope, not step scope, and that is the load-bearing part: the
-    // "Resolve the Paperclip tier gate" step reads this to emit the ONE boolean
-    // the ECR-repo create, the image build, the secret populate and the
-    // migration all gate on. A step-scoped override would leave that gate
-    // answering 0 while the CDK deploy provisioned Aurora — a service pinned to
-    // an image CI never built, the M22 shape one layer down.
-    const header = WORKFLOW.slice(0, WORKFLOW.indexOf('jobs:'));
-    expect(header).toContain(`${OVERRIDE}: ${STAGING_EXPR}`);
+  it('is set at DEPLOY JOB scope, from the same staging expression as CCE_TIER', () => {
+    // Job scope, not workflow or step scope, is the load-bearing boundary: all
+    // deploy steps (including the tier gate) inherit it, while the verify job
+    // still tests the repository's default unconfigured tier behaviour.
+    const verifyJob = WORKFLOW.slice(WORKFLOW.indexOf('\n  verify:'), WORKFLOW.indexOf('\n  deploy:'));
+    const deployHeader = WORKFLOW.slice(
+      WORKFLOW.indexOf('\n  deploy:'),
+      WORKFLOW.indexOf('\n    steps:', WORKFLOW.indexOf('\n  deploy:')),
+    );
+    expect(verifyJob).not.toContain(`${OVERRIDE}:`);
+    expect(deployHeader).toContain(`${OVERRIDE}: ${STAGING_EXPR}`);
     // Same staging test CCE_TIER uses, so a production dispatch cannot pick it
     // up — and NOT derived from CCE_TIER, which would make it a tier flag.
     expect(WORKFLOW).not.toContain(`${OVERRIDE}: \${{ env.CCE_TIER`);
@@ -1085,7 +1087,7 @@ describe('Paperclip environment-scoped provisioning override (.github/workflows/
     // '0' — an OFF value is what let a green deploy land with no Aurora behind
     // it, and this variable has none.
     expect(WORKFLOW).not.toContain(`${OVERRIDE}: '0'`);
-    // Exactly two ASSIGNMENTS: the workflow env block and the CDK deploy step.
+    // Exactly two ASSIGNMENTS: the deploy-job env block and the CDK deploy step.
     // A third would be a step quietly answering the provisioning question for
     // itself, which is how the four hand-copied `CCE_TIER != '0'` gates the
     // tier-gate step replaced got out of step with the table in the first place.
