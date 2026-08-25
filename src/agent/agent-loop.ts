@@ -59,7 +59,8 @@ import {
 const TOOL_TURN_LIMIT = 8;
 
 /**
- * Output-token ceiling for a tool-loop round.
+ * Output-token ceiling for EVERY model call in a turn — the initial streamed
+ * call and each tool-loop round alike.
  *
  * 1024 was too low to emit a document: `generate_document` needs the entire
  * spec inline as tool-call JSON, so a real report ran past the ceiling and came
@@ -67,10 +68,15 @@ const TOOL_TURN_LIMIT = 8;
  * what made PDF, DOCX and XLSX all appear broken at once — the ceiling is
  * shared, the libraries were never the problem.
  *
+ * It must be passed to the INITIAL call too, not just the tool loop. Raising
+ * only the loop left the first call falling through to `?? 1024` in
+ * `lib/bedrock/client.ts`, and for a turn that never reaches tool use that is
+ * the only call there is — so the truncation survived the first fix.
+ *
  * Spend is bounded by the daily cost cap, not by this; the cap is the control
  * that actually stops runaway cost.
  */
-const TOOL_LOOP_MAX_TOKENS = 8192;
+const TURN_MAX_TOKENS = 8192;
 
 export interface AttachmentBlock {
   /** image or document */
@@ -810,6 +816,7 @@ async function runAdmittedTurn(
       userText: req.userText,
       userContent,
       history: turnsToMessages(cleanHistory),
+      maxTokens: TURN_MAX_TOKENS,
       guardrail:
         effectiveGuardrailId && effectiveGuardrailId !== 'REPLACE_ME'
           ? { id: effectiveGuardrailId, version: guardrailVersion }
@@ -956,8 +963,8 @@ async function runAdmittedTurn(
           // converseStreamTurn already learned this and recorded the model), so
           // the tool-dispatch turns don't re-trip the ValidationException.
           inferenceConfig: modelRejectsTemperature(modelId)
-            ? { maxTokens: TOOL_LOOP_MAX_TOKENS }
-            : { maxTokens: TOOL_LOOP_MAX_TOKENS, temperature: 0.7 },
+            ? { maxTokens: TURN_MAX_TOKENS }
+            : { maxTokens: TURN_MAX_TOKENS, temperature: 0.7 },
           ...(invocation.anthropicBeta
             ? { additionalModelRequestFields: { anthropic_beta: invocation.anthropicBeta } }
             : {}),
@@ -1092,8 +1099,8 @@ async function runAdmittedTurn(
             system: cachedSystem,
             messages: synthMessages,
             inferenceConfig: modelRejectsTemperature(modelId)
-              ? { maxTokens: TOOL_LOOP_MAX_TOKENS }
-              : { maxTokens: TOOL_LOOP_MAX_TOKENS, temperature: 0.7 },
+              ? { maxTokens: TURN_MAX_TOKENS }
+              : { maxTokens: TURN_MAX_TOKENS, temperature: 0.7 },
             ...(invocation.anthropicBeta
               ? { additionalModelRequestFields: { anthropic_beta: invocation.anthropicBeta } }
               : {}),
