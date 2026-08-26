@@ -3,7 +3,7 @@ feature: knowledge-scope-fanout
 document_role: handoff
 status: current
 observed_at: 2026-08-25
-as_of_commit: 9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2
+as_of_commit: 0072dde
 ---
 
 # Knowledge scope fan-out handoff
@@ -16,9 +16,10 @@ as_of_commit: 9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2
   [branch mapping](../../../development.md#branch-to-environment-mapping),
   `fix/*` and `development` both deploy nothing. Staging resources were used for
   verification only and the fixture was removed.
-- **Pushed:** no. **PR:** none. **Deployed:** no.
+- **Pushed:** yes. **PR:** #115 into `development`. **Deployed:** no.
 - **Commits:** `476e25b` (scope resolution), `ded9dd3` (interim docs),
-  `c3d27bb` (the three-corpus fan-out), `9bfbd97` (per-corpus reporting).
+  `c3d27bb` (the three-corpus fan-out), `9bfbd97` (per-corpus reporting),
+  `3c8ef67` (docs), `0072dde` (harness tracked, development.md corrected).
 
 **The feature is complete.** The fan-out is proven end to end; the per-corpus
 reporting added in `9bfbd97` is unit-proven but has **not** been seen against
@@ -49,7 +50,7 @@ three and reported no error at all — the silent failure this work exists to ki
 | Check | Result |
 |---|---|
 | End-to-end retrieval harness, on `c3d27bb` | **PASS** — three HITs, fixture self-cleaned, exit 0 |
-| End-to-end retrieval harness, on `9bfbd97` | **NOT RUN** — AWS session expired; see below |
+| End-to-end retrieval harness, on `0072dde` | **PASS** — three HITs, new kept/found output confirmed live, fixture self-cleaned |
 | `npx vitest run src/lib/tools/vector-tools.scope.test.ts` | pass, 13/13 |
 | `npx vitest run src/lib/config/agent-loader.scope.test.ts` | pass, 4/4 |
 | Mutation: drop `default` from the scopes list | 3 tests fail, as they must |
@@ -67,23 +68,56 @@ three and reported no error at all — the silent failure this work exists to ki
 `npm run local:test:integration` was **not run** — Docker is unavailable on this
 machine. It is a pre-push gate and must run in CI before anyone pushes.
 
-## What is not yet proven
+## Production reality, measured 2026-08-26
 
-The harness has not run since `c3d27bb`. `9bfbd97` changes only the text the
-tool returns and adds one log line — it does not touch the scope list, the
-fan-out, the merge, or the ranking — so retrieval behaviour is unchanged by
-construction and the earlier proof still covers it. What has **not** been
-observed live is the new output string itself.
+Two claims made earlier in this work were wrong and are corrected here.
 
-**First action for the next session: `aws login`, then re-run the harness.**
+**The bug is latent in production, not active.** All seven production agents —
+`audre-compliance`, `elon-strategy`, `imani-benefits-advisory`,
+`jada-marketing`, `main`, `malik-business-risk-advisory`,
+`tasha-client-services` — have a `CLAUDE.md` object. The loader defect only
+bites an agent that has an `agent.yaml` and **no** `CLAUDE.md`, so no production
+agent is affected today. What was confirmed earlier was that the buggy *code*
+ships in production, which is not the same as a user being harmed by it. The fix
+is protection against the next agent created without a prompt file, not a repair
+of live damage.
 
-On the full `npm test`: it showed 7 failed files against a documented baseline of
-5. The two extra, `authz-matrix.test.ts` and `durability.repro.test.ts`, both
-pass in isolation and are not regressions. The cause was then established rather
-than assumed — `durability.repro.test.ts` writes to the real staging bucket and
-fails the moment the AWS session lapses. **`npm test` here is not hermetic and
-needs live AWS credentials**, which means a red run cannot currently be
-distinguished from an expired login. Worth fixing on its own account.
+**There is no stranded corpus.** `index/default/` in
+`claudeclaw-vectors-239887088812-us-east-1` holds **zero objects**. The populated
+scopes are all per-agent plus `shared`. A review had raised that documents
+ingested during the bug window would have landed in `default` and would become
+fleet-readable when this ships — a real mechanism, since both write paths
+(`ingest_document` at `vector-tools.ts:46` and `resolveChatIngestScope` at
+`chat-kb-ingest.ts:66`) fall back to `DEFAULT_KNOWLEDGE_SCOPE`. It does not
+materialise here because nothing was ever written there. Re-check this before
+any future promotion; it is cheap and it is the only irreversible risk in the
+change.
+
+A consequence worth stating: because `default` is empty, the fan-out returns
+nothing new in production today. Its value is prospective.
+
+## `npm test` cannot give a signal on this machine
+
+Not merely non-hermetic — **nondeterministic in both directions**, measured:
+
+| Code under test | Credentials | Failing tests, consecutive runs |
+|---|---|---|
+| base `06ebe1c` | none | 5 files / 1 test |
+| this branch | none | 7 files / 4 tests |
+| base `06ebe1c` | live | 3, then 5, then 1 |
+| this branch | live | 6, then 5 |
+
+The base range covers this branch's range. Two distinct credential-dependent
+classes are at work: `durability.repro.test.ts` writes to the real staging
+bucket and fails **without** credentials, while four dashboard tests
+(`cost-cap`, `jarvis.flow`, `test-turn-attachments`, `authz-matrix`) make real
+AWS calls against a 5-second test timeout and fail **with** them, depending on
+latency and machine load. Every one of those four has **zero** references to
+`loadAgent`, `agent-loader`, or `vector-tools`, so this change cannot reach
+them, and they fail on the untouched base commit too.
+
+`development.md` previously listed `npm test` as safe to run locally. `0072dde`
+corrects that.
 
 ## The next action
 
@@ -113,13 +147,12 @@ Two things belong in the PR body:
       exactly three documents. Suggested fix: a per-scope floor, or a test
       pinning per-scope representation in the merged result. Deliberately not
       fixed here, to keep the change small.
-- [ ] **The harness is untracked.** `e2e-three-corpus.ts` at the repository root
-      is the only thing that can prove this feature, and it is not in the repo,
-      not in CI, and not registered on `development.md`'s dangerous-commands list
-      despite touching real AWS. Committing it needs that registration, which is
-      a `development.md` edit requiring approval.
-      Run it with `AWS_PROFILE=netzer-process npx tsx e2e-three-corpus.ts`; it
-      provisions and deletes its own fixture and touches staging only.
+- [x] **The harness is tracked.** Now at `scripts/e2e-three-corpus.ts` and
+      registered on `development.md`'s dangerous-commands list, in `0072dde`.
+      Run it with `AWS_PROFILE=netzer-process npx tsx scripts/e2e-three-corpus.ts`;
+      it provisions and deletes its own fixture and touches staging only.
+- [ ] **Nobody runs it but a human.** It is still not in CI, so the only proof
+      this feature works is a command someone has to remember to type.
 - [ ] **Gap report against `development.md` § AWS safety**, filed and **not**
       applied. Layer 4 claims the machine has no `~/.aws` directory; it now does,
       so isolation rests on three layers rather than four. Running the harness

@@ -3,7 +3,7 @@ feature: knowledge-scope-fanout
 document_role: index
 status: current
 observed_at: 2026-08-25
-as_of_commit: 9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2
+as_of_commit: 0072dde
 implemented_by:
   - src/lib/config/agent-loader.ts
   - src/lib/tools/vector-tools.ts
@@ -25,7 +25,7 @@ setting has to be toggled to reach different knowledge.
 That is now true and proven by real retrieval, not only by unit test. Read the
 volatile [HANDOFF](HANDOFF.md) for where the work sits; source code is the
 ultimate truth for present behaviour. This index describes the verified snapshot
-at `9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2` on the unmerged branch
+at `0072dde` on the unmerged branch
 `fix/knowledge-scope-fanout`.
 
 ## 2. What It Does Today
@@ -60,7 +60,7 @@ scope, resolved server-side.
 
 ## 3. Current Status And Source Commit
 
-Claims are verified at `9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2` by two kinds of
+Claims are verified at `0072dde` by two kinds of
 evidence. Source evidence: the tests in section 8, including mutation checks run
 by a reviewer other than the author. Behavioural evidence: a real end-to-end
 retrieval against staging infrastructure — one fixture agent, one question, three
@@ -73,7 +73,11 @@ unmerged `fix/*` branch, which per the
 nowhere. Staging resources were used for verification only; the fixture was
 removed afterwards.
 
-The scope-resolution defect was also confirmed present in `origin/production`.
+The scope-resolution defect is present in `origin/production` as **code**, but no
+production agent is affected by it: all seven have a `CLAUDE.md`, and the defect
+only bites an agent that has an `agent.yaml` without one. Production's
+`index/default/` is also empty, so the fan-out returns nothing new there today.
+Both measured 2026-08-26; see [HANDOFF](HANDOFF.md).
 
 ## 4. Source Of Truth Table
 
@@ -117,7 +121,7 @@ The scope-resolution defect was also confirmed present in `origin/production`.
 | Risk | Evidence | Status |
 |---|---|---|
 | Top-K is shared across three corpora, so an agent's own passages can be evicted by higher-scoring `default` ones | `vector-tools.ts` queries each scope with the same `topK` and slices the merged set back to `topK`. Default `topK` is 5 | **Observable, not eliminated.** The ranking is deliberately unchanged — one blended relevance order is the point, and reserving slots per corpus would return a less relevant passage over a more relevant one. `9bfbd97` makes eviction visible in the tool output and in a structured log line, so its real rate can be measured rather than guessed. Raise `topK`, or add a per-scope floor, only once that number says it is needed |
-| Everything in `default` is now readable by every agent, including agents with a private scope | The fan-out list | **Accepted and intended.** It also makes an accidentally mis-filed document retrievable rather than lost |
+| Everything in `default` is now readable by every agent, including agents with a private scope | The fan-out list | **Accepted and intended.** Both write paths fall back to `default`, so documents ingested during the loader-bug window would land there and become fleet-readable on deploy. Measured 2026-08-26: production `index/default/` is empty, so nothing is exposed. **Re-check before any future promotion** — it is cheap and it is the only irreversible risk here |
 | A transient config-load failure pins an agent to `default` for the cache TTL | `agent-loader.ts` caches negative results unconditionally | **Open, deferred** — distinct defect, self-healing |
 | `resolveChatIngestScope` silently redirects a chat-dropped document to `default` | `src/lib/media/chat-kb-ingest.ts` bare `catch` | **Open, deferred** — consumer of `loadAgent`, inherits the fix, and less harmful now that `default` is universally readable |
 | The `default` corpus was unreachable from any agent with its own scope | Former two-scope fan-out | **Closed** in `c3d27bb`, pinned by the table-driven guard |
