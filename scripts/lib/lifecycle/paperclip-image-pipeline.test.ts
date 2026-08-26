@@ -537,6 +537,11 @@ describe('the CI entry point is a CLI over cloud-build.ts, not a second build', 
     expect(CLI).toContain("const PAPERCLIP_CONTEXT = 'vendor/paperclip'");
   });
 
+  it('bootstraps the same state bucket baseline as the local deploy driver', () => {
+    expect(CLI).toContain('ensureStateBucket(new S3Client({ region }), stateBucket, region)');
+    expect(CLI).toContain("from '../lib/lifecycle/bootstrap-state.js'");
+  });
+
   it('keeps the content tag and the skip, matching scripts/deploy.ts', () => {
     expect(CLI).toContain("contentImageTag(repoRoot, PAPERCLIP_CONTEXT, 'paperclip')");
     expect(CLI).toContain('(build skipped)');
@@ -823,7 +828,7 @@ describe('ClaudeClawGitHubDeploy can actually reach the Paperclip ECR repo', () 
     });
   });
 
-  it('can stage the source zip in THIS environment’s state bucket', () => {
+  it('can create, harden and stage into THIS environment’s state bucket', () => {
     const st = statement('PaperclipCloudBuildSource');
     // Bucket names come from the real resolver, not a literal restated here.
     for (const suffix of ['', 'staging']) {
@@ -841,7 +846,20 @@ describe('ClaudeClawGitHubDeploy can actually reach the Paperclip ECR repo', () 
       // deploy manifests and journals live in the same bucket.
       expect(covers(st, `arn:aws:s3:::${stateBucket}/manifests/latest.json`)).toBe(false);
     }
-    expect(st.Action as string[]).toContain('s3:PutObject');
+    for (const action of [
+      's3:CreateBucket',
+      's3:ListBucket',
+      's3:GetBucketVersioning',
+      's3:GetEncryptionConfiguration',
+      's3:GetBucketPublicAccessBlock',
+      's3:PutBucketVersioning',
+      's3:PutEncryptionConfiguration',
+      's3:PutBucketPublicAccessBlock',
+      's3:PutBucketTagging',
+      's3:PutObject',
+    ]) {
+      expect(st.Action as string[]).toContain(action);
+    }
   });
 
   it('can tail a FAILED build’s logs, read-only', () => {
@@ -992,6 +1010,24 @@ describe('Paperclip first install (.github/workflows/deploy.yml)', () => {
         WORKFLOW.indexOf(`      - name: ${consumer}`),
       );
     }
+  });
+
+  it('creates the unchanged secret before merge-adding company_id', () => {
+    const early = workflowStep('Apply IAM grants before Paperclip operations');
+    const populate = workflowStep('Populate Paperclip secret');
+    expect(early).toContain('${{ steps.cfg.outputs.stack_name }}-Storage');
+    expect(early).toContain('${{ steps.cfg.outputs.stack_name }}-Secrets');
+    expect(populate).toContain('has("company_id")');
+    expect(populate).toContain(".company_id = \"REPLACE_ME\"");
+    expect(populate).toContain('missing after the early Storage/Secrets deploy');
+
+    const earlyAt = WORKFLOW.indexOf(
+      '      - name: Apply IAM grants before Paperclip operations',
+    );
+    const populateAt = WORKFLOW.indexOf('      - name: Populate Paperclip secret');
+    const deployAt = WORKFLOW.indexOf('      - name: CDK deploy');
+    expect(earlyAt).toBeLessThan(populateAt);
+    expect(populateAt).toBeLessThan(deployAt);
   });
 
   it('never exits 1 for a state a first install is guaranteed to be in', () => {

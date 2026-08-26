@@ -152,7 +152,8 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
       // never has to re-authorize the tunnel.
       cloudflareTunnel: `/${app}/cloudflare-tunnel`,
       // Paperclip work engine (ADR 0010): operator-populated fields
-      // (better_auth_secret, reconciler_key, agent_keys, dispatch_secret).
+      // (better_auth_secret, reconciler_key, agent_keys, dispatch_secret,
+      // company_id).
       // The Aurora-generated DB credentials live in their own secret below.
       paperclip: `/${app}/paperclip`,
       paperclipDb: `/${app}/paperclip-db`,
