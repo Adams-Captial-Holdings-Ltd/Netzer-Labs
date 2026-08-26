@@ -14,6 +14,7 @@ import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
 import { tools } from './registry.js';
 import { embedOne } from '../vectors/embedder.js';
 import { search, type QueryHit } from '../vectors/store.js';
+import { logger } from '../../observability/logger.js';
 import { ingestDocument } from '../vectors/ingest.js';
 import {
   loadAgent,
@@ -55,7 +56,7 @@ tools.register('s3_vectors_search', {
         scope: {
           type: 'string',
           description:
-            "Optional narrowing override. When omitted, this agent searches its own knowledge scope plus the shared corpus. Only those two scopes may be named here; other agents' scopes are not searchable.",
+            "Optional narrowing override. When omitted, this agent searches all three corpora it can read: its own knowledge scope, the default corpus, and the shared corpus. Naming one of those three narrows the search to just it; other agents' scopes are not searchable.",
         },
         tag_filter: {
           type: 'array',
@@ -80,7 +81,7 @@ tools.register('s3_vectors_search', {
 
     // Resolve the agent's own knowledge scope first. A model-supplied `scope`
     // may only narrow the search to a corpus this agent is already entitled
-    // to (its own scope or the shared one); accepting arbitrary names here
+    // to (one of the three corpora in the list below); accepting arbitrary names here
     // would let a prompted agent read another agent's private corpus.
     let ownScope = DEFAULT_KNOWLEDGE_SCOPE;
     if (ctx.agentId) {
@@ -94,21 +95,19 @@ tools.register('s3_vectors_search', {
         };
       }
     }
-    let primaryScope = ownScope;
+    // One list is both the fan-out and the read allowlist, so the two cannot
+    // drift. The Set de-dups when the agent's own scope is itself the default
+    // or the shared corpus, so no corpus is ever scanned twice.
+    let scopes = [...new Set([ownScope, DEFAULT_KNOWLEDGE_SCOPE, SHARED_KNOWLEDGE_SCOPE])];
     if (typeof args.scope === 'string' && args.scope) {
-      if (args.scope !== ownScope && args.scope !== SHARED_KNOWLEDGE_SCOPE) {
+      if (!scopes.includes(args.scope)) {
         return {
-          text: `Scope '${args.scope}' is not searchable from this agent. Allowed: '${ownScope}' or '${SHARED_KNOWLEDGE_SCOPE}'.`,
+          text: `Scope '${args.scope}' is not searchable from this agent. Allowed: ${scopes.map((s) => `'${s}'`).join(', ')}.`,
           isError: true,
         };
       }
-      primaryScope = args.scope;
+      scopes = [args.scope];
     }
-    // De-dup so we don't scan the same corpus twice when an agent's own scope
-    // is already "shared" (or the caller pointed scope at the shared corpus).
-    const scopes = primaryScope === SHARED_KNOWLEDGE_SCOPE
-      ? [SHARED_KNOWLEDGE_SCOPE]
-      : [primaryScope, SHARED_KNOWLEDGE_SCOPE];
 
     let queryEmbedding: number[];
     try {
@@ -144,12 +143,40 @@ tools.register('s3_vectors_search', {
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
 
-    const scopeLabel = scopes.join("' + '");
+    // Report what each corpus OFFERED and what SURVIVED the merge. One blended
+    // ranking lets a large corpus take every slot, so `0/4` (had matches, lost
+    // the ranking) and `0/0` (empty or misresolved corpus) are different facts.
+    // A single count collapses them, reinstating one layer up the silent-corpus
+    // defect this fan-out exists to kill.
+    //
+    // Counted by chunkId, never by comparing scope strings: `scopes` holds raw
+    // agent.yaml values ('agent:ops') while metadata.scope holds the folded form
+    // ('agent_ops'), because ingest.ts normalizes before putDocument stamps it.
+    // A string compare would print 0 directly above passages visibly tagged with
+    // that very scope.
+    const keptIds = new Set(hits.map((h) => h.row.chunkId));
+    const contrib = scopes.map((scope, i) => ({
+      scope,
+      found: perScope[i].length,
+      kept: perScope[i].filter((h) => keptIds.has(h.row.chunkId)).length,
+    }));
+    logger.info(
+      { agentId: ctx.agentId, ownScope, topK, scoreFloor, contrib },
+      'vector search fan-out',
+    );
+
     if (hits.length === 0) {
+      // Name the filters that were in force; do not assert a cause. The old
+      // message blamed the user's phrasing for what may be an unread corpus.
+      const tags =
+        tagFilter && tagFilter.length > 0 ? ` and tags ${tagFilter.join(', ')}` : '';
       return {
-        text: `No relevant passages in scope '${scopeLabel}' (try a broader phrasing or ingest more docs).`,
+        text: `No passages scored at or above ${scoreFloor}${tags} in ${scopes
+          .map((s) => `'${s}'`)
+          .join(', ')}.`,
       };
     }
+    const tally = contrib.map((c) => `${c.scope} ${c.kept}/${c.found}`).join(', ');
     const lines = hits.map((h, idx) => {
       const m = h.row.metadata;
       const cite = m.docTitle ?? m.source ?? m.docId;
@@ -157,7 +184,7 @@ tools.register('s3_vectors_search', {
       return `[${idx + 1}] (${h.score.toFixed(3)}) ${cite}${loc} #${m.chunkIndex} <${m.scope}>\n${h.row.text.trim()}`;
     });
     return {
-      text: `${hits.length} passages from '${scopeLabel}':\n\n${lines.join('\n\n')}`,
+      text: `${hits.length} passages, kept/found per corpus: ${tally}\n\n${lines.join('\n\n')}`,
     };
   },
 });
