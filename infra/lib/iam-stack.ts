@@ -1028,6 +1028,18 @@ export class IamStack extends Stack implements IamOutputs {
           ],
         }),
       );
+      // Secrets Manager performs the read-modify-write above through the
+      // customer-managed data key. GetSecretValue therefore needs Decrypt,
+      // while PutSecretValue needs GenerateDataKey. Keep this separate from
+      // the secret ARN statement because KMS actions must target the key ARN.
+      cicdRole.addToPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipSecretKmsData',
+          effect: Effect.ALLOW,
+          actions: ['kms:Decrypt', 'kms:GenerateDataKey'],
+          resources: [props.storage.dataKey.keyArn],
+        }),
+      );
       // The one-shot schema migration (phase b.5's CI mirror). RunTask is
       // scoped to the migrate FAMILY only - not the service family - so this
       // role can start a migration and nothing else. DescribeTasks is how the
@@ -1257,6 +1269,14 @@ export class IamStack extends Stack implements IamOutputs {
           resources: [
             `arn:aws:secretsmanager:${this.region}:${this.account}:secret:/claudeclaw-staging/paperclip*`,
           ],
+        }),
+      );
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipSecretKmsDataStaging',
+          effect: Effect.ALLOW,
+          actions: ['kms:Decrypt', 'kms:GenerateDataKey'],
+          resources: [props.storage.dataKey.keyArn],
         }),
       );
       deployRoleRef.addToPrincipalPolicy(

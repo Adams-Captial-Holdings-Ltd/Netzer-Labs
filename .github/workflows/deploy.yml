@@ -521,7 +521,8 @@ jobs:
               *)
                 echo "::error::Could not read $SECRET; refusing to guess."
                 echo "The deploy role needs secretsmanager:GetSecretValue and PutSecretValue" >&2
-                echo "on $SECRET and $DB_SECRET. Read the LIVE role before granting (M34)." >&2
+                echo "on $SECRET and $DB_SECRET, plus kms:Decrypt and kms:GenerateDataKey" >&2
+                echo "on their customer-managed data key. Read the LIVE role before granting (M34)." >&2
                 exit 1
                 ;;
             esac
