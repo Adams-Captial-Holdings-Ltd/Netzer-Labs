@@ -953,6 +953,11 @@ describe('deploy role grants for the CI Paperclip steps (M34)', () => {
     ]);
     expect(resourcesOf(s)).toContain(':secret:/claudeclaw/paperclip*');
     expect(resourcesOf(s)).toContain(':secret:/claudeclaw-*/paperclip*');
+
+    const kms = bySid(prod, 'PaperclipSecretKmsData');
+    expect(actionsOf(kms).sort()).toEqual(['kms:Decrypt', 'kms:GenerateDataKey']);
+    expect(Array.isArray(kms.Resource) ? kms.Resource : [kms.Resource]).toHaveLength(1);
+    expect(resourcesOf(kms)).toMatch(/DataKey/i);
   });
 
   it('mirrors that grant into the STAGING branch, narrowed to staging', () => {
@@ -965,6 +970,11 @@ describe('deploy role grants for the CI Paperclip steps (M34)', () => {
     expect(resourcesOf(s)).toContain(':secret:/claudeclaw-staging/paperclip*');
     // It must NOT reach production's secret from the staging stack.
     expect(resourcesOf(s)).not.toContain(':secret:/claudeclaw/paperclip');
+
+    const kms = bySid(staging, 'PaperclipSecretKmsDataStaging');
+    expect(actionsOf(kms).sort()).toEqual(['kms:Decrypt', 'kms:GenerateDataKey']);
+    expect(Array.isArray(kms.Resource) ? kms.Resource : [kms.Resource]).toHaveLength(1);
+    expect(resourcesOf(kms)).toMatch(/DataKey/i);
   });
 
   it('scopes RunTask to the MIGRATE family, never the service family', () => {
