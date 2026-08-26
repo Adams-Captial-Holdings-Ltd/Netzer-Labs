@@ -1,5 +1,5 @@
 ---
-feature: netzer-chat
+feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-08-25
@@ -12,7 +12,7 @@ implemented_by:
 tested_by:
   - src/lib/jarvis/route-manifest.test.ts
 approved_work:
-  - docs/features/netzer-chat/plan.md
+  - docs/features/netzar-chat/plan.md
 ---
 
 # LibreChat chat UI port
@@ -32,7 +32,7 @@ carry a header comment naming this SHA and the donor path. LibreChat is the
 visual/structural donor only; no LibreChat runtime code, state library, or data
 layer is used.
 
-## 2. What netzer-chat does today
+## 2. What netzar-chat does today
 
 Today the Chat tab is a single 838-line component (`web/src/pages/Chat.tsx`)
 with a basic bubble UI. The port decomposes it into `web/src/lib/chat/*`
@@ -55,7 +55,7 @@ backend.
 
 ## 3. Current status and current source commit
 
-Planned and in progress on branch `feature/netzer-chat`, based on
+Planned and in progress on branch `feature/netzar-chat`, based on
 `development` at `06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710`. This is source
 evidence only; nothing is deployed.
 
