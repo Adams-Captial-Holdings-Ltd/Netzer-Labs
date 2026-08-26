@@ -1,5 +1,5 @@
 ---
-feature: librechat-chat-ui
+feature: netzer-chat
 document_role: handoff
 status: current
 observed_at: 2026-08-25
@@ -8,10 +8,10 @@ as_of_commit: 554656e7289f407f2e7ad6ddcf14261964168739
 
 # LibreChat chat UI port handoff
 
-- Branch: `feature/librechat-chat-ui` (canonical checkout: the full clone at
+- Branch: `feature/netzer-chat` (canonical checkout: the full clone at
   `C:\dev\_netzer-librechat` — NOT a linked worktree, see ledger M6; a
   reference copy of this docs folder also sits untracked in
-  `C:\dev\Netzer-Labs\docs\features\librechat-chat-ui\`); merge target:
+  `C:\dev\Netzer-Labs\docs\features\netzer-chat\`); merge target:
   `development`.
 - Pushed: no. PR: none. Deployment: none (staging comes only via the
   `development → qa → staging` promotion after merge).

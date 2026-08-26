@@ -1,5 +1,5 @@
 ---
-feature: librechat-chat-ui
+feature: netzer-chat
 document_role: session-handoff
 status: current
 observed_at: 2026-08-25
@@ -15,8 +15,8 @@ supersedes: 2026-08-25-phase-0-scaffolding.md
 | Field | Value |
 |---|---|
 | Session started | 2026-08-25 |
-| Feature folder | `docs/features/librechat-chat-ui/` |
-| Branch worked on | `feature/librechat-chat-ui` |
+| Feature folder | `docs/features/netzer-chat/` |
+| Branch worked on | `feature/netzer-chat` |
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710` |
@@ -149,7 +149,7 @@ JSX is character-identical after the refactor.
 | M6 | Targeted Vitest was run inside a Windows **linked worktree**. | Startup failed with `Cannot read directory "../../../../../../../.."` and could not resolve `vitest.config.ts`; no tests collected. | Ran from a normal checkout instead. | On Windows, run test suites from a normal clone. Dependency-free Node CI scripts are fine in a worktree; Vitest is not. |
 | M7 | `npm run test:integration:up` was assumed safe alongside the local stack. | It starts LocalStack on port 4566 and collides with Floci. Two emulators must never run at once. | Use `npm run local:test:integration`, which passes `--env-file=.env`. | One emulator on 4566, ever. |
 | M8 | `.env` was created for local development while several lifecycle scripts default their environment flag to **prod** and read `.env`. | Commands that were previously inert became genuinely dangerous. | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally). | Read that list before running any unfamiliar `npm run` script. |
-| M9 | A linked worktree was created under `.worktrees/` for this feature before re-reading M6. | Wasted setup; a locked `node_modules` left an orphaned directory `.worktrees/librechat-chat-ui` in the main checkout pending manual deletion. | Abandoned; full clone at `C:\dev\_netzer-librechat` used instead. | Read the ledger before environment setup, not after. |
+| M9 | A linked worktree was created under `.worktrees/` for this feature before re-reading M6. | Wasted setup; a locked `node_modules` left an orphaned directory `.worktrees/netzer-chat` in the main checkout pending manual deletion. | Abandoned; full clone at `C:\dev\_netzer-librechat` used instead. | Read the ledger before environment setup, not after. |
 
 ### 5.3 Standing assumptions
 
@@ -203,7 +203,7 @@ Phase 1 of the port plan (first visual phase). Phase 0 leaves no loose ends.
 ### 6.4 Deferred, and why
 
 - `AgentDetail.tsx` ChatTab restyle — out of scope per plan; noted for the PR body.
-- Orphaned dir `C:\dev\Netzer-Labs\.worktrees\librechat-chat-ui` (file lock) — delete when the lock clears; git already pruned it.
+- Orphaned dir `C:\dev\Netzer-Labs\.worktrees\netzer-chat` (file lock) — delete when the lock clears; git already pruned it.
 - highlight.js in `renderMarkdown` — explicitly a later phase; not added.
 - `npm run local:test:integration` — pre-push gate; this session commits locally
   and does not push. Whoever pushes runs it first (P2: recorded as NOT run).

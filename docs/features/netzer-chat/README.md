@@ -1,5 +1,5 @@
 ---
-feature: librechat-chat-ui
+feature: netzer-chat
 document_role: index
 status: current
 observed_at: 2026-08-25
@@ -12,7 +12,7 @@ implemented_by:
 tested_by:
   - src/lib/jarvis/route-manifest.test.ts
 approved_work:
-  - docs/features/librechat-chat-ui/plan.md
+  - docs/features/netzer-chat/plan.md
 ---
 
 # LibreChat chat UI port
@@ -32,7 +32,7 @@ carry a header comment naming this SHA and the donor path. LibreChat is the
 visual/structural donor only; no LibreChat runtime code, state library, or data
 layer is used.
 
-## 2. What librechat-chat-ui does today
+## 2. What netzer-chat does today
 
 Today the Chat tab is a single 838-line component (`web/src/pages/Chat.tsx`)
 with a basic bubble UI. The port decomposes it into `web/src/lib/chat/*`
@@ -55,7 +55,7 @@ backend.
 
 ## 3. Current status and current source commit
 
-Planned and in progress on branch `feature/librechat-chat-ui`, based on
+Planned and in progress on branch `feature/netzer-chat`, based on
 `development` at `06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710`. This is source
 evidence only; nothing is deployed.
 
@@ -157,3 +157,23 @@ Fixed translation table used by every ported file (critics judge against it):
 Style bar: the app's Linear/Vercel/Stripe language (violet-tinted neutrals,
 indigo accent, hairline borders, whisper shadows). Never the Jarvis HUD
 language; never LibreChat's stock gray palette.
+
+### Syntax-highlighting palette (Phase 1)
+
+The donor hand-writes its highlight.js theme in `client/src/style.css` as five
+token groups plus a comment/meta pair, once for light and once under `.dark`.
+The port keeps that *structure* and retints every value from this app's own
+primitive ramps, so a code block reads as Netzar rather than as LibreChat:
+
+| highlight.js group | Donor (light / dark) | This app (light / dark) |
+|---|---|---|
+| `comment`, `meta` | grays | `--color-text-muted` / same |
+| `keyword`, `literal`, `doctag`, `formula` | `#0550ae` / `#2e95d3` | indigo 600 `#4f46e5` / indigo 300 `#a5b4fc` |
+| `string`, `attribute`, `regexp`, `addition` | `#0a7b62` / `#00a67d` | green 600 `#16a34a` / green 400 `#4ade80` |
+| `built_in`, `class .title` | `#9a6700` / `#e9950c` | amber 500 `#f59e0b` / amber 400 `#fbbf24` |
+| `attr`, `number`, `type`, `variable` | `#9a2f6a` / `#df3079` | pink 500 `#ec4899` / pink 500 `#ec4899` |
+| `title`, `link`, `symbol`, `bullet` | `#b42318` / `#f22c3d` | red 600 `#dc2626` / red 400 `#f87171` |
+
+All six rules are scoped under `.chat-md` so they cannot leak into any other
+surface, and they are appended rather than edited into the existing block —
+WarRoom and Playground share `.chat-md` and must render unchanged.

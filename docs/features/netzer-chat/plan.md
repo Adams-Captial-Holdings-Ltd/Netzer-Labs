@@ -1,5 +1,5 @@
 ---
-feature: librechat-chat-ui
+feature: netzer-chat
 document_role: backlog
 status: accepted
 observed_at: 2026-08-25

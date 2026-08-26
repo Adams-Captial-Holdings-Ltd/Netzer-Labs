@@ -1,5 +1,5 @@
 ---
-feature: librechat-chat-ui
+feature: netzer-chat
 document_role: session-handoff
 status: current
 observed_at: 2026-08-25
@@ -15,8 +15,8 @@ supersedes: none
 | Field | Value |
 |---|---|
 | Session started | 2026-08-25 |
-| Feature folder | `docs/features/librechat-chat-ui/` |
-| Branch worked on | `feature/librechat-chat-ui` |
+| Feature folder | `docs/features/netzer-chat/` |
+| Branch worked on | `feature/netzer-chat` |
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710` |
@@ -103,7 +103,7 @@ code as unproven until the checks in §6.2 pass.
 
 | File | Change | Rationale |
 |---|---|---|
-| `docs/features/librechat-chat-ui/*` | Created | Framework requirement before code |
+| `docs/features/netzer-chat/*` | Created | Framework requirement before code |
 
 ### 4.3 Decisions made
 
@@ -117,7 +117,7 @@ code as unproven until the checks in §6.2 pass.
 
 | Fact learned | Promoted into | Done |
 |---|---|---|
-| Token mapping table + donor pin | `docs/features/librechat-chat-ui/README.md` | yes |
+| Token mapping table + donor pin | `docs/features/netzer-chat/README.md` | yes |
 
 ## 5. Carried-forward mistakes, assumptions and precautions
 
@@ -150,7 +150,7 @@ code as unproven until the checks in §6.2 pass.
 | M6 | Targeted Vitest was run inside a Windows **linked worktree**. | Startup failed with `Cannot read directory "../../../../../../../.."` and could not resolve `vitest.config.ts`; no tests collected. | Ran from a normal checkout instead. | On Windows, run test suites from a normal clone. Dependency-free Node CI scripts are fine in a worktree; Vitest is not. |
 | M7 | `npm run test:integration:up` was assumed safe alongside the local stack. | It starts LocalStack on port 4566 and collides with Floci. Two emulators must never run at once. | Use `npm run local:test:integration`, which passes `--env-file=.env`. | One emulator on 4566, ever. |
 | M8 | `.env` was created for local development while several lifecycle scripts default their environment flag to **prod** and read `.env`. | Commands that were previously inert became genuinely dangerous. | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally). | Read that list before running any unfamiliar `npm run` script. |
-| M9 | *(this session)* A linked worktree was created under `.worktrees/` for this feature before re-reading M6. | Wasted setup; a locked `node_modules` left an orphaned directory `.worktrees/librechat-chat-ui` in the main checkout pending manual deletion. | Abandoned; full clone at `C:\dev\_netzer-librechat` used instead. | Read the ledger before environment setup, not after. |
+| M9 | *(this session)* A linked worktree was created under `.worktrees/` for this feature before re-reading M6. | Wasted setup; a locked `node_modules` left an orphaned directory `.worktrees/netzer-chat` in the main checkout pending manual deletion. | Abandoned; full clone at `C:\dev\_netzer-librechat` used instead. | Read the ledger before environment setup, not after. |
 
 ### 5.3 Standing assumptions
 
@@ -218,7 +218,7 @@ Verify the builder's uncommitted Phase-0 extraction: from
 ### 6.4 Deferred, and why
 
 - `AgentDetail.tsx` ChatTab restyle — out of scope per plan; noted for the PR body.
-- Orphaned dir `C:\dev\Netzer-Labs\.worktrees\librechat-chat-ui` (file lock) — delete when the lock clears; git already pruned it.
+- Orphaned dir `C:\dev\Netzer-Labs\.worktrees\netzer-chat` (file lock) — delete when the lock clears; git already pruned it.
 
 ## 7. Verification actually performed
 
@@ -271,13 +271,13 @@ any "after changes" claim until re-run.
 - **Uncommitted work left in the tree**: (a) the main checkout
   `C:\dev\Netzer-Labs` carries someone's in-flight `feature/paperclip-phase-1-5`
   work (modified CLAUDE.md + untracked handoffs) — untouched per P6; note its
-  `.worktrees/librechat-chat-ui` orphan directory is file-locked leftovers from
+  `.worktrees/netzer-chat` orphan directory is file-locked leftovers from
   the abandoned worktree (git already pruned it) — delete when unlocked;
   (b) THIS clone's working tree holds the builder's uncommitted Phase-0
   extraction (§2) plus this docs folder — commit docs first, extraction only
   after verification. A reference COPY of this docs folder exists (untracked)
-  at `C:\dev\Netzer-Labs\docs\features\librechat-chat-ui\` for discoverability;
-  the clone's copy on `feature/librechat-chat-ui` is canonical.
+  at `C:\dev\Netzer-Labs\docs\features\netzer-chat\` for discoverability;
+  the clone's copy on `feature/netzer-chat` is canonical.
 
 ## 9. Related documents
 
