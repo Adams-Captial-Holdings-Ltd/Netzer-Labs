@@ -80,6 +80,20 @@
     --color-warning-dim: rgba(245, 158, 11, 0.12);
     --color-info: #06b6d4;
 
+    /* ── Alpha-capable mirrors of the semantic tokens (light mode) ──
+       Space-separated RGB triplets, NOT colors: they exist so Tailwind can
+       compose `rgb(var(--x-rgb) / <alpha-value>)` and opacity modifiers such
+       as `bg-primary-a/10` actually emit CSS (the raw `var()` tokens above
+       cannot — Tailwind has nowhere to inject the alpha). The paired `-a` keys
+       live in web/tailwind.config.ts. Each triplet MUST track its parent token
+       above, and applyBrand() co-writes --color-primary-rgb so white-label
+       brands stay in sync (web/src/lib/theme.ts). */
+    --color-primary-rgb: 99 102 241;   /* --color-primary  #6366f1 */
+    --color-bg-rgb: 250 250 250;       /* --color-bg       #fafafa */
+    --color-surface-rgb: 255 255 255;  /* --color-surface  #ffffff */
+    --color-danger-rgb: 239 68 68;     /* --color-danger   #ef4444 */
+    --color-border-rgb: 228 228 236;   /* --color-border   #e4e4ec */
+
     /* ── Shadows ── */
     --shadow-xs: 0 1px 2px rgba(0,0,0,0.05);
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
@@ -131,6 +145,16 @@
     --color-danger-dim: rgba(239, 68, 68, 0.15);
     --color-warning: #fbbf24;
     --color-warning-dim: rgba(245, 158, 11, 0.15);
+
+    /* Dark mirrors of the alpha triplets. These MUST be re-declared here (not
+       inherited from :root) because the dark palette re-tunes their parents:
+       the primary lifts to indigo 400 and the danger to red 400 so they read on
+       a near-black surface. */
+    --color-primary-rgb: 129 140 248;  /* --color-primary  #818cf8 */
+    --color-bg-rgb: 10 10 15;          /* --color-bg       #0a0a0f */
+    --color-surface-rgb: 20 20 32;     /* --color-surface  #141420 */
+    --color-danger-rgb: 248 113 113;   /* --color-danger   #f87171 */
+    --color-border-rgb: 42 42 61;      /* --color-border   #2a2a3d */
 
     --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
@@ -355,3 +379,293 @@
   text-align: left;
 }
 .chat-md th { background: var(--color-surface-elevated); font-weight: 600; }
+
+/* ── Chat code blocks (CHATUI-001) ────────────────────────────────────────
+   STRICTLY ADDITIVE. `.chat-md` is shared with WarRoom and Playground, so not
+   one rule above is edited or removed. Everything below either targets a NEW
+   class that only the chat renderer emits (`.chat-code*`, the `.hljs-*` groups)
+   or out-specifies an existing rule from inside that new class — so a surface
+   that does not render the chrome keeps today's exact markdown.
+
+   Structure ported from danny-avila/LibreChat (MIT), pinned at commit
+   6d499ba3ce17f906a7762429c61018f230ecd64e —
+   client/src/components/Messages/Content/{CodeBlock,CodeBar}.tsx: rounded
+   hairline container, a bar with the language on the left and actions on the
+   right, then a body that scrolls horizontally on its own. Every colour is one
+   of this app's tokens; no donor palette survives. */
+
+.chat-md .chat-code {
+  margin: 0 0 var(--space-3);
+  max-width: 100%;
+  /* The bubble is `bg-surface`; the block steps one level up so it reads as a
+     panel rather than as loose text, in both themes. */
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  /* Clips the bar's corners to the container radius AND stops a long line from
+     widening the bubble — the body, not the page, does the scrolling. */
+  overflow: hidden;
+}
+
+.chat-md .chat-code__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 5px 6px 5px var(--space-3);
+  /* A whisper of the brand hue, via the alpha triplet: follows light/dark and
+     any white-label primary without a second hardcoded value. */
+  background: rgb(var(--color-primary-rgb) / 0.06);
+  border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.chat-md .chat-code__lang {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  /* A fence info string is author-controlled; never let it push the button out. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-md .chat-code__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 7px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.chat-md .chat-code__copy:hover {
+  background: rgb(var(--color-primary-rgb) / 0.12);
+  color: var(--color-primary);
+}
+/* Set by the delegated copy handler for ~1.6s after a successful copy. */
+.chat-md .chat-code__copy[data-copied='true'] { color: var(--color-success); }
+.chat-md .chat-code__copy[data-copied='false'] { color: var(--color-danger); }
+.chat-md .chat-code__copy-icon { flex: none; }
+
+/* Out-specifies `.chat-md pre` (0,1,1 vs 0,2,1) instead of editing it: inside
+   the chrome the frame belongs to the container, so the pre contributes only
+   padding and its own horizontal scroll. */
+.chat-md .chat-code > pre {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.chat-md .chat-code > pre > code {
+  display: block;
+  /* Long lines scroll the body rather than wrapping — matches the donor and
+     keeps indentation readable. */
+  white-space: pre;
+  min-width: 0;
+}
+
+/* ── Inline code chips ──
+   Distinct from a block: a small brand-tinted chip, not a grey panel. Out-
+   specifies `.chat-md code` (0,1,2 vs 0,1,1) and leaves `pre > code` alone. */
+.chat-md :not(pre) > code {
+  background: rgb(var(--color-primary-rgb) / 0.10);
+  border-color: rgb(var(--color-primary-rgb) / 0.22);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+/* ── One token, one pill (CHATUI-003) ──
+   A chip is an OBJECT, and an object does not come in halves. Left to the
+   inherited prose wrapping, `sha-9b3e07` in a narrow column broke after the
+   hyphen and painted as TWO chips — a box ending "sha-" at the right margin
+   and a second box opening "9b3e07" on the next line — which reads as two
+   values where the agent reported one. On a governance surface that is not a
+   cosmetic defect: `sha-4f2a1c` and `sha-9b3e07` are the whole point of the
+   sentence they sit in.
+
+   Three separate wrap opportunities have to be closed, which is why this is
+   four declarations and not one:
+
+     white-space: nowrap   the guarantee. Nothing below it can reintroduce a
+                           break INSIDE the chip.
+     word-break: keep-all  kills the break the hyphen offers on its own. U+002D
+                           is a normal break opportunity in every engine — this
+                           is the one that actually fired in the capture.
+     overflow-wrap: normal cancels the `overflow-wrap: anywhere` the chip
+                           inherits from `.chat-md`, which otherwise licenses a
+                           break between any two characters under pressure.
+     hyphens: none         stops an engine with `hyphens: auto` in scope from
+                           adding a soft hyphen of its own.
+
+   A NEW rule rather than four lines added to the block above: `.chat-md` is
+   shared with WarRoom and Playground, and this file's rule is that nothing
+   already written here is edited. Same specificity, later in the cascade, and
+   no property collides with the chip's colours anyway.
+
+   The pathological case — a single token wider than the whole column — is
+   handled by the canvas, which is `overflow-x-hidden` (ChatCanvas): the chip
+   stays ONE box and is clipped at the column edge, and the page does not gain
+   a horizontal scrollbar (measured at 375 and 1280: a 139-character chip
+   yields one client rect and `documentElement.scrollWidth == clientWidth`).
+
+   The obvious upgrade — make the pill `display: inline-block` so `max-width`
+   and `overflow-x: auto` apply and a monster token scrolls inside itself — was
+   measured and rejected. An inline-block pill stops being a zero-height inline
+   box, so its vertical padding and border start counting toward the line box:
+   the chip grows 19px → 24.8px and a paragraph containing one grows 135.2px →
+   151.9px. Every line with a chip in it would sit taller than every line
+   without, which is the transcript's rhythm — the thing this phase is judged
+   on — traded away to improve a case the fixtures do not contain. Worse, a
+   scrolling inline-block has its baseline synthesised as the bottom margin
+   edge, so the chip's text lands 4px off the line it sits in. Clipping one
+   rare monster token beats splitting every ordinary one AND beats making every
+   ordinary line taller. */
+.chat-md :not(pre) > code {
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  hyphens: none;
+}
+
+/* ── highlight.js palette, scoped to .chat-md ──
+   The donor hand-writes its hljs theme as five token groups plus a
+   comment/meta pair, once for light and once for dark. Same structure, every
+   value retinted from this app's own primitive ramps (see the
+   "Syntax-highlighting palette" table in docs/features/netzar-chat/README.md).
+   Scoping to `.chat-md` keeps it off every other surface; the primitives are
+   declared once in :root and inherited by .dark. */
+
+/* comment / meta */
+.chat-md .hljs-comment,
+.chat-md .hljs-meta { color: var(--color-text-muted); }
+
+/* keyword / literal / doctag / formula → indigo */
+.chat-md .hljs-keyword,
+.chat-md .hljs-literal,
+.chat-md .hljs-doctag,
+.chat-md .hljs-formula { color: var(--color-indigo-600); }
+
+/* string / attribute / regexp / addition → green */
+.chat-md .hljs-string,
+.chat-md .hljs-attribute,
+.chat-md .hljs-regexp,
+.chat-md .hljs-addition { color: var(--color-green-600); }
+
+/* attr / number / type / variable → pink */
+.chat-md .hljs-attr,
+.chat-md .hljs-number,
+.chat-md .hljs-type,
+.chat-md .hljs-variable { color: var(--color-pink-500); }
+
+/* title / link / symbol / bullet → red */
+.chat-md .hljs-title,
+.chat-md .hljs-link,
+.chat-md .hljs-symbol,
+.chat-md .hljs-bullet { color: var(--color-red-600); }
+
+/* built_in / class title → amber. Listed after the title group, and more
+   specific than it, so a class name wins amber over the red `title` rule.
+   `.hljs-title.class_` is highlight.js 11's spelling of the donor's
+   `.hljs-class .hljs-title`; both are matched. */
+.chat-md .hljs-built_in,
+.chat-md .hljs-class .hljs-title,
+.chat-md .hljs-title.class_ { color: var(--color-amber-500); }
+
+/* Dark: same six groups, lifted to the ramp steps that read on a near-black
+   panel. comment/meta needs no entry — --color-text-muted re-tunes itself. */
+.dark .chat-md .hljs-keyword,
+.dark .chat-md .hljs-literal,
+.dark .chat-md .hljs-doctag,
+.dark .chat-md .hljs-formula { color: var(--color-indigo-300); }
+
+.dark .chat-md .hljs-string,
+.dark .chat-md .hljs-attribute,
+.dark .chat-md .hljs-regexp,
+.dark .chat-md .hljs-addition { color: var(--color-green-400); }
+
+.dark .chat-md .hljs-attr,
+.dark .chat-md .hljs-number,
+.dark .chat-md .hljs-type,
+.dark .chat-md .hljs-variable { color: var(--color-pink-500); }
+
+.dark .chat-md .hljs-title,
+.dark .chat-md .hljs-link,
+.dark .chat-md .hljs-symbol,
+.dark .chat-md .hljs-bullet { color: var(--color-red-400); }
+
+.dark .chat-md .hljs-built_in,
+.dark .chat-md .hljs-class .hljs-title,
+.dark .chat-md .hljs-title.class_ { color: var(--color-amber-400); }
+
+/* ── Live streaming caret (CHATUI-003) ────────────────────────────────────
+   STRICTLY ADDITIVE, like the block above. `.chat-streaming` is a NEW class
+   that ONLY the in-flight assistant row adds alongside `.chat-md`
+   (web/src/components/chat/StreamingRow.tsx); WarRoom and Playground never
+   emit it, so their markdown is untouched — and not one rule above is edited.
+
+   Why a `::after` on the last block instead of a sibling <span>: markdown ends
+   in a block-level element, so a caret rendered next to the rendered HTML
+   always lands on a line of its own, a full line-height below the text it is
+   supposed to be trailing. Hanging it off the last child puts it immediately
+   after the final glyph, the way a terminal cursor sits.
+
+   Why a selector LIST rather than one rule: `> :last-child` is not always the
+   element holding the last glyph. Through most of a streaming markdown turn the
+   reply is mid-list, so the last child is the <ul>/<ol> — and a caret on the
+   list container draws a full line BELOW the final bullet instead of after its
+   text (seen at the `2. The tool_use switc▌` frame). The extra selectors step
+   one level in for the containers where that matters, and the first rule
+   excludes those same containers so the caret is never drawn twice.
+
+   `pre` and `.chat-code` get no caret at all: a fenced block is a bordered
+   panel with `overflow: hidden`, so anything hung inside it draws as a stray
+   bar under the code rather than as a cursor. `table` is excluded for the same
+   family of reason — an inline box appended to a `display: table` element lands
+   in an anonymous wrapper of its own. A turn whose last block is code or a
+   table simply shows no caret for those few frames.
+
+   Under `prefers-reduced-motion` the global rule in the base layer zeroes the
+   animation duration, which leaves the caret STEADY rather than removing it —
+   the indicator that a turn is still streaming survives, only the blink goes.
+
+   The blink bottoms out at 0.2, NOT at 0. A terminal caret is allowed to
+   vanish because a terminal has a prompt, a shell and a cursor position all
+   saying the session is alive; here the caret is the only mark inside the reply
+   that says this turn is still running. At `opacity: 0` it is absent for half
+   of every second, which is both a worse signal and unshootable evidence — the
+   round-2 dark-mobile streaming capture landed in a trough frame and recorded a
+   live turn with no caret in it at all. Fading to a fifth still reads as a
+   blink in motion and leaves a mark on screen in every frame. */
+.chat-md.chat-streaming > :last-child:not(pre):not(.chat-code):not(ul):not(ol):not(blockquote):not(table)::after,
+.chat-md.chat-streaming > ul:last-child > li:last-child::after,
+.chat-md.chat-streaming > ol:last-child > li:last-child::after,
+.chat-md.chat-streaming > blockquote:last-child > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--color-primary);
+  animation: chat-caret 1s step-end infinite;
+}
+
+@keyframes chat-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}

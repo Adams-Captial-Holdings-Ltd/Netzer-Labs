@@ -4,7 +4,7 @@ import { Trash2 } from 'lucide-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
 import type { Agent, Conversation, Message, Model } from '../lib/chat/types';
 import {
-  modelOptionLabel,
+  MODEL_NAMES,
   freshChatId,
   storedChatId,
   rememberChatId,
@@ -12,20 +12,38 @@ import {
   relativeAge,
   friendlyStreamError,
 } from '../lib/chat/helpers';
-import { renderMarkdown } from '../lib/chat/markdown';
+import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
 import { stageAttachments } from '../lib/chat/uploads';
 import { Button } from '../components/Button';
-import { Select } from '../components/Select';
-import { EmptyState } from '../components/EmptyState';
-import { EmptyChat } from '../components/Icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { InfoTooltip } from '../components/InfoTooltip';
 import { toast } from '../components/Toast';
+import { ChatCanvas } from '../components/chat/ChatCanvas';
+import { ChatHeader } from '../components/chat/ChatHeader';
+import { ChatLanding } from '../components/chat/ChatLanding';
+import { MessagesView } from '../components/chat/MessagesView';
+import { ScrollToBottom } from '../components/chat/ScrollToBottom';
+import { useChatScroll } from '../components/chat/useChatScroll';
 
 // The chat data/transport layer lives in ../lib/chat (types, helpers,
 // markdown, stream, uploads) — extracted verbatim from this file in Phase 0 of
-// the chat UI port. This page owns state and rendering only.
+// the chat UI port. This page owns state and composition only; the shell it
+// composes (overlay header, scrolling column, landing) lives in
+// ../components/chat (Phase 2), and the transcript itself — turn rendering,
+// the live row, the tool timeline, scroll behaviour — lives there too as of
+// Phase 3 (CHATUI-003).
+
+// What <Button variant="secondary" size="md"> emits, verbatim (see
+// ../components/Button.tsx). The two composer controls that need an
+// `aria-label` or a QA hook render as native <button>s — the shared component
+// forwards neither — and this constant is what keeps them pixel-identical to
+// every other secondary button in the app.
+const COMPOSER_BTN =
+  'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-normal ' +
+  'bg-surface border border-border text-primary hover:bg-surface-hover ' +
+  'px-4 py-2 text-body-sm gap-2 ' +
+  'disabled:opacity-50 disabled:cursor-not-allowed ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2';
 
 export function Chat() {
   const [, params] = useRoute('/chat/:agentId');
@@ -41,6 +59,17 @@ export function Chat() {
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
+  // Epoch ms the in-flight turn was dispatched. The live row counts up from it,
+  // which is the difference between "something is happening" and "this has been
+  // running for 40 seconds" — the caret alone cannot say which.
+  const [streamStartedAt, setStreamStartedAt] = useState(0);
+  // The cumulative text as of the LAST chunk, readable synchronously. `send()`
+  // closes over `streamText` at the value it had when the turn started (''), so
+  // the state is useless to the abort path — and the abort path is precisely
+  // where the partial answer has to be recovered and kept.
+  const streamTextRef = useRef('');
+  // Aborts the in-flight turn (the composer's Stop control). Null when idle.
+  const abortRef = useRef<AbortController | null>(null);
   // Live tool-call status, mirroring Telegram/Slack (CLAUDE.md "Chat surface
   // parity"). Shown while the agent works a tool; cleared when text resumes.
   const [toolStatus, setToolStatus] = useState('');
@@ -64,10 +93,31 @@ export function Chat() {
   // Set when the initial /agents load fails, so the tab shows WHY it's empty
   // instead of a silently dead chat (send() early-returns without an agent).
   const [loadError, setLoadError] = useState('');
+  // Painted height of the overlay header (opaque plate + mask-fade), reported
+  // by ChatHeader's own ResizeObserver. It becomes the transcript's top
+  // padding, so a message is never laid out underneath the plate. 0 = not yet
+  // measured, in which case the CSS fallback on the canvas stands.
+  const [headerHeight, setHeaderHeight] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Focused after a landing starter chip drops its text into the composer, so
+  // the caret is already where the user will keep typing.
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Stick to the end of a streaming answer, let go the moment the reader
+  // scrolls away, and offer them a way back. The rules (and why the attach and
+  // detach thresholds differ) are documented in the hook.
+  const { scrollRef, endRef, showJump, jumpToBottom } = useChatScroll({
+    // Every value that changes the transcript's height, in one string: a turn
+    // committed, another cumulative chunk, a tool status appearing or clearing.
+    revision: `${messages.length}:${streamText.length}:${toolStatus.length}`,
+    streaming,
+  });
 
   useEffect(() => {
+    // Code blocks are injected as sanitized HTML, so their copy buttons cannot
+    // carry a Preact handler. One delegated document listener serves every
+    // block on the page; the call is idempotent.
+    installChatCodeCopy();
     api.get<{ agents: Agent[] }>('/agents').then((d) => {
       const active = d.agents.filter((a) => a.status === 'active');
       setAgents(active);
@@ -90,10 +140,6 @@ export function Chat() {
       // log it so it isn't invisible when debugging.
       .catch((e) => { console.error('Chat: failed to load models', e); });
   }, []);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamText]);
 
   // Conversation sidebar. /sessions with an agentId is a single Query on
   // PK=AGENT#<id> (without it the route Scans the whole table), so always
@@ -241,7 +287,11 @@ export function Chat() {
     setMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
     setStreamText('');
+    streamTextRef.current = '';
     setToolStatus('');
+    setStreamStartedAt(Date.now());
+    const abort = new AbortController();
+    abortRef.current = abort;
 
     try {
       const token = getToken();
@@ -262,7 +312,13 @@ export function Chat() {
           ...(attachments.length > 0 ? { attachments } : {}),
         },
         token,
-        { onChunk: setStreamText, onToolStatus: setToolStatus },
+        {
+          onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
+          onToolStatus: setToolStatus,
+        },
+        // Stop is the only thing this signal does; every other exit path from
+        // streamTurn is unchanged.
+        { signal: abort.signal },
       );
 
       if (outcome.errorText) {
@@ -273,8 +329,10 @@ export function Chat() {
         const partial = (!outcome.isReply && outcome.text) ? `${outcome.text}\n\n${msg}` : msg;
         setMessages((prev) => [...prev, { role: 'assistant', text: partial, ts: Date.now() / 1000, error: true }]);
         setStreamText('');
+        streamTextRef.current = '';
         setToolStatus('');
         setStreaming(false);
+        abortRef.current = null;
         return;
       }
 
@@ -289,6 +347,32 @@ export function Chat() {
         ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
       }]);
     } catch (e) {
+      // Stop, not a failure. streamTurn rejects with an AbortError the moment
+      // the reader hits Stop, and the partial answer is theirs to keep: commit
+      // whatever text had arrived as a settled turn instead of throwing it away
+      // (and instead of dressing a deliberate cancel up as a red error bubble).
+      //
+      // No `tools` on a stopped turn: streamTurn's accumulator is local to the
+      // call that just rejected, and reaching into lib/chat to hand it out
+      // early would change a module pinned by the golden tests. No `meta`
+      // either — the run never reached `final`, so AssistantMessage renders the
+      // StoppedFooter in the footer slot rather than inventing numbers.
+      if ((e as { name?: string } | null)?.name === 'AbortError') {
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          text: streamTextRef.current,
+          ts: Date.now() / 1000,
+          stopped: true,
+        }]);
+        setStreamText('');
+        streamTextRef.current = '';
+        setToolStatus('');
+        setStreaming(false);
+        abortRef.current = null;
+        clearApiCache();
+        void refreshConversations(agentId);
+        return;
+      }
       // Log the raw cause for debugging, but render only sanitized copy: the
       // transcript must never show raw exception text (backend response bodies,
       // URLs). friendlyStreamError is the same sanitizer the mid-stream SSE
@@ -300,8 +384,10 @@ export function Chat() {
       setMessages((prev) => [...prev, { role: 'assistant', text: msg, ts: Date.now() / 1000, error: true }]);
     }
     setStreamText('');
+    streamTextRef.current = '';
     setToolStatus('');
     setStreaming(false);
+    abortRef.current = null;
     // Surface the conversation in the sidebar (and refresh its preview/age).
     // send() uses a raw fetch rather than the api wrapper, so nothing has
     // invalidated the 60s GET cache — clear it or /sessions returns a stale
@@ -310,9 +396,21 @@ export function Chat() {
     void refreshConversations(agentId);
   }
 
+  // Cancel the turn in flight. The abort travels through streamTurn's optional
+  // signal to the underlying fetch, which rejects the read; send()'s catch
+  // recognises the AbortError and commits the partial answer instead of
+  // discarding it. Idempotent — a second click on an already-aborted controller
+  // is a no-op, and `abortRef` is nulled on every exit path.
+  function stopStreaming() {
+    abortRef.current?.abort();
+  }
+
+  // Phase 6 (CHATUI-006) restyles this into the donor's date-grouped sidebar.
+  // Phase 2 only re-seats it in the full-bleed canvas: the page padding it used
+  // to sit inside is gone, so the panel now carries its own.
   const historyPanel = (
     <aside
-      class="hidden lg:flex lg:flex-col w-64 shrink-0 border-r border-border pr-3 mr-4 overflow-y-auto"
+      class="hidden lg:flex lg:flex-col w-64 shrink-0 border-r border-border px-3 py-4 overflow-y-auto"
       aria-label="Conversation history"
     >
       <div class="flex items-center justify-between mb-2">
@@ -369,167 +467,34 @@ export function Chat() {
     </aside>
   );
 
-  return (
-    <div class="flex h-[calc(100vh-var(--header-height)-3rem)]">
-      {historyPanel}
-      <div class="flex flex-col flex-1 min-w-0">
-      <div class="flex items-center gap-3 mb-4 flex-wrap">
-        <h1 class="text-display-sm text-primary font-bold" data-tour="chat-title">Chat</h1>
-        <span data-tour="chat-agent-picker">
-          <Select
-            value={agentId}
-            onChange={selectAgent}
-            options={agents.map((a) => ({ value: a.id, label: a.displayName }))}
-          />
-        </span>
-        {models.length > 0 && (
-          <span data-tour="chat-model-picker">
-            <Select
-              value={modelId}
-              onChange={setModelId}
-              options={[
-                { value: '', label: 'Agent default' },
-                ...models.map((m) => ({ value: m.id, label: modelOptionLabel(m) })),
-              ]}
-            />
-          </span>
-        )}
-        <div class="ml-auto flex items-center gap-2" data-tour="chat-new-chat">
-          <span class="hidden sm:inline-flex items-center gap-1 text-caption text-muted font-mono">
-            {chatId}
-            <InfoTooltip term="dashboard:" />
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={streaming}
-            onClick={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
-          >
-            New chat
-          </Button>
-        </div>
-      </div>
+  const agentName = agents.find((a) => a.id === agentId)?.displayName ?? 'agent';
+  const activeModel = models.find((m) => m.id === modelId);
+  const modelLabel = activeModel
+    ? (MODEL_NAMES[activeModel.label] ?? activeModel.label)
+    : 'the agent default';
 
-      {loadError && agents.length === 0 && (
-        <div class="mb-3 text-caption text-danger bg-danger/10 border border-danger/40 rounded-lg px-3 py-2">
-          {loadError}
-        </div>
-      )}
+  // Header title: the sidebar's label for this conversation once the server
+  // knows it, else the opening line already on screen, else "New chat".
+  // conversationTitle() falls back to the raw chatId — fine as a sidebar
+  // label, wrong as a heading, so that case falls through too.
+  const activeConversation = conversations.find((c) => c.chatId === chatId);
+  const sidebarTitle = activeConversation ? conversationTitle(activeConversation) : '';
+  const firstUserLine = messages.find((m) => m.role === 'user')?.text.split('\n')[0]?.trim();
+  const headerTitle =
+    (sidebarTitle && sidebarTitle !== chatId ? sidebarTitle : firstUserLine) || 'New chat';
 
-      <div class="flex-1 overflow-y-auto bg-bg-sunken rounded-xl border border-border p-4 space-y-4" data-tour="chat-messages">
-        {messages.length === 0 && !streaming && (
-          <EmptyState
-            icon={<EmptyChat />}
-            title="Start a conversation"
-            description="Send a message to test your agent's behavior."
-          />
-        )}
-        {messages.map((m, i) => (
-          <div key={i} class={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div class={`max-w-[75%] rounded-xl px-4 py-3 text-body-sm
-              ${m.role === 'user'
-                ? 'bg-primary text-inverse rounded-br-sm'
-                : m.error
-                  ? 'bg-danger/10 border border-danger/40 text-danger rounded-bl-sm'
-                  : 'bg-surface border border-border text-primary rounded-bl-sm'}`}>
-              {m.role === 'assistant'
-                ? (m.error
-                    ? <pre class="whitespace-pre-wrap font-sans break-words">{m.text}</pre>
-                    : <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />)
-                : <pre class="whitespace-pre-wrap font-sans break-words">{m.text}</pre>}
-              {m.images && m.images.length > 0 && (
-                <div class="mt-2 space-y-2">
-                  {m.images.map((im, j) => (
-                    <a key={j} href={im.url} target="_blank" rel="noopener noreferrer" class="block">
-                      <img
-                        src={im.url}
-                        alt={im.caption || 'generated image'}
-                        class="rounded-lg border border-border max-w-full max-h-96"
-                        loading="lazy"
-                      />
-                    </a>
-                  ))}
-                </div>
-              )}
-              {m.artifacts && m.artifacts.length > 0 && (
-                <div class="mt-2 space-y-2">
-                  {m.artifacts.map((a, j) => (
-                    <a
-                      key={j}
-                      href={a.url}
-                      download={a.name}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 hover:bg-surface-hover transition-colors duration-fast"
-                    >
-                      <span class="text-overline uppercase tracking-wider text-muted shrink-0">
-                        {(a.name.split('.').pop() || 'file').slice(0, 4)}
-                      </span>
-                      <span class="text-body-sm text-primary truncate">{a.name}</span>
-                      <span class="text-caption text-secondary ml-auto shrink-0">Download</span>
-                    </a>
-                  ))}
-                </div>
-              )}
-              {m.kb && m.kb.length > 0 && (
-                <div class="mt-2 space-y-1">
-                  {m.kb.map((k, j) => (
-                    <div key={j} class="text-caption text-secondary bg-bg-sunken border border-border rounded-lg px-2 py-1">
-                      {k}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {m.meta && (
-                // Run footer: model · latency · cost · tools. Same metadata the
-                // Telegram/Slack footers show (CLAUDE.md "Chat surface parity").
-                <div class="mt-2 text-caption text-muted font-mono">
-                  {[
-                    m.meta.modelId ? m.meta.modelId.split('.').pop() : null,
-                    `${Math.round(m.meta.latencyMs)}ms`,
-                    `$${m.meta.costUsd.toFixed(4)}`,
-                    m.meta.toolCallCount > 0
-                      ? `${m.meta.toolCallCount} tool${m.meta.toolCallCount === 1 ? '' : 's'}`
-                      : null,
-                  ].filter(Boolean).join(' · ')}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {streaming && streamText && (
-          <div class="flex justify-start">
-            <div class="max-w-[75%] rounded-xl rounded-bl-sm px-4 py-3 bg-surface border border-border text-body-sm">
-              <div class="chat-md break-words text-primary" dangerouslySetInnerHTML={{ __html: renderMarkdown(streamText) }} />
-              <span class="inline-block w-2 h-4 bg-primary/50 animate-pulse ml-0.5" />
-            </div>
-          </div>
-        )}
-        {streaming && !streamText && toolStatus && (
-          <div class="flex justify-start">
-            <div class="rounded-xl rounded-bl-sm px-4 py-3 bg-surface border border-border text-body-sm text-secondary flex items-center gap-2">
-              <span>⚙️</span>
-              <span>{toolStatus}</span>
-              <span class="inline-block w-2 h-4 bg-primary/40 animate-pulse" />
-            </div>
-          </div>
-        )}
-        {streaming && !streamText && !toolStatus && (
-          <div class="flex justify-start">
-            <div class="rounded-xl rounded-bl-sm px-4 py-3 bg-surface border border-border">
-              <div class="flex gap-1">
-                <span class="w-2 h-2 bg-muted rounded-full animate-bounce" style="animation-delay: 0ms" />
-                <span class="w-2 h-2 bg-muted rounded-full animate-bounce" style="animation-delay: 150ms" />
-                <span class="w-2 h-2 bg-muted rounded-full animate-bounce" style="animation-delay: 300ms" />
-              </div>
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+  // No turns and nothing in flight: the deliberate landing state.
+  const isLanding = messages.length === 0 && !streaming;
 
+  // Composer CONTENT only. It declares no width, no centring and no padding of
+  // its own: ChatCanvas parents it into the shared content column beside the
+  // transcript, which is what makes the two share one left and one right edge
+  // at every viewport (see ChatCanvas). Phase 4 (CHATUI-004) restyles the
+  // controls themselves into the donor's autosize card.
+  const composer = (
+    <>
       {files.length > 0 && (
-        <div class="mt-3 flex flex-wrap gap-2">
+        <div class="mb-2 flex flex-wrap gap-2">
           {files.map((f, i) => (
             <span key={i} class="inline-flex items-center gap-1.5 text-caption bg-surface border border-border rounded-lg px-2 py-1">
               📎 {f.name}
@@ -548,7 +513,7 @@ export function Chat() {
 
       <form
         onSubmit={(e) => { e.preventDefault(); send(); }}
-        class="mt-4 flex gap-3"
+        class="flex gap-3"
       >
         <input
           ref={fileInputRef}
@@ -562,54 +527,157 @@ export function Chat() {
             (e.target as HTMLInputElement).value = '';
           }}
         />
-        <Button
+        {/* Native <button>, not <Button>: the shared component renders only the
+            props it declares, so an `aria-label` handed to it is dropped on the
+            floor — which is how this control ended up shipping as an unlabelled
+            "📎" that a screen reader announces as "paperclip emoji, button". A
+            local element keeps the label (and the Stop control's capture hook)
+            without changing a component every page depends on. The classes are
+            exactly what <Button variant="secondary" size="md"> emits, so the
+            pixels are unchanged; Phase 4 (CHATUI-004) replaces both with the
+            donor's composer controls. */}
+        <button
           type="button"
-          variant="secondary"
           disabled={streaming}
           onClick={() => fileInputRef.current?.click()}
           aria-label="Attach files"
+          class={COMPOSER_BTN}
         >
           📎
-        </Button>
+        </button>
         <input
+          ref={inputRef}
           data-tour="chat-input"
           value={input}
           onInput={(e) => setInput((e.target as HTMLInputElement).value)}
-          placeholder={`Message ${agents.find((a) => a.id === agentId)?.displayName ?? 'agent'}...`}
+          placeholder={`Message ${agentName}...`}
           disabled={streaming}
-          class="flex-1 bg-surface border border-border rounded-xl px-4 py-3 text-body-sm
-            focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none
+          class="flex-1 min-w-0 bg-surface border border-border rounded-xl px-4 py-3 text-body-sm
+            shadow-sm focus:ring-2 focus:ring-primary-a/50 focus:border-primary outline-none
             placeholder:text-muted disabled:opacity-50 transition-colors"
           autoFocus
         />
-        <Button type="submit" loading={streaming} disabled={!input.trim() && files.length === 0}>
-          Send
-        </Button>
+        {/* Send BECOMES Stop while a turn is in flight — the donor's own
+            behaviour, and the difference between a live turn you can end and a
+            greyed-out button with a spinner in it that leaves the reader
+            waiting on a run they cannot stop paying for. The glyph is a solid
+            square (universal stop), not a spinner: a spinner says "wait", and
+            this control says "you don't have to". */}
+        {streaming ? (
+          <button
+            type="button"
+            onClick={stopStreaming}
+            aria-label="Stop generating"
+            data-chat-stop
+            class={COMPOSER_BTN}
+          >
+            <span aria-hidden="true" class="size-3 shrink-0 rounded-[2px] bg-current" />
+            Stop
+          </button>
+        ) : (
+          <Button type="submit" disabled={!input.trim() && files.length === 0}>
+            Send
+          </Button>
+        )}
       </form>
+    </>
+  );
 
-      <ConfirmDialog
-        open={newChatOpen}
-        title="Start a new chat"
-        message="This starts a fresh chat session. The current conversation stays in the sidebar and can be reopened."
-        confirmPhrase="NEW CHAT"
-        confirmLabel="Start new chat"
-        onConfirm={() => { startNewChat(); setNewChatOpen(false); }}
-        onCancel={() => setNewChatOpen(false)}
-      />
+  return (
+    // Full-bleed canvas: cancel the app shell's page padding (App.tsx
+    // `main p-4 sm:p-6 lg:p-8`) so the transcript runs edge to edge under its
+    // own overlay header, the way the donor's does, instead of sitting in a
+    // boxed panel inside a padded page.
+    <div class="-m-4 sm:-m-6 lg:-m-8 flex h-[calc(100vh-var(--header-height))] overflow-hidden bg-bg">
+      {historyPanel}
+      {/* One custom property carries this canvas's layout contract, and it is
+          measured rather than guessed: `--chat-header-h` is the overlay
+          header's own painted height (plate + mask-fade), reported by its
+          ResizeObserver. MessagesView pads the transcript by exactly that, so
+          no message is ever laid out under the opaque plate. The Tailwind
+          classes are the pre-measurement fallback (the header wraps to two
+          rows below `sm`, hence two values); the inline property overrides them
+          the moment a real measurement exists, and is omitted while it does
+          not so the fallback is never clobbered with 0.
 
-      <ConfirmDialog
-        open={pendingDelete !== null}
-        title="Delete chat?"
-        message="This will permanently delete this chat and its messages. This action cannot be undone."
-        confirmPhrase="DELETE"
-        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
-        danger
-        onConfirm={() => { void confirmDelete(); }}
-        // Ignore Cancel/Escape/overlay while a delete is in flight, so the
-        // dialog cannot be dismissed out from under a request that is still
-        // deciding whether to roll back.
-        onCancel={() => { if (!deletingRef.current) setPendingDelete(null); }}
-      />
+          There is no second property for the reading column: ChatCanvas
+          declares that once and parents both the transcript and the composer
+          into it. */}
+      <div
+        class="relative flex flex-col flex-1 min-w-0
+          [--chat-header-h:7rem] sm:[--chat-header-h:5rem]"
+        style={headerHeight > 0 ? `--chat-header-h:${headerHeight}px` : undefined}
+      >
+        <ChatHeader
+          onHeight={setHeaderHeight}
+          title={headerTitle}
+          agents={agents}
+          agentId={agentId}
+          onSelectAgent={selectAgent}
+          models={models}
+          modelId={modelId}
+          onSelectModel={setModelId}
+          chatId={chatId}
+          streaming={streaming}
+          onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
+        />
+
+        {/* The canvas owns the scrolling AND the one content column; the
+            transcript and the composer are its two children, so they share a
+            left and a right edge by construction. */}
+        <ChatCanvas
+          composer={composer}
+          scrollRef={scrollRef}
+          affordance={<ScrollToBottom visible={showJump} onClick={jumpToBottom} />}
+        >
+          <MessagesView
+            messages={messages}
+            agentName={agentName}
+            landing={isLanding}
+            streaming={streaming}
+            streamText={streamText}
+            toolStatus={toolStatus}
+            streamStartedAt={streamStartedAt}
+            endRef={endRef}
+          >
+            {loadError && agents.length === 0 && (
+              <div class="text-caption text-danger bg-danger-a/10 border border-danger-a/40 rounded-lg px-3 py-2">
+                {loadError}
+              </div>
+            )}
+            {isLanding && (
+              <ChatLanding
+                agentName={agentName}
+                modelLabel={modelLabel}
+                onStarter={(text) => { setInput(text); inputRef.current?.focus(); }}
+              />
+            )}
+          </MessagesView>
+        </ChatCanvas>
+
+        <ConfirmDialog
+          open={newChatOpen}
+          title="Start a new chat"
+          message="This starts a fresh chat session. The current conversation stays in the sidebar and can be reopened."
+          confirmPhrase="NEW CHAT"
+          confirmLabel="Start new chat"
+          onConfirm={() => { startNewChat(); setNewChatOpen(false); }}
+          onCancel={() => setNewChatOpen(false)}
+        />
+
+        <ConfirmDialog
+          open={pendingDelete !== null}
+          title="Delete chat?"
+          message="This will permanently delete this chat and its messages. This action cannot be undone."
+          confirmPhrase="DELETE"
+          confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+          danger
+          onConfirm={() => { void confirmDelete(); }}
+          // Ignore Cancel/Escape/overlay while a delete is in flight, so the
+          // dialog cannot be dismissed out from under a request that is still
+          // deciding whether to roll back.
+          onCancel={() => { if (!deletingRef.current) setPendingDelete(null); }}
+        />
       </div>
     </div>
   );

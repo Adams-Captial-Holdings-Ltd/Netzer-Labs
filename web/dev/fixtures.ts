@@ -8,6 +8,17 @@
 export interface MockSseEvent {
   event: string;
   data: string;
+  /**
+   * Milliseconds to wait BEFORE writing this event, overriding the plugin's
+   * default 30-80ms jitter. Tool dispatch on the real backend takes hundreds of
+   * milliseconds to seconds per call, so a fixture that fires five `tool`
+   * events 40ms apart is not a slow-motion version of production — it is a
+   * FASTER one, and it makes the live tool-status line physically unobservable
+   * (it exists for one frame, which is how a capture run ends up with no
+   * evidence that the line is implemented at all). Fixtures that are judged on
+   * a live state set this explicitly.
+   */
+  delayMs?: number;
 }
 
 export type Fixture = MockSseEvent[];
@@ -23,11 +34,21 @@ function finalEvent(text: string, opts: { latencyMs: number; costUsd: number; to
 }
 
 /** Slice `full` into `count` cumulative chunk events. */
-function cumulativeChunks(full: string, count: number): MockSseEvent[] {
+function cumulativeChunks(full: string, count: number, delayMs?: number): MockSseEvent[] {
   const events: MockSseEvent[] = [];
   for (let i = 1; i <= count; i++) {
     const end = Math.ceil((full.length * i) / count);
-    events.push({ event: 'chunk', data: full.slice(0, end) });
+    events.push({ event: 'chunk', data: full.slice(0, end), ...(delayMs ? { delayMs } : {}) });
+  }
+  return events;
+}
+
+/** Slice a RANGE of `full` into cumulative chunk events (from → to characters). */
+function cumulativeRange(full: string, from: number, to: number, steps: number, delayMs: number): MockSseEvent[] {
+  const events: MockSseEvent[] = [];
+  for (let i = 1; i <= steps; i++) {
+    const end = Math.round(from + ((to - from) * i) / steps);
+    events.push({ event: 'chunk', data: full.slice(0, end), delayMs });
   }
   return events;
 }
@@ -74,21 +95,108 @@ const defaultFixture: Fixture = [
   finalEvent(defaultText, { latencyMs: 2140, costUsd: 0.0117, toolCallCount: 0 }),
 ];
 
-// ── tools: five tool events interleaved with streaming text ──────────────────
+// ── code: the Phase 1 (CHATUI-001) evidence fixture ──────────────────────────
+// Deliberately built so ONE assistant turn shows every code deliverable at
+// once, which is what the screenshot bar is compared on:
+//   (c) fenced blocks with a language tag → header strip, label, copy button,
+//       hairline border, corner radius — and a SECOND fence in another
+//       language so the label is visibly data, not a constant;
+//   (c) one line far wider than the bubble → the horizontal scrollbar must
+//       appear INSIDE the <pre>, never on the page;
+//   (d) keywords / strings / numbers / comments / class names in the same
+//       block, so all six palette groups are on screen together;
+//   (e) inline `code` chips in running prose, to read against the block.
 
-const toolsText = `Searching across the workspace and the web, one moment.
+const codeText = `## Wiring the turn stream
 
-Found it: the deploy failed because the image tag was stale. The fix landed in
-\`scripts/deploy.ts\` and the follow-up is tracked in the missions board.`;
+The client never appends: every \`chunk\` event carries the **cumulative** text, so the reducer assigns rather than concatenates. Call \`clearApiCache()\` after the turn, or the sidebar serves a stale \`/sessions\` read for up to 60s.
+
+\`\`\`ts
+// Cumulative chunks: assign, never append (see lib/chat/stream.ts).
+export class TurnStream {
+  private buffer = '';
+  async consume(res: Response, onText: (text: string) => void): Promise<void> {
+    const reader = res.body!.getReader(), decoder = new TextDecoder();
+    for (let frames = 0; frames < 4096; frames++) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      this.buffer = decoder.decode(value, { stream: true }); // this comment is long on purpose, so the code body has to scroll horizontally inside its own <pre> instead of widening the message bubble or the page
+      onText(this.buffer);
+    }
+  }
+}
+\`\`\`
+
+The same contract on the wire, as a curl you can paste:
+
+\`\`\`bash
+curl -N -X POST "$ORIGIN/api/test-turn/stream" \\
+  -H "Authorization: Bearer $DASHBOARD_TOKEN" \\
+  -d '{"agentId":"main","text":"status?","chatId":"dashboard:1756180000000"}'
+\`\`\`
+
+> Inline chips like \`streamTurn()\`, \`modelOverride\` and \`dashboard:\` should read as chips, not as miniature panels.`;
+
+const codeFixture: Fixture = [
+  ...cumulativeChunks(codeText, 24),
+  finalEvent(codeText, { latencyMs: 3180, costUsd: 0.0164, toolCallCount: 0 }),
+];
+
+// ── tools: the Phase 3b (CHATUI-003) evidence fixture ───────────────────────
+// This is the ONLY fixture that drives the two deliverables Phase 3b is judged
+// on, so it is built to make both of them observable rather than merely
+// present in the DOM for one frame:
+//
+//   (1) the LIVE tool-status line (StreamingRow → ToolStatusLine), which is the
+//       dashboard's half of the cross-surface `onToolEvent` contract in
+//       CLAUDE.md — Telegram and Slack edit the same string into their
+//       placeholder message;
+//   (2) the SETTLED "Used N tools" collapsible (ToolCallsSection), built from
+//       the `{label, step}` rows streamTurn accumulated during the turn.
+//
+// Five calls, five DISTINCT glyph categories (web / knowledge / connector /
+// code / document as classified by toolKind()), so the stacked-icon cap and
+// its `+N` disc are both exercised, and so is the deduplicated name summary
+// ("web search, Knowledge: search, Slack: search public, +2").
+//
+// Two separate status windows on purpose. The first three calls run before any
+// text, which is the common shape; the last two land AFTER prose is already on
+// screen, which is the frame worth capturing — reply text, a live status line
+// and the caret in one shot, proving the status line is not merely a
+// pre-answer placeholder. `delayMs` holds each window ~1s, which is what real
+// tool dispatch costs anyway.
+
+const toolsText = `Here is what the failed staging rollout came down to.
+
+**Root cause.** The task definition still pointed at image tag \`sha-4f2a1c\`
+while the ECR push had already moved to \`sha-9b3e07\`, so every new task
+started, failed its health check, and rolled straight back.
+
+**Fix.** \`scripts/deploy.ts\` now reads the digest it just pushed instead of
+resolving the branch tag a second time. I have written the incident note up as
+a document and posted the summary in \`#deploys\`.`;
+
+// Where the first burst of prose stops — mid-sentence in the root-cause
+// paragraph, so the caret is trailing running text rather than sitting after a
+// tidy full stop when the second tool window opens over it.
+const TOOLS_TEXT_BREAK = 210;
 
 const toolsFixture: Fixture = [
-  { event: 'tool', data: JSON.stringify({ label: 'web search', step: 1 }) },
-  { event: 'tool', data: JSON.stringify({ label: 'web fetch', step: 2 }) },
-  ...cumulativeChunks(toolsText.slice(0, 52), 3),
-  { event: 'tool', data: JSON.stringify({ label: 'Slack: search public', step: 3 }) },
-  { event: 'tool', data: JSON.stringify({ label: 'Knowledge: search', step: 4 }) },
-  { event: 'tool', data: JSON.stringify({ label: 'document generator', step: 5 }) },
-  ...cumulativeChunks(toolsText, 10).slice(4),
+  { event: 'tool', data: JSON.stringify({ label: 'web search', step: 1 }), delayMs: 260 },
+  { event: 'tool', data: JSON.stringify({ label: 'Knowledge: search', step: 2 }), delayMs: 1000 },
+  { event: 'tool', data: JSON.stringify({ label: 'Slack: search public', step: 3 }), delayMs: 1000 },
+  // Text resumes: streamTurn's chunk branch clears the status line.
+  ...cumulativeRange(toolsText, 0, TOOLS_TEXT_BREAK, 12, 55),
+  // …and a mid-answer tool call brings it back, over prose that is already on
+  // screen. This is the captured frame.
+  { event: 'tool', data: JSON.stringify({ label: 'code interpreter', step: 4 }), delayMs: 900 },
+  { event: 'tool', data: JSON.stringify({ label: 'document generator', step: 5 }), delayMs: 1400 },
+  // The tail's FIRST chunk is what closes the second status window (the chunk
+  // branch clears the line), so it waits too — otherwise step 5 would flash for
+  // 55ms and the window would only ever be step 4's.
+  ...cumulativeRange(toolsText, TOOLS_TEXT_BREAK, toolsText.length, 16, 55).map((ev, i) =>
+    i === 0 ? { ...ev, delayMs: 1400 } : ev,
+  ),
   finalEvent(toolsText, { latencyMs: 8320, costUsd: 0.0409, toolCallCount: 5 }),
 ];
 
@@ -152,6 +260,7 @@ const longstreamFixture: Fixture = (() => {
 
 export const fixtures: Record<string, Fixture> = {
   default: defaultFixture,
+  code: codeFixture,
   tools: toolsFixture,
   'error-mid': errorMidFixture,
   'error-partial': errorPartialFixture,

@@ -82,7 +82,11 @@ plugin + fixtures behind `CCE_CHAT_MOCK=1`, frozen LibreChat bar screenshots,
 baseline recorded.
 
 ```yaml
-work_state: in_progress
+outcome: landed
+reachable_commit: 9c8adcd404ea92a8ca54b58ef6f4ecdde7c7e929
+present_in_current_source: true
+deployment: none
+verification: code_verified
 ```
 
 ### CHATUI-001 — Phase 1: theming foundation
@@ -91,7 +95,7 @@ Alpha tokens, `.chat-md` code-block chrome + scoped hljs palette,
 `highlight.js` dep, white-label support. Chat-chunk bundle delta ≤ 70 KB gzip.
 
 ```yaml
-work_state: approved
+work_state: in_progress
 ```
 
 ### CHATUI-002 — Phase 2: layout shell + header
@@ -100,7 +104,7 @@ Open canvas, shared column, ChatHeader overlay; tour anchors and NEW CHAT
 dialog unchanged.
 
 ```yaml
-work_state: approved
+work_state: in_progress
 ```
 
 ### CHATUI-003 — Phase 3: message list
@@ -108,8 +112,19 @@ work_state: approved
 MessageRow port, event renderings, scroll behavior, streaming states. Includes
 Phase 3b: ToolCallsSection (decision 3 above).
 
+Phase 3b is evidenced by the `tools` fixture, which is the only one that drives
+both of its deliverables: the live tool-status line and the settled "Used N
+tools" section. Its `delayMs` holds each status window ~1s so the live line is
+observable at all — at token cadence it exists for a single frame and no
+capture can show it. The capture harness asserts the heading, `aria-expanded`,
+the per-call `{step, label}` rows and the run footer out of the live DOM into
+PROVENANCE.json, so the section's existence is a recorded fact rather than a
+claim. Cancelling a live turn (Send↔Stop, partial text kept) landed here rather
+than in CHATUI-004 because a turn that cannot be read or stopped is a message
+list defect, not a composer feature.
+
 ```yaml
-work_state: approved
+work_state: in_progress
 ```
 
 ### CHATUI-004 — Phase 4: composer

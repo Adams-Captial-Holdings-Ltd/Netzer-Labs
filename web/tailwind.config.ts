@@ -33,6 +33,18 @@ export default {
         danger: 'var(--color-danger)',
         success: 'var(--color-success)',
         warning: 'var(--color-warning)',
+        // ── Alpha-capable siblings (additive; nothing above changes) ──
+        // The semantic keys above are raw `var()` strings, so Tailwind has
+        // nowhere to inject an alpha channel and an opacity modifier silently
+        // emits NO CSS — `bg-primary/10` is a no-op today. These `-a` keys read
+        // the RGB-triplet custom properties from index.css instead, so
+        // `bg-primary-a/10`, `border-danger-a/40`, `from-bg-a` and friends work,
+        // and follow light/dark plus any white-label brand.
+        'primary-a': 'rgb(var(--color-primary-rgb) / <alpha-value>)',
+        'bg-a': 'rgb(var(--color-bg-rgb) / <alpha-value>)',
+        'surface-a': 'rgb(var(--color-surface-rgb) / <alpha-value>)',
+        'danger-a': 'rgb(var(--color-danger-rgb) / <alpha-value>)',
+        'border-a': 'rgb(var(--color-border-rgb) / <alpha-value>)',
         jarvis: {
           blue: 'var(--jarvis-blue)',
           bright: 'var(--jarvis-blue-bright)',
