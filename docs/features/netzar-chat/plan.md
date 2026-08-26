@@ -21,10 +21,43 @@ intact and every agent and model reachable today stays reachable.
 
 Confirmed decisions (2026-08-25, session owner):
 
-1. **Preact-native source-level port** — copy donor JSX/Tailwind markup and
-   interaction patterns into Preact; no `react`→`preact/compat` aliasing; the
-   only new runtime dependency is `highlight.js` (`lib/common`), loaded solely
-   by the lazy chat chunk.
+1. **Preact-native port, with the compat question settled by measurement**
+   (revised 2026-08-26, superseding the original ban). The original decision
+   forbade `react`→`preact/compat` aliasing. A spike on `spike/preact-compat`
+   (HEAD `0b065a0`) established three things the ban got wrong or right:
+
+   - **The ban was never in force.** `@preact/preset-vite` already sets
+     `reactAliasesEnabled: true` by default and merges its aliases *ahead* of
+     user `resolve.alias`. The app has been aliasing React to `preact/compat`
+     all along, and donor React source compiles under it on the first attempt
+     with zero edits.
+   - **Donor source is genuinely copyable where it is presentational.** 2,284
+     donor lines were copied with 8 lines edited (99.65% verbatim). The markdown
+     pipeline and the composer textarea both pass fully.
+   - **Ariakit-based interactive menus are not usable under Preact, and the
+     failure is silent.** After shimming out `useInsertionEffect` (Preact aliases
+     it to `useLayoutEffect`, which runs *after* refs attach rather than before,
+     so Ariakit's `useEvent` fires a thrower ref mid-commit), the menu opens and
+     filters — but `aria-activedescendant` stays null, ArrowDown does nothing,
+     and `hideOnClick` never fires. Preact's `useId` restarts per portal root
+     and emits duplicate DOM ids, and Ariakit's composite store is id-addressed.
+     Ariakit also writes to `event.currentTarget`, which is getter-only in
+     Preact; React's SyntheticEvent is writable and Preact has no synthetic
+     event system, so this class of breakage cannot be shimmed.
+
+   **Therefore:** copy donor source for presentational and leaf components; do
+   NOT adopt Ariakit menus — keep the hand-written `CommandMenu`, which is now
+   an evidence-backed choice rather than a preference. Runtime dependencies:
+   `highlight.js` (`lib/common`) plus `react-textarea-autosize` (1.70 kB gzip,
+   the donor's own composer autosize).
+
+   **Not adopted, on cost:** the donor markdown pipeline works verbatim but
+   costs 111 kB gzip without KaTeX and 279 kB with it, against 12.87 kB for the
+   `marked` renderer already shipping — 8.7x to 21.7x for the same rendered
+   output, on a chat chunk that is 72 kB in total. Adopting Ariakit would have
+   added 59.54 kB gzip, 83% of the whole current chat chunk, for a menu with
+   broken keyboard access. Both are recorded here so the decision is not
+   re-litigated from taste.
 2. **Full promotion to staging** — PR into `development`, merge on green CI,
    promote `qa` → `staging` (auto-deploys staging), verify there. Production
    untouched.
