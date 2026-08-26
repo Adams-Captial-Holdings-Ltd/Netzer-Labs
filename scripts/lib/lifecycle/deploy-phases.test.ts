@@ -185,19 +185,22 @@ describe('planSecretWrites', () => {
     expect(value).toEqual({ guardrail_id: 'gr-123', guardrail_version: 'DRAFT' });
   });
 
-  it('plans paperclip ONLY when PAPERCLIP_BETTER_AUTH_SECRET is set', () => {
-    expect(planSecretWrites({}, BASE, GUARDRAILS).map((p) => p.leaf)).not.toContain('paperclip');
-    const plans = planSecretWrites({ PAPERCLIP_BETTER_AUTH_SECRET: 's3cret' }, BASE, GUARDRAILS);
-    expect(plans.map((p) => p.leaf)).toContain('paperclip');
+  it('always plans the additive Paperclip company-id migration', () => {
+    const withoutAuth = planSecretWrites({}, BASE, GUARDRAILS).find(
+      (p) => p.leaf === 'paperclip',
+    )!;
+    expect(JSON.parse(withoutAuth.value)).toEqual({});
+    expect(JSON.parse(withoutAuth.defaults!)).toEqual({ company_id: 'REPLACE_ME' });
   });
 
-  it('paperclip writes only better_auth_secret, merged, and is never configured', () => {
+  it('paperclip owns only better_auth_secret and defaults company_id without replacing it', () => {
     const plan = planSecretWrites({ PAPERCLIP_BETTER_AUTH_SECRET: 's3cret' }, BASE, GUARDRAILS).find(
       (p) => p.leaf === 'paperclip',
     )!;
     // The SHIPPED field spelling (infra/lib/secrets-stack.ts), NOT the plan's
     // agent_keys_json / dispatch_token variant. plan-audit P1-C4, code wins.
     expect(JSON.parse(plan.value)).toEqual({ better_auth_secret: 's3cret' });
+    expect(JSON.parse(plan.defaults!)).toEqual({ company_id: 'REPLACE_ME' });
     // Merge, or the next deploy wipes reconciler_key / agent_keys /
     // dispatch_secret, which are minted against the RUNNING instance.
     expect(plan.mergeExisting).toBe(true);
@@ -231,6 +234,27 @@ describe('mergeSecretValue', () => {
     });
   });
 
+  it('adds defaults only when missing and preserves a live bootstrapped value', () => {
+    expect(
+      JSON.parse(
+        mergeSecretValue(
+          JSON.stringify({ company_id: 'company-live', reconciler_key: 'minted' }),
+          JSON.stringify({}),
+          JSON.stringify({ company_id: 'REPLACE_ME' }),
+        ),
+      ),
+    ).toEqual({ company_id: 'company-live', reconciler_key: 'minted' });
+    expect(
+      JSON.parse(
+        mergeSecretValue(
+          JSON.stringify({ reconciler_key: 'minted' }),
+          JSON.stringify({}),
+          JSON.stringify({ company_id: 'REPLACE_ME' }),
+        ),
+      ),
+    ).toEqual({ company_id: 'REPLACE_ME', reconciler_key: 'minted' });
+  });
+
   it('degrades to the planned value when the live one is absent or malformed', () => {
     const planned = JSON.stringify({ better_auth_secret: 'new' });
     const only = { better_auth_secret: 'new' };
@@ -257,6 +281,7 @@ describe('populateSecretsV2', () => {
       reconciler_key: 'minted-1',
       agent_keys: 'minted-2',
       dispatch_secret: 'minted-3',
+      company_id: 'company-live',
     });
     await populateSecretsV2({
       client,
@@ -273,6 +298,7 @@ describe('populateSecretsV2', () => {
       reconciler_key: 'minted-1',
       agent_keys: 'minted-2',
       dispatch_secret: 'minted-3',
+      company_id: 'company-live',
     });
   });
 
