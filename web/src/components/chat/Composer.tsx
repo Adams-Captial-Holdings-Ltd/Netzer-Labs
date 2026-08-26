@@ -161,7 +161,19 @@ function fit(el: HTMLTextAreaElement | null) {
     return;
   }
   const content = Math.max(0, el.scrollHeight - pad);
-  const wanted = Math.max(1, Math.ceil(content / line));
+  // `scrollHeight` is an INTEGER, but a line box rarely is (14px text at 1.6
+  // gives 22.4px here). Two full lines measure 44.8px and are reported as 45,
+  // and a bare `Math.ceil(45 / 22.4)` reads that 0.2px of rounding noise as a
+  // third line — so every Shift+Enter left the box one whole row taller than
+  // its own text, with an empty band under the caret that never went away
+  // (measured: 2 lines of content sized to 99.2px instead of 76.8px). On the
+  // mobile cap that also cost a line of real capacity: four lines of text hit
+  // a five-line cap and started scrolling with the box not yet full.
+  //
+  // One pixel is the most `scrollHeight` can round up by, so discount exactly
+  // that before quantising. Content genuinely past a line boundary is more
+  // than 1px past it and still rounds up.
+  const wanted = Math.max(1, Math.ceil((content - 1) / line));
   const capLines = Number.isFinite(cap) ? Math.max(1, Math.floor((cap - pad) / line)) : wanted;
   el.style.height = `${Math.min(wanted, capLines) * line + pad}px`;
 }
