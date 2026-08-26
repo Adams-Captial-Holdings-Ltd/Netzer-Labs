@@ -6,8 +6,8 @@
  * Provisions the deployed Paperclip instance into the shape the ACL, the
  * reconciler and the dispatch route all assume: ONE company, ONE responsible
  * user, N agents wired to `adapterType: "http"` pointing back at Netzar, and
- * N+1 API keys — one per agent plus the company-wide reconciler key — written
- * into `/claudeclaw[-suffix]/paperclip`.
+ * N+1 API keys — one per agent plus the company-wide reconciler key — and the
+ * company id written into `/claudeclaw[-suffix]/paperclip`.
  *
  * FOUR PROPERTIES THIS SCRIPT IS BUILT AROUND
  *
@@ -382,6 +382,7 @@ async function main(): Promise<void> {
   // and `dispatch_secret`. `agent_keys_json` / `dispatch_token` are the plan's
   // wrong variants, and a field mismatch is a task that cannot start.
   nextFields.agent_keys = JSON.stringify(storedAgentKeys);
+  nextFields.company_id = company.id;
 
   // `fields` already carries a freshly minted dispatch_secret when there was
   // none, so compare against what Secrets Manager actually holds.

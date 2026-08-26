@@ -209,6 +209,14 @@ jobs:
           npx cdk deploy "${{ steps.cfg.outputs.stack_name }}-Iam" \
             --exclusively \
             --require-approval never
+          # Create the unchanged secret schema first. The Populate step can
+          # then merge-add company_id without CloudFormation replacing live
+          # credentials during an upgrade.
+          npx cdk deploy \
+            "${{ steps.cfg.outputs.stack_name }}-Storage" \
+            "${{ steps.cfg.outputs.stack_name }}-Secrets" \
+            --exclusively \
+            --require-approval never
 
       - name: Login to ECR
         id: ecr
@@ -445,14 +453,12 @@ jobs:
       # Populate the Paperclip secret BEFORE the CDK deploy that starts the
       # service. `put-secret-value` appeared ZERO times in this workflow until
       # now (ledger A26): CI populated no secrets at all, for any feature. The
-      # Paperclip task definition injects `database_url` and
-      # `better_auth_secret` as ECS secret FIELDS, and a missing field is a
-      # ResourceInitializationError at task START, so an armed deploy without
-      # this step could not start a task at all.
+      # Paperclip and Compute inject JSON fields from this secret, and a missing
+      # field is a ResourceInitializationError at task START.
       #
-      # Ordering. The secret itself is created by CCE-Secrets, ungated, on
-      # every deploy, so on any environment that has ever deployed it already
-      # exists and this step can run first. The Aurora credentials secret is
+      # Ordering. The early prerequisite step deploys Storage + Secrets first,
+      # preserving CloudFormation's original Paperclip schema. This step then
+      # merge-adds company_id before Compute references it. The Aurora secret is
       # created by CCE-Database, which only exists once the feature is armed,
       # so on the FIRST deploy of a standard install there is nothing to
       # compose a URL from. The migrate step below sees the absence and arms
@@ -461,9 +467,8 @@ jobs:
       # and starts it in this same workflow run. No operator variable is needed.
       #
       # Failure directions, both stated deliberately (M33):
-      #  - a secret that does not exist yet: SKIP. Nothing deployed on that run
-      #    depends on its contents, and creating it here would collide with the
-      #    CloudFormation resource that owns the name.
+      #  - missing after the early prerequisite deploy: HARD FAIL. Compute now
+      #    depends on the additive company_id field.
       #  - a secret that exists but cannot be READ or WRITTEN (AccessDenied):
       #    HARD FAIL. This is the corrected cloudflared idiom directly above:
       #    "not ready" and "I could not find out" must not be the same answer.
@@ -471,8 +476,9 @@ jobs:
       #    REPLACE_ME.
       #  - a value already present: LEAVE IT. Every write is a read-modify-write
       #    merge, because PutSecretValue swaps the whole string and would
-      #    otherwise wipe the reconciler, agent and dispatch keys that
-      #    scripts/paperclip-bootstrap.ts minted against the running instance.
+      #    otherwise wipe the company id and reconciler, agent and dispatch
+      #    keys that scripts/paperclip-bootstrap.ts minted against the running
+      #    instance.
       #
       # No secret value is ever echoed: values move through jq and a file, and
       # only FIELD NAMES are printed.
@@ -508,10 +514,9 @@ jobs:
           if ! current=$(read_secret "$SECRET"); then
             case "$current" in
               *ResourceNotFoundException*)
-                echo "$SECRET does not exist yet; CCE-Secrets creates it in this deploy."
-                echo "The migrate step below arms CCE_PAPERCLIP_BOOTSTRAP for this run, so"
-                echo "the service lands with DesiredCount 0 before this workflow finishes it."
-                exit 0
+                echo "::error::$SECRET is missing after the early Storage/Secrets deploy."
+                echo "Refusing to deploy Compute with an unresolved company_id field." >&2
+                exit 1
                 ;;
               *)
                 echo "::error::Could not read $SECRET; refusing to guess."
@@ -523,6 +528,16 @@ jobs:
           fi
           printf '%s' "$current" > current.json
           cp current.json before.json
+
+          # Additive schema migration. Never put company_id in the CDK
+          # SecretString: changing that template on an upgrade would publish a
+          # placeholder-only version and erase the live database URL and keys.
+          # A real id written by paperclip-bootstrap always wins.
+          if [ "$(jq 'has("company_id")' current.json)" != "true" ]; then
+            jq '.company_id = "REPLACE_ME"' current.json > next.json
+            mv next.json current.json
+            echo "added company_id placeholder without replacing live fields"
+          fi
 
           # better_auth_secret has exactly ONE owner: the operator-held
           # PAPERCLIP_BETTER_AUTH_SECRET, the same value and the same spelling

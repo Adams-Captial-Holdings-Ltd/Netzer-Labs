@@ -577,6 +577,57 @@ function computeTemplateUnguarded(tier: 0 | 1): Template {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('orchestrator to Paperclip reachability', () => {
+  it('carries the bootstrapped company id through the Paperclip secret', () => {
+    const app = new App();
+    const storage = new StorageStack(app, 'CCE-Storage', { tier: 1, env: ENV });
+    const secrets = new SecretsStack(app, 'CCE-Secrets', {
+      tier: 1,
+      env: ENV,
+      dataKey: storage.dataKey,
+    });
+    const secretsTemplate = Template.fromStack(secrets);
+    const paperclipSecret = Object.values(
+      secretsTemplate.findResources('AWS::SecretsManager::Secret'),
+    ).find((resource) => resource.Properties?.Name === '/claudeclaw/paperclip')!;
+    // Upgrade safety: CloudFormation's original SecretString must not change,
+    // or it would replace the live database URL and keys with placeholders.
+    expect(JSON.stringify(paperclipSecret.Properties?.SecretString)).not.toContain('company_id');
+
+    const orchestrator = taskDefs(computeTemplate(1))
+      .flatMap((d) => d.ContainerDefinitions)
+      .find((c) => c.Name === 'orchestrator')!;
+    const companyId = (orchestrator.Secrets ?? []).find(
+      (secret) => secret.Name === 'PAPERCLIP_COMPANY_ID',
+    );
+    expect(JSON.stringify(companyId?.ValueFrom)).toContain(':company_id::');
+    expect(envOf(orchestrator).PAPERCLIP_COMPANY_ID).toBeUndefined();
+
+    const deployPhases = readFileSync(
+      new URL('../../scripts/lib/lifecycle/deploy-phases.ts', import.meta.url),
+      'utf8',
+    );
+    expect(deployPhases).toContain("defaults: JSON.stringify({ company_id: 'REPLACE_ME' })");
+
+    // ECS resolves the current secret version at task start, so this write is
+    // what the post-bootstrap rollout receives instead of the placeholder.
+    const bootstrap = readFileSync(
+      new URL('../../scripts/paperclip-bootstrap.ts', import.meta.url),
+      'utf8',
+    );
+    expect(bootstrap).toContain('nextFields.company_id = company.id;');
+  });
+
+  it('does not reference the additive company-id field at Tier 0', () => {
+    const orchestrator = taskDefs(computeTemplate(0))
+      .flatMap((d) => d.ContainerDefinitions)
+      .find((c) => c.Name === 'orchestrator')!;
+    expect(
+      (orchestrator.Secrets ?? []).some(
+        (secret) => secret.Name === 'PAPERCLIP_COMPANY_ID',
+      ),
+    ).toBe(false);
+  });
+
   it('opens PaperclipSg to the orchestrator Fargate SG on 3100', () => {
     // A20: literal port, and the SOURCE is asserted, not just the count —
     // an ingress from the ALB on the same port would satisfy a count check

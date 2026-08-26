@@ -48,9 +48,10 @@
 import { appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { S3Client } from '@aws-sdk/client-s3';
 import { bold, fail, info, ok } from '../lib/ansi.js';
 import { capture } from '../lib/shell.js';
-import { resolveStateNames } from '../lib/lifecycle/bootstrap-state.js';
+import { ensureStateBucket, resolveStateNames } from '../lib/lifecycle/bootstrap-state.js';
 import {
   contentImageTag,
   runCloudBuild,
@@ -153,23 +154,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  // The state bucket is a BOOTSTRAP primitive (`npm run bootstrap` / a local
-  // `npm run deploy`), never created by this workflow, and the cloud build
-  // cannot stage its source without it. Fail here with the remedy rather than
-  // several minutes later inside runCloudBuild's `aws s3 cp`.
-  const head = await capture('aws', [
-    's3api', 'head-bucket', '--bucket', stateBucket, '--region', region,
-  ]);
-  if (head.code !== 0) {
-    throw new Error(
-      `the cloud build stages this checkout in s3://${stateBucket}/cloud-build/ and that bucket ` +
-        `is not reachable from CI (${head.stderr.trim() || `exit ${head.code}`}).\n` +
-        'It is a bootstrap primitive created by `npm run bootstrap` (or a local `npm run deploy`) ' +
-        'for this environment, never by this workflow. Run one of those once, then re-run.\n' +
-        'The deploy role also needs s3:PutObject on that prefix (infra/lib/iam-stack.ts, cicdRole ' +
-        'sid PaperclipCloudBuildSource).',
-    );
-  }
+  // CI is a first-install driver in its own right. Requiring an operator to
+  // run the local bootstrap first made an automatic staging deploy incapable
+  // of installing Paperclip from a fresh account. Reuse the exact bucket
+  // baseline the local driver owns: deterministic name, versioning, SSE,
+  // public-access block and tags, all idempotent.
+  await ensureStateBucket(new S3Client({ region }), stateBucket, region);
+  console.log(ok(`Paperclip cloud-build state bucket ready: ${stateBucket}`));
 
   console.log(
     info(

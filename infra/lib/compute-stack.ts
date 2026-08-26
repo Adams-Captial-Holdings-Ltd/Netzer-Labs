@@ -235,8 +235,8 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     );
     // Paperclip bridge credentials (ADR 0010). Safe to inject on day one even
     // though the fields still read REPLACE_ME: secrets-stack.ts creates all
-    // three (`agent_keys`, `reconciler_key`, `dispatch_secret`) with the
-    // secret itself, and src/config/env.ts declares each with
+    // four (`agent_keys`, `reconciler_key`, `dispatch_secret`, `company_id`)
+    // with the secret itself, and src/config/env.ts declares each with
     // optionalNonPlaceholder(), so a placeholder resolves to "unset" rather
     // than to a bad credential. A missing FIELD would be different in kind: it
     // fails the task at START with a ResourceInitializationError. That is the
@@ -584,6 +584,18 @@ export class ComputeStack extends Stack implements ComputeOutputs {
           paperclipSecret,
           'dispatch_secret',
         ),
+        // The migration adds a placeholder before this provisioned task starts;
+        // env.ts treats it as unset. Bootstrap replaces it with the real id,
+        // which ECS resolves from the current secret version on the next rollout.
+        // Tier 0 does not run that migration, so it must not reference the field.
+        ...(paperclipProvisioned(props.tier)
+          ? {
+              PAPERCLIP_COMPANY_ID: EcsSecret.fromSecretsManager(
+                paperclipSecret,
+                'company_id',
+              ),
+            }
+          : {}),
         SERPER_API_KEY: EcsSecret.fromSecretsManager(vendorKeysSecret, 'serper_api_key'),
         GOOGLE_GEMINI_API_KEY: EcsSecret.fromSecretsManager(
           vendorKeysSecret,

@@ -107,6 +107,8 @@ export interface SecretWritePlan {
    * owns. See mergeSecretValue.
    */
   mergeExisting?: boolean;
+  /** JSON fields added only when absent from the live value. */
+  defaults?: string;
 }
 
 /**
@@ -115,15 +117,21 @@ export interface SecretWritePlan {
  *
  * PutSecretValue replaces the WHOLE SecretString. Paperclip's secret holds
  * one field this deploy owns (better_auth_secret, generated once by
- * `npm run setup`) and three minted against the RUNNING instance in a later
- * phase (reconciler_key, agent_keys, dispatch_secret). Without this merge the
- * next routine deploy would overwrite those minted credentials with the
- * placeholders CDK seeded.
+ * `npm run setup`) and four values recorded against the RUNNING instance in a
+ * later phase (reconciler_key, agent_keys, dispatch_secret, company_id).
+ * Without this merge the next routine deploy would overwrite those minted
+ * credentials with the placeholders CDK seeded.
  *
- * Planned fields win; every other live field survives. A missing or malformed
- * live value degrades to the planned value rather than failing the deploy.
+ * Planned fields win; every other live field survives. Defaults sit below the
+ * live value, so additive migrations never replace data already written by the
+ * running service. A missing or malformed live value degrades to the defaults
+ * plus planned value rather than failing the deploy.
  */
-export function mergeSecretValue(existing: string | undefined, planned: string): string {
+export function mergeSecretValue(
+  existing: string | undefined,
+  planned: string,
+  defaults: string = '{}',
+): string {
   let live: unknown;
   try {
     live = JSON.parse(existing ?? '');
@@ -131,7 +139,11 @@ export function mergeSecretValue(existing: string | undefined, planned: string):
     live = null;
   }
   const base = live !== null && typeof live === 'object' && !Array.isArray(live) ? live : {};
-  return JSON.stringify({ ...base, ...(JSON.parse(planned) as object) });
+  return JSON.stringify({
+    ...(JSON.parse(defaults) as object),
+    ...base,
+    ...(JSON.parse(planned) as object),
+  });
 }
 
 /**
@@ -243,12 +255,11 @@ export function planSecretWrites(
     });
   }
 
-  // Paperclip work engine (ADR 0010). ONLY better_auth_secret is written
-  // here. reconciler_key / agent_keys / dispatch_secret are minted against
-  // the RUNNING Paperclip instance in a later phase, and CDK already seeds
-  // all four as REPLACE_ME (infra/lib/secrets-stack.ts), so this plan MERGES
-  // instead of replacing: PutSecretValue swaps the whole string and would
-  // otherwise wipe those minted keys on the next routine deploy.
+  // Paperclip work engine (ADR 0010). CloudFormation keeps its original
+  // four-field seed forever: changing SecretString on an upgrade would publish
+  // a placeholder-only AWSCURRENT version and wipe every live credential.
+  // Phase b therefore adds company_id as a merge DEFAULT after Secrets exists.
+  // A real company id written by bootstrap wins over that default forever.
   //
   // `better_auth_secret` is the SHIPPED field spelling. The plan's
   // `agent_keys_json` / `dispatch_token` variant is the wrong one
@@ -259,19 +270,28 @@ export function planSecretWrites(
   // is deliberately NOT minted here: planSecretWrites runs on EVERY deploy,
   // so generating at this point would rotate the auth secret every deploy
   // and invalidate every Paperclip session.
-  if (env.PAPERCLIP_BETTER_AUTH_SECRET) {
-    plans.push({
-      leaf: 'paperclip',
-      secretId: `${secretBase}/paperclip`,
-      label: 'Paperclip',
-      value: JSON.stringify({ better_auth_secret: env.PAPERCLIP_BETTER_AUTH_SECRET }),
-      mergeExisting: true,
-      // Not a configured surface until the Paperclip service exists: a
-      // deploy with CCE_PAPERCLIP_ENABLED unset must not fail on this.
-      configured: false,
-      placeholderShape: JSON.stringify({ better_auth_secret: '<generated-by-npm-run-setup>' }),
-    });
-  }
+  plans.push({
+    leaf: 'paperclip',
+    secretId: `${secretBase}/paperclip`,
+    label: 'Paperclip',
+    value: JSON.stringify({
+      ...(env.PAPERCLIP_BETTER_AUTH_SECRET
+        ? { better_auth_secret: env.PAPERCLIP_BETTER_AUTH_SECRET }
+        : {}),
+    }),
+    defaults: JSON.stringify({ company_id: 'REPLACE_ME' }),
+    mergeExisting: true,
+    // Not a configured surface until the Paperclip service exists: a
+    // deploy at a tier that does not provision Paperclip must not fail here.
+    configured: false,
+    placeholderShape: JSON.stringify({
+      better_auth_secret: '<generated-by-npm-run-setup>',
+      reconciler_key: 'REPLACE_ME',
+      agent_keys: 'REPLACE_ME',
+      dispatch_secret: 'REPLACE_ME',
+      company_id: 'REPLACE_ME',
+    }),
+  });
 
   // Bedrock guardrails: value comes from the phase-(a) stack outputs, not
   // env; always configured (item 10: "or the guardrails secret").
@@ -430,7 +450,7 @@ export async function populateSecretsV2(
         const cur = (await opts.client.send(
           new GetSecretValueCommand({ SecretId: plan.secretId }),
         )) as { SecretString?: string };
-        valueToWrite = mergeSecretValue(cur.SecretString, plan.value);
+        valueToWrite = mergeSecretValue(cur.SecretString, plan.value, plan.defaults);
       } catch (err) {
         const message = `${plan.label} secret (${plan.secretId}): GetSecretValue failed: ${errMessage(err)}`;
         if (plan.configured) {
