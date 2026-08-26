@@ -246,11 +246,16 @@ export async function loadAgent(agentId: string): Promise<AgentConfig> {
   } catch {
     /* keep the config model on a DDB read failure */
   }
+  // An agent with no CLAUDE.md never reaches the agent.yaml read inside
+  // fetchFromS3, so its configured knowledgeScope was silently lost to the
+  // builtin fallback. Read it here too, on both paths. Costs one extra GET
+  // only for a CLAUDE.md-without-agent.yaml agent, and the result is cached.
+  const knowledgeScope = base.knowledgeScope || (await fetchKnowledgeScope(agentId));
   // Normalize the knowledge scope so every consumer sees an explicit value.
   const config: AgentConfig = {
     ...base,
     ...(model ? { model } : {}),
-    knowledgeScope: base.knowledgeScope || DEFAULT_KNOWLEDGE_SCOPE,
+    knowledgeScope: knowledgeScope || DEFAULT_KNOWLEDGE_SCOPE,
   };
   cache.set(agentId, { config, expiresAt: Date.now() + TTL_MS });
   return config;
