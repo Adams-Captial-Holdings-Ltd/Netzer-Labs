@@ -93,11 +93,6 @@ export function Chat() {
   // Set when the initial /agents load fails, so the tab shows WHY it's empty
   // instead of a silently dead chat (send() early-returns without an agent).
   const [loadError, setLoadError] = useState('');
-  // Painted height of the overlay header (opaque plate + mask-fade), reported
-  // by ChatHeader's own ResizeObserver. It becomes the transcript's top
-  // padding, so a message is never laid out underneath the plate. 0 = not yet
-  // measured, in which case the CSS fallback on the canvas stands.
-  const [headerHeight, setHeaderHeight] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Focused after a landing starter chip drops its text into the composer, so
   // the caret is already where the user will keep typing.
@@ -590,42 +585,31 @@ export function Chat() {
     // boxed panel inside a padded page.
     <div class="-m-4 sm:-m-6 lg:-m-8 flex h-[calc(100vh-var(--header-height))] overflow-hidden bg-bg">
       {historyPanel}
-      {/* One custom property carries this canvas's layout contract, and it is
-          measured rather than guessed: `--chat-header-h` is the overlay
-          header's own painted height (plate + mask-fade), reported by its
-          ResizeObserver. MessagesView pads the transcript by exactly that, so
-          no message is ever laid out under the opaque plate. The Tailwind
-          classes are the pre-measurement fallback (the header wraps to two
-          rows below `sm`, hence two values); the inline property overrides them
-          the moment a real measurement exists, and is omitted while it does
-          not so the fallback is never clobbered with 0.
-
-          There is no second property for the reading column: ChatCanvas
-          declares that once and parents both the transcript and the composer
-          into it. */}
-      <div
-        class="relative flex flex-col flex-1 min-w-0
-          [--chat-header-h:7rem] sm:[--chat-header-h:5rem]"
-        style={headerHeight > 0 ? `--chat-header-h:${headerHeight}px` : undefined}
-      >
-        <ChatHeader
-          onHeight={setHeaderHeight}
-          title={headerTitle}
-          agents={agents}
-          agentId={agentId}
-          onSelectAgent={selectAgent}
-          models={models}
-          modelId={modelId}
-          onSelectModel={setModelId}
-          chatId={chatId}
-          streaming={streaming}
-          onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
-        />
-
-        {/* The canvas owns the scrolling AND the one content column; the
-            transcript and the composer are its two children, so they share a
-            left and a right edge by construction. */}
+      {/* This page carries NO layout contract of its own — no measured header
+          height, no custom property, no reading measure. ChatCanvas declares
+          the one content column and parents the header, the transcript and the
+          composer into it, so all three share a left and a right edge by
+          construction rather than by three components agreeing about a number.
+          The `--chat-header-h` property that used to live here (measured by a
+          ResizeObserver in ChatHeader, with two breakpointed fallbacks for the
+          frames before the first measurement) is gone: a sticky header takes
+          its own height in the flow, so there is nothing left to measure. */}
+      <div class="relative flex flex-col flex-1 min-w-0">
         <ChatCanvas
+          header={
+            <ChatHeader
+              title={headerTitle}
+              agents={agents}
+              agentId={agentId}
+              onSelectAgent={selectAgent}
+              models={models}
+              modelId={modelId}
+              onSelectModel={setModelId}
+              chatId={chatId}
+              streaming={streaming}
+              onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
+            />
+          }
           composer={composer}
           scrollRef={scrollRef}
           affordance={<ScrollToBottom visible={showJump} onClick={jumpToBottom} />}

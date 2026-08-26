@@ -59,23 +59,24 @@ export function MessagesView({
 }: MessagesViewProps) {
   return (
     // `flex-1` claims the column's free height so the block below can push
-    // itself to the bottom on the landing state. `pt-[var(--chat-header-h)]`
-    // is the whole reason the overlay header is readable: the property carries
-    // the header's MEASURED height (plate + mask-fade), published by
-    // ChatHeader's ResizeObserver and written onto the canvas by Chat.tsx. A
-    // hard-coded constant was wrong on every viewport it was not tuned for —
-    // at 1280px the old `pt-16` (64px) sat 12px inside a 76px header, which is
-    // exactly how a line of body copy ended up sliced through its x-height by
-    // the header's edge. The page seeds a static fallback for the frames
-    // before the first measurement, so this is never 0.
-    <div class="flex flex-1 flex-col pt-[var(--chat-header-h)]">
+    // itself to the bottom on the landing state.
+    //
+    // `pt-4` is a GAP, not a clearance. The header is a sticky sibling inside
+    // this same column (ChatCanvas), so it occupies its own height in the flow
+    // and the first message cannot be laid out underneath it — there is
+    // nothing to measure and nothing to keep in sync. This used to be
+    // `pt-[var(--chat-header-h)]`, a property carrying the measured height of
+    // an absolutely-positioned header; every frame before the first
+    // measurement landed, and every viewport its static fallback was not tuned
+    // for, showed the top line of a reply sliced through its x-height.
+    <div class="flex flex-1 flex-col pt-4">
       {/* `mt-auto`, NOT `justify-end` on the parent: a centring or end-aligned
           justification overflows a too-tall child out the TOP of a scroll
           container, where it is clipped and unreachable (verified at 800px
           tall — the greeting lost its mark). An auto margin takes only the
           FREE space, so it collapses to 0 the moment content exceeds the box
-          and the same layout degrades into an ordinary scroll with the header
-          padding still protecting the first line. */}
+          and the same layout degrades into an ordinary scroll, with the sticky
+          header above still occluding whatever passes under it. */}
       <div class={landing ? 'mt-auto pb-2' : 'flex flex-col gap-7 pb-6'}>
         {children}
         {messages.map((m, i) =>

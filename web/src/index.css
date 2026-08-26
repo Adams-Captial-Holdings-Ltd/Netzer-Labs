@@ -478,6 +478,80 @@
   min-width: 0;
 }
 
+/* ── Overflow has to ANNOUNCE itself (CHATUI-00x) ──
+   A NEW rule with the same selector, later in the cascade, rather than edits
+   to the block above — same house rule as the inline-chip fix below.
+
+   The block already scrolled. Nothing on screen said so. A line was sliced
+   mid-token at a hard vertical seam ("…lib/chat/stre", "=> void", "new TextD")
+   with no scrollbar track, no thumb and no ramp, so on a 2560px desktop the
+   correct reading of that frame was "this panel is broken", not "this panel
+   scrolls". Two independent affordances, because either one alone can vanish:
+
+   1. A REAL SCROLLBAR. The global `* { scrollbar-width: thin }` a few hundred
+      lines up is why there was none: whenever `scrollbar-width` is set to
+      anything other than `auto`, Chromium ignores every `::-webkit-scrollbar`
+      rule in scope, and the thin scrollbar it substitutes is an overlay that
+      paints nothing at rest and takes 0px of layout (measured: `offsetHeight -
+      clientHeight === 0` on a pre whose scrollWidth was 1531 against a
+      clientWidth of 710). Restoring `auto` here — and only here — hands the
+      block back to the styled pseudo-elements below, which are always painted
+      and always take their 8px.
+
+   2. A RIGHT-EDGE RAMP, so the seam becomes a fade even in a still frame where
+      a scrollbar could be missed. The ramp is exactly as wide as the right
+      padding, and that is what makes it honest rather than decorative:
+
+        - a block that does NOT overflow cannot put a glyph inside its own
+          padding, so the ramp never touches its text;
+        - a block scrolled to its END shows that padding at the right edge, so
+          the last glyph clears the ramp;
+        - a block with more to the right is the ONLY case where the ramp eats
+          ink — which is precisely when "there is more" is the true statement.
+
+      `black`/`transparent` in the gradient are stencil values, not colours:
+      under `mask-mode: match-source` a CSS gradient is read for its ALPHA, so
+      these two stops mean "keep" and "drop". No theme colour is involved and
+      none is needed — the ramp reveals whatever ground the block is on, in
+      either theme. */
+.chat-md .chat-code > pre {
+  padding-right: var(--space-8);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - var(--space-8)), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - var(--space-8)), transparent);
+  /* BOTH standard properties have to be handed back, not just one. Chromium
+     ignores every `::-webkit-scrollbar` rule in scope when EITHER
+     `scrollbar-width` is non-auto (the `*` rule sets `thin`) or
+     `scrollbar-color` is set (the `*` rule sets that too) — and with the
+     pseudo-elements ignored it draws the platform default: measured at 15px
+     tall, in the platform's own grey, on a panel whose whole point is that it
+     is this product's chrome. `auto`/`auto` here is what re-arms the four
+     rules below. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+/* Firefox has no `::-webkit-scrollbar`, so it needs the standard properties
+   after all — and only there, where they cost nothing. */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-md .chat-code > pre {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-primary-rgb) / 0.45) rgb(var(--color-border-rgb) / 0.6);
+  }
+}
+.chat-md .chat-code > pre::-webkit-scrollbar {
+  height: 8px;
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-track {
+  background: rgb(var(--color-border-rgb) / 0.6);
+  border-radius: 4px;
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-primary-rgb) / 0.45);
+  border-radius: 4px;
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-primary-rgb) / 0.7);
+}
+
 /* ── Inline code chips ──
    Distinct from a block: a small brand-tinted chip, not a grey panel. Out-
    specifies `.chat-md code` (0,1,2 vs 0,1,1) and leaves `pre > code` alone. */
