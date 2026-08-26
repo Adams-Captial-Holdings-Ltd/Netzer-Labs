@@ -3,7 +3,7 @@ feature: knowledge-scope-fanout
 document_role: index
 status: current
 observed_at: 2026-08-25
-as_of_commit: 476e25bf6e8f8fcf255022e9fa726907035aa379
+as_of_commit: 9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2
 implemented_by:
   - src/lib/config/agent-loader.ts
   - src/lib/tools/vector-tools.ts
@@ -18,49 +18,62 @@ tested_by:
 
 ## 1. Start Here
 
-The goal of this feature is that every agent reaches all three knowledge corpora
-on every query — its own scope, the platform `default` corpus, and `shared` —
-merged and ranked together, so no setting has to be toggled to reach different
-knowledge.
+Every agent reaches all three knowledge corpora on every query — its own scope,
+the platform `default` corpus, and `shared` — merged and ranked together, so no
+setting has to be toggled to reach different knowledge.
 
-**That goal is half met.** The reason an agent's own scope never resolved is
-fixed. The fan-out to all three corpora is not written yet. Read
-[HANDOFF](HANDOFF.md) for the current state and the next action; source code is
-the ultimate truth for present behaviour, and this index describes the verified
-snapshot at `476e25bf6e8f8fcf255022e9fa726907035aa379` on the unmerged branch
+That is now true and proven by real retrieval, not only by unit test. Read the
+volatile [HANDOFF](HANDOFF.md) for where the work sits; source code is the
+ultimate truth for present behaviour. This index describes the verified snapshot
+at `9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2` on the unmerged branch
 `fix/knowledge-scope-fanout`.
 
 ## 2. What It Does Today
 
-An agent searches **two** corpora: its own scope and `shared`.
-`s3_vectors_search` resolves the calling agent's scope server-side, queries each
-scope in parallel, and merges the hits by `chunkId`, keeping the higher score and
-re-sorting globally. The `default` corpus is a real, first-class S3 prefix
-alongside the others, but **no agent with its own scope reads it**. That is the
-outstanding half of this feature.
+`s3_vectors_search` builds one de-duped list of the corpora the calling agent may
+read — its own scope, `default`, and `shared` — queries each in parallel, and
+merges the hits by `chunkId`, keeping the higher score and re-sorting globally
+before slicing to `topK`. Each returned passage is cited with the scope it came
+from. When an agent's own scope *is* `default` or `shared` the list collapses, so
+no corpus is ever scanned twice.
 
-As of `476e25b`, an agent's own scope now resolves correctly. Previously
-`knowledgeScope` lived in `agents/<id>/agent.yaml` but was read only *after* a
-successful fetch of `agents/<id>/CLAUDE.md`; an agent without that object fell
-through to a built-in fallback declaring no scope and was normalised to
-`default`, silently. `loadAgent` now performs that read on the fallback path as
-well, so a configured scope is honoured whether or not a `CLAUDE.md` exists.
+That same list is also the read allowlist. A model-supplied `scope` argument may
+only name a corpus already on it, and doing so narrows the search to just that
+corpus. Because the fan-out and the allowlist are one expression rather than two,
+a corpus cannot be searched without being nameable, nor named without being
+searched.
 
-It is **not** true that this has been observed working against a real corpus. No
-end-to-end retrieval has been run. Every claim in this document is source
-evidence.
+An agent's own scope resolves whether or not it has a `CLAUDE.md` object in S3.
+Previously `knowledgeScope` was read from `agents/<id>/agent.yaml` only after a
+successful `CLAUDE.md` fetch, so an agent without that object silently fell back
+to `default`.
+
+The result reports what each corpus **offered** and what **survived** the merge —
+`research-corpus 0/4, default 5/5, shared 0/2`. Two numbers rather than one,
+because `0/4` (had matches, lost the blended ranking) and `0/0` (empty or
+misresolved corpus) are different facts. Contribution is counted by `chunkId`,
+never by comparing scope strings, since the scope list holds raw `agent.yaml`
+values while `metadata.scope` holds the `normalizeScope`-folded form.
+
+Writes are **not** widened. `ingest_document` still lands only in the agent's own
+scope, resolved server-side.
 
 ## 3. Current Status And Source Commit
 
-Claims are **source evidence** at `476e25bf6e8f8fcf255022e9fa726907035aa379`,
-read from the implementation and confirmed by the tests listed in section 8. No
-deployment evidence is claimed and none exists: the change sits on an unmerged
-`fix/*` branch, which per the
-[branch mapping](../../../development.md#branch-to-environment-mapping) deploys
-nowhere.
+Claims are verified at `9bfbd97fdfd9c5b7889f8c966f6b8e1828ff2ba2` by two kinds of
+evidence. Source evidence: the tests in section 8, including mutation checks run
+by a reviewer other than the author. Behavioural evidence: a real end-to-end
+retrieval against staging infrastructure — one fixture agent, one question, three
+documents ingested one per corpus — returning all three in a single search, each
+cited by its own scope.
 
-The same defect is present in `origin/production`, verified by reading that
-branch's copy of `src/lib/config/agent-loader.ts`.
+No **deployment** evidence is claimed and none exists. The change sits on an
+unmerged `fix/*` branch, which per the
+[branch mapping](../../../development.md#branch-to-environment-mapping) deploys
+nowhere. Staging resources were used for verification only; the fixture was
+removed afterwards.
+
+The scope-resolution defect was also confirmed present in `origin/production`.
 
 ## 4. Source Of Truth Table
 
@@ -75,23 +88,27 @@ branch's copy of `src/lib/config/agent-loader.ts`.
 
 | Area | Verified file | Present behavior |
 |---|---|---|
-| Scope resolution | `src/lib/config/agent-loader.ts` | Reads `agent.yaml` on both the S3 and the builtin-fallback path; normalises to `default` only when nothing is configured. Result cached 5 minutes |
-| Search fan-out | `src/lib/tools/vector-tools.ts` | Queries `[ownScope, 'shared']`. **Does not reach `default`** — outstanding |
-| Read allowlist | `src/lib/tools/vector-tools.ts` | A model-supplied `scope` may name only the agent's own scope or `shared` |
-| Ingest containment | `src/lib/tools/vector-tools.ts` | Writes are locked to the agent's own scope regardless of the argument |
+| Scope resolution | `src/lib/config/agent-loader.ts` | Reads `agent.yaml` on both the S3 and the builtin-fallback path; normalises to `default` only when nothing is configured. Cached 5 minutes |
+| Search fan-out | `src/lib/tools/vector-tools.ts` | One de-duped list of own scope, `default`, and `shared`; queried in parallel and merged |
+| Read allowlist | `src/lib/tools/vector-tools.ts` | The same list. A named scope must be on it, and narrows the search to it |
+| Ingest containment | `src/lib/tools/vector-tools.ts` | Writes locked to the agent's own scope regardless of the argument |
 | Storage partition | `src/lib/vectors/store.ts` | Scope folds to an S3 prefix via `indexPrefixFor`; read and write paths share it |
 
 ## 6. Business And State Rules
 
-Rules the code enforces today:
-
-- A search reaches the agent's own scope and `shared`, and nothing else.
+- A search reaches the agent's own scope, `default`, and `shared`, and nothing
+  else. No corpus is scanned twice when those overlap.
 - An agent's configured `knowledgeScope` is honoured whether or not it has a
   `CLAUDE.md` object; only an agent with nothing configured gets `default`.
 - The `scope` argument is model-supplied and therefore attacker-controlled under
-  prompt injection. It may only name a corpus the agent already reads.
-- Writes via `ingest_document` always land in the agent's own scope, because a
-  write into `shared` would poison retrieval fleet-wide.
+  prompt injection. It may only name a corpus the agent already reads, and
+  naming one narrows the search to it.
+- Writes via `ingest_document` always land in the agent's own scope. `default`
+  and `shared` are readable but not writable through the tool, because a write
+  into a fleet-wide corpus would poison retrieval for every agent.
+- Each returned passage carries the scope it came from, and the result reports
+  kept/found per corpus, so a corpus that returned nothing is distinguishable
+  from one that returned something and lost the blended ranking.
 - The read and write S3 prefixes for a scope derive from one helper, so a scope
   cannot be written to one prefix and read from another.
 
@@ -99,11 +116,12 @@ Rules the code enforces today:
 
 | Risk | Evidence | Status |
 |---|---|---|
-| The `default` corpus is unreachable from any agent that has its own scope | `src/lib/tools/vector-tools.ts` fan-out array | **Open** — the outstanding half of this feature |
-| A zero-hit result is indistinguishable from a corpus that was never searched | `src/lib/tools/vector-tools.ts` empty-result message asserts a cause it cannot know | **Open** — mitigated by the fan-out guard once written |
-| An agent's configured scope is silently discarded when `CLAUDE.md` is absent | `src/lib/config/agent-loader.ts`, single call site of `fetchKnowledgeScope` | **Addressed** in `476e25b`, pinned by `agent-loader.scope.test.ts` |
-| A transient config-load failure pins an agent to `default` for the cache TTL | `agent-loader.ts` caches negative results unconditionally | **Open, deferred** — distinct defect, self-healing; see [HANDOFF](HANDOFF.md) |
-| `resolveChatIngestScope` silently redirects a chat-dropped document to `default` | `src/lib/media/chat-kb-ingest.ts` bare `catch` | **Open, deferred** — consumer of `loadAgent`, inherits the fix |
+| Top-K is shared across three corpora, so an agent's own passages can be evicted by higher-scoring `default` ones | `vector-tools.ts` queries each scope with the same `topK` and slices the merged set back to `topK`. Default `topK` is 5 | **Observable, not eliminated.** The ranking is deliberately unchanged — one blended relevance order is the point, and reserving slots per corpus would return a less relevant passage over a more relevant one. `9bfbd97` makes eviction visible in the tool output and in a structured log line, so its real rate can be measured rather than guessed. Raise `topK`, or add a per-scope floor, only once that number says it is needed |
+| Everything in `default` is now readable by every agent, including agents with a private scope | The fan-out list | **Accepted and intended.** It also makes an accidentally mis-filed document retrievable rather than lost |
+| A transient config-load failure pins an agent to `default` for the cache TTL | `agent-loader.ts` caches negative results unconditionally | **Open, deferred** — distinct defect, self-healing |
+| `resolveChatIngestScope` silently redirects a chat-dropped document to `default` | `src/lib/media/chat-kb-ingest.ts` bare `catch` | **Open, deferred** — consumer of `loadAgent`, inherits the fix, and less harmful now that `default` is universally readable |
+| The `default` corpus was unreachable from any agent with its own scope | Former two-scope fan-out | **Closed** in `c3d27bb`, pinned by the table-driven guard |
+| An agent's configured scope was silently discarded without a `CLAUDE.md` | Former single call site of `fetchKnowledgeScope` | **Closed** in `476e25b`, pinned by `agent-loader.scope.test.ts` |
 
 ## 8. Validation Commands
 
@@ -116,9 +134,13 @@ npx vitest run src/lib/config/agent-loader.scope.test.ts src/lib/tools/vector-to
 Full pre-push suite: the nine commands in
 [`development.md`](../../../development.md), step 7 of *How to develop a new
 feature, end to end*. A scoped run does not satisfy that gate. Note that
-`npm test` currently exits 1 on this repository from a Windows machine for five
+`npm test` exits 1 on this repository from a Windows machine for five
 pre-existing reasons unrelated to this feature; the enumerated list is in the
 [session handoff](handoffs/2026-08-25-three-corpus-retrieval.md), section 7.
+
+The behavioural check is an end-to-end retrieval, which no unit test replaces.
+The harness that performs it is described in [HANDOFF](HANDOFF.md); it is
+**untracked**, which is itself an open question recorded there.
 
 ## 9. Related Documents
 
