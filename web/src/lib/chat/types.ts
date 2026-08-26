@@ -3,7 +3,12 @@
 // by tests under src/, so it enters the ROOT tsc program: keep it DOM-free and
 // keep relative imports `.js`-suffixed (NodeNext).
 
-export interface Agent { id: string; displayName: string; status: string }
+// `description` is additive (Phase 5, CHATUI-005) and OPTIONAL: /agents has
+// always returned it — handler.ts builds it from the agent's DDB row or from
+// its system prompt — this type simply never declared it. Declaring it changes
+// no behaviour: nothing reads it except the agent picker, which renders it as
+// the row's descriptor and matches it when searching.
+export interface Agent { id: string; displayName: string; status: string; description?: string }
 // `error` marks an assistant turn the stream failed mid-flight. It renders in a
 // red bubble (and as a " [error: ...]" suffix when text had already streamed)
 // instead of a silent blank reply. `kb` carries knowledge-base confirmations

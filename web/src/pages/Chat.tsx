@@ -15,12 +15,12 @@ import {
 import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
 import { stageAttachments } from '../lib/chat/uploads';
-import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
 import { ChatCanvas } from '../components/chat/ChatCanvas';
 import { ChatHeader } from '../components/chat/ChatHeader';
 import { ChatLanding } from '../components/chat/ChatLanding';
+import { Composer } from '../components/chat/Composer';
 import { MessagesView } from '../components/chat/MessagesView';
 import { ScrollToBottom } from '../components/chat/ScrollToBottom';
 import { useChatScroll } from '../components/chat/useChatScroll';
@@ -29,21 +29,10 @@ import { useChatScroll } from '../components/chat/useChatScroll';
 // markdown, stream, uploads) — extracted verbatim from this file in Phase 0 of
 // the chat UI port. This page owns state and composition only; the shell it
 // composes (overlay header, scrolling column, landing) lives in
-// ../components/chat (Phase 2), and the transcript itself — turn rendering,
-// the live row, the tool timeline, scroll behaviour — lives there too as of
-// Phase 3 (CHATUI-003).
-
-// What <Button variant="secondary" size="md"> emits, verbatim (see
-// ../components/Button.tsx). The two composer controls that need an
-// `aria-label` or a QA hook render as native <button>s — the shared component
-// forwards neither — and this constant is what keeps them pixel-identical to
-// every other secondary button in the app.
-const COMPOSER_BTN =
-  'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-normal ' +
-  'bg-surface border border-border text-primary hover:bg-surface-hover ' +
-  'px-4 py-2 text-body-sm gap-2 ' +
-  'disabled:opacity-50 disabled:cursor-not-allowed ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2';
+// ../components/chat (Phase 2), the transcript itself — turn rendering, the
+// live row, the tool timeline, scroll behaviour — lives there as of Phase 3
+// (CHATUI-003), and the composer — the autosizing card, its attachment chips
+// and the Send/Stop control — as of Phase 4 (CHATUI-004).
 
 export function Chat() {
   const [, params] = useRoute('/chat/:agentId');
@@ -93,10 +82,9 @@ export function Chat() {
   // Set when the initial /agents load fails, so the tab shows WHY it's empty
   // instead of a silently dead chat (send() early-returns without an agent).
   const [loadError, setLoadError] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
   // Focused after a landing starter chip drops its text into the composer, so
   // the caret is already where the user will keep typing.
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Stick to the end of a streaming answer, let go the moment the reader
   // scrolls away, and offer them a way back. The rules (and why the attach and
@@ -484,98 +472,27 @@ export function Chat() {
   // Composer CONTENT only. It declares no width, no centring and no padding of
   // its own: ChatCanvas parents it into the shared content column beside the
   // transcript, which is what makes the two share one left and one right edge
-  // at every viewport (see ChatCanvas). Phase 4 (CHATUI-004) restyles the
-  // controls themselves into the donor's autosize card.
+  // at every viewport (see ChatCanvas). The card, the autosize, Enter/
+  // Shift+Enter and the Send/Stop slot live in ../components/chat/Composer.
+  //
+  // The staging list and its cap stay HERE, because they are what `send()`
+  // reads: the composer reports what was picked and what was dismissed, the
+  // page decides how many survive. `.slice(0, 3)` is the pre-existing cap,
+  // unchanged.
   const composer = (
-    <>
-      {files.length > 0 && (
-        <div class="mb-2 flex flex-wrap gap-2">
-          {files.map((f, i) => (
-            <span key={i} class="inline-flex items-center gap-1.5 text-caption bg-surface border border-border rounded-lg px-2 py-1">
-              📎 {f.name}
-              <button
-                type="button"
-                class="text-muted hover:text-danger transition-colors"
-                aria-label={`Remove ${f.name}`}
-                onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      <form
-        onSubmit={(e) => { e.preventDefault(); send(); }}
-        class="flex gap-3"
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept="image/*,video/*,audio/*,.pdf,.docx,.pptx,.txt,.md,.csv"
-          class="hidden"
-          onChange={(e) => {
-            const list = (e.target as HTMLInputElement).files;
-            if (list) setFiles((prev) => [...prev, ...Array.from(list)].slice(0, 3));
-            (e.target as HTMLInputElement).value = '';
-          }}
-        />
-        {/* Native <button>, not <Button>: the shared component renders only the
-            props it declares, so an `aria-label` handed to it is dropped on the
-            floor — which is how this control ended up shipping as an unlabelled
-            "📎" that a screen reader announces as "paperclip emoji, button". A
-            local element keeps the label (and the Stop control's capture hook)
-            without changing a component every page depends on. The classes are
-            exactly what <Button variant="secondary" size="md"> emits, so the
-            pixels are unchanged; Phase 4 (CHATUI-004) replaces both with the
-            donor's composer controls. */}
-        <button
-          type="button"
-          disabled={streaming}
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="Attach files"
-          class={COMPOSER_BTN}
-        >
-          📎
-        </button>
-        <input
-          ref={inputRef}
-          data-tour="chat-input"
-          value={input}
-          onInput={(e) => setInput((e.target as HTMLInputElement).value)}
-          placeholder={`Message ${agentName}...`}
-          disabled={streaming}
-          class="flex-1 min-w-0 bg-surface border border-border rounded-xl px-4 py-3 text-body-sm
-            shadow-sm focus:ring-2 focus:ring-primary-a/50 focus:border-primary outline-none
-            placeholder:text-muted disabled:opacity-50 transition-colors"
-          autoFocus
-        />
-        {/* Send BECOMES Stop while a turn is in flight — the donor's own
-            behaviour, and the difference between a live turn you can end and a
-            greyed-out button with a spinner in it that leaves the reader
-            waiting on a run they cannot stop paying for. The glyph is a solid
-            square (universal stop), not a spinner: a spinner says "wait", and
-            this control says "you don't have to". */}
-        {streaming ? (
-          <button
-            type="button"
-            onClick={stopStreaming}
-            aria-label="Stop generating"
-            data-chat-stop
-            class={COMPOSER_BTN}
-          >
-            <span aria-hidden="true" class="size-3 shrink-0 rounded-[2px] bg-current" />
-            Stop
-          </button>
-        ) : (
-          <Button type="submit" disabled={!input.trim() && files.length === 0}>
-            Send
-          </Button>
-        )}
-      </form>
-    </>
+    <Composer
+      value={input}
+      onInput={setInput}
+      onSend={() => { void send(); }}
+      onStop={stopStreaming}
+      streaming={streaming}
+      agentReady={agentId !== ''}
+      agentName={agentName}
+      files={files}
+      onAttach={(picked) => setFiles((prev) => [...prev, ...picked].slice(0, 3))}
+      onRemoveFile={(i) => setFiles((prev) => prev.filter((_, j) => j !== i))}
+      textareaRef={inputRef}
+    />
   );
 
   return (

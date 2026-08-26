@@ -552,6 +552,95 @@
   background: rgb(var(--color-primary-rgb) / 0.7);
 }
 
+/* ── The composer's own scroller (Phase 4, CHATUI-004) ──
+   The composer textarea grows to a max-height and then becomes a scroll
+   container of its own — the capped state, and the headline deliverable of the
+   phase. It is NOT the code block, and the previous pass's mistake was
+   treating it as though it were.
+
+   A scrollbar is right on the code block: that panel is a quoted artifact
+   whose right edge is an ARBITRARY cut through the middle of a line, so the
+   reader needs a track to tell them how much of the line they are missing and
+   a thumb to drag. The composer is the opposite — it is the reader's OWN
+   sentence, cut at a boundary they created by typing, and everything they
+   need is one keystroke away. Chrome there buys nothing and costs three
+   defects, all of which the last capture shows in one corner:
+
+     - `scrollbar-color` puts Chromium on its non-overlay scrollbar path, and
+       on Windows that scrollbar has STEPPER BUTTONS. The up stepper is drawn
+       square into the card's 12px top-right radius, so a grey triangle sits
+       OUTSIDE the rounded corner it is supposed to be inside;
+     - the down stepper lands at the textarea's bottom edge — which is not the
+       card's, because the control row is below it — so it floats mid-air
+       above the send button with no track under it;
+     - and the track claims ~15px of the box's width for a scroller nobody in
+       this composer will ever drag.
+
+   So: NO SCROLLBAR. `scrollbar-width: none` is the standard property and the
+   one modern Chromium and Firefox both honour; the `::-webkit-` rule below is
+   for the older WebKit that has no `scrollbar-width` to obey. The box still
+   scrolls, by wheel, by trackpad, by arrow key and by caret — it just stops
+   painting furniture on a card the donor's own composer keeps bare.
+
+   What replaces it is the affordance that was actually missing: an EDGE FADE.
+   The viewport used to be flush to the card's inner border, so a line scrolled
+   half out of view was sliced at a hard seam against a 2px stroke — a descender
+   from the line above collided with the border, and the line below was
+   guillotined through its x-height. A cut like that reads as a rendering bug.
+   A fade reads as "there is more", which is the true statement.
+
+   The gradient is inset by `--composer-fade` at both ends and the textarea
+   carries MORE vertical padding than that (16px against 12px), which is what
+   makes the fade honest rather than decorative — the same argument as the code
+   block's right-edge ramp:
+
+     - a draft that does NOT overflow keeps every line inside the padding, so
+       the fade never touches ink;
+     - scrolled to the top or the bottom, the first/last line clears the ramp
+       by the 4px the padding has spare;
+     - the ONLY case where the fade eats ink is a line half out of view — which
+       is precisely when "there is more" is what the reader needs told.
+
+   `black`/`transparent` are stencil values, not colours: under the default
+   `mask-mode: match-source` a CSS gradient is read for its ALPHA, so the two
+   stops mean "keep" and "drop". No theme colour is involved and none is
+   needed — the fade reveals the card underneath in either theme, which is why
+   it cannot drift out of step with `--color-surface` the way a painted
+   gradient overlay would.
+
+   The one state that has to be checked rather than argued is the CARET on the
+   last visible line, because there the browser picks the scroll offset, not
+   the padding. Measured (Ctrl+End in the capped box, 1280×800 and 375×812):
+   Chromium parks the caret's line 8px clear of the scrollport edge on its own,
+   so the ramp reaches only the last ~3px of that line's descender box, at 75%
+   alpha or better — the capped frames show the caret's line crisp. It does not
+   apply `scroll-padding` to caret scrolling inside a textarea; the declaration
+   is here for the engines that do, and costs nothing where they don't. */
+.chat-composer__input {
+  --composer-fade: 12px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-padding-block: var(--composer-fade);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--composer-fade),
+    black calc(100% - var(--composer-fade)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--composer-fade),
+    black calc(100% - var(--composer-fade)),
+    transparent 100%
+  );
+}
+.chat-composer__input::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* ── Inline code chips ──
    Distinct from a block: a small brand-tinted chip, not a grey panel. Out-
    specifies `.chat-md code` (0,1,2 vs 0,1,1) and leaves `pre > code` alone. */

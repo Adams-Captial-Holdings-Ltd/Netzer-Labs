@@ -9,9 +9,13 @@
  * toolbar. Donor tokens are translated per docs/features/netzar-chat/README.md;
  * no donor colour survives.
  *
- * What is NOT ported: the donor's endpoint/preset/bookmark/multi-convo menus.
- * This product's header carries the governance controls instead — which agent,
- * which model, and the conversation id the audit trail keys on.
+ * What is NOT ported: the donor's preset, bookmark and multi-convo menus. This
+ * product's header carries the governance controls instead — which agent,
+ * which model, and the conversation id the audit trail keys on. The donor's
+ * endpoint menu IS ported, as of Phase 5 (CHATUI-005): its structure is what
+ * AgentMenu and ModelMenu are built on (see CommandMenu), because a roster of
+ * seventeen agent templates and a multi-family model catalog are exactly the
+ * problem that menu was shaped to solve.
  *
  * ── It is a FLOATING OVERLAY, and it declares that ─────────────────────────
  *
@@ -61,10 +65,10 @@
  */
 import { Plus } from 'lucide-preact';
 import type { Agent, Model } from '../../lib/chat/types';
-import { modelOptionLabel } from '../../lib/chat/helpers';
 import { Button } from '../Button';
-import { Select } from '../Select';
 import { InfoTooltip } from '../InfoTooltip';
+import { AgentMenu } from './AgentMenu';
+import { ModelMenu } from './ModelMenu';
 import { COLUMN_BLEED_X, COLUMN_PX } from './ChatCanvas';
 
 interface ChatHeaderProps {
@@ -157,27 +161,32 @@ export function ChatHeader({
           {/* w-full on mobile forces the pickers onto their own line; sm:w-auto
               folds them back inline. */}
           <div class="flex w-full min-w-0 items-center gap-2 sm:order-2 sm:w-auto">
+            {/* The two pickers are searchable command menus as of Phase 5
+                (CHATUI-005); the tour anchors stay on the wrappers, which is
+                where they have always been, so the anchor does not depend on
+                which control is inside. */}
             <span data-tour="chat-agent-picker" class="min-w-0">
-              <Select
-                size="md"
-                value={agentId}
-                onChange={onSelectAgent}
-                options={agents.map((a) => ({ value: a.id, label: a.displayName }))}
+              <AgentMenu
+                agents={agents}
+                agentId={agentId}
+                onSelect={onSelectAgent}
+                disabled={streaming}
               />
             </span>
-            {models.length > 0 && (
-              <span data-tour="chat-model-picker" class="min-w-0">
-                <Select
-                  size="md"
-                  value={modelId}
-                  onChange={onSelectModel}
-                  options={[
-                    { value: '', label: 'Agent default' },
-                    ...models.map((m) => ({ value: m.id, label: modelOptionLabel(m) })),
-                  ]}
-                />
-              </span>
-            )}
+            {/* Rendered unconditionally. The old `models.length > 0` guard made
+                the model picker — and its tour anchor — disappear entirely
+                whenever /models failed or a deployment configured no catalog,
+                which is exactly when an operator most needs to see that the
+                turn is running on the agent's own model. With no catalog the
+                menu still offers "Agent default", which is the honest state. */}
+            <span data-tour="chat-model-picker" class="min-w-0">
+              <ModelMenu
+                models={models}
+                modelId={modelId}
+                onSelect={onSelectModel}
+                disabled={streaming}
+              />
+            </span>
           </div>
         </div>
       </div>

@@ -74,12 +74,37 @@ function json(res: ServerResponse, body: unknown): void {
 // The roster the chat page reads on mount. `status` matters: Chat.tsx filters
 // to active only, so the inactive row here is a live check that the filter
 // still holds (it must never appear in the picker).
+//
+// The roster is DELIBERATELY long. It is the platform's own seventeen agent
+// templates (verbatim from GET /agents/templates — same ids, display names and
+// descriptions) standing in as deployed agents, plus the house agent and one
+// retired row. A four-row fixture cannot tell you whether the agent picker is
+// usable, because at four rows every picker is: the search field, the
+// scrolling list and the descriptor line only start earning their place at the
+// length a real deployment actually reaches. `description` is a field /agents
+// has always returned; the old fixture just omitted it, so the picker had
+// nothing to render and no second search axis to match on.
 const mockAgents = {
   agents: [
-    { id: 'main', displayName: 'Netzar Prime', status: 'active' },
-    { id: 'analyst', displayName: 'Research Analyst', status: 'active' },
-    { id: 'ops', displayName: 'Ops Engineer', status: 'active' },
-    { id: 'legacy', displayName: 'Retired Assistant', status: 'inactive' },
+    { id: 'main', displayName: 'Netzar Prime', status: 'active', description: 'The house agent — general work, full tool access, every kill switch honoured.' },
+    { id: 'blank', displayName: 'Blank Agent', status: 'active', description: 'Minimal agent with no specialized behavior.' },
+    { id: 'comms', displayName: 'Communications', status: 'active', description: 'Email, messaging, and stakeholder communication.' },
+    { id: 'content', displayName: 'Content Creator', status: 'active', description: 'Writing, editing, and content strategy.' },
+    { id: 'ops', displayName: 'Operations', status: 'active', description: 'Scheduling, billing, and operational tasks.' },
+    { id: 'research', displayName: 'Research', status: 'active', description: 'Deep research, analysis, and synthesis.' },
+    { id: 'due-diligence', displayName: 'Due Diligence Analyst', status: 'active', description: 'Deal screening, document review, and risk surfacing for investment teams.' },
+    { id: 'lp-update', displayName: 'LP Update Drafter', status: 'active', description: 'Investor letters, quarterly updates, and capital-call notices in your voice.' },
+    { id: 'deal-memo', displayName: 'Deal Memo Summarizer', status: 'active', description: 'Turn meeting notes, transcripts, and data rooms into tight IC-ready memos.' },
+    { id: 'grant-writer', displayName: 'Grant Writer', status: 'active', description: 'Proposals, LOIs, and funder reports for nonprofits, grounded in your documents.' },
+    { id: 'compliance-reviewer', displayName: 'Compliance Reviewer', status: 'active', description: 'Policy checks, document review, and audit-prep against your indexed policies.' },
+    { id: 'exec-assistant', displayName: 'Executive Assistant', status: 'active', description: 'Inbox triage, briefings, scheduling, and follow-up tracking for a busy principal.' },
+    { id: 'support', displayName: 'Customer Support', status: 'active', description: 'Front-line customer support grounded in your help docs, with clean human handoff.' },
+    { id: 'sdr', displayName: 'Sales Development Rep', status: 'active', description: 'Qualify inbound leads, draft outreach, and book the calls worth taking.' },
+    { id: 'social', displayName: 'Social Media Manager', status: 'active', description: 'Plan the calendar and repurpose one idea across every platform.' },
+    { id: 'marketing-strategist', displayName: 'Marketing Strategist', status: 'active', description: 'Positioning, offers, and launch plans that brief the rest of the fleet.' },
+    { id: 'community-manager', displayName: 'Community Manager', status: 'active', description: 'Welcome members, answer recurring questions, and surface who is at risk of churning.' },
+    { id: 'bookkeeper', displayName: 'Bookkeeper', status: 'active', description: 'Categorize transactions, chase invoices, and explain the numbers in plain English.' },
+    { id: 'legacy', displayName: 'Retired Assistant', status: 'inactive', description: 'Decommissioned. Must never appear in the picker.' },
   ],
 };
 
