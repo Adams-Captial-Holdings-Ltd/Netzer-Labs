@@ -846,10 +846,21 @@ export class IamStack extends Stack implements IamOutputs {
           sid: 'PaperclipCloudBuildSource',
           effect: Effect.ALLOW,
           // `git archive HEAD` of the checkout is staged here and read by the
-          // build role. ListBucket is the head-bucket preflight that turns a
-          // missing bootstrap primitive into a first-second failure with a
-          // remedy instead of an opaque `aws s3 cp` error minutes in.
-          actions: ['s3:PutObject', 's3:ListBucket'],
+          // build role. CI is also a first-install driver, so it applies the
+          // same idempotent state-bucket baseline as scripts/deploy.ts instead
+          // of requiring an operator to bootstrap the environment locally.
+          actions: [
+            's3:CreateBucket',
+            's3:ListBucket',
+            's3:GetBucketVersioning',
+            's3:GetEncryptionConfiguration',
+            's3:GetBucketPublicAccessBlock',
+            's3:PutBucketVersioning',
+            's3:PutEncryptionConfiguration',
+            's3:PutBucketPublicAccessBlock',
+            's3:PutBucketTagging',
+            's3:PutObject',
+          ],
           resources: [
             // resolveStateNames(): `claudeclaw[-suffix]-deploy-<account>-<region>`.
             `arn:aws:s3:::claudeclaw*-deploy-${this.account}-${this.region}`,
@@ -1140,7 +1151,18 @@ export class IamStack extends Stack implements IamOutputs {
         new PolicyStatement({
           sid: 'PaperclipCloudBuildSourceStaging',
           effect: Effect.ALLOW,
-          actions: ['s3:PutObject', 's3:ListBucket'],
+          actions: [
+            's3:CreateBucket',
+            's3:ListBucket',
+            's3:GetBucketVersioning',
+            's3:GetEncryptionConfiguration',
+            's3:GetBucketPublicAccessBlock',
+            's3:PutBucketVersioning',
+            's3:PutEncryptionConfiguration',
+            's3:PutBucketPublicAccessBlock',
+            's3:PutBucketTagging',
+            's3:PutObject',
+          ],
           resources: [
             `arn:aws:s3:::claudeclaw-staging-deploy-${this.account}-${this.region}`,
             `arn:aws:s3:::claudeclaw-staging-deploy-${this.account}-${this.region}/cloud-build/*`,
