@@ -13,7 +13,16 @@
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": {
+      "@/*": ["src/*"],
+      "~/*": ["src/spike/lc/*"],
+      "recoil": ["src/spike/lc/shims/recoil.ts"],
+      "@librechat/client": ["src/spike/lc/shims/librechat-client.tsx"],
+      "librechat-data-provider": ["src/spike/lc/shims/librechat-data-provider.ts"],
+      "react": ["node_modules/preact/compat/src/index.d.ts"],
+      "react-dom": ["node_modules/preact/compat/src/index.d.ts"],
+      "react/jsx-runtime": ["node_modules/preact/jsx-runtime/src/index.d.ts"]
+    }
   },
   "include": ["src"]
 }

@@ -29,7 +29,11 @@ export default defineConfig(async ({ mode }) => {
 
   return {
     plugins: [
-      preact(),
+      // @preact/preset-vite ALREADY aliases react/react-dom/react-jsx-runtime
+      // to preact/compat by default (reactAliasesEnabled defaults to true).
+      // Its aliases are merged ahead of this config's `resolve.alias`, so they
+      // win — disable them to take control of the mapping.
+      preact({ reactAliasesEnabled: false }),
       // Dev-only mock SSE harness (`CCE_CHAT_MOCK=1 npm run dev`): answers
       // POST /api/test-turn/stream with scripted fixtures before the proxy.
       // Imported dynamically INSIDE the guard, never at module top level, so a
@@ -41,6 +45,37 @@ export default defineConfig(async ({ mode }) => {
         : []),
     ],
     base: '/dashboard/',
+    // SPIKE (spike/preact-compat): alias React -> preact/compat so donor
+    // LibreChat component source can be compiled unmodified.
+    //
+    // ORDER IS LOAD-BEARING. Vite/@rollup-plugin-alias matches a string `find`
+    // against `id === find || id.startsWith(find + '/')`, first match wins and
+    // object key order is the array order. With `react` listed first,
+    // `react/jsx-runtime` would rewrite to `preact/compat/jsx-runtime`, which
+    // does not exist. Deep specifiers must precede their bare package.
+    resolve: {
+      alias: {
+        'react/jsx-runtime': 'preact/jsx-runtime',
+        'react/jsx-dev-runtime': 'preact/jsx-dev-runtime',
+        'react-dom/test-utils': 'preact/test-utils',
+        'react-dom/client': 'preact/compat/client',
+        'react-dom': fileURLToPath(new URL('./src/spike/react-compat-shim.ts', import.meta.url)),
+        react: fileURLToPath(new URL('./src/spike/react-compat-shim.ts', import.meta.url)),
+        // Donor LibreChat source imports its own app root as `~/...`. Pointing
+        // `~` at the shim tree lets donor files be copied byte-for-byte.
+        '~': fileURLToPath(new URL('./src/spike/lc', import.meta.url)),
+        // Donor workspace packages, stubbed. Aliased (not vendored) so the
+        // donor files that import them stay byte-for-byte.
+        recoil: fileURLToPath(new URL('./src/spike/lc/shims/recoil.ts', import.meta.url)),
+        '@librechat/client': fileURLToPath(
+          new URL('./src/spike/lc/shims/librechat-client.tsx', import.meta.url),
+        ),
+        'librechat-data-provider': fileURLToPath(
+          new URL('./src/spike/lc/shims/librechat-data-provider.ts', import.meta.url),
+        ),
+      },
+    },
+
     build: {
       outDir: '../dist/web',
       emptyOutDir: true,

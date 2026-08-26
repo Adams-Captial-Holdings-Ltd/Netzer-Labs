@@ -102,6 +102,12 @@ const WarRoom = lazyRoute(() => import('./pages/WarRoom').then((m) => ({ default
 const Settings = lazyRoute(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const Members = lazyRoute(() => import('./pages/Members'));
 const Jarvis = lazyRoute(() => import('./routes/Jarvis').then((m) => ({ default: m.Jarvis })));
+// SPIKE (spike/preact-compat): scratch route mounting verbatim donor source.
+const Spike = lazyRoute(() => import('./spike/SpikeRoute'));
+const SpikeMenuOnly = lazyRoute(() => import('./spike/SpikeMenuOnly'));
+const SpikeMarkdownOnly = lazyRoute(() => import('./spike/SpikeMarkdownOnly'));
+const SpikeComposerOnly = lazyRoute(() => import('./spike/SpikeComposerOnly'));
+const SpikeMarkdownNoKatex = lazyRoute(() => import('./spike/SpikeMarkdownNoKatex'));
 
 function AuthGate({ children }: { children: preact.ComponentChildren }) {
   const [token, setTokenState] = useState(getToken());
@@ -324,6 +330,16 @@ export function App() {
         other path falls through to AuthGate → AppShell.
       */}
       <Switch>
+        {/* SPIKE (spike/preact-compat): pre-auth scratch route. */}
+        <Route path="/spike">
+          <Suspense fallback={<div class="py-16 text-center">Loading spike...</div>}>
+            <Spike />
+          </Suspense>
+        </Route>
+        <Route path="/spike-menu"><Suspense fallback={null}><SpikeMenuOnly /></Suspense></Route>
+        <Route path="/spike-markdown"><Suspense fallback={null}><SpikeMarkdownOnly /></Suspense></Route>
+        <Route path="/spike-composer"><Suspense fallback={null}><SpikeComposerOnly /></Suspense></Route>
+        <Route path="/spike-md-nokatex"><Suspense fallback={null}><SpikeMarkdownNoKatex /></Suspense></Route>
         <Route path="/accept">
           <AcceptInvite
             onLogin={(t: string, remember: boolean) => setToken(t, remember)}
