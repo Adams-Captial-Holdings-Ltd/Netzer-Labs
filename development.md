@@ -598,10 +598,23 @@ Several read `.env`, so they became live the moment a local `.env` existed.
   `npm run status -- --strict`, `npm run verify`, `npm run battle`,
   `npm run loadtest`, the `scripts/jarvis-*-probe.ts` files.
 - **Attaches to live infrastructure**: `npm run dashboard:tunnel`,
-  `npm run mission`, `npm run schedule:cli`.
+  `npm run mission`, `npm run schedule:cli`,
+  `npx tsx scripts/e2e-three-corpus.ts` (writes an agent config and three
+  documents to the **staging** buckets, calls Bedrock for embeddings, then
+  deletes what it made; needs `AWS_PROFILE` and is the only proof that
+  three-corpus retrieval works — see
+  [knowledge-scope-fanout](docs/features/knowledge-scope-fanout/HANDOFF.md)).
 
-Safe locally: `npm test`, `npm run typecheck`, `npm run build`, `npm run synth`,
+Safe locally: `npm run typecheck`, `npm run build`, `npm run synth`,
 everything under `npm run local:*`, and `--help` on any lifecycle CLI.
+
+`npm test` is **not** fully hermetic, despite previously being listed here as
+safe. `src/lib/vectors/durability.repro.test.ts` writes to the real staging
+vectors bucket, so the suite reaches AWS and fails when the session lapses —
+which means a red run cannot be distinguished from an expired login. Verified
+2026-08-26: the same two files that fail without credentials pass in isolation
+with them. Treat a red `npm test` as inconclusive until you have checked
+`aws sts get-caller-identity`.
 
 ---
 
