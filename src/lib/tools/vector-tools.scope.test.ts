@@ -121,4 +121,59 @@ describe('s3_vectors_search scope containment', () => {
     const scopes = searchMock.mock.calls.map((c) => c[0].scope);
     expect(scopes).toEqual(['shared']);
   });
+  // A corpus that returned nothing must be visibly distinct from a corpus that
+  // returned something and lost the blended ranking. Collapsing both to "absent"
+  // is the silent-corpus defect this whole fan-out exists to kill.
+  const hit = (scope: string, score: number, chunkId: string) => ({
+    score,
+    row: {
+      chunkId,
+      text: 'passage text',
+      embedding: [],
+      metadata: {
+        docId: 'd',
+        scope,
+        chunkIndex: 0,
+        start: 0,
+        end: 1,
+        uploadedAt: '',
+      },
+    },
+  });
+
+  it('reports an own-scope shutout as kept/found, not as absence', async () => {
+    searchMock.mockImplementation(({ scope }: { scope: string }) =>
+      Promise.resolve(
+        scope === 'default'
+          ? [hit('default', 0.9, 'a'), hit('default', 0.8, 'b')]
+          : scope === 'research-corpus'
+            ? [hit('research-corpus', 0.3, 'c')]
+            : [],
+      ),
+    );
+    const out = await tools.invoke('s3_vectors_search', { query: 'q', top_k: 2 }, ctx);
+    // own corpus offered one passage and lost it; that is not the same as empty
+    expect(out.text).toContain('research-corpus 0/1');
+    expect(out.text).toContain('default 2/2');
+    expect(out.text).toContain('shared 0/0');
+  });
+
+  // Regression guard. `scopes` holds the raw agent.yaml value while
+  // metadata.scope holds the normalizeScope-folded form, so counting by scope
+  // string prints 0 above passages tagged with that very scope. Count by chunk
+  // identity instead; this test fails if anyone reintroduces a string compare.
+  it('counts a colon-scoped corpus by chunk identity, not by scope string', async () => {
+    loadAgentMock.mockResolvedValue({ knowledgeScope: 'agent:ops' });
+    searchMock.mockImplementation(({ scope }: { scope: string }) =>
+      Promise.resolve(scope === 'agent:ops' ? [hit('agent_ops', 0.9, 'c1')] : []),
+    );
+    const out = await tools.invoke('s3_vectors_search', { query: 'q' }, ctx);
+    expect(out.text).toContain('agent:ops 1/1');
+  });
+
+  it('states the filters in force rather than guessing a cause when empty', async () => {
+    const out = await tools.invoke('s3_vectors_search', { query: 'q' }, ctx);
+    expect(out.text).toContain('research-corpus');
+    expect(out.text).not.toContain('broader phrasing');
+  });
 });

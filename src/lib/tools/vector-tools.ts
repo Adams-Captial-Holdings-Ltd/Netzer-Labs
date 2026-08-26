@@ -14,6 +14,7 @@ import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
 import { tools } from './registry.js';
 import { embedOne } from '../vectors/embedder.js';
 import { search, type QueryHit } from '../vectors/store.js';
+import { logger } from '../../observability/logger.js';
 import { ingestDocument } from '../vectors/ingest.js';
 import {
   loadAgent,
@@ -142,12 +143,40 @@ tools.register('s3_vectors_search', {
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
 
-    const scopeLabel = scopes.join("' + '");
+    // Report what each corpus OFFERED and what SURVIVED the merge. One blended
+    // ranking lets a large corpus take every slot, so `0/4` (had matches, lost
+    // the ranking) and `0/0` (empty or misresolved corpus) are different facts.
+    // A single count collapses them, reinstating one layer up the silent-corpus
+    // defect this fan-out exists to kill.
+    //
+    // Counted by chunkId, never by comparing scope strings: `scopes` holds raw
+    // agent.yaml values ('agent:ops') while metadata.scope holds the folded form
+    // ('agent_ops'), because ingest.ts normalizes before putDocument stamps it.
+    // A string compare would print 0 directly above passages visibly tagged with
+    // that very scope.
+    const keptIds = new Set(hits.map((h) => h.row.chunkId));
+    const contrib = scopes.map((scope, i) => ({
+      scope,
+      found: perScope[i].length,
+      kept: perScope[i].filter((h) => keptIds.has(h.row.chunkId)).length,
+    }));
+    logger.info(
+      { agentId: ctx.agentId, ownScope, topK, scoreFloor, contrib },
+      'vector search fan-out',
+    );
+
     if (hits.length === 0) {
+      // Name the filters that were in force; do not assert a cause. The old
+      // message blamed the user's phrasing for what may be an unread corpus.
+      const tags =
+        tagFilter && tagFilter.length > 0 ? ` and tags ${tagFilter.join(', ')}` : '';
       return {
-        text: `No relevant passages in scope '${scopeLabel}' (try a broader phrasing or ingest more docs).`,
+        text: `No passages scored at or above ${scoreFloor}${tags} in ${scopes
+          .map((s) => `'${s}'`)
+          .join(', ')}.`,
       };
     }
+    const tally = contrib.map((c) => `${c.scope} ${c.kept}/${c.found}`).join(', ');
     const lines = hits.map((h, idx) => {
       const m = h.row.metadata;
       const cite = m.docTitle ?? m.source ?? m.docId;
@@ -155,7 +184,7 @@ tools.register('s3_vectors_search', {
       return `[${idx + 1}] (${h.score.toFixed(3)}) ${cite}${loc} #${m.chunkIndex} <${m.scope}>\n${h.row.text.trim()}`;
     });
     return {
-      text: `${hits.length} passages from '${scopeLabel}':\n\n${lines.join('\n\n')}`,
+      text: `${hits.length} passages, kept/found per corpus: ${tally}\n\n${lines.join('\n\n')}`,
     };
   },
 });
