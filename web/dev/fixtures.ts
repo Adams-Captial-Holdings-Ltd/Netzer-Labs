@@ -168,13 +168,9 @@ const codeFixture: Fixture = [
 
 const toolsText = `Here is what the failed staging rollout came down to.
 
-**Root cause.** The task definition still pointed at image tag \`sha-4f2a1c\`
-while the ECR push had already moved to \`sha-9b3e07\`, so every new task
-started, failed its health check, and rolled straight back.
+**Root cause.** The task definition still pointed at image tag \`sha-4f2a1c\` while the ECR push had already moved to \`sha-9b3e07\`, so every new task started, failed its health check, and rolled straight back.
 
-**Fix.** \`scripts/deploy.ts\` now reads the digest it just pushed instead of
-resolving the branch tag a second time. I have written the incident note up as
-a document and posted the summary in \`#deploys\`.`;
+**Fix.** \`scripts/deploy.ts\` now reads the digest it just pushed instead of resolving the branch tag a second time. I have written the incident note up as a document and posted the summary in \`#deploys\`.`;
 
 // Where the first burst of prose stops — mid-sentence in the root-cause
 // paragraph, so the caret is trailing running text rather than sitting after a

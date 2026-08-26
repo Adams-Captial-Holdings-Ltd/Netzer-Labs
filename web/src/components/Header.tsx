@@ -75,7 +75,7 @@ export function Header() {
         <span class="hidden sm:block w-px h-5 bg-border" aria-hidden="true" />
       </div>
 
-      <nav class="flex items-center gap-1.5 text-caption text-muted overflow-hidden" aria-label="Breadcrumb">
+      <nav class="hidden sm:flex items-center gap-1.5 text-caption text-muted overflow-hidden" aria-label="Breadcrumb">
         {crumbs.map((c, i) => (
           <span key={c.href} class="flex items-center gap-1.5 shrink-0">
             {i > 0 && <span class="text-muted">/</span>}
@@ -109,7 +109,7 @@ export function Header() {
 
       <button
         onClick={() => { clearToken(); window.location.reload(); }}
-        class="text-caption text-muted hover:text-danger transition-colors px-3 py-1.5 rounded-lg hover:bg-surface-hover"
+        class="text-caption text-muted hover:text-danger transition-colors px-3 py-1.5 rounded-lg hover:bg-surface-hover whitespace-nowrap shrink-0"
       >
         Sign out
       </button>
