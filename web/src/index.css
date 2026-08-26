@@ -832,3 +832,106 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.2; }
 }
+
+/* ── The picker lists have to ANNOUNCE that they scroll (CHATUI-005) ──
+   New rules with new class names, appended rather than woven into anything
+   above: `.chat-md` is shared with WarRoom and Playground, and these selectors
+   are emitted only by CommandMenu.
+
+   The defect this answers, measured: the agent menu held eighteen rows, showed
+   eight, and drew NOTHING to say so. The eighth row was cut at a hard seam
+   against the panel border, so the honest reading of a still frame was "here
+   are the eight agents", on the one surface whose acceptance test is that
+   every agent is reachable.
+
+   1. THE SCROLLBAR. `* { scrollbar-width: thin; scrollbar-color: ... }` at the
+      top of this file is why there wasn't one: whenever EITHER standard
+      property is set to anything but `auto`, Chromium ignores every
+      `::-webkit-scrollbar` rule in scope and substitutes an overlay scrollbar
+      that paints nothing at rest and takes 0px of layout. Handing both back to
+      `auto` here — and only here — re-arms the four styled rules below, which
+      are always painted and always take their 10px. The thumb is proportional,
+      so it states the ratio (8 of 18 ⇒ a thumb over ~44% of the track) without
+      any text.
+
+   2. THE RAMPS. A fade at the edge that has more beyond it, so the seam reads
+      as a continuation rather than an end. They are ABSOLUTE and
+      `pointer-events: none`: taking no layout is what keeps them from changing
+      what overflows (a loop), and taking no pointer events is what keeps the
+      row underneath clickable.
+
+   The gradient interpolates to `transparent`, which every engine now resolves
+   premultiplied, so there is no grey fringe and no second colour token to keep
+   in step — the ramp is made of `--color-surface` alone and is therefore
+   correct in both themes by construction. */
+.chat-menu-list {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  overscroll-behavior: contain;
+}
+/* Firefox has no `::-webkit-scrollbar`, so it needs the standard properties. */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-menu-list {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-primary-rgb) / 0.5) rgb(var(--color-border-rgb) / 0.7);
+  }
+}
+.chat-menu-list::-webkit-scrollbar {
+  width: 10px;
+}
+.chat-menu-list::-webkit-scrollbar-track {
+  background: rgb(var(--color-border-rgb) / 0.7);
+  border-radius: var(--radius-full);
+  /* Insets the track from the panel's rounded corners, so a square-ended bar
+     does not sit proud of a 12px radius at the bottom of the popover. */
+  margin: var(--space-1) 0;
+}
+.chat-menu-list::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-primary-rgb) / 0.5);
+  border-radius: var(--radius-full);
+}
+.chat-menu-list::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-primary-rgb) / 0.75);
+}
+
+.chat-menu-edge {
+  position: absolute;
+  left: 0;
+  /* Stops short of the scrollbar gutter: a ramp drawn over the thumb would
+     dim the very affordance it is reinforcing. */
+  right: 10px;
+  height: var(--space-8);
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+}
+.chat-menu-edge--top {
+  top: 0;
+  align-items: flex-start;
+  background: linear-gradient(to bottom, var(--color-surface) 25%, transparent);
+}
+.chat-menu-edge--bottom {
+  bottom: 0;
+  align-items: flex-end;
+  background: linear-gradient(to top, var(--color-surface) 25%, transparent);
+}
+
+/* "10 more" — the count, not a vague hint, so the reader can choose between
+   scrolling and typing into the field above. Sits in the ramp it belongs to
+   and inherits its `pointer-events: none`. */
+.chat-menu-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-bottom: 3px;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}

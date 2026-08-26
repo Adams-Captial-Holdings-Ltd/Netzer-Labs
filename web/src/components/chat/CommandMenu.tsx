@@ -77,6 +77,36 @@
  * measured outcome of the geometry rather than a viewport breakpoint, so it
  * cannot disagree with what actually fits.
  *
+ * ── A list that scrolls has to SAY it scrolls ──────────────────────────────
+ *
+ * The agent roster is eighteen rows on this deployment and the panel is capped
+ * at 60% of the viewport, so eight of them are on screen. Until this cut,
+ * nothing said so. Chromium's overlay scrollbar — which the global
+ * `* { scrollbar-width: thin }` in index.css forces on every scroller in the
+ * app — paints NOTHING at rest and takes 0px of layout, so the eighth row was
+ * sliced at a hard horizontal seam against the panel's own border and the
+ * correct reading of that frame was "eighteen agents exist, here are the eight
+ * you get". On the surface whose acceptance test is *every agent is reachable*,
+ * that is the whole product failing in a still frame.
+ *
+ * Three affordances, because each one alone can be missed:
+ *
+ *   1. A REAL SCROLLBAR — `.chat-menu-list` in index.css hands the standard
+ *      properties back to `auto` so the styled `::-webkit-scrollbar` rules are
+ *      obeyed again. Always painted, always 10px of layout, and its thumb is
+ *      proportional: a thumb covering 44% of the track states the ratio.
+ *   2. A BOTTOM RAMP, so the seam becomes a fade rather than a cut, and a TOP
+ *      ramp once the list has been scrolled off its first row (which is the
+ *      only cue that the top is not the top).
+ *   3. THE COUNT OF WHAT IS BELOW, measured — not "there is more" but "10
+ *      more", so the reader knows whether to scroll or to type.
+ *
+ * All three are driven from one measurement of the live scroller
+ * (`useListOverflow`), re-run on scroll, on every keystroke that changes the
+ * row set, and whenever the panel is re-sized by `place()`. The state is
+ * published on the listbox as `data-overflow` so the roll-call harness asserts
+ * the affordance instead of trusting it.
+ *
  * ── The keyboard model is a combobox, not a roving tabstop ─────────────────
  *
  * Focus stays in the search input for the whole interaction and the active row
@@ -215,6 +245,80 @@ function selectableRows(rows: MenuRow[]): ActionableRow[] {
   return rows.filter((r): r is ActionableRow => r.type !== 'group');
 }
 
+/** What a list's scroll position leaves out of view, measured not assumed. */
+interface Overflow {
+  /** Rows exist above the visible slice. */
+  up: boolean;
+  /** Rows exist below it. */
+  down: boolean;
+  /** How many option rows are not fully visible below the fold. */
+  more: number;
+}
+
+const NO_OVERFLOW: Overflow = { up: false, down: false, more: 0 };
+
+function overflowState(o: Overflow): 'none' | 'up' | 'down' | 'both' {
+  if (o.up && o.down) return 'both';
+  if (o.up) return 'up';
+  if (o.down) return 'down';
+  return 'none';
+}
+
+/**
+ * Measure what a scrollable list is hiding.
+ *
+ * `signal` is a string the caller rebuilds whenever the row set or the panel
+ * box changes; it is what re-runs the measurement after a keystroke filters the
+ * list or `place()` re-caps its height. A ResizeObserver covers the rest (the
+ * window resizing under an open menu), and the list's own `onScroll` covers
+ * scrolling. There is no polling and no interval.
+ *
+ * The 1px tolerances are not decoration: `scrollHeight`, `clientHeight` and
+ * `scrollTop` are fractional on a zoomed or fractionally-scaled display, and a
+ * 0.5px residue at the end of a scroll would otherwise keep claiming there is
+ * "more" below with nothing left to show.
+ */
+function useListOverflow(ref: RefObject<HTMLDivElement>, signal: string) {
+  const [edges, setEdges] = useState<Overflow>(NO_OVERFLOW);
+
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) {
+      setEdges((prev) => (prev === NO_OVERFLOW ? prev : NO_OVERFLOW));
+      return;
+    }
+    const up = el.scrollTop > 1;
+    const down = el.scrollHeight - el.clientHeight - el.scrollTop > 1;
+    // Counted from live rects rather than from row heights, because rows are
+    // not a uniform height here — a row with a wrapped description is taller
+    // than one without, so "how many fit" cannot be divided out.
+    let more = 0;
+    if (down) {
+      const cut = el.getBoundingClientRect().bottom;
+      for (const row of el.querySelectorAll('[role="option"]')) {
+        if (row.getBoundingClientRect().bottom > cut + 1) more += 1;
+      }
+    }
+    setEdges((prev) =>
+      prev.up === up && prev.down === down && prev.more === more ? prev : { up, down, more },
+    );
+  }, [ref]);
+
+  useLayoutEffect(() => {
+    measure();
+  }, [measure, signal]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, measure, signal]);
+
+  return { edges, measure };
+}
+
 /**
  * Split a flat row list into segments so the rows under a `group` row can be
  * wrapped in a real `role="group"`. Rows before the first group row form an
@@ -295,6 +399,20 @@ export function CommandMenu({
   // on every keystroke, and an effect that fixes it renders the out-of-range
   // frame first — aria-activedescendant pointing at an id not in the document.
   const activeIdx = activeRows.length > 0 ? Math.min(active, activeRows.length - 1) : -1;
+
+  // ── Overflow affordances ─────────────────────────────────────────────────
+  // Two independent measurements because the two listboxes scroll separately
+  // and are on screen at the same time in the flyout case.
+  const rootOverflow = useListOverflow(
+    rootListRef,
+    `${open ? 'o' : 'c'}|${drillDown ? 'd' : 'r'}|${rootQuery}|${rootPanel.rows.length}|${box?.maxHeight ?? 0}`,
+  );
+  const subOverflow = useListOverflow(
+    subListRef,
+    `${open ? 'o' : 'c'}|${branchKey ?? ''}|${branchQuery}|${subPanel?.rows.length ?? 0}|${
+      box?.subMaxHeight ?? 0
+    }|${subSide}|${subTop ?? 0}`,
+  );
 
   // ── Placement ────────────────────────────────────────────────────────────
   const hasBranches = branchPanel !== undefined;
@@ -669,6 +787,59 @@ export function CommandMenu({
     );
   }
 
+  /**
+   * The listbox plus its overflow chrome.
+   *
+   * The scroller is wrapped in a `relative` box so the ramps can sit over it
+   * without being scrolled BY it, and — the part that matters — without taking
+   * any layout: an affordance that shortened the list would change what
+   * overflows, which is a loop that settles on the wrong answer or does not
+   * settle. `pointer-events: none` (in index.css) keeps the row underneath
+   * clickable, so nothing is made unreachable by the thing announcing that
+   * more is reachable.
+   */
+  function listBox(
+    kind: 'root' | 'sub',
+    p: MenuPanel,
+    listRef: RefObject<HTMLDivElement>,
+    over: { edges: Overflow; measure: () => void },
+  ) {
+    return (
+      <div class="relative min-h-0 flex-1">
+        <div
+          ref={listRef}
+          id={listIdOf(kind)}
+          role="listbox"
+          aria-label={p.listLabel}
+          // Read by the roll-call harness: the affordance is asserted against
+          // the same measurement that draws it.
+          data-overflow={overflowState(over.edges)}
+          onScroll={over.measure}
+          class="chat-menu-list h-full overflow-y-auto p-1"
+        >
+          {selectableRows(p.rows).length === 0 ? (
+            <p class="px-2 py-3 text-caption text-muted">{p.emptyLabel}</p>
+          ) : (
+            renderRows(kind, p.rows)
+          )}
+        </div>
+        {over.edges.up && <div class="chat-menu-edge chat-menu-edge--top" aria-hidden="true" />}
+        {over.edges.down && (
+          <div class="chat-menu-edge chat-menu-edge--bottom" aria-hidden="true">
+            {/* Not "there is more" but how much more, so the reader can decide
+                between scrolling and typing. Hidden from assistive tech
+                because the same count is already the group heading above the
+                first row ("18 agents"), where it is announced on entry. */}
+            <span class="chat-menu-more" data-more={over.edges.more}>
+              <ChevronDown size={11} aria-hidden="true" />
+              {over.edges.more} more
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const panelChrome =
     'fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-lg page-enter';
 
@@ -731,19 +902,7 @@ export function CommandMenu({
           {!drillDown && (
           <div ref={rootRef} data-menu-panel={menuName} style={panelStyle(box.left)} class={panelChrome}>
             {searchField('root', rootPanel, rootQuery, setRootQuery, rootInputRef)}
-            <div
-              ref={rootListRef}
-              id={listIdOf('root')}
-              role="listbox"
-              aria-label={rootPanel.listLabel}
-              class="min-h-0 flex-1 overflow-y-auto p-1"
-            >
-              {selectableRows(rootPanel.rows).length === 0 ? (
-                <p class="px-2 py-3 text-caption text-muted">{rootPanel.emptyLabel}</p>
-              ) : (
-                renderRows('root', rootPanel.rows)
-              )}
-            </div>
+            {listBox('root', rootPanel, rootListRef, rootOverflow)}
           </div>
           )}
 
@@ -782,19 +941,7 @@ export function CommandMenu({
                 <span class="min-w-0 truncate text-caption font-semibold text-primary">{subPanel.title}</span>
               </div>
               {searchField('sub', subPanel, branchQuery, setBranchQuery, subInputRef)}
-              <div
-                ref={subListRef}
-                id={listIdOf('sub')}
-                role="listbox"
-                aria-label={subPanel.listLabel}
-                class="min-h-0 flex-1 overflow-y-auto p-1"
-              >
-                {selectableRows(subPanel.rows).length === 0 ? (
-                  <p class="px-2 py-3 text-caption text-muted">{subPanel.emptyLabel}</p>
-                ) : (
-                  renderRows('sub', subPanel.rows)
-                )}
-              </div>
+              {listBox('sub', subPanel, subListRef, subOverflow)}
             </div>
           )}
         </>
