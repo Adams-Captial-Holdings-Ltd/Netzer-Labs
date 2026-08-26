@@ -451,6 +451,14 @@ describe('Paperclip tier gate (.github/workflows/deploy.yml)', () => {
   // absent from the path that reaches staging and production.
   const step = workflowStep('Build + Push Paperclip (native ARM64 CodeBuild)');
 
+  it('allows the bounded job to finish both image builds and deployment', () => {
+    const deployStart = WORKFLOW.indexOf('\n  deploy:\n');
+    const firstStep = WORKFLOW.indexOf('\n    steps:\n', deployStart);
+    expect(deployStart).toBeGreaterThanOrEqual(0);
+    expect(firstStep).toBeGreaterThan(deployStart);
+    expect(WORKFLOW.slice(deployStart, firstStep)).toContain('timeout-minutes: 150');
+  });
+
   it('is gated on the tier, like the ECR repo create and like synth', () => {
     // Same gate on both drivers and in the CDK app: the tier. A CI step still
     // keyed on CCE_PAPERCLIP_ENABLED would build no image for a Tier 1+ deploy

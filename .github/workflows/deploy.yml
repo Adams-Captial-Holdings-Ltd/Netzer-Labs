@@ -104,7 +104,11 @@ jobs:
     # workflow file invalid, and GitHub reports that as a 0-second run failure
     # with no jobs rather than as a syntax error.
     environment: ${{ (github.event_name == 'push' || github.event.inputs.env == 'staging') && 'staging' || 'production' }}
-    timeout-minutes: 60
+    # A cold QEMU arm64 orchestrator build can consume almost 60 minutes by
+    # itself. Paperclip then needs up to 35 minutes for its native build plus
+    # migration, CDK rollout and smoke verification. Bound the whole deploy,
+    # but leave enough room for the complete first-deploy path.
+    timeout-minutes: 150
     # Staging stays Tier 0 but provisions Paperclip so the engine is validated
     # before production. Keep this deploy-only: the verify job must test the
     # repository's default, unconfigured tier behaviour.
