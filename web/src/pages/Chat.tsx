@@ -1,9 +1,20 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 import { Trash2 } from 'lucide-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
+import type { Agent, Conversation, Message, Model } from '../lib/chat/types';
+import {
+  modelOptionLabel,
+  freshChatId,
+  storedChatId,
+  rememberChatId,
+  conversationTitle,
+  relativeAge,
+  friendlyStreamError,
+} from '../lib/chat/helpers';
+import { renderMarkdown } from '../lib/chat/markdown';
+import { streamTurn } from '../lib/chat/stream';
+import { stageAttachments } from '../lib/chat/uploads';
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { EmptyState } from '../components/EmptyState';
@@ -12,123 +23,9 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { InfoTooltip } from '../components/InfoTooltip';
 import { toast } from '../components/Toast';
 
-interface Agent { id: string; displayName: string; status: string }
-// `error` marks an assistant turn the stream failed mid-flight. It renders in a
-// red bubble (and as a " [error: ...]" suffix when text had already streamed)
-// instead of a silent blank reply. `kb` carries knowledge-base confirmations
-// ("Indexed report.pdf…") rendered as chips under the assistant bubble. `meta`
-// is the run footer (model · latency · cost · tools) — parity with the
-// Telegram/Slack footers, which surface the same numbers when enabled.
-interface TurnMeta { modelId: string; latencyMs: number; costUsd: number; toolCallCount: number }
-interface Message { role: 'user' | 'assistant'; text: string; ts: number; error?: boolean; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; meta?: TurnMeta }
-interface Model { label: string; id: string; contextWindow: number; family: string; isDefault: boolean }
-
-// Friendly names for the env-driven model labels the backend returns.
-const MODEL_NAMES: Record<string, string> = {
-  opus: 'Opus',
-  'opus-1m': 'Opus 1M',
-  sonnet: 'Sonnet',
-  'sonnet-1m': 'Sonnet 1M',
-  haiku: 'Haiku',
-  default: 'Default',
-};
-
-// "Sonnet 1M · 1M ctx" — name plus a compact context-window hint so the picker
-// conveys why you'd reach for one model over another.
-function modelOptionLabel(m: Model): string {
-  const name = MODEL_NAMES[m.label] ?? m.label;
-  const ctx = m.contextWindow >= 1_000_000
-    ? '1M ctx'
-    : `${Math.round(m.contextWindow / 1000)}K ctx`;
-  return `${name} · ${ctx}`;
-}
-
-// Each conversation gets its own chatId. Reusing a single id across agent
-// switches let one agent's accumulated context leak into the next turn, which
-// tripped Bedrock guardrails on later turns (the multi-turn false-positive).
-// A fresh id per agent (and per explicit "new chat") keeps server-side history
-// scoped to the conversation actually on screen.
-function freshChatId(): string {
-  return `dashboard:${Date.now()}`;
-}
-
-// One row of the conversation sidebar. Mirrors the shape /sessions already
-// returns (same as Sessions.tsx) — this feature adds no new endpoint.
-interface Conversation {
-  agentId: string;
-  chatId: string;
-  updatedAt: number;
-  messageCount: number | null;
-  firstMessage: string | null;
-}
-
-// The active conversation survives a reload. Without this the Chat tab minted a
-// fresh chatId on every mount and silently abandoned the previous conversation
-// — which is what made history feel non-existent even though it was stored.
-const ACTIVE_CHAT_KEY = 'cce_chat_active';
-
-function storedChatId(agentId: string): string | null {
-  try {
-    const raw = sessionStorage.getItem(ACTIVE_CHAT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { agentId?: string; chatId?: string };
-    return parsed.agentId === agentId && parsed.chatId ? parsed.chatId : null;
-  } catch {
-    return null;
-  }
-}
-
-function rememberChatId(agentId: string, chatId: string): void {
-  try {
-    sessionStorage.setItem(ACTIVE_CHAT_KEY, JSON.stringify({ agentId, chatId }));
-  } catch {
-    /* private mode or quota — the sidebar still works, only resume-on-reload is lost */
-  }
-}
-
-/** Sidebar label for a conversation: its opening message, else the raw id. */
-function conversationTitle(c: Conversation): string {
-  const first = (c.firstMessage ?? '').trim();
-  return first.length > 0 ? first : c.chatId;
-}
-
-/** Compact relative age for the sidebar ("3m", "5h", "2d"). */
-function relativeAge(epochSeconds: number, nowMs = Date.now()): string {
-  const secs = Math.max(0, Math.floor(nowMs / 1000) - epochSeconds);
-  if (secs < 60) return 'now';
-  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
-  return `${Math.floor(secs / 86400)}d`;
-}
-
-// Render assistant markdown to sanitized HTML. marked emits <strong>, <em>,
-// <pre><code> (monospaced via prose styling below); DOMPurify strips anything
-// unsafe so dangerouslySetInnerHTML can't inject script. Synchronous parse
-// (async:false) keeps the return type a plain string.
-function renderMarkdown(text: string): string {
-  const html = marked.parse(text, { async: false, gfm: true, breaks: true });
-  return DOMPurify.sanitize(html);
-}
-
-// Turn the stream's `event: error` payload into a plain-English sentence. The
-// backend emits either a code-prefixed string (e.g. "kill_switch_active: ...")
-// or a raw Error message (e.g. "daily cost cap exceeded: $1.50 >= $1.00", "No
-// Bedrock model configured"). A CISO should never see the raw token or a dollar
-// dump, so match known codes first, then substrings of the raw message.
-function friendlyStreamError(raw: string): string {
-  const code = raw.trim();
-  const n = code.toLowerCase();
-  if (/kill.?switch|killed\b/.test(n)) return 'This was blocked by an active kill switch.';
-  if (/cost.?cap|daily cost|spend cap|spending limit/.test(n)) return 'The daily spending limit has been reached. Raise it in Cost or try again tomorrow.';
-  if (/rate.?limit|too many requests/.test(n)) return 'Too many requests right now. Wait a moment and try again.';
-  if (/sessions?.?frozen/.test(n)) return 'New messages are paused by a kill switch (sessions frozen).';
-  if (/guardrail|blocked by/.test(n)) return 'The response was blocked by a safety guardrail.';
-  if (/no .*model|model .*config|model.?error|no bedrock/.test(n)) return 'No model is configured for this agent, or the model failed. Try a different model.';
-  // Unknown: a clean fallback, never a raw token or a long dump.
-  return code && code.length < 140 && !/[{}$]/.test(code)
-    ? `Something went wrong: ${code}`
-    : 'The agent could not finish this response. Please try again.';
-}
+// The chat data/transport layer lives in ../lib/chat (types, helpers,
+// markdown, stream, uploads) — extracted verbatim from this file in Phase 0 of
+// the chat UI port. This page owns state and rendering only.
 
 export function Chat() {
   const [, params] = useRoute('/chat/:agentId');
@@ -348,135 +245,32 @@ export function Chat() {
 
     try {
       const token = getToken();
-      // Stage each file straight to S3 via a presigned PUT (the JSON body to
-      // the stream endpoint then carries only small s3Key references, far
-      // under the WAF 8KB cap).
-      const attachments: Array<{ s3Key: string; fileName: string; mimeType?: string }> = [];
-      for (const f of sendFiles) {
-        setToolStatus(`Uploading ${f.name}…`);
-        const presign = await fetch('/api/vectors/upload-url', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: f.name }),
-        });
-        if (!presign.ok) throw new Error('Upload failed');
-        const { url, key } = await presign.json();
-        const put = await fetch(url, { method: 'PUT', body: f });
-        if (!put.ok) throw new Error('Upload failed');
-        attachments.push({ s3Key: key, fileName: f.name, ...(f.type ? { mimeType: f.type } : {}) });
-      }
+      // Stage each file straight to S3 via a presigned PUT (see
+      // ../lib/chat/uploads.ts; the JSON body to the stream endpoint then
+      // carries only small s3Key references, far under the WAF 8KB cap).
+      const attachments = await stageAttachments(sendFiles, token, setToolStatus);
       setToolStatus('');
-      const res = await fetch('/api/test-turn/stream', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      // The SSE parser lives in streamTurn (../lib/chat/stream.ts). Its chunk
+      // callback both updates the live preview and clears the tool status —
+      // exactly the pre-extraction behavior.
+      const outcome = await streamTurn(
+        {
           text,
           agentId,
           chatId,
           ...(modelId ? { modelOverride: modelId } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
-        }),
-      });
-      if (!res.ok || !res.body) throw new Error('Stream failed');
+        },
+        token,
+        { onChunk: setStreamText, onToolStatus: setToolStatus },
+      );
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let fullText = '';
-      let isReply = false;
-      // The backend emits `event: error` with the message string as `data` when a
-      // turn fails mid-stream. We capture it here and surface it as a red bubble
-      // after the loop instead of pushing an empty assistant reply.
-      let errorText = '';
-      const kbChips: string[] = [];
-      const images: Array<{ url: string; caption: string }> = [];
-      const artifacts: Array<{ url: string; name: string }> = [];
-      let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
-      let curData = '';
-      let buffer = '';
-
-      // Flush one fully-received SSE event (event + its accumulated data lines).
-      const flushEvent = () => {
-        if (curData === '') return;
-        if (curEvent === 'reply') {
-          // Slash-command reply: plain text, surfaced directly (not JSON).
-          fullText = curData;
-          isReply = true;
-          setStreamText(curData);
-        } else if (curEvent === 'final') {
-          fullText = curData; // JSON; parsed after the loop
-        } else if (curEvent === 'chunk') {
-          fullText = curData; // cumulative plain text for the live preview
-          setStreamText(curData);
-          setToolStatus(''); // text resumed; drop the tool-status line
-        } else if (curEvent === 'tool') {
-          // { label, step } — show what the agent is doing during tool dispatch.
-          try {
-            const t = JSON.parse(curData);
-            setToolStatus(t.step > 1 ? `${t.label}… (step ${t.step})` : `${t.label}…`);
-          } catch { /* ignore malformed tool event */ }
-        } else if (curEvent === 'media') {
-          // { fileName, stage, label } — media pipeline progress (transcribe,
-          // frames, indexing). Rides the same status row as tool events.
-          try {
-            const m = JSON.parse(curData);
-            setToolStatus(m.label ?? `Processing ${m.fileName}…`);
-          } catch { /* ignore malformed media event */ }
-        } else if (curEvent === 'kb') {
-          // { text } — knowledge-base confirmation chip for the final bubble.
-          try {
-            const k = JSON.parse(curData);
-            if (k.text) kbChips.push(k.text);
-          } catch { /* ignore malformed kb event */ }
-        } else if (curEvent === 'image') {
-          // { url, caption } — generated image, rendered inline under the reply.
-          try {
-            const im = JSON.parse(curData);
-            if (im.url) images.push({ url: im.url, caption: im.caption ?? '' });
-          } catch { /* ignore malformed image event */ }
-        } else if (curEvent === 'artifact') {
-          // { url, name } — generated document, rendered as a download card.
-          // This URL comes straight off the tool result, so unlike a link the
-          // model retypes into its reply, its signature is intact.
-          try {
-            const a = JSON.parse(curData);
-            if (a.url) artifacts.push({ url: a.url, name: a.name || a.caption || 'document' });
-          } catch { /* ignore malformed artifact event */ }
-        } else if (curEvent === 'error') {
-          // Plain-text error message from the SSE writer; surfaced as an error bubble.
-          errorText = curData;
-        }
-        // done / unknown events carry no assistant text we surface here.
-        curData = '';
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (line === '') {
-            // Blank line terminates an SSE event.
-            flushEvent();
-            curEvent = 'chunk';
-          } else if (line.startsWith('event: ')) {
-            curEvent = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            // Multiline data arrives as repeated "data: " lines; rejoin them.
-            curData = curData === '' ? line.slice(6) : `${curData}\n${line.slice(6)}`;
-          }
-        }
-      }
-      flushEvent();
-
-      if (errorText) {
+      if (outcome.errorText) {
         // Mid-stream failure. If text had already streamed, keep it and append a
         // clear error suffix; otherwise show the error on its own. Either way it
         // renders in a red bubble, never as a silent blank reply.
-        const msg = friendlyStreamError(errorText);
-        const partial = (!isReply && fullText) ? `${fullText}\n\n${msg}` : msg;
+        const msg = friendlyStreamError(outcome.errorText);
+        const partial = (!outcome.isReply && outcome.text) ? `${outcome.text}\n\n${msg}` : msg;
         setMessages((prev) => [...prev, { role: 'assistant', text: partial, ts: Date.now() / 1000, error: true }]);
         setStreamText('');
         setToolStatus('');
@@ -484,31 +278,15 @@ export function Chat() {
         return;
       }
 
-      let meta: TurnMeta | undefined;
-      if (fullText && !isReply) {
-        // chunk/final payloads carry the assistant turn as JSON {text,...}. The
-        // `final` event also carries the run metadata for the footer.
-        try {
-          const parsed = JSON.parse(fullText);
-          fullText = parsed.text ?? fullText;
-          if (typeof parsed.costUsd === 'number') {
-            meta = {
-              modelId: parsed.modelId ?? '',
-              latencyMs: parsed.latencyMs ?? 0,
-              costUsd: parsed.costUsd,
-              toolCallCount: parsed.toolCallCount ?? 0,
-            };
-          }
-        } catch { /* not JSON (e.g. a raw chunk); use raw text */ }
-      }
       setMessages((prev) => [...prev, {
         role: 'assistant',
-        text: fullText,
+        text: outcome.text,
         ts: Date.now() / 1000,
-        ...(kbChips.length > 0 ? { kb: kbChips } : {}),
-        ...(images.length > 0 ? { images } : {}),
-        ...(artifacts.length > 0 ? { artifacts } : {}),
-        ...(meta ? { meta } : {}),
+        ...(outcome.kb.length > 0 ? { kb: outcome.kb } : {}),
+        ...(outcome.images.length > 0 ? { images: outcome.images } : {}),
+        ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
+        ...(outcome.meta ? { meta: outcome.meta } : {}),
+        ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
       }]);
     } catch (e) {
       // Log the raw cause for debugging, but render only sanitized copy: the
