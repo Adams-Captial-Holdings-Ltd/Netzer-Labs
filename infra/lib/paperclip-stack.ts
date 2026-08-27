@@ -13,11 +13,6 @@ import {
   type ICluster,
 } from 'aws-cdk-lib/aws-ecs';
 import { SubnetType, type IVpc, type SecurityGroup } from 'aws-cdk-lib/aws-ec2';
-import {
-  ApplicationProtocol,
-  ApplicationTargetGroup,
-  TargetType,
-} from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Role, ServicePrincipal, PolicyStatement, Effect } from 'aws-cdk-lib/aws-iam';
 import { Secret as SmSecret, type ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { IFileSystem, IAccessPoint } from 'aws-cdk-lib/aws-efs';
@@ -533,26 +528,6 @@ export class PaperclipStack extends Stack {
       },
     });
 
-    // ── Target group ────────────────────────────────────────────
-    const targetGroup = new ApplicationTargetGroup(this, 'PaperclipTargetGroup', {
-      vpc: props.vpc,
-      targetGroupName: `${APP}-paperclip-tg`,
-      port: PAPERCLIP_PORT,
-      protocol: ApplicationProtocol.HTTP,
-      targetType: TargetType.IP,
-      healthCheck: {
-        path: PAPERCLIP_HEALTH_PATH,
-        healthyHttpCodes: '200',
-        interval: Duration.seconds(30),
-        timeout: Duration.seconds(5),
-        healthyThresholdCount: 2,
-        unhealthyThresholdCount: 3,
-      },
-      // Short, because a roll already drops to zero healthy targets
-      // (minHealthyPercent 0) and a long drain only lengthens that window.
-      deregistrationDelay: Duration.seconds(20),
-    });
-
     // ── Operator console posture (Phase 4.5) ────────────────────
     // The pinned artifact keeps email self-registration open even in
     // authenticated mode (A38). Therefore this stack deliberately emits NO
@@ -582,8 +557,10 @@ export class PaperclipStack extends Stack {
     // RESOURCE_NAMES instead, exactly as it already does for every other
     // deterministic name it hands the task.
     //
-    // ADDITIVE. The target group remains for ECS health; no browser listener
-    // is attached while A38 remains true.
+    // No target group is emitted while A38 remains true. ECS rejects a service
+    // that registers with a target group which is not associated with a load
+    // balancer, and the task's container health check already owns service
+    // health for this private Cloud Map-only route.
     const namespace = new PrivateDnsNamespace(this, 'PaperclipNamespace', {
       name: RESOURCE_NAMES.paperclipNamespace,
       vpc: props.vpc,
@@ -626,7 +603,6 @@ export class PaperclipStack extends Stack {
         dnsTtl: Duration.seconds(15),
       },
     });
-    this.service.attachToApplicationTargetGroup(targetGroup);
     // NO autoScaleTaskCount(). Intentionally. See the class doc and the
     // guardrail assertion in paperclip-stack.test.ts.
 

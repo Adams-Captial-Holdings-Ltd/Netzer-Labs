@@ -252,13 +252,13 @@ describe('readiness gates (M33)', () => {
   it('scales a bootstrap deploy to zero tasks instead of deleting the service', () => {
     // The fresh-install and maintenance escape hatch while the database is not
     // ready. It must degrade, never destroy: the service resource, its
-    // target-group attachment and both task definitions all survive, so one
+    // Cloud Map registration and both task definitions all survive, so one
     // redeploy without the flag restores the running system.
     const boot = synth({ bootstrapWithoutTasks: true });
     boot.paperclip.resourceCountIs('AWS::ECS::Service', 1);
     boot.paperclip.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 0 });
     expect(byFamily(boot.paperclip, 'claudeclaw-paperclip-migrate')).toBeDefined();
-    boot.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
+    boot.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 0);
   });
 
   it('keeps the migration task definition on every synth, flag or no flag', () => {
@@ -279,15 +279,10 @@ describe('readiness gates (M33)', () => {
 // Wire contract: port, health path, names the deploy manifest predicted.
 // ─────────────────────────────────────────────────────────────────────
 
-describe('target group and container wiring', () => {
-  it('health-checks /api/health on port 3100', () => {
-    paperclip.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
-      Port: 3100,
-      Protocol: 'HTTP',
-      TargetType: 'ip',
-      HealthCheckPath: '/api/health',
-      Matcher: { HttpCode: '200' },
-    });
+describe('private service and container wiring', () => {
+  it('does not attach an orphan target group to the Cloud Map-only service', () => {
+    paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 0);
+    expect(JSON.stringify(raw)).not.toContain('"LoadBalancers"');
   });
 
   it('exposes 3100 on the container, never 3000', () => {
@@ -297,8 +292,7 @@ describe('target group and container wiring', () => {
   });
 
   it('container-health-checks the same path on the same port', () => {
-    // The ALB health check and the container health check must agree, or a
-    // task can be ALB-healthy while ECS restarts it in a loop. `curl` is used
+    // ECS owns health for the private Cloud Map-only route. `curl` is used
     // because /usr/bin/curl was probed present in the pinned image; a check
     // naming a binary the image lacks is UNHEALTHY forever, which at
     // minHealthyPercent 0 is an outage.
@@ -673,12 +667,12 @@ describe('orchestrator to Paperclip reachability', () => {
     });
   });
 
-  it('leaves the ALB console path exactly as it was (additive only)', () => {
-    // The existing listener stays unbound; target-group health remains.
+  it('leaves the ALB console path unbound', () => {
+    // A38 keeps the operator console off the shared ALB entirely.
     const withListener = synth({ withListener: true });
     withListener.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 0);
-    withListener.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
-    paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
+    withListener.paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 0);
+    paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 0);
   });
 
   it('gives the orchestrator task definition PAPERCLIP_BASE_URL', () => {
