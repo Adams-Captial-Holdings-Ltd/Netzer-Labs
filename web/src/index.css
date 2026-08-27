@@ -62,6 +62,64 @@
     --color-surface: #ffffff;
     --color-surface-elevated: #f5f5f7;
     --color-surface-hover: #f0f0f5;
+
+    /* ── Row states: the CURRENT row, and a merely hovered one ──────────────
+       Two tokens, not one, because a list needs three legible grounds: the
+       panel, "the pointer is here", and "this is the one you are on". The
+       previous cut had a single fill and gave it to HOVER, then marked the
+       current row with a hairline — so a hovered row read as more selected
+       than the selected one (measured 1.02:1 apart, light desktop).
+
+       The donor's answer to the same problem is a fill you can see across the
+       room plus a rail: `--gray-200` on a `--gray-50` panel (1.20:1) light,
+       `#2f2f2f` on `#171717` (1.34:1) dark, both with a left marker. These are
+       that treatment in this palette's own grays, one step further apart:
+
+         light  panel #f5f5f7 → hover #e4e4ec (1.16:1) → active #d1d1db (1.39:1)
+         dark   panel #08080d → hover #1c1c2e (1.19:1) → active #313146 (1.58:1)
+
+       `row-active` is also what the picker menus paint the KEYBOARD-ACTIVE row
+       with (CommandMenu), so "the thing you are on" is one colour wherever the
+       product draws a list — there it sits on `--color-surface` instead and
+       measures 1.52:1 light / 1.44:1 dark against it. (The dark value moved in
+       round 2; the reasoning and the full before/after table are on the dark
+       `--color-row-active` declaration below.) */
+    --color-row-hover: #e4e4ec;   /* gray-200 */
+    --color-row-active: #d1d1db;  /* gray-300 */
+
+    /* The left-edge MARKER on the conversation rail's CURRENT row — "the
+       conversation you are in". Brand indigo, at the weight that actually
+       reads against `--color-row-active`: stock `--color-primary` (#6366f1)
+       on the light fill measures 2.95:1, so the hover shade is used instead
+       and lands it at 4.15:1. Defined as a `var()` of a brand token rather
+       than a literal so a white-label palette moves the marker with it
+       (applyBrand co-writes --color-primary and --color-primary-hover,
+       web/src/lib/theme.ts). */
+    --color-accent-bar: var(--color-primary-hover);
+
+    /* The KEYBOARD-FOCUS marker in the picker menus — "the row the arrow keys
+       are on". A SEPARATE token from `--color-accent-bar` above, and
+       deliberately achromatic, for two reasons a review caught:
+
+       1. ONE HUE, ONE MEANING. The first cut painted this rail in the same
+          brand indigo as the sidebar marker, so a single colour was saying
+          "the conversation you are in" on one surface and "where the keyboard
+          is" on another. They are different facts and now read as different
+          marks: indigo for place, the text ramp for focus.
+       2. STRENGTH. The brief quoted the donor's bar at 2.99:1 light / 3.71:1
+          dark; those were sampled off the bar's ANTIALIASED EDGE. The donor's
+          actual declaration is `data-[active-item]:before:bg-text-primary`
+          (Chat/Menus/Endpoints/CustomMenu.tsx:182) — its primary TEXT colour,
+          i.e. near-black on light and near-white on dark, which measures
+          12.5:1 / 9.8:1 against its own row fill. Indigo cannot reach that at
+          any weight. Copying the donor's actual choice can, in our own ramp:
+          #1a1a2e on the #d1d1db row fill measures 11.20:1 light, #e8e8f0 on
+          #2a2a3d measures 11.51:1 dark.
+
+       It tracks `--color-text-primary` rather than restating it, so a theme
+       that moves the text ramp moves the focus marker with it and the two
+       cannot drift apart. */
+    --color-focus-bar: var(--color-text-primary);
     --color-text-primary: #1a1a2e;
     --color-text-secondary: #64648c;
     --color-text-muted: #9898b0;
@@ -79,6 +137,41 @@
     --color-warning: #f59e0b;
     --color-warning-dim: rgba(245, 158, 11, 0.12);
     --color-info: #06b6d4;
+
+    /* ── Alpha-capable mirrors of the semantic tokens (light mode) ──
+       Space-separated RGB triplets, NOT colors: they exist so Tailwind can
+       compose `rgb(var(--x-rgb) / <alpha-value>)` and opacity modifiers such
+       as `bg-primary-a/10` actually emit CSS (the raw `var()` tokens above
+       cannot — Tailwind has nowhere to inject the alpha). The paired `-a` keys
+       live in web/tailwind.config.ts. Each triplet MUST track its parent token
+       above, and applyBrand() co-writes --color-primary-rgb so white-label
+       brands stay in sync (web/src/lib/theme.ts). */
+    --color-primary-rgb: 99 102 241;   /* --color-primary  #6366f1 */
+    --color-bg-rgb: 250 250 250;       /* --color-bg       #fafafa */
+    --color-surface-rgb: 255 255 255;  /* --color-surface  #ffffff */
+    --color-danger-rgb: 239 68 68;     /* --color-danger   #ef4444 */
+    --color-border-rgb: 228 228 236;   /* --color-border   #e4e4ec */
+
+    /* ── Scrollbar ink: the one ramp here that is DELIBERATELY unbranded ──
+       (round 2) Every scrollbar in this product used to be painted in
+       `--color-primary-rgb`. On a HORIZONTAL bar that is a bug, not a taste
+       call: a saturated, brand-coloured bar sitting flush on a panel's bottom
+       edge, whose LENGTH varies with content, is the universal grammar of a
+       progress bar — and a reviewer read two code blocks in one dark mobile
+       frame as "two things are loading". They were the horizontal scrollbars
+       of two <pre>s with different overflow (measured: thumbs at 21% and 57%
+       of a 321px track, saturation 46%, the highest-saturation objects in the
+       frame).
+       So the ink is neutral BY CONSTRUCTION, and it costs the affordance
+       nothing. These are the same LUMINANCE as the indigo they replace: at the
+       alphas the rules below already use, the dark code-block thumb composites
+       to L=0.0886 against the old L=0.0871 — same visual weight, same width,
+       same 8px gutter — while the hue spread drops from 119 to 8. A scrollbar
+       has to be visible; it must not be the loudest thing on the screen.
+       Solid neutrals, so any residual cast is the panel showing THROUGH the
+       alpha rather than a colour the bar brought with it. */
+    --color-scroll-thumb-rgb: 110 110 118;
+    --color-scroll-track-rgb: 214 214 220;
 
     /* ── Shadows ── */
     --shadow-xs: 0 1px 2px rgba(0,0,0,0.05);
@@ -115,6 +208,55 @@
     --color-surface: #141420;
     --color-surface-elevated: #1c1c2e;
     --color-surface-hover: #22223a;
+
+    /* Dark mirrors of the row-state ladder. They travel UP from the sunken
+       panel here and DOWN from it in light mode, which is why they cannot be
+       one alpha token shared between the themes. */
+    --color-row-hover: #1c1c2e;   /* gray-850-ish, = surface-elevated */
+    /* ── The DARK focused-row fill, re-tuned in round 2 ──────────────────────
+       A review said the focused menu row's fill was carrying no signal and the
+       whole focus mark rested on the 3px rail, quoting 1.52:1 from the LIGHT
+       theme. Checked against the donor's own tokens rather than argued about:
+
+         donor light  --surface-hover gray-200 (227) on --presentation white
+                      = 1.283:1
+         donor dark   --surface-hover gray-650 (57)  on --presentation gray-800
+                      = 1.394:1
+         (donor/src/style.css:151,169,257,274 — CustomMenu.tsx:182 is the row.)
+
+       So the light number the review quoted, 1.52:1, is already 18% STRONGER
+       than the bar it was copied from. The one genuinely below the donor was
+       DARK, at 1.30:1 against its 1.394:1 — and nobody had looked, because the
+       report happens to print light first.
+
+       #2a2a3d -> #313146 is that gap closed, and it is a zero-sum trade made
+       with the numbers open: fill contrast and rail contrast are the SAME
+       headroom spent twice, so every step the fill gains, the rail loses.
+       Measured at the new value:
+
+         menu row fill vs panel   1.30:1 -> 1.44:1   (donor 1.39)
+         focus rail vs row fill  11.51:1 -> 10.39:1  (donor 9.79)
+         sidebar row vs rail bg   1.42:1 ->  1.58:1
+         active vs merely hovered 1.19:1 ->  1.32:1
+         accent bar on the row    4.70:1 ->  4.24:1  (floor is 3:1)
+
+       Every one of those still clears the donor's own bar and WCAG's, which is
+       what makes this the right point on the curve rather than just a different
+       one. LIGHT IS DELIBERATELY UNTOUCHED: it already wins on the fill, and
+       spending its rail headroom to gain fill it does not need would trade a
+       strength for a strength. */
+    --color-row-active: #313146;  /* was #2a2a3d (gray-800) */
+
+    /* Dark inverts which shade reads: the fill is now the LIGHTER of the two,
+       so the sidebar marker wants the brighter brand tone, not the hover shade
+       (which is darker here). #818cf8 on #2a2a3d measures 4.70:1. */
+    --color-accent-bar: var(--color-primary);
+
+    /* The keyboard-focus marker needs no dark override of its own — it tracks
+       `--color-text-primary`, which flips to #e8e8f0 four lines below, so the
+       rail inverts with the theme exactly as the donor's `bg-text-primary`
+       does. Restated here only so the token is greppable in both blocks. */
+    --color-focus-bar: var(--color-text-primary);
     --color-text-primary: #e8e8f0;
     --color-text-secondary: #9898b0;
     --color-text-muted: #606078;
@@ -131,6 +273,23 @@
     --color-danger-dim: rgba(239, 68, 68, 0.15);
     --color-warning: #fbbf24;
     --color-warning-dim: rgba(245, 158, 11, 0.15);
+
+    /* Dark mirrors of the alpha triplets. These MUST be re-declared here (not
+       inherited from :root) because the dark palette re-tunes their parents:
+       the primary lifts to indigo 400 and the danger to red 400 so they read on
+       a near-black surface. */
+    --color-primary-rgb: 129 140 248;  /* --color-primary  #818cf8 */
+    --color-bg-rgb: 10 10 15;          /* --color-bg       #0a0a0f */
+    --color-surface-rgb: 20 20 32;     /* --color-surface  #141420 */
+    --color-danger-rgb: 248 113 113;   /* --color-danger   #f87171 */
+    --color-border-rgb: 42 42 61;      /* --color-border   #2a2a3d */
+
+    /* Dark scrollbar ink. Same rule as the light block above: neutral, and
+       luminance-matched to the indigo it replaces so no scrollbar gets quieter
+       — only less chromatic. This is the pair the dark-mobile defect was
+       actually about. */
+    --color-scroll-thumb-rgb: 150 150 158;
+    --color-scroll-track-rgb: 52 52 56;
 
     --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
@@ -355,3 +514,965 @@
   text-align: left;
 }
 .chat-md th { background: var(--color-surface-elevated); font-weight: 600; }
+
+/* ── Chat code blocks (CHATUI-001) ────────────────────────────────────────
+   STRICTLY ADDITIVE. `.chat-md` is shared with WarRoom and Playground, so not
+   one rule above is edited or removed. Everything below either targets a NEW
+   class that only the chat renderer emits (`.chat-code*`, the `.hljs-*` groups)
+   or out-specifies an existing rule from inside that new class — so a surface
+   that does not render the chrome keeps today's exact markdown.
+
+   Structure ported from danny-avila/LibreChat (MIT), pinned at commit
+   6d499ba3ce17f906a7762429c61018f230ecd64e —
+   client/src/components/Messages/Content/{CodeBlock,CodeBar}.tsx: rounded
+   hairline container, a bar with the language on the left and actions on the
+   right, then a body that scrolls horizontally on its own. Every colour is one
+   of this app's tokens; no donor palette survives. */
+
+.chat-md .chat-code {
+  margin: 0 0 var(--space-3);
+  max-width: 100%;
+  /* The bubble is `bg-surface`; the block steps one level up so it reads as a
+     panel rather than as loose text, in both themes. */
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  /* Clips the bar's corners to the container radius AND stops a long line from
+     widening the bubble — the body, not the page, does the scrolling. */
+  overflow: hidden;
+}
+
+.chat-md .chat-code__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 5px 6px 5px var(--space-3);
+  /* A whisper of the brand hue, via the alpha triplet: follows light/dark and
+     any white-label primary without a second hardcoded value. */
+  background: rgb(var(--color-primary-rgb) / 0.06);
+  border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.chat-md .chat-code__lang {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  /* A fence info string is author-controlled; never let it push the button out. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-md .chat-code__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 7px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.chat-md .chat-code__copy:hover {
+  background: rgb(var(--color-primary-rgb) / 0.12);
+  color: var(--color-primary);
+}
+/* Set by the delegated copy handler for ~1.6s after a successful copy. */
+.chat-md .chat-code__copy[data-copied='true'] { color: var(--color-success); }
+.chat-md .chat-code__copy[data-copied='false'] { color: var(--color-danger); }
+.chat-md .chat-code__copy-icon { flex: none; }
+
+/* Out-specifies `.chat-md pre` (0,1,1 vs 0,2,1) instead of editing it: inside
+   the chrome the frame belongs to the container, so the pre contributes only
+   padding and its own horizontal scroll. */
+.chat-md .chat-code > pre {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.chat-md .chat-code > pre > code {
+  display: block;
+  /* Long lines scroll the body rather than wrapping — matches the donor and
+     keeps indentation readable. */
+  white-space: pre;
+  min-width: 0;
+}
+
+/* ── Overflow has to ANNOUNCE itself (CHATUI-00x) ──
+   A NEW rule with the same selector, later in the cascade, rather than edits
+   to the block above — same house rule as the inline-chip fix below.
+
+   The block already scrolled. Nothing on screen said so. A line was sliced
+   mid-token at a hard vertical seam ("…lib/chat/stre", "=> void", "new TextD")
+   with no scrollbar track, no thumb and no ramp, so on a 2560px desktop the
+   correct reading of that frame was "this panel is broken", not "this panel
+   scrolls". Two independent affordances, because either one alone can vanish:
+
+   1. A REAL SCROLLBAR. The global `* { scrollbar-width: thin }` a few hundred
+      lines up is why there was none: whenever `scrollbar-width` is set to
+      anything other than `auto`, Chromium ignores every `::-webkit-scrollbar`
+      rule in scope, and the thin scrollbar it substitutes is an overlay that
+      paints nothing at rest and takes 0px of layout (measured: `offsetHeight -
+      clientHeight === 0` on a pre whose scrollWidth was 1531 against a
+      clientWidth of 710). Restoring `auto` here — and only here — hands the
+      block back to the styled pseudo-elements below, which are always painted
+      and always take their 8px.
+
+   2. A RIGHT-EDGE RAMP, so the seam becomes a fade even in a still frame where
+      a scrollbar could be missed. The ramp is exactly as wide as the right
+      padding, and that is what makes it honest rather than decorative:
+
+        - a block that does NOT overflow cannot put a glyph inside its own
+          padding, so the ramp never touches its text;
+        - a block scrolled to its END shows that padding at the right edge, so
+          the last glyph clears the ramp;
+        - a block with more to the right is the ONLY case where the ramp eats
+          ink — which is precisely when "there is more" is the true statement.
+
+      `black`/`transparent` in the gradient are stencil values, not colours:
+      under `mask-mode: match-source` a CSS gradient is read for its ALPHA, so
+      these two stops mean "keep" and "drop". No theme colour is involved and
+      none is needed — the ramp reveals whatever ground the block is on, in
+      either theme. */
+.chat-md .chat-code > pre {
+  padding-right: var(--space-8);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - var(--space-8)), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - var(--space-8)), transparent);
+  /* BOTH standard properties have to be handed back, not just one. Chromium
+     ignores every `::-webkit-scrollbar` rule in scope when EITHER
+     `scrollbar-width` is non-auto (the `*` rule sets `thin`) or
+     `scrollbar-color` is set (the `*` rule sets that too) — and with the
+     pseudo-elements ignored it draws the platform default: measured at 15px
+     tall, in the platform's own grey, on a panel whose whole point is that it
+     is this product's chrome. `auto`/`auto` here is what re-arms the four
+     rules below. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+/* Firefox has no `::-webkit-scrollbar`, so it needs the standard properties
+   after all — and only there, where they cost nothing. */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-md .chat-code > pre {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-primary-rgb) / 0.45) rgb(var(--color-border-rgb) / 0.6);
+  }
+}
+.chat-md .chat-code > pre::-webkit-scrollbar {
+  height: 8px;
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-track {
+  background: rgb(var(--color-border-rgb) / 0.6);
+  border-radius: 4px;
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-primary-rgb) / 0.45);
+  border-radius: 4px;
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-primary-rgb) / 0.7);
+}
+
+/* ── The composer's own scroller (Phase 4, CHATUI-004) ──
+   The composer textarea grows to a max-height and then becomes a scroll
+   container of its own — the capped state, and the headline deliverable of the
+   phase. It is NOT the code block, and the previous pass's mistake was
+   treating it as though it were.
+
+   A scrollbar is right on the code block: that panel is a quoted artifact
+   whose right edge is an ARBITRARY cut through the middle of a line, so the
+   reader needs a track to tell them how much of the line they are missing and
+   a thumb to drag. The composer is the opposite — it is the reader's OWN
+   sentence, cut at a boundary they created by typing, and everything they
+   need is one keystroke away. Chrome there buys nothing and costs three
+   defects, all of which the last capture shows in one corner:
+
+     - `scrollbar-color` puts Chromium on its non-overlay scrollbar path, and
+       on Windows that scrollbar has STEPPER BUTTONS. The up stepper is drawn
+       square into the card's 12px top-right radius, so a grey triangle sits
+       OUTSIDE the rounded corner it is supposed to be inside;
+     - the down stepper lands at the textarea's bottom edge — which is not the
+       card's, because the control row is below it — so it floats mid-air
+       above the send button with no track under it;
+     - and the track claims ~15px of the box's width for a scroller nobody in
+       this composer will ever drag.
+
+   So: NO SCROLLBAR. `scrollbar-width: none` is the standard property and the
+   one modern Chromium and Firefox both honour; the `::-webkit-` rule below is
+   for the older WebKit that has no `scrollbar-width` to obey. The box still
+   scrolls, by wheel, by trackpad, by arrow key and by caret — it just stops
+   painting furniture on a card the donor's own composer keeps bare.
+
+   What replaces it is the affordance that was actually missing: an EDGE FADE.
+   The viewport used to be flush to the card's inner border, so a line scrolled
+   half out of view was sliced at a hard seam against a 2px stroke — a descender
+   from the line above collided with the border, and the line below was
+   guillotined through its x-height. A cut like that reads as a rendering bug.
+   A fade reads as "there is more", which is the true statement.
+
+   The gradient is inset by `--composer-fade` at both ends and the textarea
+   carries MORE vertical padding than that (16px against 12px), which is what
+   makes the fade honest rather than decorative — the same argument as the code
+   block's right-edge ramp:
+
+     - a draft that does NOT overflow keeps every line inside the padding, so
+       the fade never touches ink;
+     - scrolled to the top or the bottom, the first/last line clears the ramp
+       by the 4px the padding has spare;
+     - the ONLY case where the fade eats ink is a line half out of view — which
+       is precisely when "there is more" is what the reader needs told.
+
+   `black`/`transparent` are stencil values, not colours: under the default
+   `mask-mode: match-source` a CSS gradient is read for its ALPHA, so the two
+   stops mean "keep" and "drop". No theme colour is involved and none is
+   needed — the fade reveals the card underneath in either theme, which is why
+   it cannot drift out of step with `--color-surface` the way a painted
+   gradient overlay would.
+
+   The one state that has to be checked rather than argued is the CARET on the
+   last visible line, because there the browser picks the scroll offset, not
+   the padding. Measured (Ctrl+End in the capped box, 1280×800 and 375×812):
+   Chromium parks the caret's line 8px clear of the scrollport edge on its own,
+   so the ramp reaches only the last ~3px of that line's descender box, at 75%
+   alpha or better — the capped frames show the caret's line crisp. It does not
+   apply `scroll-padding` to caret scrolling inside a textarea; the declaration
+   is here for the engines that do, and costs nothing where they don't. */
+.chat-composer__input {
+  --composer-fade: 12px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-padding-block: var(--composer-fade);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--composer-fade),
+    black calc(100% - var(--composer-fade)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--composer-fade),
+    black calc(100% - var(--composer-fade)),
+    transparent 100%
+  );
+}
+.chat-composer__input::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ── Inline code chips ──
+   Distinct from a block: a small brand-tinted chip, not a grey panel. Out-
+   specifies `.chat-md code` (0,1,2 vs 0,1,1) and leaves `pre > code` alone. */
+.chat-md :not(pre) > code {
+  background: rgb(var(--color-primary-rgb) / 0.10);
+  border-color: rgb(var(--color-primary-rgb) / 0.22);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+/* ── One token, one pill (CHATUI-003) ──
+   A chip is an OBJECT, and an object does not come in halves. Left to the
+   inherited prose wrapping, `sha-9b3e07` in a narrow column broke after the
+   hyphen and painted as TWO chips — a box ending "sha-" at the right margin
+   and a second box opening "9b3e07" on the next line — which reads as two
+   values where the agent reported one. On a governance surface that is not a
+   cosmetic defect: `sha-4f2a1c` and `sha-9b3e07` are the whole point of the
+   sentence they sit in.
+
+   Three separate wrap opportunities have to be closed, which is why this is
+   four declarations and not one:
+
+     white-space: nowrap   the guarantee. Nothing below it can reintroduce a
+                           break INSIDE the chip.
+     word-break: keep-all  kills the break the hyphen offers on its own. U+002D
+                           is a normal break opportunity in every engine — this
+                           is the one that actually fired in the capture.
+     overflow-wrap: normal cancels the `overflow-wrap: anywhere` the chip
+                           inherits from `.chat-md`, which otherwise licenses a
+                           break between any two characters under pressure.
+     hyphens: none         stops an engine with `hyphens: auto` in scope from
+                           adding a soft hyphen of its own.
+
+   A NEW rule rather than four lines added to the block above: `.chat-md` is
+   shared with WarRoom and Playground, and this file's rule is that nothing
+   already written here is edited. Same specificity, later in the cascade, and
+   no property collides with the chip's colours anyway.
+
+   The pathological case — a single token wider than the whole column — is
+   handled by the canvas, which is `overflow-x-hidden` (ChatCanvas): the chip
+   stays ONE box and is clipped at the column edge, and the page does not gain
+   a horizontal scrollbar (measured at 375 and 1280: a 139-character chip
+   yields one client rect and `documentElement.scrollWidth == clientWidth`).
+
+   The obvious upgrade — make the pill `display: inline-block` so `max-width`
+   and `overflow-x: auto` apply and a monster token scrolls inside itself — was
+   measured and rejected. An inline-block pill stops being a zero-height inline
+   box, so its vertical padding and border start counting toward the line box:
+   the chip grows 19px → 24.8px and a paragraph containing one grows 135.2px →
+   151.9px. Every line with a chip in it would sit taller than every line
+   without, which is the transcript's rhythm — the thing this phase is judged
+   on — traded away to improve a case the fixtures do not contain. Worse, a
+   scrolling inline-block has its baseline synthesised as the bottom margin
+   edge, so the chip's text lands 4px off the line it sits in. Clipping one
+   rare monster token beats splitting every ordinary one AND beats making every
+   ordinary line taller. */
+.chat-md :not(pre) > code {
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  hyphens: none;
+}
+
+/* ── highlight.js palette, scoped to .chat-md ──
+   The donor hand-writes its hljs theme as five token groups plus a
+   comment/meta pair, once for light and once for dark. Same structure, every
+   value retinted from this app's own primitive ramps (see the
+   "Syntax-highlighting palette" table in docs/features/netzar-chat/README.md).
+   Scoping to `.chat-md` keeps it off every other surface; the primitives are
+   declared once in :root and inherited by .dark. */
+
+/* comment / meta */
+.chat-md .hljs-comment,
+.chat-md .hljs-meta { color: var(--color-text-muted); }
+
+/* keyword / literal / doctag / formula → indigo */
+.chat-md .hljs-keyword,
+.chat-md .hljs-literal,
+.chat-md .hljs-doctag,
+.chat-md .hljs-formula { color: var(--color-indigo-600); }
+
+/* string / attribute / regexp / addition → green */
+.chat-md .hljs-string,
+.chat-md .hljs-attribute,
+.chat-md .hljs-regexp,
+.chat-md .hljs-addition { color: var(--color-green-600); }
+
+/* attr / number / type / variable → pink */
+.chat-md .hljs-attr,
+.chat-md .hljs-number,
+.chat-md .hljs-type,
+.chat-md .hljs-variable { color: var(--color-pink-500); }
+
+/* title / link / symbol / bullet → red */
+.chat-md .hljs-title,
+.chat-md .hljs-link,
+.chat-md .hljs-symbol,
+.chat-md .hljs-bullet { color: var(--color-red-600); }
+
+/* built_in / class title → amber. Listed after the title group, and more
+   specific than it, so a class name wins amber over the red `title` rule.
+   `.hljs-title.class_` is highlight.js 11's spelling of the donor's
+   `.hljs-class .hljs-title`; both are matched. */
+.chat-md .hljs-built_in,
+.chat-md .hljs-class .hljs-title,
+.chat-md .hljs-title.class_ { color: var(--color-amber-500); }
+
+/* Dark: same six groups, lifted to the ramp steps that read on a near-black
+   panel. comment/meta needs no entry — --color-text-muted re-tunes itself. */
+.dark .chat-md .hljs-keyword,
+.dark .chat-md .hljs-literal,
+.dark .chat-md .hljs-doctag,
+.dark .chat-md .hljs-formula { color: var(--color-indigo-300); }
+
+.dark .chat-md .hljs-string,
+.dark .chat-md .hljs-attribute,
+.dark .chat-md .hljs-regexp,
+.dark .chat-md .hljs-addition { color: var(--color-green-400); }
+
+.dark .chat-md .hljs-attr,
+.dark .chat-md .hljs-number,
+.dark .chat-md .hljs-type,
+.dark .chat-md .hljs-variable { color: var(--color-pink-500); }
+
+.dark .chat-md .hljs-title,
+.dark .chat-md .hljs-link,
+.dark .chat-md .hljs-symbol,
+.dark .chat-md .hljs-bullet { color: var(--color-red-400); }
+
+.dark .chat-md .hljs-built_in,
+.dark .chat-md .hljs-class .hljs-title,
+.dark .chat-md .hljs-title.class_ { color: var(--color-amber-400); }
+
+/* ── Live streaming caret (CHATUI-003) ────────────────────────────────────
+   STRICTLY ADDITIVE, like the block above. `.chat-streaming` is a NEW class
+   that ONLY the in-flight assistant row adds alongside `.chat-md`
+   (web/src/components/chat/StreamingRow.tsx); WarRoom and Playground never
+   emit it, so their markdown is untouched — and not one rule above is edited.
+
+   Why a `::after` on the last block instead of a sibling <span>: markdown ends
+   in a block-level element, so a caret rendered next to the rendered HTML
+   always lands on a line of its own, a full line-height below the text it is
+   supposed to be trailing. Hanging it off the last child puts it immediately
+   after the final glyph, the way a terminal cursor sits.
+
+   Why a selector LIST rather than one rule: `> :last-child` is not always the
+   element holding the last glyph. Through most of a streaming markdown turn the
+   reply is mid-list, so the last child is the <ul>/<ol> — and a caret on the
+   list container draws a full line BELOW the final bullet instead of after its
+   text (seen at the `2. The tool_use switc▌` frame). The extra selectors step
+   one level in for the containers where that matters, and the first rule
+   excludes those same containers so the caret is never drawn twice.
+
+   `pre` and `.chat-code` get no caret at all: a fenced block is a bordered
+   panel with `overflow: hidden`, so anything hung inside it draws as a stray
+   bar under the code rather than as a cursor. `table` is excluded for the same
+   family of reason — an inline box appended to a `display: table` element lands
+   in an anonymous wrapper of its own. A turn whose last block is code or a
+   table simply shows no caret for those few frames.
+
+   Under `prefers-reduced-motion` the global rule in the base layer zeroes the
+   animation duration, which leaves the caret STEADY rather than removing it —
+   the indicator that a turn is still streaming survives, only the blink goes.
+
+   The blink bottoms out at 0.2, NOT at 0. A terminal caret is allowed to
+   vanish because a terminal has a prompt, a shell and a cursor position all
+   saying the session is alive; here the caret is the only mark inside the reply
+   that says this turn is still running. At `opacity: 0` it is absent for half
+   of every second, which is both a worse signal and unshootable evidence — the
+   round-2 dark-mobile streaming capture landed in a trough frame and recorded a
+   live turn with no caret in it at all. Fading to a fifth still reads as a
+   blink in motion and leaves a mark on screen in every frame. */
+.chat-md.chat-streaming > :last-child:not(pre):not(.chat-code):not(ul):not(ol):not(blockquote):not(table)::after,
+.chat-md.chat-streaming > ul:last-child > li:last-child::after,
+.chat-md.chat-streaming > ol:last-child > li:last-child::after,
+.chat-md.chat-streaming > blockquote:last-child > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--color-primary);
+  animation: chat-caret 1s step-end infinite;
+}
+
+@keyframes chat-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+/* ── The picker lists have to ANNOUNCE that they scroll (CHATUI-005) ──
+   New rules with new class names, appended rather than woven into anything
+   above: `.chat-md` is shared with WarRoom and Playground, and these selectors
+   are emitted only by CommandMenu.
+
+   The defect this answers, measured: the agent menu held eighteen rows, showed
+   eight, and drew NOTHING to say so. The eighth row was cut at a hard seam
+   against the panel border, so the honest reading of a still frame was "here
+   are the eight agents", on the one surface whose acceptance test is that
+   every agent is reachable.
+
+   1. THE SCROLLBAR. `* { scrollbar-width: thin; scrollbar-color: ... }` at the
+      top of this file is why there wasn't one: whenever EITHER standard
+      property is set to anything but `auto`, Chromium ignores every
+      `::-webkit-scrollbar` rule in scope and substitutes an overlay scrollbar
+      that paints nothing at rest and takes 0px of layout. Handing both back to
+      `auto` here — and only here — re-arms the four styled rules below, which
+      are always painted and always take their 10px. The thumb is proportional,
+      so it states the ratio (8 of 18 ⇒ a thumb over ~44% of the track) without
+      any text.
+
+   2. THE RAMPS. A fade at the edge that has more beyond it, so the seam reads
+      as a continuation rather than an end. They are ABSOLUTE and
+      `pointer-events: none`: taking no layout is what keeps them from changing
+      what overflows (a loop), and taking no pointer events is what keeps the
+      row underneath clickable.
+
+   The gradient interpolates to `transparent`, which every engine now resolves
+   premultiplied, so there is no grey fringe and no second colour token to keep
+   in step — the ramp is made of `--color-surface` alone and is therefore
+   correct in both themes by construction. */
+.chat-menu-list {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  overscroll-behavior: contain;
+}
+/* Firefox has no `::-webkit-scrollbar`, so it needs the standard properties. */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-menu-list {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-scroll-thumb-rgb) / 0.5) rgb(var(--color-scroll-track-rgb) / 0.7);
+  }
+}
+.chat-menu-list::-webkit-scrollbar {
+  width: 10px;
+}
+.chat-menu-list::-webkit-scrollbar-track {
+  background: rgb(var(--color-scroll-track-rgb) / 0.7);
+  border-radius: var(--radius-full);
+  /* Insets the track from the panel's rounded corners, so a square-ended bar
+     does not sit proud of a 12px radius at the bottom of the popover. */
+  margin: var(--space-1) 0;
+}
+.chat-menu-list::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.5);
+  border-radius: var(--radius-full);
+}
+.chat-menu-list::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.75);
+}
+
+.chat-menu-edge {
+  position: absolute;
+  left: 0;
+  /* Stops short of the scrollbar gutter: a ramp drawn over the thumb would
+     dim the very affordance it is reinforcing. */
+  right: 10px;
+  /* A FALLBACK only: both modifiers below build their height from the band
+     they were measured with. It is also the number the rows' `scroll-mt` /
+     `scroll-mb` reference, which is what keeps a keyboard-scrolled row clear
+     of whichever band is in force. */
+  height: var(--space-8);
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+}
+.chat-menu-edge--top {
+  /* A FLOOR, not the value — the same shape `.chat-rail-edge--top` has carried
+     since round 4. `CommandMenu` measures where the nearest row boundary
+     actually is and writes `--more-band` inline; this is what the head falls
+     back to when there is nothing to snap to. See the long note at the foot
+     below for why a constant band was the defect on BOTH surfaces. */
+  --more-band: 8px;
+  top: 0;
+  height: calc(var(--more-band) + var(--space-2));
+  align-items: flex-start;
+  background: linear-gradient(to bottom, var(--color-surface) var(--more-band), transparent 100%);
+}
+.chat-menu-edge--bottom {
+  /* The band the chip sits in has to be FULLY opaque, and it is the one length
+     in this block that is not decoration.
+
+     What shipped before this: a 32px ramp that was `--color-surface` at 25%
+     and transparent by its top, with an opaque chip floating 3px off the fold.
+     The chip's own line therefore landed where the ramp was only ~40% covered,
+     so the glyphs either SIDE of the chip stayed crisp while the ones behind it
+     vanished, and the row read as a sentence with a hole punched in it. The
+     roll-call now measures it: at 1440px the agent menu hid "quarterly upd"
+     out of "Investor letters, quarterly updates, and capital-call notices" and
+     "mmarizer" off the end of "Deal Memo Summarizer"; at 375px it hid "er" off
+     "LP Update Drafter". That is text occlusion, not a peek affordance, and no
+     hit-test could ever have caught it — the chip is `pointer-events: none`,
+     so `elementFromPoint` cheerfully reports the row underneath.
+
+     `--more-band` is the chip's own box written out: 3px of float, 1px border,
+     1px padding, 11px x 1.4 of line box, 1px padding, 1px border = 22.4px,
+     rounded up with slack for fractional device scaling. Below it the ramp is
+     solid, so the cut row is GONE rather than half-eaten; above it the ramp
+     fades over `--space-6`, which is what still makes the cut read as "there
+     is more" rather than as the end of the list. rollcall.js intersects the
+     chip's painted box with the painted box of every glyph beneath it and
+     fails on ONE covered character, so this number cannot drift out of step
+     with the type above it in silence. */
+  --more-band: 26px;
+  bottom: 0;
+  /* ROUND 6 — the fade is `--space-2`, not `--space-6`, and the band is
+     MEASURED rather than declared. This is the fix `.chat-rail-edge--bottom`
+     got in round 4, finally applied to the surface the reading was written
+     about. The note there recorded the debt out loud:
+
+       "The pickers' ramp still declares a CONSTANT band (26px) with a
+        --space-6 fade. That is the geometry proved defective on this rail …
+        It is a known, unfixed instance, written down rather than quietly
+        inherited."
+
+     It was reachable, and it was reached. `probe-menu-ramp.js` points
+     ROLLCALL-P5's occlusion reading — plus the BAND-EDGE-vs-GLYPH check P5 was
+     missing — at these panels and measured the shipped geometry in all four
+     cells: 465 half-eaten glyphs on the agent menu at 375 and 557 at 1280, in
+     both themes, worst coverage step 0.79. The critic read the same damage off
+     the frames: "Deal screening, document review, and risk surfa" and
+     "…letters, quarterly updates…" sliced through the x-height, and the last
+     description line surviving as CSS 501.0-508.5 at luminance 222-249 where a
+     clean line of the same style reads 160.
+
+     The arithmetic is the rail's, not a second derivation of it: a 24px fade
+     over a 50px box is still ~87% opaque 3px above the "opaque" line and ~50%
+     opaque 12px above it, so a line of type lying across that stretch is not
+     dissolved, it is SLICED. The answer is not a length — it is WHERE the
+     transition lands. A menu row is `px-2 py-1.5`, so two adjacent rows are
+     separated by 12px of guaranteed white space (6px of one row's padding,
+     6px of the next). `CommandMenu` measures the nearest boundary, insets 4px
+     into it and writes the result here; an 8px fade then has BOTH its ends
+     inside that 12px gap. Above the edge every row is fully legible; below it
+     every row is fully gone.
+
+     The value below is the floor the component clamps to — the chip's own box
+     (3px float + 1px border + 1px padding + 11px x 1.4 line + 1px + 1px =
+     22.4px, rounded up for fractional device scaling), which is what the
+     roll-call's slack check measures — and the fallback when there is no
+     boundary to snap to. It is also why the rows carry
+     `scroll-mb-[var(--space-8)]`: 32px of scroll padding is more than
+     `MIN_BOTTOM_BAND + BAND_INSET`, so a row the keyboard scrolls to the foot
+     of the list snaps the band to the row BELOW it and survives whole. */
+  height: calc(var(--more-band) + var(--space-2));
+  align-items: flex-end;
+  background: linear-gradient(to top, var(--color-surface) var(--more-band), transparent 100%);
+}
+
+/* "10 more" — the count, not a vague hint, so the reader can choose between
+   scrolling and typing into the field above. Sits in the ramp it belongs to
+   and inherits its `pointer-events: none`. */
+.chat-menu-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-bottom: 3px;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ── The conversation rail's list has to ANNOUNCE that it scrolls (CHATUI-006) ──
+   New rules with new class names, appended rather than woven into anything
+   above. Nothing here is shared with `.chat-md` or the pickers.
+
+   The defect this answers, measured on the delivered frames: the rail's list
+   was a bare `overflow-y-auto`, so it inherited the GLOBAL scrollbar a few
+   hundred lines up (`* { scrollbar-width: thin; scrollbar-color:
+   var(--color-gray-600) transparent }`) and shipped two failures in every shot.
+
+   1. PLATFORM CHROME INSIDE PRODUCT CHROME. Setting `scrollbar-color` at all
+      puts Chromium on its non-overlay scrollbar path, and on Windows that path
+      draws STEPPER BUTTONS — the same trap already written down for the
+      composer above. The result was a 6px stripe in `--color-gray-600` /
+      `--color-gray-700` with a solid ▲ at the top of the rail and a ▼ at the
+      bottom of it, running the full height of the panel and of the mobile
+      drawer. Across every donor rail frame there is not one pixel of that.
+
+      The donor's answer is not "no scrollbar", it is a QUIET one — donor
+      `client/src/style.css:1301-1318`: `width: 0.5rem`, a transparent track,
+      and a fully rounded thumb at 10% ink. That shape is copied here; only the
+      thumb's colour is this product's (`--color-primary` at 30%, lifting on
+      hover), because the house doctrine above is that an overflow affordance
+      must be visible AT REST, and 10% black is not on a `#f5f5f7` rail.
+      Handing `scrollbar-width` and `scrollbar-color` back to `auto` is what
+      re-arms these pseudo-elements — while EITHER is set, Chromium ignores
+      every `::-webkit-scrollbar` rule in scope.
+
+   2. A GUILLOTINED LAST ROW. Where the list met the New-chat footer, the row
+      under the fold was sliced through its x-height at a hard seam — every
+      descender and the bottom half of every glyph amputated, no ramp. This
+      repo has already ruled on exactly that frame for code blocks (see
+      CHATUI-00x above): a mid-token slice at a hard seam reads as "this panel
+      is broken", not as "this panel scrolls". So the seam gets a ramp.
+
+      The ramps are ABSOLUTE and `pointer-events: none` — taking no layout is
+      what stops them from changing what overflows (a loop), and taking no
+      pointer events is what keeps the row underneath clickable — and they are
+      MEASURED, mounted only on an edge that really has more beyond it, so a
+      list of three conversations fades nothing. `--color-bg-sunken` is the
+      rail's own ground in both shells and in both themes, so one declaration
+      is correct everywhere; the gradient interpolates to `transparent`, which
+      every engine now resolves premultiplied, so there is no grey fringe. */
+.chat-rail-list {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  /* A flick that reaches the end of the rail must not then scroll the
+     transcript behind it. */
+  overscroll-behavior: contain;
+  /* Keyboard focus travelling down the list stops clear of the bottom ramp
+     rather than under it. */
+  scroll-padding-block: var(--space-8);
+}
+/* Firefox has no `::-webkit-scrollbar`, so it needs the standard properties —
+   and only there, where they cost nothing. */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-rail-list {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-scroll-thumb-rgb) / 0.3) transparent;
+  }
+}
+.chat-rail-list::-webkit-scrollbar {
+  width: 8px;
+}
+/* Donor: transparent. A painted track on a full-height rail is ~700px of
+   chrome announcing a ~200px thumb; the thumb alone states the ratio. */
+.chat-rail-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-rail-list::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.3);
+  border-radius: var(--radius-full);
+  /* Inset from the panel edge the donor way — a transparent border is padding
+     the thumb cannot paint into, so an 8px gutter carries a 6px thumb that
+     never touches the rail's border. */
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.chat-rail-list::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.6);
+  background-clip: padding-box;
+}
+
+.chat-rail-edge {
+  position: absolute;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  /* Stops short of the scrollbar gutter: a ramp drawn over the thumb would dim
+     the very affordance it is reinforcing. */
+  right: 8px;
+  height: var(--space-8);
+  pointer-events: none;
+}
+.chat-rail-edge--top {
+  /* A FLOOR, not the value. `ConversationList` measures where the nearest row
+     boundary actually is and writes `--more-band` inline; this is what the head
+     falls back to when there is nothing to snap to. Same shape as the foot
+     below — see the long note there for why a constant band was the defect. */
+  --more-band: 8px;
+  top: 0;
+  height: calc(var(--more-band) + var(--space-2));
+  align-items: flex-start;
+  background: linear-gradient(to bottom, var(--color-bg-sunken) var(--more-band), transparent 100%);
+}
+.chat-rail-edge--bottom {
+  /* The same ANSWER as `.chat-menu-edge--bottom` a few hundred lines up — both
+     surfaces say "there is more" with a chip in an opaque band — but no longer
+     the same arithmetic, and the divergence is deliberate rather than drift.
+
+     ROUND 6 CLOSED THE DEBT THIS NOTE USED TO RECORD. What stood here was:
+     "The pickers' ramp still declares a CONSTANT band (26px) with a `--space-6`
+     fade … a known, unfixed instance, written down rather than quietly
+     inherited." It was inherited anyway — the critic read the slice off the
+     agent menu in both themes at both breakpoints. `.chat-menu-edge--*` now
+     carries the same measured band, on its own numbers (a 12px inter-row gap
+     rather than this rail's 18px, and the picker chip's 26px box rather than
+     this chip's 28px), proved by `probe-menu-ramp.js` rather than by this
+     paragraph. The divergence that remains is only those two constants.
+
+     The chip floats `--space-1` off the fold here rather than 3px, so the floor
+     below is that much taller than the pickers'. */
+  --more-band: 28px;
+  bottom: 0;
+  /* ROUND 4 — the fade is `--space-2`, not `--space-6`, and the band is
+     MEASURED rather than declared.
+
+     The 24px fade was itself an occluder. `linear-gradient(to top, C 28px,
+     transparent 100%)` over a 52px box is still 87% opaque 3px above the
+     "opaque" line and 50% opaque 12px above it, so a 15px line of type sitting
+     across that stretch is not dissolved, it is SLICED: measured at 375x812 in
+     both themes, "21d · 9 msg" under this ramp lost its lower half and read
+     "21d · 9 msq". Lengthening the fade only spreads the slice; shortening it
+     alone only sharpens it. Neither is the answer, because the answer is not a
+     length at all — it is WHERE the transition lands.
+
+     So `ConversationList` measures the nearest row boundary and writes
+     `--more-band` inline, and this fade is short enough (8px) that both of its
+     ends sit inside the 18px of white space between two rows. The value below
+     is the floor the component clamps to (the chip's own box, which is what the
+     roll-call's slack reading measures) and the fallback when there is no
+     boundary to snap to. */
+  height: calc(var(--more-band) + var(--space-2));
+  align-items: flex-end;
+  background: linear-gradient(to top, var(--color-bg-sunken) var(--more-band), transparent 100%);
+}
+
+/* "2 more" — measured, and the reason the bottom edge is honest at EVERY
+   scroll position rather than most of them.
+
+   A ramp only says something when there is ink inside it. Parked at the head
+   of this list the fold lands in the gap between two rows, so the fade has
+   nothing to fade and the frame reads "the list ends at Grant narrative" —
+   which is false, and is the same wrong reading the guillotine gave, arrived
+   at from the other direction. The count does not depend on where the cut
+   falls. Same component and same wording as the picker panels' `.chat-menu-more`
+   a few hundred lines up, so the two surfaces answer "there is more" the same
+   way; the ground is `--color-surface` rather than `--color-surface-elevated`
+   because on the rail's recessed panel those two tokens are the same colour in
+   light mode, and a chip has to sit ON the list, not in it. */
+.chat-rail-more {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: var(--space-1);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xs);
+  color: var(--color-text-secondary);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   COPIED VERBATIM from danny-avila/LibreChat (MIT), pinned at commit
+   6d499ba3ce17f906a7762429c61018f230ecd64e — donor path
+   `client/src/style.css`, lines 598-622 (25 lines, byte-for-byte).
+
+   ADDITIVE: `.message-render` and `.message-timestamp` are NEW selectors in
+   this stylesheet. Nothing above is edited, and neither name appears anywhere
+   else in this file.
+
+   These two classes are emitted by the ported donor MessageRow.tsx and
+   MessageTimestamp.tsx, which is why the rule can be lifted whole. It replaces
+   a hand-transcribed Tailwind variant chain that used to live inline in
+   AssistantMessage.tsx's author line — the donor's own comment below explains
+   why the reveal is a stylesheet rule rather than `group-hover:` in the first
+   place, which is the exact trap that inline version was working around.
+   ───────────────────────────────────────────────────────────────────────── */
+/* Show the message time when the row is hovered. Tailwind group-hover
+   loses to `[@media(hover:hover)]:opacity-0` (same specificity, :where()).
+
+   Keyboard focus reveals it too, but only `:focus-visible`: a pointer that
+   clicks a tool card or an expand toggle inside the row leaves focus sitting
+   there, and plain `:focus-within` would pin the time open long after the
+   pointer moved away.
+
+   The condition matches the row itself as well as its descendants, because
+   `MessageNav` focuses the row through `tabindex="-1"` and `:has()` never
+   matches its own subject. Text-entry controls are excluded, because they
+   match `:focus-visible` on a plain mouse click. See `revealOnRowHoverClasses`
+   in `components/Chat/Messages/styles.ts` for the full reasoning. */
+@media (hover: hover) {
+  .message-render .message-timestamp {
+    opacity: 0;
+  }
+
+  .message-render:hover .message-timestamp,
+  .message-render:focus-visible .message-timestamp,
+  .message-render:has(:focus-visible:not(:is(input, textarea, [contenteditable])))
+    .message-timestamp {
+    opacity: 1;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ROUND 3 — A HOVER GATE IS NOT A REACHABILITY GATE.
+
+   ADDITIVE, per this file's house rule: a NEW rule later in the cascade, and
+   the ONLY property it touches is `opacity` — the same property the two rules
+   above set. Nothing before this line is edited. `.chat-row-actions` is a new
+   selector, emitted by AssistantMessage.tsx; `.message-timestamp` is the donor
+   class the block above already owns.
+
+   WHAT WAS WRONG. Both reveals are gated on `@media (hover: hover)` — the
+   donor's own escape hatch, which keeps them showing on a device that cannot
+   hover. Correct as far as it goes, and it does not go far enough: hover
+   CAPABILITY is not hover OPPORTUNITY. Measured on the settled `code` fixture
+   at 375x812 with a plain (non-touch) context — a narrow desktop window, a
+   hybrid laptop, and every mobile frame the screenshot bar shoots — the media
+   query matched, and the message's copy button computed `opacity: 0`. On the
+   same viewport with touch emulation it computed `1`. So on the one layout
+   where hover may not happen, the action the harvest exists to add was
+   invisible, while the donor renders its own action row there persistently.
+
+   THE RULE. Below `lg` (1024px — this product's compact layout, the breakpoint
+   at which the conversation rail becomes a drawer), the row's actions and its
+   timestamp are simply shown. That is already what a phone gets from the
+   `hover: none` branch above, so this makes a narrow window agree with the
+   phone rather than inventing a third state.
+
+   `.chat-row-actions button` is 0,1,1 and beats the utility that hides it
+   (`[@media(hover:hover)]:opacity-0`, 0,1,0) on specificity, so it does not
+   depend on source order. The timestamp half ties on specificity with the
+   block above (0,2,0) and wins on ORDER, which is why it is written here,
+   after it, rather than folded into it.
+
+   The `lg` breakpoint is spelled as its 1023.98px complement rather than
+   through Tailwind's `lg:` variant, because this file is plain CSS below the
+   `@tailwind` directives; `theme(screens.lg)` would put the same constant in
+   the file with more machinery around it.
+   ───────────────────────────────────────────────────────────────────────── */
+@media (max-width: 1023.98px) {
+  .chat-row-actions button {
+    opacity: 1;
+    position: relative;
+  }
+
+  /* A FINGER-SIZED TARGET UNDER A 31px GLYPH. Making the control visible on the
+     one layout where the input is a fingertip and then leaving it at the
+     donor's 43x31 (`p-1.5` around a 19px icon) is half an answer: this repo
+     already calls 44px the touch minimum, in DrawerToggle, and declined to trim
+     4px off that control for chrome. The pseudo-element takes the HIT area to
+     45x45 and leaves the PAINTED box exactly as the donor drew it, so nothing
+     moves and no row grows — measured, the copy button's row is the same 35px
+     it was, and the button the same 43x31.
+
+     It is safe to extend into: probed on the settled `code` fixture at 375, the
+     nearest other focusable element in the row is further than 60px vertically
+     and 200px horizontally (there is none — this is the row's only control),
+     and `gap-7` puts 28px between rows. The horizontal extension is held to 1px
+     for that reason: the run footer's text sits 12px to its left, and a hit
+     area that reached it would eat taps meant for selecting an audit figure. */
+  .chat-row-actions button::after {
+    content: '';
+    position: absolute;
+    inset: -7px -1px;
+  }
+
+  .message-render .message-timestamp {
+    opacity: 1;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ROUND 2 — THE CODE BLOCK'S HORIZONTAL SCROLLBAR STOPS IMPERSONATING A
+   PROGRESS BAR.
+
+   ADDITIVE, per this file's house rule (see the "Overflow has to ANNOUNCE
+   itself" block above, which states it): a NEW rule with the same selector,
+   later in the cascade, rather than an edit to a `.chat-md`/`.chat-code`
+   declaration already in the file. Every property below is one this same
+   selector already sets, re-declared — nothing new is introduced and nothing
+   above is touched, so the affordance work that block argues for survives
+   intact. Only the INK changes.
+
+   WHAT WAS WRONG. The thumb was `rgb(var(--color-primary-rgb) / 0.45)` and the
+   track `rgb(var(--color-border-rgb) / 0.6)`. On dark mobile that composites
+   to a 46%-saturation violet bar, and a still frame of one conversation showed
+   TWO of them — flush on the bottom edge of two panels, on a near-black ground,
+   at 21% and 57% of their track. Saturated + horizontal + flush + variable
+   length IS a progress bar; a neutral observer read that frame as "two things
+   are loading". Nothing about the scroll affordance required the brand hue —
+   the donor does not paint this bar at all.
+
+   WHAT IS UNCHANGED, deliberately: the 8px height, the radius, the track being
+   painted at all, and the thumb's luminance. `--color-scroll-thumb-rgb` was
+   chosen to composite to the SAME luminance as the indigo at the SAME alpha
+   (dark: L=0.0886 vs 0.0871), so this costs the affordance no visibility — it
+   only takes the hue out. The rest of the argument above still holds.
+   ───────────────────────────────────────────────────────────────────────── */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-md .chat-code > pre {
+    scrollbar-color: rgb(var(--color-scroll-thumb-rgb) / 0.45)
+      rgb(var(--color-scroll-track-rgb) / 0.6);
+  }
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-track {
+  background: rgb(var(--color-scroll-track-rgb) / 0.6);
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.45);
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.7);
+}

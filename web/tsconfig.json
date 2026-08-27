@@ -13,7 +13,37 @@
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": {
+      "@/*": ["src/*"],
+
+      // ── THE ENABLER (donor harvest) ────────────────────────────────────
+      // Vite already aliases react -> preact/compat (@preact/preset-vite does
+      // it by default), but `tsc` does not: this repo has no @types/react, so
+      // an unmodified donor file's `import { useRef } from 'react'` fails
+      // typecheck with TS7016 while the build stays perfectly green. These
+      // three lines are what make "donor React source compiles unmodified"
+      // true of the TYPECHECKER as well as of the bundler.
+      //
+      // ORDER IS LOAD-BEARING, same trap the spike documented in vite.config:
+      // the deep specifier must precede the bare package or `react/jsx-runtime`
+      // resolves against preact/compat, which has no such entry point.
+      "react/jsx-runtime": ["node_modules/preact/jsx-runtime/src/index.d.ts"],
+      "react": ["node_modules/preact/compat/src/index.d.ts"],
+      "react-dom": ["node_modules/preact/compat/src/index.d.ts"],
+
+      // Donor source imports its own app root as `~/...`. Pointing `~` at the
+      // ported tree is what lets those files stay byte-for-byte.
+      "~/*": ["src/components/chat/lc/*"],
+
+      // The donor's UI primitive package. It is not on disk (only client/src
+      // was copied) and it has 485 import sites across the donor tree, which
+      // is the single reason most "copyable" donor components are not.
+      "@librechat/client": ["src/lib/chat/librechat-client-shim.tsx"],
+
+      // Eight date-fns functions, hand-written. `date-fns` is not a dependency
+      // and the chat chunk carries a gzip budget.
+      "date-fns": ["src/lib/chat/date-fns-shim.ts"]
+    }
   },
   "include": ["src"]
 }

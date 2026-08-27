@@ -1,7 +1,7 @@
 import { useLocation } from 'wouter-preact';
 import { clearToken } from '../lib/api';
 import { themePreference, setTheme, resolvedTheme, brand, DEFAULT_COMPANY_NAME } from '../lib/theme';
-import { toggleMobileMenu } from './Sidebar';
+import { toggleMobileMenu, pageOwnsTopBar } from './Sidebar';
 import { NotificationBell } from './NotificationBell';
 
 const BREADCRUMB_LABELS: Record<string, string> = {
@@ -49,9 +49,40 @@ export function Header() {
     setTheme(order[(idx + 1) % order.length]);
   }
 
+  // ── ONE BAR, AT EVERY WIDTH ────────────────────────────────
+  // The chat surface draws its own top bar (ChatHeader), and the donor's chat
+  // header IS the app bar — `Chat/Header.tsx` is a single 52px row and there is
+  // nothing above it. Stacking this 56px header on top of it spent 108 CSS px
+  // of a 812px viewport on chrome before the first word of an answer, and put a
+  // bare 32x32 hamburger at the top-left corner 245px from the 44x44 pill that
+  // opens the conversation drawer — two openers, and the wrong one on top.
+  //
+  // Round 5 fixed that BELOW `lg` and left the desktop alone, on the reasoning
+  // that a wide viewport can afford a second bar. It cannot, and the same critic
+  // measured the same defect one breakpoint up: at 1280 this header's ink ran
+  // y 20.0-35.5, the chat plate 56.5-122.5, and the first content line landed at
+  // y=131.5 against the donor's 57.0 — two bars, 2.3x the donor's chrome, at the
+  // breakpoint E1's own framing ("fix the economy, not the symptoms") points at.
+  // A thinner second bar is still a second bar, and so is a second bar on a
+  // bigger screen.
+  //
+  // So on these routes this header stands down at EVERY width and the page owns
+  // the top of the viewport. Nothing is removed, and nothing new had to be
+  // invented to hold what it carried: the brand is already the first thing in
+  // the rail (Sidebar's own `h-[var(--header-height)]` head), the current page is
+  // already the marked row in that rail's nav, and the three account controls
+  // move into the rail's foot — which is exactly where they already were below
+  // `lg`, so this is one relocation applied a breakpoint wider rather than a new
+  // one. The breadcrumb is the single thing the chat route gives up; on a
+  // surface whose location is "Chat", the marked nav row states it.
+  //
+  // `hidden` rather than a conditional render, so the bell keeps polling and the
+  // theme signal keeps its subscriber on every route, exactly as before.
+  const standDown = pageOwnsTopBar(location);
+
   return (
     <header
-      class="sticky top-0 z-30 h-[var(--header-height)] bg-surface/80 backdrop-blur-lg border-b border-border flex items-center gap-4 px-6"
+      class={`sticky top-0 z-30 h-[var(--header-height)] bg-surface/80 backdrop-blur-lg border-b border-border flex items-center gap-4 px-6 ${standDown ? 'hidden' : ''}`}
     >
       <button
         onClick={toggleMobileMenu}
@@ -75,7 +106,7 @@ export function Header() {
         <span class="hidden sm:block w-px h-5 bg-border" aria-hidden="true" />
       </div>
 
-      <nav class="flex items-center gap-1.5 text-caption text-muted overflow-hidden" aria-label="Breadcrumb">
+      <nav class="hidden sm:flex items-center gap-1.5 text-caption text-muted overflow-hidden" aria-label="Breadcrumb">
         {crumbs.map((c, i) => (
           <span key={c.href} class="flex items-center gap-1.5 shrink-0">
             {i > 0 && <span class="text-muted">/</span>}
@@ -109,7 +140,7 @@ export function Header() {
 
       <button
         onClick={() => { clearToken(); window.location.reload(); }}
-        class="text-caption text-muted hover:text-danger transition-colors px-3 py-1.5 rounded-lg hover:bg-surface-hover"
+        class="text-caption text-muted hover:text-danger transition-colors px-3 py-1.5 rounded-lg hover:bg-surface-hover whitespace-nowrap shrink-0"
       >
         Sign out
       </button>

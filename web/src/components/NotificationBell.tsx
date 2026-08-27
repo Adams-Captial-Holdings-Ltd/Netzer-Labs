@@ -72,8 +72,15 @@ export function NotificationBell() {
           </span>
         )}
       </button>
+      {/* `max-w-[calc(100vw-1rem)]`: this bell also renders inside the
+          260px-wide mobile nav drawer now (Sidebar.tsx's account row, on the
+          routes where the house header stands down below `lg`), and a fixed
+          320px panel anchored to its right edge hung 60px off the left of the
+          viewport with the first characters of every notification outside the
+          screen. Widths only ever shrink here — at every viewport that could
+          already show 320px, nothing changes. */}
       {open && (
-        <div class="absolute right-0 top-10 w-80 bg-surface border border-border rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
+        <div class="absolute right-0 top-10 w-80 max-w-[calc(100vw-1rem)] bg-surface border border-border rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
           <div class="p-3 border-b border-border flex items-center justify-between">
             <span class="text-sm font-medium text-primary">Notifications</span>
             {unread.length > 0 && (
