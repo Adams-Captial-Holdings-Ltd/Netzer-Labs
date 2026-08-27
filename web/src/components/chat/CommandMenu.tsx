@@ -571,7 +571,24 @@ export function CommandMenu({
 
   // Focus follows the level: opening focuses the root field, entering a
   // submenu focuses its field, leaving one hands focus back to the root field.
-  useEffect(() => {
+  //
+  // LAYOUT effect, not a passive one, and the difference is a dropped keystroke
+  // at 375px. Below the flyout breakpoint the menu is a DRILL-DOWN: entering a
+  // family UNMOUNTS the root panel (see the render below), which takes the
+  // focused root field out of the document with it and drops focus onto
+  // `document.body`. A passive effect re-homes it only after the browser has
+  // painted, so every key pressed in that window lands on the body and is
+  // swallowed — and `Escape` is the one people press there, so the submenu
+  // simply would not close. The desktop flyout hid it completely: there the
+  // root panel stays mounted, focus never leaves it, and its own onKeyDown
+  // unwinds the level. Phase 5's mobile roll-call is what caught it; the gate
+  // now presses Escape with ZERO delay after the submenu mounts, which is the
+  // exact race. A layout effect runs before paint, so no input event can be
+  // dispatched between the unmount and the re-focus and the window is gone
+  // rather than narrowed. Placement (the two layout effects above) is declared
+  // earlier and so still runs first — the field is focused at its final
+  // position, not a stale one.
+  useLayoutEffect(() => {
     if (!open) return;
     const el = branchKey !== null ? subInputRef.current : rootInputRef.current;
     el?.focus();
@@ -797,6 +814,27 @@ export function CommandMenu({
    * settle. `pointer-events: none` (in index.css) keeps the row underneath
    * clickable, so nothing is made unreachable by the thing announcing that
    * more is reachable.
+   *
+   * ── Why the wrapper is a COLUMN FLEX BOX and the list flexes into it ──────
+   *
+   * Because the obvious version — a plain block wrapper and `h-full` on the
+   * list — failed silently and took the Phase 5 roll-call with it. The wrapper
+   * is a flex item whose height comes from the panel's `max-height` (540px in
+   * a 900px-tall window), and Chrome does not treat that as a DEFINITE height
+   * for a descendant's percentage: `h-full` fell back to `auto`, so the list
+   * laid out at its full 1041px of content inside a 540px panel and the
+   * panel's `overflow-hidden` sliced off ten of the eighteen agents.
+   *
+   * The affordances could not catch it either. A list that grows instead of
+   * scrolling reports `scrollHeight === clientHeight`, so `useListOverflow`
+   * measured "nothing hidden" and drew no scrollbar, no edge ramps and no
+   * "N more" chip: the menu looked complete while more than half the roster
+   * was unreachable by pointer, and every automated check that measured rows
+   * against the LISTBOX rather than the panel agreed that it was fine.
+   *
+   * Flex sizing needs no definite parent height. The list gets a real 491px
+   * box, a real scroll range, and — because the affordances are drawn from
+   * that same measurement — its ramps and its chip back.
    */
   function listBox(
     kind: 'root' | 'sub',
@@ -805,7 +843,7 @@ export function CommandMenu({
     over: { edges: Overflow; measure: () => void },
   ) {
     return (
-      <div class="relative min-h-0 flex-1">
+      <div class="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={listRef}
           id={listIdOf(kind)}
@@ -815,7 +853,7 @@ export function CommandMenu({
           // the same measurement that draws it.
           data-overflow={overflowState(over.edges)}
           onScroll={over.measure}
-          class="chat-menu-list h-full overflow-y-auto p-1"
+          class="chat-menu-list min-h-0 flex-1 overflow-y-auto p-1"
         >
           {selectableRows(p.rows).length === 0 ? (
             <p class="px-2 py-3 text-caption text-muted">{p.emptyLabel}</p>

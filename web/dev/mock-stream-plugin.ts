@@ -110,17 +110,64 @@ const mockAgents = {
 
 // Sidebar rows. Only `dashboard:`-prefixed chats are browsable (Chat.tsx
 // filters on the prefix), so one non-dashboard row is included to prove the
-// filter, and the timestamps are relative so the date grouping in a later
-// phase has something real to group.
+// filter.
+//
+// UNITS: `updatedAt` is EPOCH SECONDS. That is what the real route returns —
+// `src/lib/state/sessions-repo.ts` documents the field as "epoch seconds" and
+// writes it that way — and it is what `relativeAge()` reads. This fixture used
+// to emit `Date.now()` milliseconds, which made every row's age arithmetic go
+// negative and clamp to "now": three rows an hour, a day and four days apart
+// all rendered identically, and the date grouping this phase adds would have
+// filed every one of them under a year ~55,000 years hence. The `chatId`
+// suffix stays in MILLISECONDS, because that is what `freshChatId()` mints
+// (`dashboard:${Date.now()}`) and the two fields genuinely differ.
+//
+// The spread is deliberate: enough rows on both sides of every boundary the
+// grouping ladder tests — today, yesterday, inside seven days, inside thirty,
+// and earlier than that — so a screenshot of the sidebar shows real groups
+// rather than one heading with everything under it.
+//
+// IDENTITY: `chatId` is a FIXED string per row, not derived from `Date.now()`.
+// It used to be `dashboard:${now - hoursAgo * hour}`, which minted a different
+// id on every request — so the row you had open stopped existing the moment
+// anything called GET /sessions again (send() and the delete path both do,
+// right after `clearApiCache()`), the sidebar's active marker went out, and
+// reopening it 404'd. `updatedAt` stays relative to the live clock, because
+// that is what has to keep moving for the date groups to mean anything.
+const SESSION_ID_BASE = 1_750_000_000_000;
+
 function mockSessions(): unknown {
-  const hour = 3_600_000;
-  const now = Date.now();
+  const hourMs = 3_600_000;
+  const nowMs = Date.now();
+  // hours ago, messageCount, opening line
+  const rows: Array<[number, number, string]> = [
+    [1, 6, 'Wiring the turn stream'],
+    [4, 18, 'Draft the incident note for the cost-cap trip'],
+    [9, 2, 'Which model is the LP update agent on?'],
+    [26, 4, 'Quarterly posture review'],
+    [30, 7, 'Kill-switch audit rows from yesterday'],
+    [72, 11, 'Why did the deploy fail?'],
+    [96, 12, 'Compare Opus 1M and Sonnet 1M on the diligence pack'],
+    [24 * 12, 5, 'Grant narrative for the Q3 renewal'],
+    [24 * 21, 9, 'Reconcile the August invoice exceptions'],
+    [24 * 64, 3, 'First pass at the compliance control catalogue'],
+  ];
   return {
     sessions: [
-      { agentId: 'main', chatId: `dashboard:${now - hour}`, updatedAt: now - hour, messageCount: 6, firstMessage: 'Wiring the turn stream' },
-      { agentId: 'main', chatId: `dashboard:${now - 26 * hour}`, updatedAt: now - 26 * hour, messageCount: 4, firstMessage: 'Quarterly posture review' },
-      { agentId: 'main', chatId: `dashboard:${now - 96 * hour}`, updatedAt: now - 96 * hour, messageCount: 12, firstMessage: 'Why did the deploy fail?' },
-      { agentId: 'main', chatId: `telegram:2201`, updatedAt: now - 2 * hour, messageCount: 3, firstMessage: 'not browsable here' },
+      ...rows.map(([hoursAgo, messageCount, firstMessage], i) => ({
+        agentId: 'main',
+        chatId: `dashboard:${SESSION_ID_BASE + i}`,
+        updatedAt: Math.floor((nowMs - hoursAgo * hourMs) / 1000),
+        messageCount,
+        firstMessage,
+      })),
+      {
+        agentId: 'main',
+        chatId: 'telegram:2201',
+        updatedAt: Math.floor((nowMs - 2 * hourMs) / 1000),
+        messageCount: 3,
+        firstMessage: 'not browsable here',
+      },
     ],
   };
 }

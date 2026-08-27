@@ -22,19 +22,36 @@
  * the visible width scrolls out of sight to the left, so a three-sentence
  * prompt is composed through a keyhole — and this surface's users write
  * paragraphs, paste stack traces and quote logs. The textarea therefore grows
- * with its content and then stops: `height` is recomputed to `scrollHeight` on
- * every keystroke, and a `max-height` in CSS clamps the growth so the box
- * turns into its own scroller instead of eating the conversation above it.
+ * with its content and then stops, turning into its own scroller instead of
+ * eating the conversation above it.
  *
- * The cap is `min(<lines>, <share of viewport>)` on purpose. A rem-only cap is
- * right on a laptop and absurd in a 500px-tall window, where a composer that
- * grows to 15rem plus its control row leaves no transcript at all; a vh-only
- * cap is the reverse on a tall monitor. Whichever is smaller is the one that
- * was going to be wrong.
+ * The growth itself is the DONOR'S, not ours: `react-textarea-autosize`, the
+ * same package `client/src/components/Chat/Input/ChatForm.tsx` composes with,
+ * 1.70 kB gzip. This file used to hand-roll it, and the hand-rolled version
+ * needed two corrections that the dependency does not need at all — both of
+ * them arithmetic. It quantised the height to whole line boxes so the cap
+ * could not land mid-glyph, and then had to discount a 1px `scrollHeight`
+ * rounding error that its own division read as an extra row on every
+ * Shift+Enter. The library never divides: it measures a hidden clone of this
+ * textarea carrying the same font, padding and WIDTH, takes that clone's
+ * `scrollHeight` as the wanted height, and measures ONE row separately by
+ * putting a single `x` in the same clone. With no division there is nothing
+ * for a rounding error to be multiplied by, and a whole class of bug this
+ * component has already paid for twice stops being ours to get wrong.
  *
- * `height` is written to the element's inline style rather than being tracked
- * in state, because the value being computed IS a measurement of the DOM —
- * routing it through a render only means measuring the previous frame.
+ * The cap rides on that same measured row: `maxRows` is a row COUNT, so the
+ * box can only ever stop on a whole line, at whatever the font metrics
+ * actually are — through a token change or a browser zoom, which a px cap
+ * cannot follow. The `min(rem, vh)` rule survives underneath it in CSS as an
+ * outer clamp for short windows (see TEXTAREA_MAX).
+ *
+ * `height` still reaches the element as inline style rather than through
+ * state, for the reason the hand-rolled version gave: the value being computed
+ * IS a measurement of the DOM, and routing it through a render only means
+ * measuring the previous frame. The library also re-measures on window resize
+ * and on `document.fonts` `loadingdone` — the second of which the hand-rolled
+ * version never did, and which is precisely when a webfont swap changes the
+ * line box under a draft already on screen.
  *
  * Once it caps, the box is a scroll container, and it is finished as one: no
  * scrollbar furniture (the donor's composer paints none either, and Windows
@@ -73,12 +90,31 @@
  * on the card INSIDE the form, which is what keeps the card's outer edge on
  * the column's edge instead of one padding value inboard of it.
  */
-import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowUp, Paperclip, X } from 'lucide-preact';
+import TextareaAutosize from 'react-textarea-autosize';
 
 /**
- * How tall the textarea may grow before it becomes its own scroller.
- * `min()` of a line-count cap and a share of the viewport — see the header.
+ * How tall the textarea may grow before it becomes its own scroller, in whole
+ * ROWS — the two breakpoints' caps restated in the only unit that cannot land
+ * mid-glyph. Five and nine are today's 9.5rem and 15rem at this composer's
+ * 14px/1.6 line box and 2rem of vertical padding; the library multiplies them
+ * by a row it measured rather than by a number written here, so they stay the
+ * same two caps after a font-size token change or a browser zoom.
+ */
+const MAX_ROWS_SM = 5;
+const MAX_ROWS_MD = 9;
+/** The boundary `md:` compiles to. `maxRows` is a number, so it must be read. */
+const MD_QUERY = '(min-width: 768px)';
+
+/**
+ * The OUTER clamp, kept from the hand-rolled version and still expressed in
+ * CSS because only CSS can weigh a rem against a share of the viewport. In an
+ * ordinary window `maxRows` is the smaller of the two and this never bites; it
+ * takes over in a window short enough that a nine-row composer plus its
+ * control row would leave no transcript at all. A rem-only cap is right on a
+ * laptop and absurd in a 500px-tall window; a vh-only cap is the reverse on a
+ * tall monitor. Whichever is smaller is the one that was going to be wrong.
  */
 const TEXTAREA_MAX = 'max-h-[min(9.5rem,30vh)] md:max-h-[min(15rem,45vh)]';
 
@@ -137,45 +173,39 @@ interface ComposerProps {
 }
 
 /**
- * Recompute the box to fit its content, SNAPPED to whole line boxes.
+ * Which of the two row caps is in force.
  *
- * Sizing to raw `scrollHeight` and letting a `max-height` in rem do the
- * clamping shears the last line in half at the cap: the cap is a round
- * typographic value, the line box is whatever the font metrics make it, and
- * the two do not divide. A half-row of sliced glyphs reads as a rendering
- * fault rather than as "there is more text above", so the height is quantised
- * here instead — both while growing and at the cap, which is itself floored to
- * a whole number of lines. The CSS cap stays as the source of the maximum.
+ * The rest of this component states its breakpoints in `md:` classes, which
+ * cost nothing to read. `maxRows` cannot: it is a number handed to a
+ * component, so the same 768px boundary has to be *subscribed to* rather than
+ * declared — otherwise a window dragged across it leaves an open composer
+ * capped for the breakpoint it is no longer at.
+ *
+ * Defaults to the desktop count where `matchMedia` is missing, which is the
+ * generous end: a cap that is too tall clamps against TEXTAREA_MAX, while one
+ * that is too short would silently take four rows off a laptop composer.
  */
-function fit(el: HTMLTextAreaElement | null) {
-  if (!el) return;
-  el.style.height = 'auto';
-  const cs = getComputedStyle(el);
-  const line = parseFloat(cs.lineHeight);
-  const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-  const cap = parseFloat(cs.maxHeight);
-  if (!Number.isFinite(line) || line <= 0) {
-    // No resolvable line box (e.g. `line-height: normal`): fall back to the
-    // unquantised behaviour rather than guessing a metric.
-    el.style.height = `${el.scrollHeight}px`;
-    return;
-  }
-  const content = Math.max(0, el.scrollHeight - pad);
-  // `scrollHeight` is an INTEGER, but a line box rarely is (14px text at 1.6
-  // gives 22.4px here). Two full lines measure 44.8px and are reported as 45,
-  // and a bare `Math.ceil(45 / 22.4)` reads that 0.2px of rounding noise as a
-  // third line — so every Shift+Enter left the box one whole row taller than
-  // its own text, with an empty band under the caret that never went away
-  // (measured: 2 lines of content sized to 99.2px instead of 76.8px). On the
-  // mobile cap that also cost a line of real capacity: four lines of text hit
-  // a five-line cap and started scrolling with the box not yet full.
-  //
-  // One pixel is the most `scrollHeight` can round up by, so discount exactly
-  // that before quantising. Content genuinely past a line boundary is more
-  // than 1px past it and still rounds up.
-  const wanted = Math.max(1, Math.ceil((content - 1) / line));
-  const capLines = Number.isFinite(cap) ? Math.max(1, Math.floor((cap - pad) / line)) : wanted;
-  el.style.height = `${Math.min(wanted, capLines) * line + pad}px`;
+function useMaxRows(): number {
+  const mediaQuery = () =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(MD_QUERY)
+      : null;
+
+  const [wide, setWide] = useState(() => mediaQuery()?.matches ?? true);
+
+  useEffect(() => {
+    const mq = mediaQuery();
+    if (!mq) return;
+    const onChange = () => setWide(mq.matches);
+    // Read once here as well: a resize landing between first render and this
+    // effect would otherwise leave the cap a breakpoint behind for good.
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return wide ? MAX_ROWS_MD : MAX_ROWS_SM;
 }
 
 export function Composer({
@@ -194,19 +224,13 @@ export function Composer({
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const area = textareaRef ?? ownRef;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const maxRows = useMaxRows();
 
-  // Before paint, so the box never renders at the wrong height for a frame.
-  // Runs on every value change, which covers typing, pasting, a starter chip
-  // dropping text in, and the reset to one row after a send.
-  useLayoutEffect(() => { fit(area.current); }, [value]);
-
-  // A narrower window rewraps the text, which changes how many rows it needs.
-  useEffect(() => {
-    const onResize = () => fit(area.current);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // No sizing effect of our own any more. TextareaAutosize re-measures in a
+  // layout effect on every render — which is every keystroke, paste, starter
+  // chip and the reset to one row after a send — plus on window resize and on
+  // webfont load. All four cases the hand-rolled version handled, and one it
+  // did not.
 
   // The one gate, used by Enter, by submit and by the button's `disabled` —
   // three call sites that would otherwise drift apart. Identical to the
@@ -290,12 +314,25 @@ export function Composer({
           </ul>
         )}
 
-        <textarea
+        {/* The donor's call-site shape (ChatForm.tsx): a controlled
+            TextareaAutosize with `rows={1}`, its own ref, the composer's
+            keydown handler and nothing else between it and the DOM element.
+            What differs is the cap — the donor leaves it to a CSS max-height
+            and accepts a sheared row there; `maxRows` is what makes ours stop
+            on a line box. */}
+        <TextareaAutosize
           ref={area}
           data-tour="chat-input"
           rows={1}
+          maxRows={maxRows}
           value={value}
-          onInput={(e) => onInput((e.target as HTMLTextAreaElement).value)}
+          // `e` is annotated rather than inferred: the package ships React
+          // types, and this app has no React types installed for them to
+          // resolve against, so its props widen to `any` and `strict` refuses
+          // the implicit parameter. The annotation is the honest one — Preact
+          // has no synthetic event system, so what arrives here is the native
+          // DOM event off the textarea.
+          onInput={(e: Event) => onInput((e.target as HTMLTextAreaElement).value)}
           onKeyDown={handleKeyDown}
           placeholder={`Message ${agentName}...`}
           aria-label={`Message ${agentName}`}

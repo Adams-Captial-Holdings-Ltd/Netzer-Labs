@@ -69,6 +69,7 @@ import { Button } from '../Button';
 import { InfoTooltip } from '../InfoTooltip';
 import { AgentMenu } from './AgentMenu';
 import { ModelMenu } from './ModelMenu';
+import { OpenSidebarButton } from './ConversationSidebar';
 import { COLUMN_BLEED_X, COLUMN_PX } from './ChatCanvas';
 
 interface ChatHeaderProps {
@@ -84,6 +85,10 @@ interface ChatHeaderProps {
   chatId: string;
   streaming: boolean;
   onNewChat: () => void;
+  /** Opens the conversation drawer. Rendered only below `lg`, where the
+   *  conversation rail is off-canvas and has no control of its own on screen
+   *  (donor `Chat/Menus/OpenSidebar.tsx`). Omit it and no button appears. */
+  onOpenSidebar?: () => void;
 }
 
 export function ChatHeader({
@@ -97,6 +102,7 @@ export function ChatHeader({
   chatId,
   streaming,
   onNewChat,
+  onOpenSidebar,
 }: ChatHeaderProps) {
   return (
     // The bleed layer: no paint of its own, it only cancels the column's
@@ -119,9 +125,13 @@ export function ChatHeader({
           what declares the sides. */}
       <div class={`rounded-b-xl border-b border-border bg-surface shadow-sm ${COLUMN_PX}`}>
         <div class="flex flex-wrap items-center gap-2 py-3">
-          {/* Mobile falls back to DOM order (title + New chat, then the pickers
-              on their own line because that group is w-full); sm+ reorders to
-              title · pickers · New chat on a single row. */}
+          {/* Mobile falls back to DOM order (the drawer control + title + New
+              chat, then the pickers on their own line because that group is
+              w-full); sm+ reorders to title · pickers · New chat on a single
+              row. The drawer control keeps DOM order in every case — it is
+              `lg:hidden`, and by the breakpoint the reorder matters at, the
+              rail it opens is a column in the flow instead. */}
+          {onOpenSidebar && <OpenSidebarButton onClick={onOpenSidebar} />}
           <h1
             data-tour="chat-title"
             title={title}

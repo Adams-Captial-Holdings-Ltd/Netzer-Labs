@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
-import { Trash2 } from 'lucide-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
 import type { Agent, Conversation, Message, Model } from '../lib/chat/types';
 import {
@@ -9,7 +8,6 @@ import {
   storedChatId,
   rememberChatId,
   conversationTitle,
-  relativeAge,
   friendlyStreamError,
 } from '../lib/chat/helpers';
 import { installChatCodeCopy } from '../lib/chat/code-block';
@@ -21,6 +19,11 @@ import { ChatCanvas } from '../components/chat/ChatCanvas';
 import { ChatHeader } from '../components/chat/ChatHeader';
 import { ChatLanding } from '../components/chat/ChatLanding';
 import { Composer } from '../components/chat/Composer';
+import {
+  ConversationSidebar,
+  readSidebarCollapsed,
+  writeSidebarCollapsed,
+} from '../components/chat/ConversationSidebar';
 import { MessagesView } from '../components/chat/MessagesView';
 import { ScrollToBottom } from '../components/chat/ScrollToBottom';
 import { useChatScroll } from '../components/chat/useChatScroll';
@@ -64,6 +67,13 @@ export function Chat() {
   const [toolStatus, setToolStatus] = useState('');
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  // Desktop conversation rail: collapsed or expanded, remembered across
+  // reloads (localStorage, not sessionStorage — a layout preference outlives
+  // the tab, unlike `cce_chat_active`, which is deliberately per-tab).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  // Below `lg` the same rail is an off-canvas drawer. Never open on first
+  // paint: the reader asked for a conversation, not for a file list.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   // The conversation the delete dialog is armed for (null = dialog closed).
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
@@ -388,66 +398,40 @@ export function Chat() {
     abortRef.current?.abort();
   }
 
-  // Phase 6 (CHATUI-006) restyles this into the donor's date-grouped sidebar.
-  // Phase 2 only re-seats it in the full-bleed canvas: the page padding it used
-  // to sit inside is gone, so the panel now carries its own.
-  const historyPanel = (
-    <aside
-      class="hidden lg:flex lg:flex-col w-64 shrink-0 border-r border-border px-3 py-4 overflow-y-auto"
-      aria-label="Conversation history"
-    >
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="text-overline uppercase tracking-wider text-muted">Conversations</h2>
-        {historyLoading && <span class="text-caption text-muted">…</span>}
-      </div>
-      {conversations.length === 0 && !historyLoading && (
-        <p class="text-caption text-muted py-2">
-          No past conversations yet. They appear here once you send a message.
-        </p>
-      )}
-      <ul class="space-y-1">
-        {conversations.map((c) => {
-          const active = c.chatId === chatId;
-          return (
-            <li key={c.chatId} class="group relative">
-              <button
-                type="button"
-                disabled={streaming}
-                onClick={() => void openConversation(c.chatId)}
-                aria-current={active ? 'true' : undefined}
-                class={`w-full text-left rounded-lg pl-2 pr-9 py-2 transition-colors duration-fast disabled:opacity-50 ${
-                  active ? 'bg-surface-hover border border-border' : 'hover:bg-surface-hover border border-transparent'
-                }`}
-              >
-                <span class="block text-body-sm text-primary truncate">{conversationTitle(c)}</span>
-                <span class="block text-caption text-muted">
-                  {relativeAge(c.updatedAt)}
-                  {c.messageCount ? ` · ${c.messageCount} msg` : ''}
-                </span>
-              </button>
-              {/* A SIBLING of the row button, never nested inside it: a <button>
-                  within a <button> is invalid HTML, and nesting would make one
-                  click both open and delete the conversation. Hidden until
-                  hover/focus so the sidebar stays uncluttered, but always
-                  reachable by keyboard. */}
-              <button
-                type="button"
-                disabled={streaming || deleting}
-                onClick={(e) => { e.stopPropagation(); setPendingDelete(c); }}
-                aria-label={`Delete chat: ${conversationTitle(c)}`}
-                title="Delete chat"
-                class="absolute right-1 top-2 p-1 rounded text-muted opacity-0
-                  group-hover:opacity-100 focus-visible:opacity-100 hover:text-danger
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger
-                  disabled:opacity-0 disabled:pointer-events-none transition-colors duration-fast"
-              >
-                <Trash2 size={14} />
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </aside>
+  // The conversation rail (Phase 6, CHATUI-006). It is one component across
+  // both shells: a collapsible column at `lg` and up, an off-canvas drawer
+  // below it. Every row, every group heading and the delete control live in
+  // ../components/chat/ConversationSidebar.
+  //
+  // THE DELETE FLOW STAYS HERE, deliberately and untouched. `confirmDelete`
+  // below, `deletingRef`, the snapshot-inside-the-updater rollback and the
+  // ConfirmDialog are the paid-for fixes; the sidebar only reports which row's
+  // trash icon was clicked. Nothing about them changed in this phase.
+  const sidebar = (
+    <ConversationSidebar
+      conversations={conversations}
+      activeChatId={chatId}
+      loading={historyLoading}
+      streaming={streaming}
+      deleting={deleting}
+      // Picking a conversation in the drawer closes it — the donor's
+      // `toggleNav`, which every row selection funnels through. On desktop
+      // there is no drawer and this is a no-op.
+      onOpen={(id) => { void openConversation(id); setSidebarOpen(false); }}
+      onRequestDelete={(c) => setPendingDelete(c)}
+      // The SAME handler the header's New chat uses, confirm dialog included:
+      // two controls for one action must not disagree about whether an
+      // in-progress conversation is about to be abandoned.
+      onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
+      collapsed={sidebarCollapsed}
+      onToggleCollapse={() => {
+        const next = !sidebarCollapsed;
+        setSidebarCollapsed(next);
+        writeSidebarCollapsed(next);
+      }}
+      mobileOpen={sidebarOpen}
+      onCloseMobile={() => setSidebarOpen(false)}
+    />
   );
 
   const agentName = agents.find((a) => a.id === agentId)?.displayName ?? 'agent';
@@ -501,7 +485,7 @@ export function Chat() {
     // own overlay header, the way the donor's does, instead of sitting in a
     // boxed panel inside a padded page.
     <div class="-m-4 sm:-m-6 lg:-m-8 flex h-[calc(100vh-var(--header-height))] overflow-hidden bg-bg">
-      {historyPanel}
+      {sidebar}
       {/* This page carries NO layout contract of its own — no measured header
           height, no custom property, no reading measure. ChatCanvas declares
           the one content column and parents the header, the transcript and the
@@ -516,6 +500,10 @@ export function Chat() {
           header={
             <ChatHeader
               title={headerTitle}
+              // Below `lg` the rail is a drawer, so its open control has to
+              // live outside it. Above `lg` the button is hidden and the rail's
+              // own collapse toggle governs.
+              onOpenSidebar={() => setSidebarOpen(true)}
               agents={agents}
               agentId={agentId}
               onSelectAgent={selectAgent}

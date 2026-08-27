@@ -911,9 +911,35 @@
   background: linear-gradient(to bottom, var(--color-surface) 25%, transparent);
 }
 .chat-menu-edge--bottom {
+  /* The band the chip sits in has to be FULLY opaque, and it is the one length
+     in this block that is not decoration.
+
+     What shipped before this: a 32px ramp that was `--color-surface` at 25%
+     and transparent by its top, with an opaque chip floating 3px off the fold.
+     The chip's own line therefore landed where the ramp was only ~40% covered,
+     so the glyphs either SIDE of the chip stayed crisp while the ones behind it
+     vanished, and the row read as a sentence with a hole punched in it. The
+     roll-call now measures it: at 1440px the agent menu hid "quarterly upd"
+     out of "Investor letters, quarterly updates, and capital-call notices" and
+     "mmarizer" off the end of "Deal Memo Summarizer"; at 375px it hid "er" off
+     "LP Update Drafter". That is text occlusion, not a peek affordance, and no
+     hit-test could ever have caught it — the chip is `pointer-events: none`,
+     so `elementFromPoint` cheerfully reports the row underneath.
+
+     `--more-band` is the chip's own box written out: 3px of float, 1px border,
+     1px padding, 11px x 1.4 of line box, 1px padding, 1px border = 22.4px,
+     rounded up with slack for fractional device scaling. Below it the ramp is
+     solid, so the cut row is GONE rather than half-eaten; above it the ramp
+     fades over `--space-6`, which is what still makes the cut read as "there
+     is more" rather than as the end of the list. rollcall.js intersects the
+     chip's painted box with the painted box of every glyph beneath it and
+     fails on ONE covered character, so this number cannot drift out of step
+     with the type above it in silence. */
+  --more-band: 26px;
   bottom: 0;
+  height: calc(var(--more-band) + var(--space-6));
   align-items: flex-end;
-  background: linear-gradient(to top, var(--color-surface) 25%, transparent);
+  background: linear-gradient(to top, var(--color-surface) var(--more-band), transparent 100%);
 }
 
 /* "10 more" — the count, not a vague hint, so the reader can choose between
@@ -928,6 +954,148 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ── The conversation rail's list has to ANNOUNCE that it scrolls (CHATUI-006) ──
+   New rules with new class names, appended rather than woven into anything
+   above. Nothing here is shared with `.chat-md` or the pickers.
+
+   The defect this answers, measured on the delivered frames: the rail's list
+   was a bare `overflow-y-auto`, so it inherited the GLOBAL scrollbar a few
+   hundred lines up (`* { scrollbar-width: thin; scrollbar-color:
+   var(--color-gray-600) transparent }`) and shipped two failures in every shot.
+
+   1. PLATFORM CHROME INSIDE PRODUCT CHROME. Setting `scrollbar-color` at all
+      puts Chromium on its non-overlay scrollbar path, and on Windows that path
+      draws STEPPER BUTTONS — the same trap already written down for the
+      composer above. The result was a 6px stripe in `--color-gray-600` /
+      `--color-gray-700` with a solid ▲ at the top of the rail and a ▼ at the
+      bottom of it, running the full height of the panel and of the mobile
+      drawer. Across every donor rail frame there is not one pixel of that.
+
+      The donor's answer is not "no scrollbar", it is a QUIET one — donor
+      `client/src/style.css:1301-1318`: `width: 0.5rem`, a transparent track,
+      and a fully rounded thumb at 10% ink. That shape is copied here; only the
+      thumb's colour is this product's (`--color-primary` at 30%, lifting on
+      hover), because the house doctrine above is that an overflow affordance
+      must be visible AT REST, and 10% black is not on a `#f5f5f7` rail.
+      Handing `scrollbar-width` and `scrollbar-color` back to `auto` is what
+      re-arms these pseudo-elements — while EITHER is set, Chromium ignores
+      every `::-webkit-scrollbar` rule in scope.
+
+   2. A GUILLOTINED LAST ROW. Where the list met the New-chat footer, the row
+      under the fold was sliced through its x-height at a hard seam — every
+      descender and the bottom half of every glyph amputated, no ramp. This
+      repo has already ruled on exactly that frame for code blocks (see
+      CHATUI-00x above): a mid-token slice at a hard seam reads as "this panel
+      is broken", not as "this panel scrolls". So the seam gets a ramp.
+
+      The ramps are ABSOLUTE and `pointer-events: none` — taking no layout is
+      what stops them from changing what overflows (a loop), and taking no
+      pointer events is what keeps the row underneath clickable — and they are
+      MEASURED, mounted only on an edge that really has more beyond it, so a
+      list of three conversations fades nothing. `--color-bg-sunken` is the
+      rail's own ground in both shells and in both themes, so one declaration
+      is correct everywhere; the gradient interpolates to `transparent`, which
+      every engine now resolves premultiplied, so there is no grey fringe. */
+.chat-rail-list {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  /* A flick that reaches the end of the rail must not then scroll the
+     transcript behind it. */
+  overscroll-behavior: contain;
+  /* Keyboard focus travelling down the list stops clear of the bottom ramp
+     rather than under it. */
+  scroll-padding-block: var(--space-8);
+}
+/* Firefox has no `::-webkit-scrollbar`, so it needs the standard properties —
+   and only there, where they cost nothing. */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-rail-list {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-primary-rgb) / 0.3) transparent;
+  }
+}
+.chat-rail-list::-webkit-scrollbar {
+  width: 8px;
+}
+/* Donor: transparent. A painted track on a full-height rail is ~700px of
+   chrome announcing a ~200px thumb; the thumb alone states the ratio. */
+.chat-rail-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-rail-list::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-primary-rgb) / 0.3);
+  border-radius: var(--radius-full);
+  /* Inset from the panel edge the donor way — a transparent border is padding
+     the thumb cannot paint into, so an 8px gutter carries a 6px thumb that
+     never touches the rail's border. */
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.chat-rail-list::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-primary-rgb) / 0.6);
+  background-clip: padding-box;
+}
+
+.chat-rail-edge {
+  position: absolute;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  /* Stops short of the scrollbar gutter: a ramp drawn over the thumb would dim
+     the very affordance it is reinforcing. */
+  right: 8px;
+  height: var(--space-8);
+  pointer-events: none;
+}
+.chat-rail-edge--top {
+  top: 0;
+  align-items: flex-start;
+  background: linear-gradient(to bottom, var(--color-bg-sunken) 30%, transparent);
+}
+.chat-rail-edge--bottom {
+  /* Same band, same reason, same arithmetic as `.chat-menu-edge--bottom` a few
+     hundred lines up — the two surfaces answer "there is more" the same way, so
+     they have to get the OPACITY of that answer right the same way too. The
+     chip floats `--space-1` off the fold here rather than 3px, so the band is
+     that much taller. Deliberately its own declaration rather than a shared
+     rule: nothing in this block is meant to be coupled to the pickers. */
+  --more-band: 28px;
+  bottom: 0;
+  height: calc(var(--more-band) + var(--space-6));
+  align-items: flex-end;
+  background: linear-gradient(to top, var(--color-bg-sunken) var(--more-band), transparent 100%);
+}
+
+/* "2 more" — measured, and the reason the bottom edge is honest at EVERY
+   scroll position rather than most of them.
+
+   A ramp only says something when there is ink inside it. Parked at the head
+   of this list the fold lands in the gap between two rows, so the fade has
+   nothing to fade and the frame reads "the list ends at Grant narrative" —
+   which is false, and is the same wrong reading the guillotine gave, arrived
+   at from the other direction. The count does not depend on where the cut
+   falls. Same component and same wording as the picker panels' `.chat-menu-more`
+   a few hundred lines up, so the two surfaces answer "there is more" the same
+   way; the ground is `--color-surface` rather than `--color-surface-elevated`
+   because on the rail's recessed panel those two tokens are the same colour in
+   light mode, and a chip has to sit ON the list, not in it. */
+.chat-rail-more {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: var(--space-1);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xs);
   color: var(--color-text-secondary);
   font-size: 0.6875rem;
   line-height: 1.4;
