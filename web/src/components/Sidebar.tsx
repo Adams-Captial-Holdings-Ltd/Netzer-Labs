@@ -5,7 +5,16 @@ import {
   currentRole,
   hasCapability,
 } from '../lib/auth';
-import { brand, DEFAULT_COMPANY_NAME, DEFAULT_COMPANY_TAGLINE } from '../lib/theme';
+import {
+  brand,
+  DEFAULT_COMPANY_NAME,
+  DEFAULT_COMPANY_TAGLINE,
+  themePreference,
+  setTheme,
+  resolvedTheme,
+} from '../lib/theme';
+import { clearToken } from '../lib/api';
+import { NotificationBell } from './NotificationBell';
 
 const STORAGE_KEY = 'cce_sidebar_collapsed';
 export const sidebarCollapsed = signal(localStorage.getItem(STORAGE_KEY) === 'true');
@@ -18,6 +27,41 @@ export function toggleSidebar() {
 
 export function toggleMobileMenu() {
   mobileMenuOpen.value = !mobileMenuOpen.value;
+}
+
+/**
+ * Routes that draw their OWN top bar, and where the house header must therefore
+ * not draw a second one.
+ *
+ * The chat surface is the whole viewport, not a page inside the shell: the
+ * donor's chat header IS its app bar (`Chat/Header.tsx` is one 52px row that
+ * carries the drawer opener, the model selector and the new-chat control, and
+ * there is nothing above it). Measured at 375x812 the house header cost 56 CSS
+ * px stacked on top of the chat's own bar — 108px of chrome for one bar's worth
+ * of controls, and two openers 245px apart competing for "the menu".
+ *
+ * So the chat route hands the top of the viewport to the chat bar (Header.tsx
+ * applies `hidden`), and the two things the house header was the only home for
+ * — the nav toggle and the account controls — move with it: the toggle onto the
+ * chat bar (ChatHeader, below `lg` only, since the rail is permanent above it),
+ * the controls into this component's foot (below).
+ *
+ * ROUND 6: AT EVERY WIDTH, NOT ONLY BELOW `lg`. Round 5 stopped at the phone and
+ * the same reading caught the desktop: at 1280 the house header's ink ran
+ * y 20.0-35.5 above a chat plate at 56.5-122.5, first content at y=131.5 against
+ * the donor's 57.0. Two bars is the defect; a wide screen does not make a second
+ * one free, it only makes it less obvious. The account row below is therefore
+ * mounted on the desktop rail too, which is why it now has a collapsed form.
+ *
+ * Declared HERE, beside `mobileMenuOpen`, because it is a fact about the
+ * shell's mobile chrome, and because Header.tsx already imports this module
+ * (the reverse import would be a cycle).
+ */
+/** The mobile nav drawer's own id, so an opener outside it can name it. */
+export const APP_NAV_DRAWER_ID = 'app-nav-drawer';
+
+export function pageOwnsTopBar(location: string): boolean {
+  return location === '/chat' || location.startsWith('/chat/');
 }
 
 function Icon({ children, class: cls = '' }: { children: ComponentChildren; class?: string }) {
@@ -188,7 +232,19 @@ export const NAV_ITEMS: NavItem[] = [
 
 const sections = ['Core', 'Operations', 'Security', 'Advanced', 'Collaboration', 'Team', 'Account'];
 
-function SidebarContent({ collapsed, onNavClick }: { collapsed: boolean; onNavClick?: () => void }) {
+/* `mobile` is GONE as of round 6, rather than kept and ignored. Its only reader
+   was the account row's `mobile && pageOwnsTopBar(location)` guard, and the row
+   now mounts in both shells because the house header stands down in both. A
+   boolean that no longer decides anything is a boolean the next change will
+   guess a meaning for. `collapsed` already tells this component which shape it
+   is in, and it is the one the account row actually needs. */
+function SidebarContent({
+  collapsed,
+  onNavClick,
+}: {
+  collapsed: boolean;
+  onNavClick?: () => void;
+}) {
   const [location] = useLocation();
   // currentRole is null only before /whoami has been attempted. The capability
   // set hydrates from the same localStorage cache as the role and is set by the
@@ -282,6 +338,89 @@ function SidebarContent({ collapsed, onNavClick }: { collapsed: boolean; onNavCl
         })}
       </nav>
 
+      {/* THE ACCOUNT ROW — the house header's controls, where the house header
+          is not on screen.
+
+          Donor `UnifiedSidebar/mobile/Header.tsx` puts the account controls
+          inside the mobile drawer rather than on the bar:
+
+            <Suspense fallback={<Skeleton className="size-9 rounded-lg" />}>
+              <AccountSettings collapsed />
+            </Suspense>
+
+          and `UnifiedSidebar/ExpandedPanel.tsx:192-196` — the DESKTOP rail —
+          does the identical thing at the foot of the rail:
+
+            <div className="mt-auto">
+              <Suspense fallback={<Skeleton className="h-9 w-9 rounded-lg" />}>
+                <AccountSettings collapsed />
+              </Suspense>
+            </div>
+
+          Two shells, one answer, and the answer is never "a second top bar".
+          That is the donor file round 5 did not read: it took the mobile one,
+          concluded the relocation was a phone concession, and left the desktop
+          with two bars for a critic to measure.
+
+          Same idea, this product's controls: notifications, the theme cycle and
+          sign out. It renders ONLY on a route where the house header has stood
+          down (`pageOwnsTopBar`), so no page ever shows two theme toggles or two
+          sign-out buttons — what the bar gives up is exactly what this row picks
+          up, and nothing is reachable in two places at once.
+
+          ROUND 6 dropped the `mobile &&` guard. The house header now stands down
+          at every width on those routes, so the desktop rail has to carry these
+          three as well or they become unreachable on a 1280px screen — the one
+          outcome this whole relocation exists to avoid. The donor's own call site
+          is the collapsed one (`<AccountSettings collapsed />`), which is also
+          the shape this needs when the rail is narrow: `flex-wrap` plus a
+          `justify-center` that applies only while collapsed lets the three
+          controls stack into the strip instead of overflowing it, and the
+          sign-out's `ml-auto` is dropped there for the same reason. */}
+      {pageOwnsTopBar(location) && (
+        <div
+          class={`border-t border-border p-2 shrink-0 flex flex-wrap items-center gap-1 ${
+            collapsed ? 'justify-center' : ''
+          }`}
+          // "Account controls", not "Account": the nav above already publishes a
+          // `role="group" aria-label="Account"` for its Account SECTION
+          // (Getting Started, Settings), and two groups with one name in one
+          // drawer is a landmark a screen-reader user cannot tell apart.
+          aria-label="Account controls"
+          role="group"
+        >
+          <NotificationBell />
+          <button
+            onClick={() => {
+              const order = ['light', 'dark', 'system'] as const;
+              const idx = order.indexOf(themePreference.value);
+              setTheme(order[(idx + 1) % order.length]);
+            }}
+            class="p-2 rounded-lg hover:bg-surface-hover text-secondary transition-colors"
+            title={`Theme: ${themePreference.value}`}
+            aria-label={`Switch theme (current: ${themePreference.value})`}
+          >
+            {resolvedTheme.value === 'dark' ? (
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+              </svg>
+            ) : (
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+            )}
+          </button>
+          <button
+            onClick={() => { clearToken(); window.location.reload(); }}
+            class={`text-caption text-muted hover:text-danger transition-colors px-3 py-1.5 rounded-lg hover:bg-surface-hover whitespace-nowrap shrink-0 ${
+              collapsed ? '' : 'ml-auto'
+            }`}
+          >
+            Sign out
+          </button>
+        </div>
+      )}
+
       <div class="border-t border-border p-2 shrink-0">
         <button
           onClick={toggleSidebar}
@@ -319,8 +458,21 @@ export function Sidebar() {
             class="absolute inset-0 bg-black/50 backdrop-blur-sm"
             onClick={() => { mobileMenuOpen.value = false; }}
           />
-          <aside class="absolute top-0 left-0 h-full w-[var(--sidebar-width)] bg-surface border-r border-border flex flex-col page-enter">
-            <SidebarContent collapsed={false} onNavClick={() => { mobileMenuOpen.value = false; }} />
+          {/* `id` so whichever control opened this drawer can name it: below
+              `lg` on the chat route that control is on the chat bar, and a
+              toggle that does not say WHAT it expands announces as an
+              unlabelled button next to the one that opens the conversation
+              history (donor `OpenSidebar.tsx` carries
+              `aria-controls="chat-history-nav"` for the same reason). */}
+          <aside
+            id={APP_NAV_DRAWER_ID}
+            aria-label="Main navigation"
+            class="absolute top-0 left-0 h-full w-[var(--sidebar-width)] bg-surface border-r border-border flex flex-col page-enter"
+          >
+            <SidebarContent
+              collapsed={false}
+              onNavClick={() => { mobileMenuOpen.value = false; }}
+            />
           </aside>
         </div>
       )}
