@@ -195,11 +195,22 @@ export function applyBrand() {
     root.style.removeProperty('--color-primary-hover');
     root.style.removeProperty('--color-primary-light');
     root.style.removeProperty('--color-primary-glow');
+    // Cleared alongside the family, so the per-mode :root/.dark triplet wins
+    // again. Leaving a stale brand triplet behind would desync every
+    // alpha utility (bg-primary-a/10 and friends) from --color-primary.
+    root.style.removeProperty('--color-primary-rgb');
   } else {
     const base = isDark ? shade(primary, 1.18) : primary;
     root.style.setProperty('--color-primary', base);
     root.style.setProperty('--color-primary-hover', shade(base, isDark ? 1.12 : 0.82));
     root.style.setProperty('--color-primary-light', shade(base, isDark ? 1.28 : 1.25));
+    // The alpha-capable mirror of --color-primary, as a space-separated RGB
+    // triplet for `rgb(var(--color-primary-rgb) / <alpha-value>)` (the
+    // `primary-a` Tailwind key). Derived from the SAME per-mode `base` written
+    // just above — not from the raw brand hex — or a dark-mode brand tint would
+    // sit at a different lightness than the solid it is meant to tint.
+    const rgb = hexToRgb(base);
+    root.style.setProperty('--color-primary-rgb', `${rgb.r} ${rgb.g} ${rgb.b}`);
     // Glow is a translucent tint; the same brand rgb works in both modes and
     // index.css already bumps the alpha for dark via its own token, but since
     // we override inline we set a slightly stronger alpha in dark to match.
