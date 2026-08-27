@@ -1035,15 +1035,26 @@
   /* Stops short of the scrollbar gutter: a ramp drawn over the thumb would
      dim the very affordance it is reinforcing. */
   right: 10px;
+  /* A FALLBACK only: both modifiers below build their height from the band
+     they were measured with. It is also the number the rows' `scroll-mt` /
+     `scroll-mb` reference, which is what keeps a keyboard-scrolled row clear
+     of whichever band is in force. */
   height: var(--space-8);
   pointer-events: none;
   display: flex;
   justify-content: center;
 }
 .chat-menu-edge--top {
+  /* A FLOOR, not the value — the same shape `.chat-rail-edge--top` has carried
+     since round 4. `CommandMenu` measures where the nearest row boundary
+     actually is and writes `--more-band` inline; this is what the head falls
+     back to when there is nothing to snap to. See the long note at the foot
+     below for why a constant band was the defect on BOTH surfaces. */
+  --more-band: 8px;
   top: 0;
+  height: calc(var(--more-band) + var(--space-2));
   align-items: flex-start;
-  background: linear-gradient(to bottom, var(--color-surface) 25%, transparent);
+  background: linear-gradient(to bottom, var(--color-surface) var(--more-band), transparent 100%);
 }
 .chat-menu-edge--bottom {
   /* The band the chip sits in has to be FULLY opaque, and it is the one length
@@ -1072,7 +1083,46 @@
      with the type above it in silence. */
   --more-band: 26px;
   bottom: 0;
-  height: calc(var(--more-band) + var(--space-6));
+  /* ROUND 6 — the fade is `--space-2`, not `--space-6`, and the band is
+     MEASURED rather than declared. This is the fix `.chat-rail-edge--bottom`
+     got in round 4, finally applied to the surface the reading was written
+     about. The note there recorded the debt out loud:
+
+       "The pickers' ramp still declares a CONSTANT band (26px) with a
+        --space-6 fade. That is the geometry proved defective on this rail …
+        It is a known, unfixed instance, written down rather than quietly
+        inherited."
+
+     It was reachable, and it was reached. `probe-menu-ramp.js` points
+     ROLLCALL-P5's occlusion reading — plus the BAND-EDGE-vs-GLYPH check P5 was
+     missing — at these panels and measured the shipped geometry in all four
+     cells: 465 half-eaten glyphs on the agent menu at 375 and 557 at 1280, in
+     both themes, worst coverage step 0.79. The critic read the same damage off
+     the frames: "Deal screening, document review, and risk surfa" and
+     "…letters, quarterly updates…" sliced through the x-height, and the last
+     description line surviving as CSS 501.0-508.5 at luminance 222-249 where a
+     clean line of the same style reads 160.
+
+     The arithmetic is the rail's, not a second derivation of it: a 24px fade
+     over a 50px box is still ~87% opaque 3px above the "opaque" line and ~50%
+     opaque 12px above it, so a line of type lying across that stretch is not
+     dissolved, it is SLICED. The answer is not a length — it is WHERE the
+     transition lands. A menu row is `px-2 py-1.5`, so two adjacent rows are
+     separated by 12px of guaranteed white space (6px of one row's padding,
+     6px of the next). `CommandMenu` measures the nearest boundary, insets 4px
+     into it and writes the result here; an 8px fade then has BOTH its ends
+     inside that 12px gap. Above the edge every row is fully legible; below it
+     every row is fully gone.
+
+     The value below is the floor the component clamps to — the chip's own box
+     (3px float + 1px border + 1px padding + 11px x 1.4 line + 1px + 1px =
+     22.4px, rounded up for fractional device scaling), which is what the
+     roll-call's slack check measures — and the fallback when there is no
+     boundary to snap to. It is also why the rows carry
+     `scroll-mb-[var(--space-8)]`: 32px of scroll padding is more than
+     `MIN_BOTTOM_BAND + BAND_INSET`, so a row the keyboard scrolls to the foot
+     of the list snaps the band to the row BELOW it and survives whole. */
+  height: calc(var(--more-band) + var(--space-2));
   align-items: flex-end;
   background: linear-gradient(to top, var(--color-surface) var(--more-band), transparent 100%);
 }
@@ -1191,20 +1241,54 @@
   pointer-events: none;
 }
 .chat-rail-edge--top {
+  /* A FLOOR, not the value. `ConversationList` measures where the nearest row
+     boundary actually is and writes `--more-band` inline; this is what the head
+     falls back to when there is nothing to snap to. Same shape as the foot
+     below — see the long note there for why a constant band was the defect. */
+  --more-band: 8px;
   top: 0;
+  height: calc(var(--more-band) + var(--space-2));
   align-items: flex-start;
-  background: linear-gradient(to bottom, var(--color-bg-sunken) 30%, transparent);
+  background: linear-gradient(to bottom, var(--color-bg-sunken) var(--more-band), transparent 100%);
 }
 .chat-rail-edge--bottom {
-  /* Same band, same reason, same arithmetic as `.chat-menu-edge--bottom` a few
-     hundred lines up — the two surfaces answer "there is more" the same way, so
-     they have to get the OPACITY of that answer right the same way too. The
-     chip floats `--space-1` off the fold here rather than 3px, so the band is
-     that much taller. Deliberately its own declaration rather than a shared
-     rule: nothing in this block is meant to be coupled to the pickers. */
+  /* The same ANSWER as `.chat-menu-edge--bottom` a few hundred lines up — both
+     surfaces say "there is more" with a chip in an opaque band — but no longer
+     the same arithmetic, and the divergence is deliberate rather than drift.
+
+     ROUND 6 CLOSED THE DEBT THIS NOTE USED TO RECORD. What stood here was:
+     "The pickers' ramp still declares a CONSTANT band (26px) with a `--space-6`
+     fade … a known, unfixed instance, written down rather than quietly
+     inherited." It was inherited anyway — the critic read the slice off the
+     agent menu in both themes at both breakpoints. `.chat-menu-edge--*` now
+     carries the same measured band, on its own numbers (a 12px inter-row gap
+     rather than this rail's 18px, and the picker chip's 26px box rather than
+     this chip's 28px), proved by `probe-menu-ramp.js` rather than by this
+     paragraph. The divergence that remains is only those two constants.
+
+     The chip floats `--space-1` off the fold here rather than 3px, so the floor
+     below is that much taller than the pickers'. */
   --more-band: 28px;
   bottom: 0;
-  height: calc(var(--more-band) + var(--space-6));
+  /* ROUND 4 — the fade is `--space-2`, not `--space-6`, and the band is
+     MEASURED rather than declared.
+
+     The 24px fade was itself an occluder. `linear-gradient(to top, C 28px,
+     transparent 100%)` over a 52px box is still 87% opaque 3px above the
+     "opaque" line and 50% opaque 12px above it, so a 15px line of type sitting
+     across that stretch is not dissolved, it is SLICED: measured at 375x812 in
+     both themes, "21d · 9 msg" under this ramp lost its lower half and read
+     "21d · 9 msq". Lengthening the fade only spreads the slice; shortening it
+     alone only sharpens it. Neither is the answer, because the answer is not a
+     length at all — it is WHERE the transition lands.
+
+     So `ConversationList` measures the nearest row boundary and writes
+     `--more-band` inline, and this fade is short enough (8px) that both of its
+     ends sit inside the 18px of white space between two rows. The value below
+     is the floor the component clamps to (the chip's own box, which is what the
+     roll-call's slack reading measures) and the fallback when there is no
+     boundary to snap to. */
+  height: calc(var(--more-band) + var(--space-2));
   align-items: flex-end;
   background: linear-gradient(to top, var(--color-bg-sunken) var(--more-band), transparent 100%);
 }

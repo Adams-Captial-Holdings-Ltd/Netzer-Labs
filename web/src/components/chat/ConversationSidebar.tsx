@@ -162,13 +162,48 @@ const DRAWER_ID = 'chat-history-nav';
  *  conversation rail must not collapse the product's main navigation. */
 const COLLAPSE_KEY = 'cce_chat_sidebar_collapsed';
 
-/** Read the remembered desktop collapse state. Never throws — a browser with
- *  storage disabled just starts expanded. */
+/**
+ * The narrowest window that can afford BOTH rails and still give the reading
+ * column its full measure, and therefore where the rail stops opening itself.
+ *
+ * It is arithmetic, not taste, and every term is a number this app already
+ * declares:
+ *
+ *     --sidebar-width          260   the app shell's nav rail
+ *     w-56                     224   this rail, expanded
+ *     scrollbar-gutter          20   `stable both-edges` on the canvas
+ *     xl:max-w-4xl             896   the shared column's cap (ChatCanvas)
+ *     ────────────────────────────
+ *                             1400
+ *
+ * Above 1400 the column is capped by `max-w-4xl` whatever this rail does, so
+ * expanding it costs the reader nothing. Below it, every pixel this rail takes
+ * comes straight out of the measure — which is what a review measured at 1280:
+ * two rails stacked to x=484 left the column 776px wide and the code blocks
+ * 742px, against a donor that spends one rail and gives its code 878px.
+ *
+ * So below 1400 the rail DEFAULTS to its collapsed strip (48px) instead of its
+ * panel (224px). It is a default, not a lock: the toggle is in the strip, one
+ * click away, and the moment anyone uses it the choice is remembered in
+ * `COLLAPSE_KEY` and this arithmetic never runs again for them.
+ */
+const BOTH_RAILS_FIT_AT = 1400;
+
+/** Read the remembered desktop collapse state, or choose one from the width if
+ *  nobody has expressed a preference. Never throws — a browser with storage
+ *  disabled just falls back to the same width test. */
 export function readSidebarCollapsed(): boolean {
+  const byWidth = typeof window !== 'undefined' && window.innerWidth < BOTH_RAILS_FIT_AT;
   try {
-    return localStorage.getItem(COLLAPSE_KEY) === 'true';
+    const stored = localStorage.getItem(COLLAPSE_KEY);
+    // Only an EXPLICIT choice wins. `null` is "never toggled", which is the
+    // case the width test exists for; reading it as `false` is what made a
+    // 1280px window open two rails and pay for it in the measure.
+    if (stored === 'true') return true;
+    if (stored === 'false') return false;
+    return byWidth;
   } catch {
-    return false;
+    return byWidth;
   }
 }
 
@@ -645,27 +680,115 @@ export function ConversationSidebar({
  * 0.5px residue at the end of a scroll would otherwise keep claiming there is
  * more below with nothing left to show.
  */
+/**
+ * THE RAMP'S OPAQUE EDGE IS SNAPPED TO A ROW BOUNDARY, AND THAT IS MEASURED.
+ *
+ * `--more-band` is the part of a ramp that has gone FULLY opaque — below it the
+ * list is erased outright, above it the ramp fades out. Round 2 shipped that
+ * band as a constant (28px at the foot, 30% of 32px at the head) and the
+ * constant is what broke: a row is ~44px tall, so a fixed band lands wherever
+ * it lands, and where it landed was through the middle of a line of type.
+ *
+ * Measured on the shipped frames, both themes, at 375x812: the drawer row
+ * "Reconcile the August invoice exce…" sat at y≈691 with its metadata line
+ * "21d · 9 msg" at y≈699, and the opaque line at y=719 cut that line through
+ * its x-height — the descenders went and it read "21d · 9 msq". The chip check
+ * that already guards this surface could not see it: that reading clips a
+ * glyph at the opaque line and then asks whether what is left overlaps the
+ * CHIP, and the chip is a centred 53px pill 14px lower down. The band's own
+ * edge was never the thing being tested.
+ *
+ * The fix is not a bigger band — a bigger band puts the same edge through the
+ * row above. It is to stop the edge landing on ink at all. Rows are separated
+ * by 18px of guaranteed white space (8px of the row's own `py-2`, the 2px
+ * `space-y-0.5` gap, 8px of the next row's), so the band is measured to end
+ * `BAND_INSET` px inside a row's top (or bottom) edge and the fade is shortened
+ * to `--space-2`, which puts BOTH ends of the transition inside that gap. Above
+ * the edge every row is fully legible; below it every row is fully gone. No
+ * glyph is ever partly covered, at any scroll position, because there is never
+ * a glyph where the coverage changes.
+ *
+ * `MIN_BOTTOM_BAND` keeps the foot's band at least as tall as the "N more"
+ * chip's own box, which is the property the roll-call's slack check measures;
+ * the boundary chosen is the LOWEST one that still clears it, so the ramp
+ * hides as little as it can. `more` is then counted against that boundary
+ * rather than against the scrollport's edge — the rows the band erases are
+ * exactly the rows the chip is promising, so the count cannot disagree with
+ * what the reader can see.
+ */
+const BAND_INSET = 4;
+const MIN_BOTTOM_BAND = 28;
+const MIN_TOP_BAND = 8;
+
+interface RailEdges {
+  up: boolean;
+  down: boolean;
+  more: number;
+  topBand: number;
+  bottomBand: number;
+}
+
 function ConversationList({ children, signal }: { children: ComponentChildren; signal: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [edges, setEdges] = useState({ up: false, down: false, more: 0 });
+  const [edges, setEdges] = useState<RailEdges>({
+    up: false,
+    down: false,
+    more: 0,
+    topBand: MIN_TOP_BAND,
+    bottomBand: MIN_BOTTOM_BAND,
+  });
 
   const measure = useCallback(() => {
     const el = ref.current;
     if (!el) return;
     const up = el.scrollTop > 1;
     const down = el.scrollHeight - el.clientHeight - el.scrollTop > 1;
-    // Counted from live rects rather than divided out of a row height: a row
-    // whose title wraps to a second line is taller than one whose title does
-    // not, so "how many fit" has no arithmetic answer.
+    const port = el.getBoundingClientRect();
+    // Live rects rather than a row height divided out: a row whose title wraps
+    // to a second line is taller than one whose title does not, so "how many
+    // fit" has no arithmetic answer.
+    const rows = [...el.querySelectorAll('li')].map((li) => li.getBoundingClientRect());
+
+    // ── The foot: the lowest row boundary that still clears the chip ───────
+    let bottomBand = MIN_BOTTOM_BAND;
     let more = 0;
     if (down) {
-      const cut = el.getBoundingClientRect().bottom;
-      for (const row of el.querySelectorAll('li')) {
-        if (row.getBoundingClientRect().bottom > cut + 1) more += 1;
+      let snapped = false;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const band = port.bottom - (rows[i].top + BAND_INSET);
+        if (band >= MIN_BOTTOM_BAND) {
+          bottomBand = band;
+          more = rows.length - i;
+          snapped = true;
+          break;
+        }
+      }
+      // Nothing to snap to (a single row taller than the scrollport, or an
+      // empty-state paragraph instead of rows): keep the constant, and fall
+      // back to counting rows the scrollport itself cuts.
+      if (!snapped) more = rows.filter((r) => r.bottom > port.bottom + 1).length;
+    }
+
+    // ── The head: the same reading, mirrored ──────────────────────────────
+    let topBand = MIN_TOP_BAND;
+    if (up) {
+      for (const r of rows) {
+        const band = r.bottom - BAND_INSET - port.top;
+        if (band >= MIN_TOP_BAND) {
+          topBand = band;
+          break;
+        }
       }
     }
+
     setEdges((prev) =>
-      prev.up === up && prev.down === down && prev.more === more ? prev : { up, down, more },
+      prev.up === up &&
+      prev.down === down &&
+      prev.more === more &&
+      Math.abs(prev.topBand - topBand) < 0.5 &&
+      Math.abs(prev.bottomBand - bottomBand) < 0.5
+        ? prev
+        : { up, down, more, topBand, bottomBand },
     );
   }, []);
 
@@ -700,9 +823,23 @@ function ConversationList({ children, signal }: { children: ComponentChildren; s
       >
         <div>{children}</div>
       </div>
-      {edges.up && <div class="chat-rail-edge chat-rail-edge--top" aria-hidden="true" />}
+      {edges.up && (
+        <div
+          class="chat-rail-edge chat-rail-edge--top"
+          // The measured band, handed to the stylesheet as the one number both
+          // the gradient and the ramp's height are built from. Inline because
+          // it is a MEASUREMENT — no stylesheet can know where this list's rows
+          // happen to fall.
+          style={{ '--more-band': `${edges.topBand}px` }}
+          aria-hidden="true"
+        />
+      )}
       {edges.down && (
-        <div class="chat-rail-edge chat-rail-edge--bottom" aria-hidden="true">
+        <div
+          class="chat-rail-edge chat-rail-edge--bottom"
+          style={{ '--more-band': `${edges.bottomBand}px` }}
+          aria-hidden="true"
+        >
           {/* Only when a WHOLE row is hidden. A list cut two pixels short of
               its end still gets the ramp, but claiming "1 more" there would be
               a lie the reader can check by scrolling. */}
@@ -795,17 +932,35 @@ function DrawerToggle({
  * The control that OPENS the drawer. Lives in the chat header (below `lg`
  * only), because a control inside the drawer cannot be the thing that reveals
  * it — donor `Chat/Menus/OpenSidebar.tsx`, which likewise sits in the chat
- * header and not in the nav it opens. `-ml-0.5` only nudges the pill's edge
- * onto the column's, nothing more.
+ * header and not in the nav it opens.
+ *
+ * The donor puts it in the header's FAR-LEFT slot, and so does this — with one
+ * detour worth recording, because it is what the slot cost. While the app
+ * shell's header still drew its own bar below `lg`, its nav hamburger sat at
+ * x=24…56, y=12…44 and this pill landed at x=24…68, y=68…112: the same edge,
+ * 24px below it, opening a different panel, and the bare one on top. Round 4
+ * moved this to the trailing group to break the collision; round 5 removed the
+ * collision instead — the house header stands down below `lg` on this route
+ * (Header.tsx / `pageOwnsTopBar`), so the corner is free and the opener is back
+ * in the donor's slot, with the house's nav toggle at the FAR END of the same
+ * bar. Everything the donor's control is — the bordered 44x44 pill,
+ * `aria-expanded`, `aria-controls`, the focus handoff both ways — is unchanged
+ * throughout.
  */
-export function OpenSidebarButton({ onClick }: { onClick: () => void }) {
+export function OpenSidebarButton({
+  onClick,
+  class: extra = '',
+}: {
+  onClick: () => void;
+  class?: string;
+}) {
   return (
     <DrawerToggle
       id={OPEN_SIDEBAR_ID}
       label="Show conversation history"
       expanded={false}
       onClick={onClick}
-      class="-ml-0.5 lg:hidden"
+      class={`lg:hidden ${extra}`}
     />
   );
 }

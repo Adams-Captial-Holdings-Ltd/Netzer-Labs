@@ -245,6 +245,53 @@ function selectableRows(rows: MenuRow[]): ActionableRow[] {
   return rows.filter((r): r is ActionableRow => r.type !== 'group');
 }
 
+/**
+ * THE RAMP'S OPAQUE EDGE IS SNAPPED TO A ROW BOUNDARY, AND THAT IS MEASURED.
+ *
+ * `--more-band` is the part of a ramp that has gone FULLY opaque — below it the
+ * list is erased outright, above it the ramp fades out. These panels shipped it
+ * as a CONSTANT (26px at the foot with a 24px fade, 25% of 32px at the head),
+ * which is the exact geometry the conversation rail was rescued from in round 4
+ * and which index.css recorded, right next to that fix, as "a known, unfixed
+ * instance". It was reachable, and a critic reached it: on the agent menu, in
+ * both themes, at 375 and at 1280, the last description line was sliced through
+ * its x-height — "Deal screening, document review, and risk surfa…" — the same
+ * class of damage as the drawer's "21d · 9 msg" reading "21d · 9 msq".
+ *
+ * `probe-menu-ramp.js` is that reading pointed here: ROLLCALL-P5's three checks
+ * plus the BAND-EDGE-vs-GLYPH check P5 was missing, swept across eight fold
+ * positions in all four cells. Against the constant band it found 465 half-eaten
+ * glyphs at 375 and 557 at 1280, in both themes, worst coverage step 0.79.
+ *
+ * The fix is the rail's, on this surface's own numbers. A bigger band only puts
+ * the same edge through the row above; the answer is to stop the edge landing
+ * on ink at all. A row here is `px-2 py-1.5`, so two adjacent rows are separated
+ * by 12px of guaranteed white space (6px of one row's padding, 6px of the
+ * next), and a group heading is `pb-1 pt-2`, which is another gap of the same
+ * kind. So the band is measured to end `BAND_INSET` px inside the nearest
+ * boundary and the fade is `--space-2`, which puts BOTH ends of the transition
+ * inside that gap. Above the edge every row is fully legible; below it every row
+ * is fully gone.
+ *
+ * GROUP HEADINGS ARE BOUNDARY CANDIDATES TOO, and that is not a detail: among
+ * the first failing runs the probe printed was `"18 agents"` — the agent list's
+ * own heading — sliced by the HEAD ramp at scrollTop 8 and 16. A candidate set
+ * of option rows alone would have snapped the band past it and left the heading
+ * cut, which is how a fix for a list misses the label sitting on top of it.
+ *
+ * `MIN_BOTTOM_BAND` keeps the foot's band at least as tall as the "N more"
+ * chip's own box, which is the property the roll-call's slack check measures;
+ * the boundary chosen is the LOWEST one that still clears it, so the ramp hides
+ * as little as it can. `more` is deliberately NOT recounted against that
+ * boundary the way the rail's is: 32px of `scroll-mb` on every row is more than
+ * `MIN_BOTTOM_BAND + BAND_INSET`, so the band always snaps to a boundary at or
+ * below the first row the scrollport itself cuts, and the two counts agree by
+ * construction.
+ */
+const BAND_INSET = 4;
+const MIN_BOTTOM_BAND = 26;
+const MIN_TOP_BAND = 8;
+
 /** What a list's scroll position leaves out of view, measured not assumed. */
 interface Overflow {
   /** Rows exist above the visible slice. */
@@ -253,9 +300,19 @@ interface Overflow {
   down: boolean;
   /** How many option rows are not fully visible below the fold. */
   more: number;
+  /** Where the head ramp goes fully opaque, in px from the list's top edge. */
+  topBand: number;
+  /** Where the foot ramp goes fully opaque, in px from the list's bottom edge. */
+  bottomBand: number;
 }
 
-const NO_OVERFLOW: Overflow = { up: false, down: false, more: 0 };
+const NO_OVERFLOW: Overflow = {
+  up: false,
+  down: false,
+  more: 0,
+  topBand: MIN_TOP_BAND,
+  bottomBand: MIN_BOTTOM_BAND,
+};
 
 function overflowState(o: Overflow): 'none' | 'up' | 'down' | 'both' {
   if (o.up && o.down) return 'both';
@@ -289,18 +346,60 @@ function useListOverflow(ref: RefObject<HTMLDivElement>, signal: string) {
     }
     const up = el.scrollTop > 1;
     const down = el.scrollHeight - el.clientHeight - el.scrollTop > 1;
+    const port = el.getBoundingClientRect();
     // Counted from live rects rather than from row heights, because rows are
     // not a uniform height here — a row with a wrapped description is taller
     // than one without, so "how many fit" cannot be divided out.
     let more = 0;
     if (down) {
-      const cut = el.getBoundingClientRect().bottom;
       for (const row of el.querySelectorAll('[role="option"]')) {
-        if (row.getBoundingClientRect().bottom > cut + 1) more += 1;
+        if (row.getBoundingClientRect().bottom > port.bottom + 1) more += 1;
       }
     }
+
+    // ── Where the ramps are allowed to go opaque ───────────────────
+    // Every element a ramp edge could cut, in document order: the option rows
+    // AND the `role="presentation"` group headings between them. Both are lines
+    // of type, and a candidate set holding only one of them is how the heading
+    // ends up sliced by the fix for the rows.
+    const marks = [...el.querySelectorAll('[role="option"], [role="presentation"]')].map((n) =>
+      n.getBoundingClientRect(),
+    );
+
+    // The foot: the LOWEST boundary that still clears the chip's own box, so
+    // the ramp erases as little as it can.
+    let bottomBand = MIN_BOTTOM_BAND;
+    if (down) {
+      for (let i = marks.length - 1; i >= 0; i -= 1) {
+        const band = port.bottom - (marks[i].top + BAND_INSET);
+        if (band >= MIN_BOTTOM_BAND) {
+          bottomBand = band;
+          break;
+        }
+      }
+    }
+
+    // The head: the same reading, mirrored — the FIRST boundary far enough down
+    // to carry a band at all.
+    let topBand = MIN_TOP_BAND;
+    if (up) {
+      for (const m of marks) {
+        const band = m.bottom - BAND_INSET - port.top;
+        if (band >= MIN_TOP_BAND) {
+          topBand = band;
+          break;
+        }
+      }
+    }
+
     setEdges((prev) =>
-      prev.up === up && prev.down === down && prev.more === more ? prev : { up, down, more },
+      prev.up === up &&
+      prev.down === down &&
+      prev.more === more &&
+      Math.abs(prev.topBand - topBand) < 0.5 &&
+      Math.abs(prev.bottomBand - bottomBand) < 0.5
+        ? prev
+        : { up, down, more, topBand, bottomBand },
     );
   }, [ref]);
 
@@ -987,9 +1086,23 @@ export function CommandMenu({
             renderRows(kind, p.rows)
           )}
         </div>
-        {over.edges.up && <div class="chat-menu-edge chat-menu-edge--top" aria-hidden="true" />}
+        {over.edges.up && (
+          <div
+            class="chat-menu-edge chat-menu-edge--top"
+            // The measured band, handed to the stylesheet as the one number both
+            // the gradient and the ramp's height are built from. Inline because
+            // it is a MEASUREMENT — no stylesheet can know where this list's
+            // rows happen to fall.
+            style={{ '--more-band': `${over.edges.topBand}px` }}
+            aria-hidden="true"
+          />
+        )}
         {over.edges.down && (
-          <div class="chat-menu-edge chat-menu-edge--bottom" aria-hidden="true">
+          <div
+            class="chat-menu-edge chat-menu-edge--bottom"
+            style={{ '--more-band': `${over.edges.bottomBand}px` }}
+            aria-hidden="true"
+          >
             {/* Not "there is more" but how much more, so the reader can decide
                 between scrolling and typing. Hidden from assistive tech
                 because the same count is already the group heading above the
@@ -1034,17 +1147,26 @@ export function CommandMenu({
         aria-label={triggerAriaLabel}
         title={triggerTitle ?? triggerLabel}
         data-menu={menuName}
-        // `py-1.5 sm:py-2` — the trigger is 40px tall on desktop and 36 on
-        // mobile. That 4px is not cosmetic: at 375 these two triggers are a
-        // whole row of the chat header's plate, and the plate is chrome that
-        // every message is read underneath (round 2 — see the breakdown in
-        // ChatHeader.tsx). 36px still clears the 24px WCAG 2.5.8 target size
-        // and the label keeps its 12px side padding, so nothing about hitting
-        // or reading the control changes; only the row does.
-        class={`flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5
-          text-body-sm text-primary transition-colors duration-fast hover:border-border-strong
-          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-a/60
-          disabled:cursor-not-allowed disabled:opacity-60 sm:py-2 ${triggerClass}`}
+        // `py-1 sm:py-2` — the trigger is 40px tall on desktop and 32 on
+        // mobile. That 8px is not cosmetic: below `sm` the two triggers are
+        // STACKED (ChatHeader, round 6), so the pair of them plus their 2px gap
+        // is what sets the height of the whole bar, and the bar is chrome every
+        // message is read underneath. 32px still clears the 24px WCAG 2.5.8
+        // target size by a third, on a target that is now 171px wide instead of
+        // 82.5, and the label keeps its side padding — so the control is easier
+        // to hit than it was, not harder, while stating a value it could not
+        // state before. Round 2's note here claimed the same thing for
+        // `py-1.5`; this is the same trade taken one step further because the
+        // stack asked for it twice over.
+        // `gap-1.5 px-2` below `sm`, `gap-2 px-3` from there up. The donor's own
+        // trigger is `gap-2 … px-3` on a selector that has a 60vw row to
+        // itself; ours now has the whole flexible slot, which is close enough
+        // that only the side padding is still trimmed.
+        class={`flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2
+          py-1 text-body-sm text-primary transition-colors duration-fast
+          hover:border-border-strong focus-visible:outline-none focus-visible:ring-2
+          focus-visible:ring-primary-a/60 disabled:cursor-not-allowed disabled:opacity-60
+          sm:gap-2 sm:px-3 sm:py-2 ${triggerClass}`}
       >
         {triggerIcon !== undefined && (
           <span class="shrink-0 text-muted" aria-hidden="true">
@@ -1052,6 +1174,21 @@ export function CommandMenu({
           </span>
         )}
         <span class="min-w-0 truncate">{triggerLabel}</span>
+        {/* COPIED from the donor's own trigger (`Chat/Menus/Endpoints/
+            ModelSelector.tsx`): `flex h-9 max-w-full items-center gap-2 …
+            px-3 py-2`, an icon, and `<span className="truncate text-left">`.
+            There is NO chevron on it at any width; ours carries one because
+            this pill is a menu trigger sitting next to controls that are not.
+
+            IT IS BACK AT EVERY WIDTH as of round 6. It used to be `hidden …
+            sm:block` on this reasoning: "at 375 the caret and its gap are 22px
+            out of a 112px control, which is a third of the label." The control
+            below `sm` is now the full flexible slot — 171px, because the two
+            pickers stack instead of sharing a line (ChatHeader) — so the same
+            22px is 13%, and both "Netzar Prime" and "Agent default" still
+            render whole with the caret drawn. The arithmetic that removed it
+            turned over, so it comes back rather than being left off out of
+            habit. */}
         <ChevronDown
           size={14}
           class={`shrink-0 text-muted transition-transform duration-fast ${open ? 'rotate-180' : ''}`}

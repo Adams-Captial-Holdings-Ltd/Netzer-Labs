@@ -14,6 +14,10 @@ import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
 import { stageAttachments } from '../lib/chat/uploads';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+// The shell's mobile nav toggle. Below `lg` this page's own bar is the app bar
+// (Header.tsx stands down there), so the page is what hands the house's nav
+// toggle to it — see the ChatHeader call below.
+import { toggleMobileMenu } from '../components/Sidebar';
 import { toast } from '../components/Toast';
 import { ChatCanvas } from '../components/chat/ChatCanvas';
 import { ChatHeader } from '../components/chat/ChatHeader';
@@ -484,7 +488,15 @@ export function Chat() {
     // `main p-4 sm:p-6 lg:p-8`) so the transcript runs edge to edge under its
     // own overlay header, the way the donor's does, instead of sitting in a
     // boxed panel inside a padded page.
-    <div class="-m-4 sm:-m-6 lg:-m-8 flex h-[calc(100vh-var(--header-height))] overflow-hidden bg-bg">
+    // The house header stands down on this route (Header.tsx /
+    // `pageOwnsTopBar`) and this page owns the top of the viewport, so the
+    // canvas is the WHOLE viewport rather than the viewport minus a header that
+    // is not there. Round 5 made that true below `lg` and kept the `lg:`
+    // subtraction for a header that was still drawn above it; round 6 stood the
+    // header down at every width (a second bar costs a 1280px reader the same
+    // 56px it costs a phone — measured, first content y=131.5 against the
+    // donor's 57.0), so the subtraction has nothing left to subtract.
+    <div class="-m-4 sm:-m-6 lg:-m-8 flex h-screen overflow-hidden bg-bg">
       {sidebar}
       {/* This page carries NO layout contract of its own — no measured header
           height, no custom property, no reading measure. ChatCanvas declares
@@ -504,6 +516,12 @@ export function Chat() {
               // live outside it. Above `lg` the button is hidden and the rail's
               // own collapse toggle governs.
               onOpenSidebar={() => setSidebarOpen(true)}
+              // Below `lg` this bar IS the app bar (the house header stands
+              // down — Header.tsx), so it carries the house's nav toggle too.
+              // The page hands it down rather than the header reaching for the
+              // shell itself: ChatHeader stays a component of this surface, not
+              // a component that knows about the product's navigation.
+              onOpenAppNav={toggleMobileMenu}
               agents={agents}
               agentId={agentId}
               onSelectAgent={selectAgent}

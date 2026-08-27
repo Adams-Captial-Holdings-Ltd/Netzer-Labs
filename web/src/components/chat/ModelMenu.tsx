@@ -281,7 +281,19 @@ export function ModelMenu({ models, modelId, onSelect, disabled = false }: Model
       // Cpu = "whatever the agent is configured for"; Pin = "this chat is
       // pinned to one id". The state is legible on the closed control.
       triggerIcon={pinned ? <Pin size={14} /> : <Cpu size={14} />}
-      triggerClass="max-w-[11rem] lg:max-w-[15rem]"
+      // `w-full` below `sm` is what lets this trigger fill the mobile bar's
+      // flexible slot: a button sized to its own content ignores that slot and
+      // overruns it (measured at 375: the label ran under the next control
+      // instead of truncating, and the chevron was pushed off the button).
+      // As of round 6 the slot is a COLUMN below `sm` (ChatHeader), so `w-full`
+      // is the whole 171px rather than half of it, and `max-w-[11rem]` (176px)
+      // is a cap the slot never reaches there. From `sm` up the row has room
+      // again and the trigger sizes to its label, capped exactly as before.
+      // `max-sm:rounded-t-none` is the BOTTOM half of the stacked readout below
+      // `sm` (ChatHeader): its top border is the hairline shared with the agent
+      // trigger above it. Above `sm` the two are side by side again and both
+      // keep all four corners.
+      triggerClass="w-full max-w-[11rem] max-sm:rounded-t-none sm:w-auto lg:max-w-[15rem]"
       disabled={disabled}
       panel={panel}
       branchPanel={branchPanel}

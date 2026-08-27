@@ -66,9 +66,12 @@
  * ── ROUND 3: THE PLATE NOW OWNS ITS BOTTOM BOUNDARY, RAMP INCLUDED ────────
  *
  * The reservation above is real and was measured again: at `scrollTop: 0` on a
- * 375x812 viewport the plate ends at y=157.4 and the first row starts at
- * y=173.4 — a 16px gap, nothing underneath. But that is only the geometry AT
- * REST, and a transcript spends most of its life scrolled. Mid-scroll, running
+ * 375x812 viewport the plate ended at y=157.4 and the first row started at
+ * y=173.4 — a 16px gap, nothing underneath. (Round 4 collapsed the mobile plate
+ * to one bar, so those two numbers are now y=109 and y=133; the 24px ramp
+ * between them is unchanged, and so is everything this section says about it.)
+ * But that is only the geometry AT REST, and a transcript spends most of its
+ * life scrolled. Mid-scroll, running
  * text passes under an opaque plate that terminated in a 1px rule and NOTHING
  * else: probed at 55% scroll on the `code` fixture, `elementFromPoint` returned
  * `code.hljs` at every one of the first 32px below the plate's bottom edge,
@@ -106,13 +109,14 @@
  *     DOM order and erases the `shadow-sm` that lifts the panel off the ground
  *     — a fix for the boundary that quietly deletes the boundary's edge.
  */
-import { Plus } from 'lucide-preact';
+import { Menu, Plus } from 'lucide-preact';
 import type { Agent, Model } from '../../lib/chat/types';
 import { Button } from '../Button';
 import { InfoTooltip } from '../InfoTooltip';
 import { AgentMenu } from './AgentMenu';
 import { ModelMenu } from './ModelMenu';
 import { OpenSidebarButton } from './ConversationSidebar';
+import { APP_NAV_DRAWER_ID } from '../Sidebar';
 import { COLUMN_BLEED_X, COLUMN_PX } from './ChatCanvas';
 
 interface ChatHeaderProps {
@@ -132,6 +136,11 @@ interface ChatHeaderProps {
    *  conversation rail is off-canvas and has no control of its own on screen
    *  (donor `Chat/Menus/OpenSidebar.tsx`). Omit it and no button appears. */
   onOpenSidebar?: () => void;
+  /** Opens the PRODUCT's navigation drawer (the app shell's nav). Rendered only
+   *  below `lg`, where the house header stands down and this bar is the app bar
+   *  — donor `Chat/Header.tsx`, whose mobile row likewise carries the controls
+   *  that have nowhere else to be. Omit it and no button appears. */
+  onOpenAppNav?: () => void;
 }
 
 export function ChatHeader({
@@ -146,6 +155,7 @@ export function ChatHeader({
   streaming,
   onNewChat,
   onOpenSidebar,
+  onOpenAppNav,
 }: ChatHeaderProps) {
   return (
     // The bleed layer: no paint of its own, it only cancels the column's
@@ -170,54 +180,222 @@ export function ChatHeader({
         class={`pointer-events-auto relative z-10 rounded-b-xl border-b border-border bg-surface
           shadow-sm ${COLUMN_PX}`}
       >
-        {/* ── MOBILE CHROME IS SPENT ON CONTROLS, NOT ON PADDING (round 2) ──
-            A review measured this plate at 117px on a 375x812 viewport, under
-            a 56px house bar: 173px, 21.4% of the viewport gone before the
-            first message. Measured breakdown of that 117:
+        {/* ── MOBILE IS ONE BAR, AND THAT IS THE DONOR'S ANSWER (round 4) ──
+            Round 2 shaved padding off a TWO-ROW plate and got it to ~100px.
+            Measured again at 375x812 that is still 101px of plate under a 56px
+            house bar, with a 24px ramp under it: 181px, 22.3% of the viewport,
+            before the first word of an answer. The donor spends ONE 52px bar
+            (`Chat/Header.tsx`: `flex h-[52px] w-full items-center gap-2 p-2`).
 
-              12  padding-top
-              44  row 1 — the drawer toggle's `size-11` touch target, which
-                  ABSORBS the 22px title and the 34px New-chat button beside it
-               8  the flex-wrap row gap
-              40  row 2 — the two picker triggers
-              12  padding-bottom
+            So the shape is COPIED from that file rather than tuned again. Its
+            mobile row is four targets in one line —
 
-            So 84 of the 117 is two irreducible controls and 32 is slack. The
-            slack is what moved: `py-2` and a 4px wrap gap take the plate to
-            ~100px without touching a single control's hit area. `sm:` restores
-            the roomier desktop values, where the wrap never happens and the
-            vertical budget is not scarce.
+              <div className="flex flex-shrink-0 items-center md:hidden">
+                <OpenSidebar … />
+              </div>
+              <div className="flex min-w-0 flex-1 items-center gap-2 …">
+                <ModelSelector … />
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-2 …">
+                {!isNewChat && <NewChat className="md:hidden" />}
+                <HeaderMenu … className="md:hidden" />
+              </div>
 
-            WHAT WAS NOT DONE, and why, because both look like easy wins:
-              - the drawer toggle stays 44px. It is `size-11` precisely because
-                that is the touch minimum (see DrawerToggle); trading 4px of
-                chrome for a sub-minimum tap target is not a trade.
-              - the two rows stay two rows. At 375 the column is 323px wide and
-                the three widest controls — toggle 44 + the two pickers at 150
-                and 154 — need 348px on their own. One row is not geometrically
-                available at this control count, whatever the padding is. The
-                donor's single 52px bar carries three controls and no
-                conversation title; this surface carries five. */}
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 py-2 sm:gap-2 sm:py-3">
-          {/* Mobile falls back to DOM order (the drawer control + title + New
-              chat, then the pickers on their own line because that group is
-              w-full); sm+ reorders to title · pickers · New chat on a single
-              row. The drawer control keeps DOM order in every case — it is
-              `lg:hidden`, and by the breakpoint the reorder matters at, the
-              rail it opens is a column in the flow instead. */}
+            — and the three properties that make it fit are the ones taken
+            here: the picker group is the ONLY flexible child (`min-w-0
+            flex-1`), everything else is `flex-shrink-0`, and THERE IS NO
+            CONVERSATION TITLE on the mobile row at all. `py-1` + the 44px
+            drawer toggle puts this plate at 53px against the donor's 52 — the
+            extra pixel is this plate's bottom hairline, which the donor's
+            gradient bar does not have and this one is not giving up (see the
+            note above it). Measured after: plate 101px -> 53px, and the first
+            line of an answer moves from y=181 to y=133.
+
+            ── ROUND 5: AND THE SECOND BAR IS GONE TOO ───────────────────
+            Round 4 called the 56px house bar "not this file's to spend" and
+            left it, which bought 19px of a 108px problem: 133 = 56 (shell) + 53
+            (this plate) + 24 (ramp). But the donor does not merely keep its
+            chat bar small — it has NO OTHER BAR. `Chat/Header.tsx` is the app
+            bar: one 52px row, `absolute top-0`, with the whole surface under it.
+            Two bars is the defect; a thinner second bar is still two bars.
+
+            So below `lg` the house header now stands down on this route
+            (Header.tsx / `pageOwnsTopBar`) and THIS is the app bar. Measured at
+            375x812: chrome 109px -> 53px, first ink y=133 -> y=77, of which 24
+            is the ramp (unchanged and deliberately so — steepening it is how a
+            fade starts slicing glyphs). The donor lands its first line at y=48
+            under a 52px bar because its bar floats and its text runs beneath a
+            gradient; ours is opaque and in the flow, which is the fix for the
+            smearing this file's opening note describes, and the 24px it costs
+            is the ramp that fix requires. 53 + 24 against the donor's 48 is the
+            whole remaining difference.
+
+            Nothing was removed to get it. What the house bar carried below `lg`
+            moved: its nav toggle onto this row (see the trailing group), its
+            account controls — notifications, theme, sign out — into the nav
+            drawer that toggle opens, which is where the donor keeps them too
+            (`UnifiedSidebar/mobile/Header.tsx` renders `AccountSettings` inside
+            the drawer). Above `lg` the house header is untouched.
+
+            WHAT MOVED, AND WHAT DID NOT:
+              - the title is `hidden sm:block`. It is still in the DOM, still
+                carries `data-tour="chat-title"`, and is still the first thing
+                on the row from `sm` up; the donor's mobile header simply has
+                no title, and a 323px column cannot carry one plus four
+                controls. No tour step targets it.
+              - BOTH pickers stay on the bar, and as of ROUND 6 they stay on
+                it READABLE. Side by side they had 82.5px of pill and 45px of
+                label each: the bar read "Netz…" and "Agen…" and no longer
+                named the agent or the model, which is the governance fact this
+                header exists to publish, where the donor's single selector
+                reads "mock-sonnet" in full. That is not a truncation to shrug
+                at — it is the control failing to state its value.
+
+                It is arithmetic, not taste, and the arithmetic has no side-by
+                -side answer. The bar's content box at 375 is 327px; three
+                44x44 touch targets and four gaps take 156 of it; 171 is left,
+                so two pills are 82.5px each and a pill spends 38px on its
+                border, padding and icon before a glyph. "Netzar Prime" is 80px
+                of text and "Agent default" is 84px. Two values cannot both be
+                read on one 375px line with three touch targets on it, whatever
+                is shaved.
+
+                So the flexible slot — the ONE slot the donor lets flex — turns
+                the column instead of the row below `sm`. Each picker then gets
+                the whole 171px, which is 113px of label after its chrome, and
+                both values render WHOLE in both themes. The cost is vertical
+                and it is stated rather than hidden: the pills go to `py-1`, the
+                stack's gap is 2px, and the plate grows from 53px to ~72px, so
+                the first line of an answer moves from y=77 to about y=96
+                against the donor's 48. It is still ONE bar — one plate, one
+                hairline, one shadow — and it is still less than half the 152px
+                E1 was written about.
+
+                The caret comes back with the room. It was dropped below `sm`
+                because "the caret and its gap are 22px out of a 112px control,
+                which is a third of the label"; on a 171px control it is 13% and
+                both labels still fit whole, so the affordance that says the
+                pill opens is affordable again. The note's own arithmetic turned
+                over, so the decision does.
+
+                Neither picker is hidden, neither moves behind a menu, and both
+                keep their tour anchors — the roll-call still enumerates every
+                agent and every model through them, and the full value is still
+                in each trigger's `title` and `aria-label` for a name longer
+                than any bar.
+              - the 44px drawer toggle stays 44px (touch minimum), and New chat
+                becomes an icon button below `sm`. Round 4's note claimed 44x44
+                for it and shipped `max-sm:size-9`, which is 36 — measured at
+                36x36 on the delivered frame, on the same bar whose other two
+                icon controls are 44 and in the same file that calls 44 the
+                touch minimum. It is `max-sm:size-11` now, so all three icon
+                targets on the mobile row are 44x44 and the claim and the class
+                agree. It costs the pickers 4px each; they truncate one
+                character sooner. Its label is `hidden sm:inline` and the button
+                carries the same words as its accessible name, so nothing is
+                lost to a screen reader.
+
+            ── E2: ONE BAR, ONE OBVIOUS OPENER ───────────────────────────────
+            The two openers used to be a bare 32x32 hamburger at x=24…56, y=12…44
+            in the house header and a bordered 44x44 pill at x=24…68, y=68…112
+            here — same edge, 24px apart, opening different panels, with the
+            visually weaker one on top. Round 4 pushed this pill to the trailing
+            group, which separated them by 245px but left both bars standing and
+            still gave the top-left corner to the control that opens the WRONG
+            drawer for someone reading a conversation.
+
+            Now there is one bar. The conversation opener leads it, in the
+            donor's own slot; the house nav toggle ends it. They are on opposite
+            edges, they are different chrome (bordered pill vs ghost), and they
+            are different glyphs (`PanelLeftOpen` vs the product-wide hamburger)
+            — see the note at each. This pill is otherwise untouched: 44x44,
+            `aria-expanded`, `aria-controls`, and the focus handoff in both
+            directions. */}
+        <div
+          /* `py-1` below `sm`, `py-2` from there up. The `sm:py-3` this shipped
+             with cost a 1280px reader 8px of plate for nothing the controls
+             needed — measured, plate 65.4px -> 57.4px against the donor's 52px
+             bar, first content y 89.4 -> 81.4 against the donor's 57.0. It is
+             the last of the vertical economy this file owns; what is left is
+             the 40px trigger and the 24px ramp, and both are load-bearing. */
+          class="flex flex-wrap items-center gap-1.5 py-1 sm:gap-2 sm:py-2"
+        >
+          {/* THE LEFTMOST SLOT, which is the donor's slot for it:
+
+                <div className="flex flex-shrink-0 items-center md:hidden">
+                  <OpenSidebar testId="header-open-sidebar-button" />
+                </div>
+
+              Round 4 moved this to the trailing group because the house header
+              owned the top-left corner with a bare 32x32 hamburger and two
+              openers could not share one edge. The corner is no longer taken —
+              below `lg` the house header stands down and THIS bar is the app bar
+              — so the control that reveals the conversation history is back
+              where the donor puts it and where a thumb reaches for it. No order
+              class: it is first in the DOM and `order: 0`, so it leads the row
+              at every width it exists at (it is `lg:hidden`). */}
           {onOpenSidebar && <OpenSidebarButton onClick={onOpenSidebar} />}
+
           <h1
             data-tour="chat-title"
             title={title}
-            class="min-w-0 flex-1 truncate text-heading-sm font-semibold text-primary
-              sm:order-1 sm:flex-none sm:max-w-[14rem] lg:max-w-[22rem]"
+            class="hidden min-w-0 flex-1 truncate text-heading-sm font-semibold text-primary
+              sm:block sm:order-1 sm:flex-none sm:max-w-[14rem] lg:max-w-[22rem]"
           >
             {title}
           </h1>
 
+          {/* The one flexible child on the mobile row (donor: the slot its
+              ModelSelector sits in). `sm:` hands the flex back to the title and
+              lets these size to their content again.
+
+              Below `sm` it is a COLUMN: two full-width lines rather than two
+              half-width pills, which is the only shape in which both governance
+              values are legible on a 375px bar (see the round-6 note above).
+              `items-stretch` is what makes each line the full slot width, and
+              there is NO gap between them — the two triggers meet on one
+              shared hairline (each menu asks for that in its `triggerClass`),
+              so the pair reads as ONE governance readout with two rows rather
+              than as two controls that happen to be stacked. It also buys back
+              3px of every screen: the gap and the second border were 3 of the
+              23px this stack costs the transcript. From `sm` up this is exactly
+              the row it always was, gap and all four corners included. */}
+          <div
+            class="flex min-w-0 flex-1 flex-col items-stretch sm:order-2 sm:w-auto
+              sm:flex-none sm:flex-row sm:items-center sm:gap-2"
+          >
+            {/* The two pickers are searchable command menus as of Phase 5
+                (CHATUI-005); the tour anchors stay on the wrappers, which is
+                where they have always been, so the anchor does not depend on
+                which control is inside. `min-w-0 flex-1` below `sm` is what
+                lets both share one bar instead of claiming a row each. */}
+            <span data-tour="chat-agent-picker" class="min-w-0 sm:flex-none">
+              <AgentMenu
+                agents={agents}
+                agentId={agentId}
+                onSelect={onSelectAgent}
+                disabled={streaming}
+              />
+            </span>
+            {/* Rendered unconditionally. The old `models.length > 0` guard made
+                the model picker — and its tour anchor — disappear entirely
+                whenever /models failed or a deployment configured no catalog,
+                which is exactly when an operator most needs to see that the
+                turn is running on the agent's own model. With no catalog the
+                menu still offers "Agent default", which is the honest state. */}
+            <span data-tour="chat-model-picker" class="min-w-0 sm:flex-none">
+              <ModelMenu
+                models={models}
+                modelId={modelId}
+                onSelect={onSelectModel}
+                disabled={streaming}
+              />
+            </span>
+          </div>
+
           <div
             data-tour="chat-new-chat"
-            class="flex shrink-0 items-center gap-2 sm:order-3 sm:ml-auto"
+            class="flex shrink-0 items-center gap-2 sm:order-4 sm:ml-auto"
           >
             {/* Which conversation the transcript, cost ledger and audit rows are
                 filed under. Governance detail, deliberately visible — it just
@@ -236,42 +414,56 @@ export function ChatHeader({
               size="sm"
               disabled={streaming}
               icon={<Plus size={14} />}
+              aria-label="New chat"
+              title="New chat"
+              class="max-sm:size-11 max-sm:px-0"
               onClick={onNewChat}
             >
-              New chat
+              <span class="hidden sm:inline">New chat</span>
             </Button>
           </div>
 
-          {/* w-full on mobile forces the pickers onto their own line; sm:w-auto
-              folds them back inline. */}
-          <div class="flex w-full min-w-0 items-center gap-2 sm:order-2 sm:w-auto">
-            {/* The two pickers are searchable command menus as of Phase 5
-                (CHATUI-005); the tour anchors stay on the wrappers, which is
-                where they have always been, so the anchor does not depend on
-                which control is inside. */}
-            <span data-tour="chat-agent-picker" class="min-w-0">
-              <AgentMenu
-                agents={agents}
-                agentId={agentId}
-                onSelect={onSelectAgent}
-                disabled={streaming}
-              />
-            </span>
-            {/* Rendered unconditionally. The old `models.length > 0` guard made
-                the model picker — and its tour anchor — disappear entirely
-                whenever /models failed or a deployment configured no catalog,
-                which is exactly when an operator most needs to see that the
-                turn is running on the agent's own model. With no catalog the
-                menu still offers "Agent default", which is the honest state. */}
-            <span data-tour="chat-model-picker" class="min-w-0">
-              <ModelMenu
-                models={models}
-                modelId={modelId}
-                onSelect={onSelectModel}
-                disabled={streaming}
-              />
-            </span>
-          </div>
+          {/* THE HOUSE'S NAV TOGGLE, folded into this bar.
+
+              Below `lg` the app shell's header is not on screen (Header.tsx,
+              `pageOwnsTopBar`), so its hamburger has to be somewhere, and the
+              donor's answer is the chat header's trailing group — the slot its
+              `HeaderMenu className="md:hidden"` sits in. Two openers on one bar
+              is only a defect when they are indistinguishable; these differ on
+              all three axes a person actually uses:
+
+                POSITION  conversation history leads the row; this one ends it,
+                          on the opposite edge of the bar.
+                CHROME    that one is a bordered pill on `bg-surface` with a
+                          shadow — the header's control set. This one is a plain
+                          ghost button with no edge and no ground: house chrome,
+                          not chat chrome.
+                GLYPH     `PanelLeftOpen` (a panel sliding in from the left) vs
+                          the product-wide hamburger, which is the SAME glyph
+                          the house header draws above `lg` — a person who
+                          learned it on any other page finds it here unchanged.
+
+              44x44 like everything else on this row, `aria-controls` naming the
+              drawer it opens, and `sm:order-5` so it stays at the end once the
+              row spreads out. It is NOT inside the `chat-new-chat` tour anchor:
+              that anchor points at the new-chat control, and growing it to
+              cover an unrelated button would move the spotlight. */}
+          {onOpenAppNav && (
+            <button
+              type="button"
+              onClick={onOpenAppNav}
+              aria-label="Open main navigation"
+              aria-controls={APP_NAV_DRAWER_ID}
+              aria-expanded={false}
+              title="Main navigation"
+              class="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted
+                transition-colors duration-fast hover:bg-surface-hover hover:text-primary
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary
+                lg:hidden sm:order-5"
+            >
+              <Menu size={20} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
 

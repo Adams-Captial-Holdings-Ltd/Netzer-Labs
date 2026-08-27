@@ -103,7 +103,21 @@ export function AgentMenu({ agents, agentId, onSelect, disabled = false }: Agent
         selected ? `${selected.displayName} (${selected.id})` : 'Choose which agent answers'
       }
       triggerIcon={<Bot size={14} />}
-      triggerClass="max-w-[11rem] lg:max-w-[15rem]"
+      // `w-full` below `sm` is what lets this trigger fill the mobile bar's
+      // flexible slot: a button sized to its own content ignores that slot and
+      // overruns it (measured at 375: the label ran under the next control
+      // instead of truncating, and the chevron was pushed off the button).
+      // As of round 6 the slot is a COLUMN below `sm` (ChatHeader), so `w-full`
+      // is the whole 171px rather than half of it, and `max-w-[11rem]` (176px)
+      // is a cap the slot never reaches there. From `sm` up the row has room
+      // again and the trigger sizes to its label, capped exactly as before.
+      // `max-sm:rounded-b-none max-sm:border-b-0` is the TOP half of the
+      // stacked readout below `sm` (ChatHeader): the model trigger sits
+      // directly under it and its own top border is the hairline between them,
+      // so the pair reads as one object and one border's worth of height is not
+      // spent twice. Above `sm` the two are side by side again and both keep
+      // all four corners.
+      triggerClass="w-full max-w-[11rem] max-sm:rounded-b-none max-sm:border-b-0 sm:w-auto lg:max-w-[15rem]"
       disabled={disabled}
       panel={panel}
     />
