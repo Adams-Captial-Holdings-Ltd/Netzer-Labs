@@ -76,12 +76,14 @@
        that treatment in this palette's own grays, one step further apart:
 
          light  panel #f5f5f7 → hover #e4e4ec (1.16:1) → active #d1d1db (1.39:1)
-         dark   panel #08080d → hover #1c1c2e (1.19:1) → active #2a2a3d (1.42:1)
+         dark   panel #08080d → hover #1c1c2e (1.19:1) → active #313146 (1.58:1)
 
        `row-active` is also what the picker menus paint the KEYBOARD-ACTIVE row
        with (CommandMenu), so "the thing you are on" is one colour wherever the
        product draws a list — there it sits on `--color-surface` instead and
-       measures 1.52:1 light / 1.30:1 dark against it. */
+       measures 1.52:1 light / 1.44:1 dark against it. (The dark value moved in
+       round 2; the reasoning and the full before/after table are on the dark
+       `--color-row-active` declaration below.) */
     --color-row-hover: #e4e4ec;   /* gray-200 */
     --color-row-active: #d1d1db;  /* gray-300 */
 
@@ -150,6 +152,27 @@
     --color-danger-rgb: 239 68 68;     /* --color-danger   #ef4444 */
     --color-border-rgb: 228 228 236;   /* --color-border   #e4e4ec */
 
+    /* ── Scrollbar ink: the one ramp here that is DELIBERATELY unbranded ──
+       (round 2) Every scrollbar in this product used to be painted in
+       `--color-primary-rgb`. On a HORIZONTAL bar that is a bug, not a taste
+       call: a saturated, brand-coloured bar sitting flush on a panel's bottom
+       edge, whose LENGTH varies with content, is the universal grammar of a
+       progress bar — and a reviewer read two code blocks in one dark mobile
+       frame as "two things are loading". They were the horizontal scrollbars
+       of two <pre>s with different overflow (measured: thumbs at 21% and 57%
+       of a 321px track, saturation 46%, the highest-saturation objects in the
+       frame).
+       So the ink is neutral BY CONSTRUCTION, and it costs the affordance
+       nothing. These are the same LUMINANCE as the indigo they replace: at the
+       alphas the rules below already use, the dark code-block thumb composites
+       to L=0.0886 against the old L=0.0871 — same visual weight, same width,
+       same 8px gutter — while the hue spread drops from 119 to 8. A scrollbar
+       has to be visible; it must not be the loudest thing on the screen.
+       Solid neutrals, so any residual cast is the panel showing THROUGH the
+       alpha rather than a colour the bar brought with it. */
+    --color-scroll-thumb-rgb: 110 110 118;
+    --color-scroll-track-rgb: 214 214 220;
+
     /* ── Shadows ── */
     --shadow-xs: 0 1px 2px rgba(0,0,0,0.05);
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
@@ -190,7 +213,39 @@
        panel here and DOWN from it in light mode, which is why they cannot be
        one alpha token shared between the themes. */
     --color-row-hover: #1c1c2e;   /* gray-850-ish, = surface-elevated */
-    --color-row-active: #2a2a3d;  /* gray-800 */
+    /* ── The DARK focused-row fill, re-tuned in round 2 ──────────────────────
+       A review said the focused menu row's fill was carrying no signal and the
+       whole focus mark rested on the 3px rail, quoting 1.52:1 from the LIGHT
+       theme. Checked against the donor's own tokens rather than argued about:
+
+         donor light  --surface-hover gray-200 (227) on --presentation white
+                      = 1.283:1
+         donor dark   --surface-hover gray-650 (57)  on --presentation gray-800
+                      = 1.394:1
+         (donor/src/style.css:151,169,257,274 — CustomMenu.tsx:182 is the row.)
+
+       So the light number the review quoted, 1.52:1, is already 18% STRONGER
+       than the bar it was copied from. The one genuinely below the donor was
+       DARK, at 1.30:1 against its 1.394:1 — and nobody had looked, because the
+       report happens to print light first.
+
+       #2a2a3d -> #313146 is that gap closed, and it is a zero-sum trade made
+       with the numbers open: fill contrast and rail contrast are the SAME
+       headroom spent twice, so every step the fill gains, the rail loses.
+       Measured at the new value:
+
+         menu row fill vs panel   1.30:1 -> 1.44:1   (donor 1.39)
+         focus rail vs row fill  11.51:1 -> 10.39:1  (donor 9.79)
+         sidebar row vs rail bg   1.42:1 ->  1.58:1
+         active vs merely hovered 1.19:1 ->  1.32:1
+         accent bar on the row    4.70:1 ->  4.24:1  (floor is 3:1)
+
+       Every one of those still clears the donor's own bar and WCAG's, which is
+       what makes this the right point on the curve rather than just a different
+       one. LIGHT IS DELIBERATELY UNTOUCHED: it already wins on the fill, and
+       spending its rail headroom to gain fill it does not need would trade a
+       strength for a strength. */
+    --color-row-active: #313146;  /* was #2a2a3d (gray-800) */
 
     /* Dark inverts which shade reads: the fill is now the LIGHTER of the two,
        so the sidebar marker wants the brighter brand tone, not the hover shade
@@ -228,6 +283,13 @@
     --color-surface-rgb: 20 20 32;     /* --color-surface  #141420 */
     --color-danger-rgb: 248 113 113;   /* --color-danger   #f87171 */
     --color-border-rgb: 42 42 61;      /* --color-border   #2a2a3d */
+
+    /* Dark scrollbar ink. Same rule as the light block above: neutral, and
+       luminance-matched to the indigo it replaces so no scrollbar gets quieter
+       — only less chromatic. This is the pair the dark-mobile defect was
+       actually about. */
+    --color-scroll-thumb-rgb: 150 150 158;
+    --color-scroll-track-rgb: 52 52 56;
 
     --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
@@ -946,25 +1008,25 @@
 @supports not selector(::-webkit-scrollbar) {
   .chat-menu-list {
     scrollbar-width: thin;
-    scrollbar-color: rgb(var(--color-primary-rgb) / 0.5) rgb(var(--color-border-rgb) / 0.7);
+    scrollbar-color: rgb(var(--color-scroll-thumb-rgb) / 0.5) rgb(var(--color-scroll-track-rgb) / 0.7);
   }
 }
 .chat-menu-list::-webkit-scrollbar {
   width: 10px;
 }
 .chat-menu-list::-webkit-scrollbar-track {
-  background: rgb(var(--color-border-rgb) / 0.7);
+  background: rgb(var(--color-scroll-track-rgb) / 0.7);
   border-radius: var(--radius-full);
   /* Insets the track from the panel's rounded corners, so a square-ended bar
      does not sit proud of a 12px radius at the bottom of the popover. */
   margin: var(--space-1) 0;
 }
 .chat-menu-list::-webkit-scrollbar-thumb {
-  background: rgb(var(--color-primary-rgb) / 0.5);
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.5);
   border-radius: var(--radius-full);
 }
 .chat-menu-list::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--color-primary-rgb) / 0.75);
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.75);
 }
 
 .chat-menu-edge {
@@ -1092,7 +1154,7 @@
 @supports not selector(::-webkit-scrollbar) {
   .chat-rail-list {
     scrollbar-width: thin;
-    scrollbar-color: rgb(var(--color-primary-rgb) / 0.3) transparent;
+    scrollbar-color: rgb(var(--color-scroll-thumb-rgb) / 0.3) transparent;
   }
 }
 .chat-rail-list::-webkit-scrollbar {
@@ -1104,7 +1166,7 @@
   background: transparent;
 }
 .chat-rail-list::-webkit-scrollbar-thumb {
-  background: rgb(var(--color-primary-rgb) / 0.3);
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.3);
   border-radius: var(--radius-full);
   /* Inset from the panel edge the donor way — a transparent border is padding
      the thumb cannot paint into, so an 8px gutter carries a 6px thumb that
@@ -1113,7 +1175,7 @@
   background-clip: padding-box;
 }
 .chat-rail-list::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--color-primary-rgb) / 0.6);
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.6);
   background-clip: padding-box;
 }
 
@@ -1177,3 +1239,156 @@
   white-space: nowrap;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   COPIED VERBATIM from danny-avila/LibreChat (MIT), pinned at commit
+   6d499ba3ce17f906a7762429c61018f230ecd64e — donor path
+   `client/src/style.css`, lines 598-622 (25 lines, byte-for-byte).
+
+   ADDITIVE: `.message-render` and `.message-timestamp` are NEW selectors in
+   this stylesheet. Nothing above is edited, and neither name appears anywhere
+   else in this file.
+
+   These two classes are emitted by the ported donor MessageRow.tsx and
+   MessageTimestamp.tsx, which is why the rule can be lifted whole. It replaces
+   a hand-transcribed Tailwind variant chain that used to live inline in
+   AssistantMessage.tsx's author line — the donor's own comment below explains
+   why the reveal is a stylesheet rule rather than `group-hover:` in the first
+   place, which is the exact trap that inline version was working around.
+   ───────────────────────────────────────────────────────────────────────── */
+/* Show the message time when the row is hovered. Tailwind group-hover
+   loses to `[@media(hover:hover)]:opacity-0` (same specificity, :where()).
+
+   Keyboard focus reveals it too, but only `:focus-visible`: a pointer that
+   clicks a tool card or an expand toggle inside the row leaves focus sitting
+   there, and plain `:focus-within` would pin the time open long after the
+   pointer moved away.
+
+   The condition matches the row itself as well as its descendants, because
+   `MessageNav` focuses the row through `tabindex="-1"` and `:has()` never
+   matches its own subject. Text-entry controls are excluded, because they
+   match `:focus-visible` on a plain mouse click. See `revealOnRowHoverClasses`
+   in `components/Chat/Messages/styles.ts` for the full reasoning. */
+@media (hover: hover) {
+  .message-render .message-timestamp {
+    opacity: 0;
+  }
+
+  .message-render:hover .message-timestamp,
+  .message-render:focus-visible .message-timestamp,
+  .message-render:has(:focus-visible:not(:is(input, textarea, [contenteditable])))
+    .message-timestamp {
+    opacity: 1;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ROUND 3 — A HOVER GATE IS NOT A REACHABILITY GATE.
+
+   ADDITIVE, per this file's house rule: a NEW rule later in the cascade, and
+   the ONLY property it touches is `opacity` — the same property the two rules
+   above set. Nothing before this line is edited. `.chat-row-actions` is a new
+   selector, emitted by AssistantMessage.tsx; `.message-timestamp` is the donor
+   class the block above already owns.
+
+   WHAT WAS WRONG. Both reveals are gated on `@media (hover: hover)` — the
+   donor's own escape hatch, which keeps them showing on a device that cannot
+   hover. Correct as far as it goes, and it does not go far enough: hover
+   CAPABILITY is not hover OPPORTUNITY. Measured on the settled `code` fixture
+   at 375x812 with a plain (non-touch) context — a narrow desktop window, a
+   hybrid laptop, and every mobile frame the screenshot bar shoots — the media
+   query matched, and the message's copy button computed `opacity: 0`. On the
+   same viewport with touch emulation it computed `1`. So on the one layout
+   where hover may not happen, the action the harvest exists to add was
+   invisible, while the donor renders its own action row there persistently.
+
+   THE RULE. Below `lg` (1024px — this product's compact layout, the breakpoint
+   at which the conversation rail becomes a drawer), the row's actions and its
+   timestamp are simply shown. That is already what a phone gets from the
+   `hover: none` branch above, so this makes a narrow window agree with the
+   phone rather than inventing a third state.
+
+   `.chat-row-actions button` is 0,1,1 and beats the utility that hides it
+   (`[@media(hover:hover)]:opacity-0`, 0,1,0) on specificity, so it does not
+   depend on source order. The timestamp half ties on specificity with the
+   block above (0,2,0) and wins on ORDER, which is why it is written here,
+   after it, rather than folded into it.
+
+   The `lg` breakpoint is spelled as its 1023.98px complement rather than
+   through Tailwind's `lg:` variant, because this file is plain CSS below the
+   `@tailwind` directives; `theme(screens.lg)` would put the same constant in
+   the file with more machinery around it.
+   ───────────────────────────────────────────────────────────────────────── */
+@media (max-width: 1023.98px) {
+  .chat-row-actions button {
+    opacity: 1;
+    position: relative;
+  }
+
+  /* A FINGER-SIZED TARGET UNDER A 31px GLYPH. Making the control visible on the
+     one layout where the input is a fingertip and then leaving it at the
+     donor's 43x31 (`p-1.5` around a 19px icon) is half an answer: this repo
+     already calls 44px the touch minimum, in DrawerToggle, and declined to trim
+     4px off that control for chrome. The pseudo-element takes the HIT area to
+     45x45 and leaves the PAINTED box exactly as the donor drew it, so nothing
+     moves and no row grows — measured, the copy button's row is the same 35px
+     it was, and the button the same 43x31.
+
+     It is safe to extend into: probed on the settled `code` fixture at 375, the
+     nearest other focusable element in the row is further than 60px vertically
+     and 200px horizontally (there is none — this is the row's only control),
+     and `gap-7` puts 28px between rows. The horizontal extension is held to 1px
+     for that reason: the run footer's text sits 12px to its left, and a hit
+     area that reached it would eat taps meant for selecting an audit figure. */
+  .chat-row-actions button::after {
+    content: '';
+    position: absolute;
+    inset: -7px -1px;
+  }
+
+  .message-render .message-timestamp {
+    opacity: 1;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ROUND 2 — THE CODE BLOCK'S HORIZONTAL SCROLLBAR STOPS IMPERSONATING A
+   PROGRESS BAR.
+
+   ADDITIVE, per this file's house rule (see the "Overflow has to ANNOUNCE
+   itself" block above, which states it): a NEW rule with the same selector,
+   later in the cascade, rather than an edit to a `.chat-md`/`.chat-code`
+   declaration already in the file. Every property below is one this same
+   selector already sets, re-declared — nothing new is introduced and nothing
+   above is touched, so the affordance work that block argues for survives
+   intact. Only the INK changes.
+
+   WHAT WAS WRONG. The thumb was `rgb(var(--color-primary-rgb) / 0.45)` and the
+   track `rgb(var(--color-border-rgb) / 0.6)`. On dark mobile that composites
+   to a 46%-saturation violet bar, and a still frame of one conversation showed
+   TWO of them — flush on the bottom edge of two panels, on a near-black ground,
+   at 21% and 57% of their track. Saturated + horizontal + flush + variable
+   length IS a progress bar; a neutral observer read that frame as "two things
+   are loading". Nothing about the scroll affordance required the brand hue —
+   the donor does not paint this bar at all.
+
+   WHAT IS UNCHANGED, deliberately: the 8px height, the radius, the track being
+   painted at all, and the thumb's luminance. `--color-scroll-thumb-rgb` was
+   chosen to composite to the SAME luminance as the indigo at the SAME alpha
+   (dark: L=0.0886 vs 0.0871), so this costs the affordance no visibility — it
+   only takes the hue out. The rest of the argument above still holds.
+   ───────────────────────────────────────────────────────────────────────── */
+@supports not selector(::-webkit-scrollbar) {
+  .chat-md .chat-code > pre {
+    scrollbar-color: rgb(var(--color-scroll-thumb-rgb) / 0.45)
+      rgb(var(--color-scroll-track-rgb) / 0.6);
+  }
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-track {
+  background: rgb(var(--color-scroll-track-rgb) / 0.6);
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.45);
+}
+.chat-md .chat-code > pre::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-scroll-thumb-rgb) / 0.7);
+}

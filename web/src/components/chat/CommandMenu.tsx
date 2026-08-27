@@ -778,8 +778,18 @@ export function CommandMenu({
                bar/ours/ROLLCALL-P5.json and PROVENANCE.json, not just here:
                the rail is 11.20:1 light / 11.51:1 dark against its OWN row
                fill, and the fill moves from 1.14:1 to 1.52:1 light and 1.18:1
-               to 1.30:1 dark against the panel. Width is 3px rather than the
-               donor's 2px `w-0.5`, so the mark survives the 375px column.
+               to 1.30:1 dark against the panel.
+
+               WIDTH IS 4px, not the donor's 2px `w-0.5` and no longer the 3px
+               this shipped at. Round 2's review put the objection precisely:
+               "the entire focus signal rests on the 3px rail". Contrast cannot
+               answer that — the fill and the rail draw on one pool of
+               luminance headroom, so raising either lowers the other (the
+               arithmetic is in index.css, at `--color-row-active`). WIDTH is
+               the one axis that is not zero-sum: 3px -> 4px is a third more
+               mark at identical contrast, and it costs the label nothing
+               because the row's own `px-2` is 8px. The fill was raised too,
+               but only in DARK, where it was actually below the donor's.
 
                THE STATE IS SELECTED ON THE `data-` ATTRIBUTE, not switched in
                the template string, and that is load bearing rather than
@@ -816,7 +826,7 @@ export function CommandMenu({
             class={`relative flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5
               scroll-mt-[var(--space-8)] scroll-mb-[var(--space-8)]
               transition-colors duration-fast before:absolute before:bottom-1 before:left-0
-              before:top-1 before:w-[3px] before:rounded-full before:bg-transparent
+              before:top-1 before:w-[4px] before:rounded-full before:bg-transparent
               before:content-['']
               data-[active=true]:bg-row-active data-[active=true]:before:bg-focus-bar
               data-[branch-open=true]:bg-row-active data-[branch-open=true]:before:bg-focus-bar`}
@@ -1024,10 +1034,17 @@ export function CommandMenu({
         aria-label={triggerAriaLabel}
         title={triggerTitle ?? triggerLabel}
         data-menu={menuName}
-        class={`flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2
+        // `py-1.5 sm:py-2` — the trigger is 40px tall on desktop and 36 on
+        // mobile. That 4px is not cosmetic: at 375 these two triggers are a
+        // whole row of the chat header's plate, and the plate is chrome that
+        // every message is read underneath (round 2 — see the breakdown in
+        // ChatHeader.tsx). 36px still clears the 24px WCAG 2.5.8 target size
+        // and the label keeps its 12px side padding, so nothing about hitting
+        // or reading the control changes; only the row does.
+        class={`flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5
           text-body-sm text-primary transition-colors duration-fast hover:border-border-strong
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-a/60
-          disabled:cursor-not-allowed disabled:opacity-60 ${triggerClass}`}
+          disabled:cursor-not-allowed disabled:opacity-60 sm:py-2 ${triggerClass}`}
       >
         {triggerIcon !== undefined && (
           <span class="shrink-0 text-muted" aria-hidden="true">

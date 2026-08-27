@@ -81,7 +81,7 @@ const FLASH_MS = 1600;
 
 // Clipboard API needs a secure context; fall back to the selection trick so a
 // plain-http preview still copies rather than silently doing nothing.
-async function writeClipboard(text: string): Promise<boolean> {
+export async function writeClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);

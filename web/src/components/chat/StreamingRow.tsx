@@ -3,8 +3,40 @@
  * 6d499ba3ce17f906a7762429c61018f230ecd64e — donor paths
  * `client/src/components/Chat/Messages/Content/MessageContent.tsx` (the
  * in-progress branch and its cursor) and
- * `client/src/components/Chat/Messages/Content/InProgressCall.tsx` (the live
+ * `client/src/components/Chat/Messages/Content/ProgressText.tsx` (the live
  * tool-status line).
+ *
+ * ── CORRECTION: this comment used to name the wrong donor file ─────────────
+ *
+ * It credited `Content/InProgressCall.tsx` as "the live tool-status line". That
+ * file is 19 lines and renders no status text at all — it is ENTIRELY a guard
+ * that swaps its children for a CancelledIcon when `(!isSubmitting && progress
+ * < 1) || error`. It is copied verbatim at
+ * ./lc/components/Chat/Messages/Content/InProgressCall.tsx so the claim can be
+ * checked rather than taken on trust.
+ *
+ * The donor's actual live tool line is `ProgressText.tsx`, 158 lines. Almost
+ * none of it can be fed from here, and the reason is the wire, not the code:
+ *
+ *   - `phase` (running / completed / failed / cancelled) — our wire has ONE
+ *     state. `event: tool` carries `{label, step}`; nothing reports that a call
+ *     finished, let alone that it failed. So there is no finished label, no
+ *     `com_ui_tool_failed` suffix and no cancelled icon to swap in.
+ *   - `durationMs` (`PartMetadata.runStepDurationMs`) — not on our wire, so the
+ *     `· 1.4s` reading and its `sr-only` spoken twin render nothing.
+ *   - `hasInput` / `isExpanded` / `onClick` — the donor's line is a DISCLOSURE
+ *     that opens an input/output panel. We have neither payload (see
+ *     ToolCallsSection's header), so there is nothing to disclose and the line
+ *     is not a button.
+ *   - `@radix-ui/react-popover` — the `popover` variant's Trigger. Not a
+ *     dependency here and it wraps the disclosure we do not have.
+ *
+ * What IS taken from ProgressText, and is visible in ToolStatusLine below: its
+ * `shimmer` on the running label, its `min-w-0 truncate font-medium` on the
+ * label span, and its rule that the SUBTITLE takes essentially all of the
+ * shrink (`shrink-[100]`) because the label names the card and must stay whole.
+ * That is three class decisions out of 158 lines, which is the honest size of
+ * the harvest here.
  *
  * ── The live turn is the settled turn ──────────────────────────────────────
  *
@@ -54,8 +86,7 @@
  */
 import { useEffect, useState } from 'preact/hooks';
 import { renderMarkdown } from '../../lib/chat/markdown';
-import { MessageRow } from './MessageRow';
-import { AuthorLine } from './AssistantMessage';
+import { AgentMark, MessageRow } from './MessageRow';
 
 interface StreamingRowProps {
   agentName: string;
@@ -70,8 +101,15 @@ interface StreamingRowProps {
 export function StreamingRow({ agentName, text, toolStatus, startedAt }: StreamingRowProps) {
   return (
     <MessageRow
-      role="assistant"
-      header={<AuthorLine agentName={agentName} />}
+      isCreatedByUser={false}
+      icon={<AgentMark name={agentName} />}
+      label={agentName}
+      headerPrefix="Assistant: "
+      ariaLabel="Assistant message"
+      // No timestamp: the live turn has not landed one, and the donor's
+      // MessageTimestamp renders nothing at all for a null value — which is
+      // what keeps the header the SAME height before and after the stream ends.
+      timestamp={null}
       footer={<LiveFooter startedAt={startedAt} />}
     >
       {toolStatus && <ToolStatusLine status={toolStatus} />}
@@ -150,7 +188,11 @@ function ToolStatusLine({ status }: { status: string }) {
         aria-hidden="true"
         class="size-3.5 shrink-0 animate-spin rounded-full border-2 border-primary-a/25 border-t-primary"
       />
-      <span class="min-w-0 truncate">{status}</span>
+      {/* Donor ProgressText.tsx:117 — `min-w-0 truncate font-medium` on the
+          running label. The weight is the part that matters: this line sits
+          above prose at the same size, and without it the status reads as the
+          reply's first sentence. */}
+      <span class="min-w-0 truncate font-medium">{status}</span>
     </div>
   );
 }

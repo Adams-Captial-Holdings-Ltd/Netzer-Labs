@@ -1,19 +1,37 @@
 /*
- * Structure ported from danny-avila/LibreChat (MIT), pinned at commit
- * 6d499ba3ce17f906a7762429c61018f230ecd64e — donor paths
- * `client/src/components/Chat/Messages/ui/MessageRow.tsx` (author header),
+ * Composed from files copied out of danny-avila/LibreChat (MIT), pinned at
+ * commit 6d499ba3ce17f906a7762429c61018f230ecd64e — donor paths
+ * `client/src/components/Chat/Messages/ui/MessageRow.tsx` (the row and the
+ * author header it now builds itself),
+ * `client/src/components/Chat/Messages/ui/HeaderLabel.tsx`,
  * `client/src/components/Chat/Messages/ui/MessageTimestamp.tsx`,
- * `client/src/components/Chat/Messages/SubRow.tsx` (the quiet footer row) and
- * `client/src/components/Chat/Messages/styles.ts` (reveal-on-row-hover).
+ * `client/src/components/Chat/Messages/SubRow.tsx` (the quiet footer row),
+ * `client/src/components/Chat/Messages/MinimalHoverButtons.tsx` (the copy
+ * action) and `client/src/components/Chat/Messages/Content/CancelledIcon.tsx`.
+ * The copies themselves live under ./lc/, each with its own provenance header
+ * and its own edit list; this file is the composition.
  *
- * ── The author line replaces the card ──────────────────────────────────────
+ * ── The author line is no longer written here ─────────────────────────────
  *
- * Because an assistant turn has no box (see MessageRow), something else has to
- * mark where one reply ends and the next begins. The donor's answer, ported
- * here: a short line above the body carrying a mark, the name of whoever is
- * speaking, and the time. On this product that line does more work than it does
- * on the donor, because WHICH of the seventeen agents answered is a governance
- * fact, not decoration.
+ * `AuthorLine` used to live in this file: a hand-written transcription of the
+ * donor's header (mark, name, time) plus a hand-transcribed copy of its
+ * `revealOnRowHoverClasses` variant chain. All of it is gone. The donor's own
+ * row now builds the header from `icon` / `label` / `hoverLabel` / `timestamp`
+ * (see ./MessageRow.tsx and ./lc/components/Chat/Messages/ui/), and the reveal
+ * is the donor's stylesheet rule, copied verbatim into index.css.
+ *
+ * What that bought, beyond deleting the transcription: `hoverLabel` shows the
+ * MODEL that answered, crossfading from the agent name on hover or keyboard
+ * focus. The run footer below reports the model too, but as an audit figure in
+ * mono alongside latency and cost — and only on turns that reached `final`. A
+ * historical turn reloaded from `/sessions/transcript` has no `meta` at all, so
+ * `hoverLabel` is null there and HeaderLabel falls to its plain-span branch.
+ * Two registers, one datum, neither redundant with the other.
+ *
+ * Because an assistant turn has no box (see MessageRow), the author line is
+ * what marks where one reply ends and the next begins. On this product it does
+ * more work than it does on the donor, because WHICH of the seventeen agents
+ * answered is a governance fact, not decoration.
  *
  * ── The run footer is the product, not chrome ──────────────────────────────
  *
@@ -38,81 +56,20 @@
  */
 import type { Message, TurnMeta } from '../../lib/chat/types';
 import { renderMarkdown } from '../../lib/chat/markdown';
-import { MessageRow } from './MessageRow';
+import { AgentMark, MessageRow, isoFromEpochSeconds } from './MessageRow';
 import { ToolCallsSection } from './ToolCallsSection';
-
-/** Up to two initials for the agent mark ("Netzar Prime" → "NP"). */
-function agentInitials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '?';
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return `${words[0][0]}${words[1][0]}`.toUpperCase();
-}
-
-function turnTime(ts: number): string {
-  // `ts` is epoch SECONDS (the transcript and the send path both mint it as
-  // Date.now()/1000). Guard anyway: a bad value must not throw inside a row.
-  const d = new Date(ts * 1000);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-interface AuthorLineProps {
-  agentName: string;
-  /** Epoch seconds. Omitted on the live row, which has not landed a time yet. */
-  ts?: number;
-}
+import CancelledIcon from './lc/components/Chat/Messages/Content/CancelledIcon';
+import MinimalHoverButtons from './lc/components/Chat/Messages/MinimalHoverButtons';
 
 /**
- * Mark · name · time. Shared with StreamingRow so the live turn is introduced
- * by exactly the line the settled turn keeps — nothing moves when the stream
- * ends and the message is committed.
+ * The model that answered, shortened the way the run footer shortens it, or
+ * null when this turn carries no run metadata (every historical turn). Feeds
+ * the donor header's `hoverLabel`.
  */
-export function AuthorLine({ agentName, ts }: AuthorLineProps) {
-  const time = ts === undefined ? '' : turnTime(ts);
-  return (
-    <h3 class="mb-1.5 flex min-h-6 w-full select-none items-center gap-2 text-caption font-semibold text-primary">
-      <span
-        aria-hidden="true"
-        class="flex size-6 shrink-0 items-center justify-center rounded-md border border-primary-a/25
-          bg-primary-a/10 text-[10px] font-bold leading-none tracking-tight text-primary-a"
-      >
-        {agentInitials(agentName)}
-      </span>
-      <span class="min-w-0 truncate">{agentName}</span>
-      {time && (
-        // Reveal-on-hover, now taken verbatim from the donor's
-        // `revealOnRowHoverClasses` (Chat/Messages/styles.ts) rather than
-        // approximated. The earlier version substituted `focus-within` for the
-        // donor's `focus-visible` pair, which is the exact bug that file exists
-        // to prevent — and we ship its trigger: clicking the tool expand toggle
-        // parks focus inside the row, and `focus-within` then pinned this
-        // timestamp visible with the pointer nowhere near it.
-        //
-        // Both focus halves earn their keep. The row ITSELF is tested, not only
-        // its descendants, because `:has()` never matches its own subject.
-        // Text-entry controls are excluded from the descendant half because
-        // they match `:focus-visible` even under a mouse click.
-        //
-        // Two variants, deliberately not folded into one `group-[&:is(...)]`:
-        // folding makes Tailwind emit a bare `.group { opacity: 1 }`, which
-        // lightningcss rejects — failing the production CSS build while `tsc`
-        // stays perfectly green.
-        //
-        // `[@media(hover:hover)]` keeps the time permanently visible on a touch
-        // device, which cannot hover and would otherwise never reach it.
-        <span
-          class="ml-auto shrink-0 font-mono text-overline font-normal text-muted
-            transition-[opacity,color,background-color] duration-normal ease-out
-            motion-reduce:transition-none [@media(hover:hover)]:opacity-0
-            group-hover:opacity-100 group-focus-visible:opacity-100
-            group-has-[:focus-visible:not(:is(input,textarea,[contenteditable]))]:opacity-100"
-        >
-          {time}
-        </span>
-      )}
-    </h3>
-  );
+export function modelLabel(meta: TurnMeta | undefined): string | null {
+  const id = meta?.modelId;
+  if (!id) return null;
+  return id.split('.').pop() ?? null;
 }
 
 function Sep() {
@@ -135,7 +92,9 @@ interface RunFooterProps {
 }
 
 export function RunFooter({ meta, showToolCount }: RunFooterProps) {
-  const model = meta.modelId ? meta.modelId.split('.').pop() : '';
+  // One shortening, shared with the author line's `hoverLabel`, so the header
+  // and the footer can never disagree about what answered.
+  const model = modelLabel(meta) ?? '';
   const tools = showToolCount && meta.toolCallCount > 0 ? meta.toolCallCount : 0;
 
   return (
@@ -180,10 +139,14 @@ export function RunFooter({ meta, showToolCount }: RunFooterProps) {
 function StoppedFooter() {
   return (
     <div class="flex items-center gap-2 pt-0.5 font-mono text-caption text-secondary">
-      {/* `bg-border-strong`, NOT `bg-muted`: `muted` is a textColor-only key in
-          tailwind.config.ts, so `bg-muted` compiles to nothing and the dot
-          renders invisible. */}
-      <span aria-hidden="true" class="size-1.5 shrink-0 rounded-full bg-border-strong" />
+      {/* The donor's CancelledIcon (9 lines, copied), replacing a grey dot that
+          shared its shape with the streaming pulse and said nothing on its own.
+          An X reads as "this was stopped" without a legend. The wrapper gives
+          it a box to fill, because the donor's own icon is `h-full w-full` — it
+          is drawn to sit in a run-step slot, not to size itself. */}
+      <span aria-hidden="true" class="size-4 shrink-0">
+        <CancelledIcon />
+      </span>
       <span>stopped — partial reply, no run recorded</span>
     </div>
   );
@@ -199,14 +162,63 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
 
   return (
     <MessageRow
-      role="assistant"
-      header={<AuthorLine agentName={agentName} ts={message.ts} />}
+      isCreatedByUser={false}
+      icon={<AgentMark name={agentName} />}
+      label={agentName}
+      hoverLabel={modelLabel(message.meta)}
+      headerPrefix="Assistant: "
+      ariaLabel="Assistant message"
+      timestamp={isoFromEpochSeconds(message.ts)}
       footer={
-        message.meta ? (
-          <RunFooter meta={message.meta} showToolCount={tools.length === 0} />
-        ) : message.stopped ? (
-          <StoppedFooter />
-        ) : null
+        // `items-center gap-3` rather than SubRow's own `gap-3` alone: the run
+        // footer is a 13px mono line and the copy control is a 31px button, so
+        // the two need a shared baseline or the reading sits on the button's
+        // ascender. Everything in here is ONE row on purpose — the footer slot
+        // is the same slot the live row's elapsed readout occupies, and it must
+        // not grow a second line when a turn settles.
+        <div class="flex items-center gap-3">
+          {message.meta ? (
+            <RunFooter meta={message.meta} showToolCount={tools.length === 0} />
+          ) : message.stopped ? (
+            <StoppedFooter />
+          ) : null}
+          {/* The action row this product did not have. Copy only — see the
+              copied file's header for why regenerate and feedback are absent
+              rather than disabled.
+
+              ── ROUND 3: `chat-row-actions` IS WHAT MAKES IT EXIST ON TOUCH ──
+
+              The donor hides this button until the row is hovered, via
+              `revealOnRowHoverClasses`, whose escape hatch is
+              `[@media(hover:hover)]:opacity-0` — hover-gated only where hover
+              is possible. That is the right instinct and it is not sufficient,
+              because "the browser reports a hoverable pointer" is not the same
+              question as "this reader can hover". Measured on the settled
+              `code` fixture at 375x812: computed opacity `0`, i.e. the one
+              action this harvest added is invisible on a phone-width window
+              that still reports `(hover: hover)` — a narrow desktop window, a
+              hybrid laptop, and every mobile frame in the screenshot bar. On
+              the same viewport with touch emulation on it computes `1`, so the
+              donor's rule was doing its job and the job was too narrow.
+
+              So the width joins the pointer: below `lg` — this product's own
+              definition of the compact layout, the breakpoint where the
+              conversation rail becomes a drawer — the action is simply THERE.
+              That is what a real phone already shows, so the narrow window now
+              agrees with the phone instead of inventing a third state, and it
+              is what the donor's own mobile frames show. The rule is one
+              additive block in index.css keyed on this class; the copied file
+              is untouched by it, which is why the hook is here on the wrapper
+              and not a fifth edit inside the copy.
+
+              A metadata readout may be hover-gated; an ACTION may not. The
+              timestamp is covered by the same block for the same reason — not
+              because it is an action, but because it is already visible on a
+              phone and there is no reason for a 900px window to disagree. */}
+          <div class="chat-row-actions">
+            <MinimalHoverButtons message={message} />
+          </div>
+        </div>
       }
     >
       {/* Above the prose, as in the donor: what the agent did to get the answer

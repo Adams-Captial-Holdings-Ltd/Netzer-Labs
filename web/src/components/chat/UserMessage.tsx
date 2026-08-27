@@ -17,7 +17,7 @@
  * heading is what keeps the transcript reading as an alternating dialogue.
  */
 import type { Message } from '../../lib/chat/types';
-import { MessageRow } from './MessageRow';
+import { MessageRow, isoFromEpochSeconds } from './MessageRow';
 
 interface UserMessageProps {
   message: Message;
@@ -25,7 +25,20 @@ interface UserMessageProps {
 
 export function UserMessage({ message }: UserMessageProps) {
   return (
-    <MessageRow role="user" header={<h3 class="sr-only">You said</h3>}>
+    // The donor row renders the user turn's heading itself, as `sr-only`
+    // (headerPrefix + label + timestamp), which is why no `header` node is
+    // passed any more. `icon` and `footer` are `null` rather than omitted:
+    // they are required props, and the user branch never reads the icon while
+    // SubRow's `empty:hidden` collapses the footer slot to nothing.
+    <MessageRow
+      isCreatedByUser
+      label="You said"
+      headerPrefix=""
+      ariaLabel="Your message"
+      timestamp={isoFromEpochSeconds(message.ts)}
+      icon={null}
+      footer={null}
+    >
       {/* `font-sans` overrides the UA monospace: this is prose that must
           preserve its line breaks, not code. `break-words` keeps an unbroken
           URL or token from widening the pill past the column. */}

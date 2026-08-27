@@ -61,15 +61,22 @@ export function MessagesView({
     // `flex-1` claims the column's free height so the block below can push
     // itself to the bottom on the landing state.
     //
-    // `pt-4` is a GAP, not a clearance. The header is a sticky sibling inside
-    // this same column (ChatCanvas), so it occupies its own height in the flow
-    // and the first message cannot be laid out underneath it — there is
-    // nothing to measure and nothing to keep in sync. This used to be
-    // `pt-[var(--chat-header-h)]`, a property carrying the measured height of
-    // an absolutely-positioned header; every frame before the first
-    // measurement landed, and every viewport its static fallback was not tuned
-    // for, showed the top line of a reply sliced through its x-height.
-    <div class="flex flex-1 flex-col pt-4">
+    // THERE IS NO TOP PADDING HERE, and that is now a positive statement rather
+    // than an omission. The header is a sticky sibling inside this same column
+    // (ChatCanvas), so it occupies its own height in the flow and the first
+    // message cannot be laid out underneath it — there is nothing to measure
+    // and nothing to keep in sync. It used to be `pt-[var(--chat-header-h)]`, a
+    // property carrying the measured height of an absolutely-positioned header;
+    // every frame before the first measurement landed, and every viewport its
+    // static fallback was not tuned for, showed the top line of a reply sliced
+    // through its x-height.
+    //
+    // Round 2 left a bare `pt-4` behind as a GAP. Round 3 gave the header a
+    // 24px fade ramp below its plate (ChatHeader), which occupies its own space
+    // in the flow and IS that gap — so the padding went with it. Keeping both
+    // would put two elements in two files in charge of one clearance, which is
+    // the shape of the `--chat-header-h` mistake, one size down.
+    <div class="flex flex-1 flex-col">
       {/* `mt-auto`, NOT `justify-end` on the parent: a centring or end-aligned
           justification overflows a too-tall child out the TOP of a scroll
           container, where it is clipped and unreachable (verified at 800px

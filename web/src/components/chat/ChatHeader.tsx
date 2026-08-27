@@ -62,6 +62,49 @@
  * measure this header and pad the transcript by it — which is why the
  * `--chat-header-h` custom property, its ResizeObserver and its two fallback
  * breakpoints are gone rather than merely retuned.
+ *
+ * ── ROUND 3: THE PLATE NOW OWNS ITS BOTTOM BOUNDARY, RAMP INCLUDED ────────
+ *
+ * The reservation above is real and was measured again: at `scrollTop: 0` on a
+ * 375x812 viewport the plate ends at y=157.4 and the first row starts at
+ * y=173.4 — a 16px gap, nothing underneath. But that is only the geometry AT
+ * REST, and a transcript spends most of its life scrolled. Mid-scroll, running
+ * text passes under an opaque plate that terminated in a 1px rule and NOTHING
+ * else: probed at 55% scroll on the `code` fixture, `elementFromPoint` returned
+ * `code.hljs` at every one of the first 32px below the plate's bottom edge,
+ * the first of them 1px under the rule. Wherever that landed mid-line it cut a
+ * line of code in half — roughly 10px of a 14px line left showing, with no ramp
+ * to explain the cut.
+ *
+ * The composer had solved this at the other end of the same scroller from the
+ * start: a 24px `bg-gradient-to-t from-bg-a` above its plate, so the transcript
+ * DISSOLVES into it instead of being cut by it (ChatCanvas). The conversation
+ * list solves it too, at the foot of its own overflow. The header was the one
+ * boundary on the surface with an occluder and no ramp; the strip below is that
+ * same treatment, mirrored, and it makes the plate's bottom edge the plate's
+ * own business rather than something the transcript has to leave room for.
+ *
+ * Three details, each of which is the difference between a ramp and a bug:
+ *
+ *   - It is IN THE FLOW, not `absolute`. It therefore occupies its 24px the
+ *     way the plate occupies its height, so at rest it can never wash over the
+ *     first row — no clearance to publish, nothing to keep in sync. That is
+ *     also why `MessagesView`'s `pt-4` went away in the same change: the gap it
+ *     provided is now this ramp, and two elements declaring the same clearance
+ *     is how the header/`--chat-header-h` mess started.
+ *   - The band belongs to the MESSAGE under it, and that takes two
+ *     declarations, not one. `pointer-events-none` on the ramp alone is not
+ *     enough: the ramp is in the flow, so the sticky wrapper's own box grows to
+ *     contain it, and the wrapper is what `elementFromPoint` then returns
+ *     across the whole 24px strip — probed and confirmed, on the composer's
+ *     ramp as much as this one. The wrapper is therefore `pointer-events-none`
+ *     and the plate `pointer-events-auto`, which puts the strip back on the
+ *     message (clicks select its text) while leaving every control on the plate
+ *     exactly as clickable as before.
+ *   - The plate is `relative z-10` so it, and its shadow, paint ON TOP of the
+ *     ramp. Without it the ramp's opaque top edge is drawn after the plate in
+ *     DOM order and erases the `shadow-sm` that lifts the panel off the ground
+ *     — a fix for the boundary that quietly deletes the boundary's edge.
  */
 import { Plus } from 'lucide-preact';
 import type { Agent, Model } from '../../lib/chat/types';
@@ -107,7 +150,7 @@ export function ChatHeader({
   return (
     // The bleed layer: no paint of its own, it only cancels the column's
     // padding so the panel below can span the scrollport.
-    <div class={`sticky top-0 z-20 ${COLUMN_BLEED_X}`}>
+    <div class={`pointer-events-none sticky top-0 z-20 ${COLUMN_BLEED_X}`}>
       {/* THE PANEL. Opaque, so nothing composites through it; a hairline on the
           bottom, a radius and a soft shadow, so it is unambiguously an object
           sitting over the conversation rather than an undeclared band of
@@ -123,8 +166,39 @@ export function ChatHeader({
           (`-mx-[17px]`); both re-state a constant this file is not allowed to
           own. `bg-surface` against the canvas's `bg-bg`, plus the shadow, is
           what declares the sides. */}
-      <div class={`rounded-b-xl border-b border-border bg-surface shadow-sm ${COLUMN_PX}`}>
-        <div class="flex flex-wrap items-center gap-2 py-3">
+      <div
+        class={`pointer-events-auto relative z-10 rounded-b-xl border-b border-border bg-surface
+          shadow-sm ${COLUMN_PX}`}
+      >
+        {/* ── MOBILE CHROME IS SPENT ON CONTROLS, NOT ON PADDING (round 2) ──
+            A review measured this plate at 117px on a 375x812 viewport, under
+            a 56px house bar: 173px, 21.4% of the viewport gone before the
+            first message. Measured breakdown of that 117:
+
+              12  padding-top
+              44  row 1 — the drawer toggle's `size-11` touch target, which
+                  ABSORBS the 22px title and the 34px New-chat button beside it
+               8  the flex-wrap row gap
+              40  row 2 — the two picker triggers
+              12  padding-bottom
+
+            So 84 of the 117 is two irreducible controls and 32 is slack. The
+            slack is what moved: `py-2` and a 4px wrap gap take the plate to
+            ~100px without touching a single control's hit area. `sm:` restores
+            the roomier desktop values, where the wrap never happens and the
+            vertical budget is not scarce.
+
+            WHAT WAS NOT DONE, and why, because both look like easy wins:
+              - the drawer toggle stays 44px. It is `size-11` precisely because
+                that is the touch minimum (see DrawerToggle); trading 4px of
+                chrome for a sub-minimum tap target is not a trade.
+              - the two rows stay two rows. At 375 the column is 323px wide and
+                the three widest controls — toggle 44 + the two pickers at 150
+                and 154 — need 348px on their own. One row is not geometrically
+                available at this control count, whatever the padding is. The
+                donor's single 52px bar carries three controls and no
+                conversation title; this surface carries five. */}
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 py-2 sm:gap-2 sm:py-3">
           {/* Mobile falls back to DOM order (the drawer control + title + New
               chat, then the pickers on their own line because that group is
               w-full); sm+ reorders to title · pickers · New chat on a single
@@ -200,6 +274,16 @@ export function ChatHeader({
           </div>
         </div>
       </div>
+
+      {/* THE RAMP. The mirror of the composer's `h-6 bg-gradient-to-t from-bg-a`
+          (ChatCanvas), pointing the other way: opaque page ground at the rule,
+          fading to nothing 24px down, so a line of text approaching the header
+          fades out over most of its own height instead of being sliced by the
+          rule. `from-bg-a` is the alpha-capable canvas ground — the SAME hue
+          the transcript sits on, in both themes — so the ramp is invisible
+          where nothing is under it, which is exactly what the at-rest frame
+          shows. */}
+      <div class="pointer-events-none h-6 bg-gradient-to-b from-bg-a" aria-hidden="true" />
     </div>
   );
 }

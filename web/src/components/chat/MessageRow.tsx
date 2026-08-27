@@ -1,8 +1,19 @@
 /*
- * Structure ported from danny-avila/LibreChat (MIT), pinned at commit
- * 6d499ba3ce17f906a7762429c61018f230ecd64e — donor paths
- * `client/src/components/Chat/Messages/ui/MessageRow.tsx` and
- * `client/src/components/Chat/Messages/SubRow.tsx`.
+ * The transcript's one frame — now the DONOR'S implementation of it.
+ *
+ * This file used to hand-write the row (its lines 55-91). Those 37 lines are
+ * gone; what stands in their place is
+ * `./lc/components/Chat/Messages/ui/MessageRow.tsx`, copied from
+ * danny-avila/LibreChat (MIT) at commit
+ * 6d499ba3ce17f906a7762429c61018f230ecd64e, donor path
+ * `client/src/components/Chat/Messages/ui/MessageRow.tsx` — three edits,
+ * itemised in that file's own header. Its sibling `SubRow.tsx` (19 lines) is
+ * byte-for-byte.
+ *
+ * The rationale below is kept HERE, above the re-export, because it is the
+ * reason the frame is shaped the way it is and it is the thing a future change
+ * has to argue with. Nothing in it changed; the donor's row implements all of
+ * it, which is precisely why the copy was worth taking.
  *
  * ── The one rhythm the whole transcript is built on ────────────────────────
  *
@@ -31,62 +42,63 @@
  *
  * The row declares NO width and NO horizontal padding: ChatCanvas owns the
  * single shared content column, and a second `max-w-*` here would be exactly
- * the drift that file was written to delete.
+ * the drift that file was written to delete. That is edit 1 in the donor copy —
+ * the donor's own `getMessageRowWidthClass` is deleted for exactly this reason.
+ *
+ * ── What the copy BOUGHT that the hand-written frame did not have ──────────
+ *
+ * The author line moved INSIDE the row. It used to be a node the caller built
+ * and passed as `header`; the donor's row builds it from `icon`, `label`,
+ * `hoverLabel` and `timestamp`, which is what makes the two harvested header
+ * components reachable at all:
+ *
+ *   HeaderLabel.tsx (81 lines, verbatim) — crossfades the agent name to the
+ *     model that answered, both in one grid cell so neither reflows the header.
+ *   MessageTimestamp.tsx (99 lines, 3 edited) — a real `<time dateTime>` that
+ *     reads "5 minutes ago" while a turn is recent and the absolute date after,
+ *     with only the recent rows subscribed to a shared minute ticker.
  */
-import type { ComponentChildren } from 'preact';
+export { default as MessageRow } from './lc/components/Chat/Messages/ui/MessageRow';
 
-interface MessageRowProps {
-  role: 'user' | 'assistant';
-  /**
-   * The author line. Assistant turns render a visible one (mark, name, time);
-   * user turns pass a `sr-only` heading so the transcript still reads as an
-   * alternating dialogue to a screen reader, which cannot see the alignment.
-   */
-  header?: ComponentChildren;
-  /** The turn body — prose, panels, attachments. */
-  children: ComponentChildren;
-  /** Quiet sub-row under the body (the run footer). */
-  footer?: ComponentChildren;
+/** Up to two initials for the agent mark ("Netzar Prime" → "NP"). */
+export function agentInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }
 
-export function MessageRow({ role, header, children, footer }: MessageRowProps) {
-  const isUser = role === 'user';
-
+/**
+ * The agent's mark, passed as the donor row's `icon`. Two initials rather than
+ * an avatar, because WHICH of the seventeen agents answered is a governance
+ * fact and there is no per-agent image to serve.
+ *
+ * Shared by AssistantMessage and StreamingRow so the live turn is introduced by
+ * exactly the mark the settled turn keeps. `rounded-md`, not the donor's
+ * `rounded-full`: the donor's slot is a circular avatar, and a two-letter
+ * monogram in a circle crops its own descenders at this size.
+ */
+export function AgentMark({ name }: { name: string }) {
   return (
-    // `group` is load-bearing: the timestamp and any other reveal-on-hover
-    // affordance in the header key off it (see MessageMeta).
-    <div
-      role="group"
-      aria-label={isUser ? 'Your message' : 'Assistant message'}
-      class={`group flex min-w-0 ${isUser ? 'justify-end' : 'items-start'}`}
+    <span
+      class="flex size-6 shrink-0 items-center justify-center rounded-md border border-primary-a/25
+        bg-primary-a/10 text-[10px] font-bold leading-none tracking-tight text-primary-a"
     >
-      <div
-        class={`relative flex min-w-0 flex-col ${
-          isUser ? 'ml-auto w-fit max-w-[90%] items-end sm:max-w-[85%]' : 'w-full flex-1'
-        }`}
-      >
-        {header}
-        <div class={`flex w-full min-w-0 flex-col gap-1 ${isUser ? 'items-end' : ''}`}>
-          <div
-            class={
-              isUser
-                ? // The pill. `w-fit` so it hugs; `rounded-br-md` clips the one
-                  // corner nearest the composer, which is what points the shape
-                  // back at the person who typed it. Neutral, NOT the brand
-                  // colour: a transcript of indigo slabs buries the reply, and
-                  // the donor's own user turn is a quiet tinted pill for the
-                  // same reason. The hairline border is this product's language
-                  // (README style bar), not the donor's borderless fill.
-                  'w-fit min-w-0 rounded-2xl rounded-br-md border border-border bg-surface-elevated px-4 py-2.5'
-                : // No card. The reply IS the column.
-                  'w-full min-w-0'
-            }
-          >
-            {children}
-          </div>
-          {footer && <div class={`w-full ${isUser ? 'flex justify-end' : ''}`}>{footer}</div>}
-        </div>
-      </div>
-    </div>
+      {agentInitials(name)}
+    </span>
   );
+}
+
+/**
+ * Epoch SECONDS → the ISO string the donor's MessageTimestamp expects.
+ *
+ * `Message.ts` is minted as `Date.now() / 1000` by both the transcript loader
+ * and the send path. Returns null for a missing or nonsense value, which is the
+ * shape MessageTimestamp's own `isValidTimestamp` guard treats as "render no
+ * timestamp at all".
+ */
+export function isoFromEpochSeconds(ts: number | undefined): string | null {
+  if (ts === undefined) return null;
+  const d = new Date(ts * 1000);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }

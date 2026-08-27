@@ -43,6 +43,7 @@
  * the shape humanizeToolName gives every MCP connector call.
  */
 import { useState, useId } from 'preact/hooks';
+import useExpandCollapse from './lc/hooks/Messages/useExpandCollapse';
 import {
   ChevronDown,
   FileSearch,
@@ -146,6 +147,7 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
   // reason. One click, and it is a full audit row.
   const [open, setOpen] = useState(false);
   const panelId = useId();
+  const { style, ref: expandRef } = useExpandCollapse(open);
 
   const kinds = tools.map((t) => toolKind(t.label));
   // Deduplicated, order-preserving name summary, three then "+N" — the donor's
@@ -186,10 +188,32 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
         />
       </button>
 
-      {/* Unmounted rather than hidden when collapsed: there is no enter/exit
-          animation to preserve here, and a collapsed section holds no state a
-          reader could lose (no inputs, no scroll position, nothing editable). */}
-      {open && (
+      {/* ── ANIMATED DISCLOSURE (donor useExpandCollapse.ts, 55 lines) ─────
+          This used to be `{open && <ol>}` — unmounted on collapse, which is
+          why it could not animate at all: there is nothing to transition from
+          when the subtree does not exist. The donor's hook is the grid trick:
+          the wrapper is `display: grid` and its `grid-template-rows` goes
+          `0fr` → `1fr`, which is the one way to transition to a height the
+          content decides rather than to a magic pixel number.
+
+          Two things it does that a hand-rolled version reliably forgets, and
+          the reason to take the file rather than write four lines:
+
+            1. `inert` is set on the collapsed subtree, imperatively, in a
+               LAYOUT effect. A `0fr` grid row is visually clipped but its
+               children are still focusable — without this, tabbing through a
+               finished reply lands inside a closed tool list.
+            2. `prefers-reduced-motion` SHORTENS the transition to 0.01ms
+               instead of removing it. `transition: none` emits no
+               `transitionend`, and any consumer waiting on that event to
+               unmount would leave every closed panel mounted for exactly the
+               readers who asked for less motion.
+
+          `overflow-hidden` on the inner element is what the grid row clips
+          against; it is ours, not the hook's, because the hook styles only the
+          wrapper. */}
+      <div style={style} ref={expandRef}>
+        <div class="overflow-hidden">
         <ol
           id={panelId}
           data-chat-tools-list
@@ -214,7 +238,8 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
             );
           })}
         </ol>
-      )}
+        </div>
+      </div>
     </div>
   );
 }

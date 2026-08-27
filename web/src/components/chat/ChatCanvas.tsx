@@ -142,11 +142,20 @@ export function ChatCanvas({
         {header}
         {children}
 
-        <div class="sticky bottom-0 z-10">
+        <div class="pointer-events-none sticky bottom-0 z-10">
           {/* The transcript dissolves into the composer instead of being cut by
               it. `from-bg-a` is the alpha-capable ground colour, so the ramp
-              stays in one hue in both themes. Not hit-testable: clicks and
-              wheels belong to the message underneath. */}
+              stays in one hue in both themes.
+
+              ROUND 3 — the band really is the message's now. This ramp has
+              always carried `pointer-events-none`, and the comment here has
+              always claimed the strip belonged to the message underneath, but
+              the claim was not true: the ramp is in the flow, so the sticky
+              wrapper's box contains it, and `elementFromPoint` across the whole
+              24px band returned `div.sticky.bottom-0.z-10` at every sample. The
+              wrapper is what had to opt out; the plate below opts back in. The
+              header's new ramp is built the same way, and the same probe now
+              returns the message at every sample in both bands. */}
           <div class="pointer-events-none h-6 bg-gradient-to-t from-bg-a" aria-hidden="true" />
           {/* The plate. Opaque `bg-bg` — the same ground the transcript is on —
               so a message scrolling under the composer is occluded outright
@@ -161,7 +170,7 @@ export function ChatCanvas({
               positioned clear of content, because the content moves under it;
               only a reserved lane can. Constant height, so the transcript does
               not move when the button comes and goes. */}
-          <div class="bg-bg pb-4 pt-1">
+          <div class="pointer-events-auto bg-bg pb-4 pt-1">
             {affordance}
             {composer}
           </div>

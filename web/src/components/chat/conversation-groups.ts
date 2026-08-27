@@ -1,145 +1,116 @@
 /*
  * Date grouping for the conversation sidebar.
  *
- * Structure ported from danny-avila/LibreChat (MIT), pinned at commit
- * 6d499ba3ce17f906a7762429c61018f230ecd64e — donor path
- * `client/src/utils/convos.ts` (`getGroupName` + `groupConversationsByDate`).
+ * ── This file is now an ADAPTER, not an implementation ─────────────────────
  *
- * What is ported: the bucket LADDER and its order — today, yesterday, the last
- * 7 days, the last 30 days, then a month name per month earlier in this year,
- * then a bucket per earlier year — the newest-first ordering of the buckets
- * that are not fixed, and the newest-first sort WITHIN each bucket. That
- * ladder is the donor's contribution and it is reproduced exactly, including
- * its overlaps (a row from three days ago satisfies both the 7-day and the
- * 30-day window; first match wins, so it lands in the 7-day bucket).
+ * The ladder itself — today, yesterday, the last 7 days, the last 30 days,
+ * then a month per month earlier this year, then a bucket per earlier year,
+ * with the overlaps resolved first-match-wins and every bucket sorted
+ * newest-first — is the donor's, and it now lives as the donor's own code at
+ * ./lc/utils/convos.ts (`client/src/utils/convos.ts` lines 3-12 and 17-146,
+ * 135 of 142 lines byte-for-byte). This file used to be a hand-written
+ * transcription of that ladder; it is now the shape translation that the
+ * transcription existed to avoid.
  *
- * What is NOT ported, and why it is hand-written instead: the donor's
- * predicates are seven `date-fns` imports (`isToday`, `subDays`, `getYear`,
- * `parseISO`, `startOfDay`, `startOfYear`, `isWithinInterval`) plus `format`
- * for the month name. `date-fns` is not a dependency of this app and the chat
- * chunk carries a gzip budget (plan decision 1 rejected a 111 kB markdown
- * pipeline for the same reason), so the six predicates below are plain `Date`
- * arithmetic — each one is three lines and none of them is the interesting
- * part. The donor's i18n keys (`com_ui_date_today`) are likewise replaced by
- * the English labels this product ships, because there is no localizer here.
+ * Three differences separate this app's data from the donor's, and each one is
+ * exactly one step of the adapter:
  *
- * The donor also drops pinned rows out of the date groups into a section of
- * their own. This product has no pinning, so that filter has no analogue and
- * is not carried over.
+ *   1. UNITS. `Conversation.updatedAt` is EPOCH SECONDS — the unit
+ *      src/lib/state/sessions-repo.ts writes and the unit `relativeAge()` in
+ *      ../../lib/chat/helpers.ts already reads. The donor's field is an ISO
+ *      string, which is why it can call `parseISO`. `toDonor()` converts.
+ *   2. IDENTITY. The donor dedupes on `conversationId`; ours is `chatId`.
+ *   3. LABELS. The donor emits i18n keys (`com_ui_date_today`) and, for a year,
+ *      the year prefixed with a space — that space is load-bearing inside its
+ *      comparator, which parses the label back out to sort. `LABELS` below maps
+ *      the keys to the English strings this product ships (there is no
+ *      localizer here) and trims the year.
  *
- * INPUT UNITS. `Conversation.updatedAt` is EPOCH SECONDS — the unit
- * `src/lib/state/sessions-repo.ts` writes ("updatedAt: epoch seconds") and the
- * unit `relativeAge()` in ../../lib/chat/helpers.ts already reads. The donor's
- * field is an ISO string; that is the one shape difference, and it is why
- * `parseISO` has no counterpart here.
+ * The donor also drops PINNED rows out of the date groups into a section of
+ * their own. This product has no pinning, so `pinned` is never set and that
+ * filter is inert rather than removed — it stays in the copied code where a
+ * reader can see it.
+ *
+ * ── One deliberate loss ────────────────────────────────────────────────────
+ *
+ * The previous hand-written version took a `nowMs` parameter so "today" could
+ * be pinned in a test. The donor reads `Date.now()` inside `getGroupName` and
+ * offers no injection point, so taking the donor's code means losing that
+ * seam. It is dropped rather than kept-and-ignored: no caller passed it
+ * (ConversationSidebar.tsx calls with one argument) and no test covered it, and
+ * a parameter that silently does nothing is worse than one that is gone.
  */
 
 import type { Conversation } from '../../lib/chat/types';
+import {
+  dateKeys,
+  groupConversationsByDate as groupDonorConversationsByDate,
+  type TConversation,
+} from './lc/utils/convos';
 
 /** A labelled bucket of conversations, in the order it should be rendered. */
 export type ConversationGroup = { label: string; conversations: Conversation[] };
 
-// Donor `dateKeys`, with this product's English labels standing in for the
-// donor's translation keys. The four fixed buckets keep the donor's order.
-const TODAY = 'Today';
-const YESTERDAY = 'Yesterday';
-const PREVIOUS_7_DAYS = 'Previous 7 days';
-const PREVIOUS_30_DAYS = 'Previous 30 days';
-
-/** Donor `dateGroupsSet` — the buckets that are pinned to the top, in order. */
-const FIXED_GROUPS = [TODAY, YESTERDAY, PREVIOUS_7_DAYS, PREVIOUS_30_DAYS];
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-const DAY_MS = 86_400_000;
-
-/** date-fns `startOfDay`, hand-written. Local midnight, so "today" means the
- *  reader's today rather than UTC's. */
-function startOfDay(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
-/** date-fns `startOfYear`, hand-written. */
-function startOfYear(d: Date): number {
-  return new Date(d.getFullYear(), 0, 1).getTime();
-}
-
-/** date-fns `isWithinInterval`, hand-written — inclusive at both ends, as the
- *  donor's is. */
-function isWithin(t: number, start: number, end: number): boolean {
-  return t >= start && t <= end;
-}
-
-/*
- * Donor `getGroupName`, clause for clause. The order of the tests is load
- * bearing: the windows deliberately overlap and the FIRST match wins.
+/**
+ * The donor's i18n keys, resolved to the English labels this product ships.
+ * Built from the donor's own `dateKeys` table so a key it adds cannot silently
+ * fall through as a raw `com_ui_date_*` string on screen — anything unmapped
+ * lands in the trim-the-key fallback below instead.
  */
-function groupName(t: number, now: number): string {
-  const date = new Date(t);
-  const nowDate = new Date(now);
-  if (startOfDay(date) === startOfDay(nowDate)) return TODAY;
-  if (isWithin(t, startOfDay(nowDate) - DAY_MS, now)) return YESTERDAY;
-  if (isWithin(t, now - 7 * DAY_MS, now)) return PREVIOUS_7_DAYS;
-  if (isWithin(t, now - 30 * DAY_MS, now)) return PREVIOUS_30_DAYS;
-  if (isWithin(t, startOfYear(nowDate), now)) return MONTHS[date.getMonth()];
-  // Donor: `' ' + getYear(date)`. The leading space is what sorts year buckets
-  // apart from month buckets in its comparator; this port sorts on a numeric
-  // key instead (see below), so the label is just the year.
-  return String(date.getFullYear());
-}
+const LABELS: Record<string, string> = {
+  [dateKeys.today]: 'Today',
+  [dateKeys.yesterday]: 'Yesterday',
+  [dateKeys.previous7Days]: 'Previous 7 days',
+  [dateKeys.previous30Days]: 'Previous 30 days',
+  [dateKeys.january]: 'January',
+  [dateKeys.february]: 'February',
+  [dateKeys.march]: 'March',
+  [dateKeys.april]: 'April',
+  [dateKeys.may]: 'May',
+  [dateKeys.june]: 'June',
+  [dateKeys.july]: 'July',
+  [dateKeys.august]: 'August',
+  [dateKeys.september]: 'September',
+  [dateKeys.october]: 'October',
+  [dateKeys.november]: 'November',
+  [dateKeys.december]: 'December',
+};
 
-/*
- * Donor `groupConversationsByDate`: dedupe by id, bucket by `getGroupName`,
- * emit the fixed buckets first in their declared order, then the year/month
- * buckets newest-first, and sort every bucket's rows newest-first.
+/**
+ * Epoch seconds -> the ISO string the donor's `parseISO` expects.
  *
- * The donor's month/year comparator parses the label back out of the string
- * (`parseInt(a.trim())` for the year, a `monthOrderMap` lookup for the month).
- * This port keeps the newest timestamp seen in each bucket instead and sorts on
- * that number — same resulting order, and it cannot be broken by a label that
- * happens to parse as a number.
+ * A row with no (or a nonsense) timestamp is left WITHOUT one rather than
+ * dropped: the donor's own fallback is `date = now`, so an untimed row files
+ * under "today" and stays reachable. That is the same outcome the previous
+ * hand-written version documented, reached by the donor's own branch instead
+ * of by a local guard.
  */
-export function groupConversationsByDate(
-  conversations: Conversation[],
-  nowMs: number = Date.now(),
-): ConversationGroup[] {
-  const seen = new Set<string>();
-  const groups = new Map<string, Conversation[]>();
-  // Newest row seen per bucket, for ordering the non-fixed buckets.
-  const newest = new Map<string, number>();
+function toDonor(c: Conversation): TConversation {
+  const secs = Number(c.updatedAt);
+  const valid = Number.isFinite(secs) && secs > 0;
+  return {
+    conversationId: c.chatId,
+    updatedAt: valid ? new Date(secs * 1000).toISOString() : undefined,
+  };
+}
 
+export function groupConversationsByDate(conversations: Conversation[]): ConversationGroup[] {
+  // Keyed by the id the donor dedupes on, so the donor's output — which carries
+  // only its own row shape — can be mapped back to this app's rows.
+  const byId = new Map<string, Conversation>();
+  const donorRows: TConversation[] = [];
   for (const c of conversations) {
-    if (!c || seen.has(c.chatId)) continue;
-    seen.add(c.chatId);
-    // A row with no (or a nonsense) timestamp is filed under "today" rather
-    // than dropped — the donor does the same with `date = now`. It is still a
-    // real conversation and must stay reachable.
-    const secs = Number(c.updatedAt);
-    const t = Number.isFinite(secs) && secs > 0 ? secs * 1000 : nowMs;
-    const label = groupName(t, nowMs);
-    const bucket = groups.get(label);
-    if (bucket) bucket.push(c);
-    else groups.set(label, [c]);
-    newest.set(label, Math.max(newest.get(label) ?? 0, t));
+    if (!c) continue;
+    byId.set(c.chatId, c);
+    donorRows.push(toDonor(c));
   }
 
-  const ordered: ConversationGroup[] = [];
-  for (const label of FIXED_GROUPS) {
-    const rows = groups.get(label);
-    if (rows) ordered.push({ label, conversations: rows });
-  }
-  const rest = [...groups.keys()]
-    .filter((label) => !FIXED_GROUPS.includes(label))
-    .sort((a, b) => (newest.get(b) ?? 0) - (newest.get(a) ?? 0));
-  for (const label of rest) {
-    ordered.push({ label, conversations: groups.get(label) as Conversation[] });
-  }
-
-  for (const group of ordered) {
-    group.conversations.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  }
-  return ordered;
+  return groupDonorConversationsByDate(donorRows).map(([key, rows]) => ({
+    // `key.trim()` is what turns the donor's year label (`' 2025'`, spaced so
+    // its comparator can tell a year from a month) back into a heading.
+    label: LABELS[key] ?? key.trim(),
+    conversations: rows
+      .map((r) => byId.get(r.conversationId))
+      .filter((c): c is Conversation => c !== undefined),
+  }));
 }
