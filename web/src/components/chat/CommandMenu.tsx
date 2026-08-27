@@ -588,11 +588,37 @@ export function CommandMenu({
   // rather than narrowed. Placement (the two layout effects above) is declared
   // earlier and so still runs first — the field is focused at its final
   // position, not a stale one.
+  //
+  // ROUND 6 — AND IT HAS TO RUN ON THE COMMIT THAT MOUNTS THE FIELD, NOT THE
+  // ONE THAT SETS `open`. The panel is gated on `open && box !== null`, and
+  // `box` is written by the placement layout effect above, i.e. one render
+  // LATER. With deps of `[open, branchKey]` this effect fired against a panel
+  // that was not in the document yet: `rootInputRef.current` was null, the
+  // focus call was a silent no-op, and focus stayed on the trigger — so on the
+  // FIRST open of a menu in a page's lifetime nothing on the keyboard worked.
+  // Not the arrows, not Escape, not type-to-filter. Every later open happened
+  // to work because `box` survives the close, so the panel mounted in the same
+  // commit as `open`. The roll-call gate never saw it: by the time its keyboard
+  // section runs, both menus have been opened dozens of times.
+  //
+  // `box` therefore joins the deps, and a ref remembers which panel has already
+  // been handed focus for this opening. Without that guard the effect would
+  // re-run on every `place()` — the menu re-places on window resize AND on
+  // capture-phase scroll — and yank focus back into the search field under
+  // someone who had moved on.
+  const focusedPanel = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open) {
+      focusedPanel.current = null;
+      return;
+    }
+    const key = branchKey ?? 'root';
+    if (focusedPanel.current === key) return;
     const el = branchKey !== null ? subInputRef.current : rootInputRef.current;
-    el?.focus();
-  }, [open, branchKey]);
+    if (!el) return;
+    el.focus();
+    focusedPanel.current = key;
+  }, [open, branchKey, box]);
 
   // Keep the active row in view — it moves by keyboard, and the list scrolls.
   useEffect(() => {
@@ -704,11 +730,101 @@ export function CommandMenu({
               if (kind === activeKind) setActive(index);
             }}
             onClick={() => activate(row)}
-            class={`flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 transition-colors duration-fast
-              ${isActive || branchOpen ? 'bg-surface-hover' : ''}`}
+            /* ── THE KEYBOARD-ACTIVE ROW ──────────────────────────────────
+               COPIED, class for class, from donor
+               `Chat/Menus/Endpoints/CustomMenu.tsx:182` (its item className,
+               one string): `relative … before:absolute before:bottom-1
+               before:left-0 before:top-1 before:w-0.5 before:rounded-full
+               before:bg-transparent data-[active-item]:before:bg-text-primary`
+               — a rail that is PAINTED on every row and only COLOURED on the
+               active one, so the rows never shift and the marker cannot be
+               confused with a border.
+
+               Why it had to be copied: this menu marked the arrow-key-active
+               row with `bg-surface-hover` and nothing else — measured 1.14:1
+               light and 1.18:1 dark against the row beneath it. That is the
+               exact failure mode the roll-call gate exists to catch, and it
+               was worse than a weak mark, because `bg-surface-hover` ALSO
+               landed on the checked row (the menu opens with the selection
+               active), so "the row I have arrowed to" and "the row that is
+               already chosen" were one appearance.
+
+               They are now two independent marks that stack:
+
+                 selected → the check glyph in the reserved column, plus the
+                            label's weight. No fill of its own.
+                 focused  → the fill (`row-active`, the same ground the
+                            conversation rail gives the row you are on) PLUS
+                            this rail in `--color-focus-bar`.
+
+               So a row that is BOTH shows a check AND a rail, and neither
+               mark is doing the other's job.
+
+               THE RAIL'S COLOUR WAS WRONG ON THE FIRST CUT, twice over, and a
+               review caught both. It was `--color-accent-bar` — brand indigo,
+               the SAME token the conversation sidebar uses for "the chat you
+               are in", so one hue was carrying two unrelated meanings across
+               two surfaces. And at 4.15:1 / 4.70:1 it was 2.5-3x weaker than
+               the donor's, because the 2.99:1 / 3.71:1 the donor was credited
+               with had been sampled off the bar's antialiased EDGE. The
+               donor's real declaration is `before:bg-text-primary`: its
+               primary TEXT colour, near-black on light and near-white on
+               dark, 12.5:1 / 9.8:1 against its own row fill. No weight of
+               indigo reaches that. `--color-focus-bar` tracks our text ramp
+               the same way and does.
+
+               MEASURED off the running app, both themes, 1440 and 375, after
+               the row's colour transition has settled — the numbers are in
+               bar/ours/ROLLCALL-P5.json and PROVENANCE.json, not just here:
+               the rail is 11.20:1 light / 11.51:1 dark against its OWN row
+               fill, and the fill moves from 1.14:1 to 1.52:1 light and 1.18:1
+               to 1.30:1 dark against the panel. Width is 3px rather than the
+               donor's 2px `w-0.5`, so the mark survives the 375px column.
+
+               THE STATE IS SELECTED ON THE `data-` ATTRIBUTE, not switched in
+               the template string, and that is load bearing rather than
+               stylistic — it is why the donor writes
+               `data-[active-item]:before:bg-…`. Both halves of the rail are
+               plain utilities of equal specificity, so a conditionally
+               appended `before:bg-primary` does NOT beat the always-present
+               `before:bg-transparent`: which of them wins is decided by their
+               order in the generated stylesheet, and transparent won.
+               Measured on the first cut of this fix — the rail rendered 3px
+               wide and `rgba(0, 0, 0, 0)`. Selecting on `[data-active="true"]`
+               puts an attribute in the selector, so the active declaration
+               outranks the resting one by specificity and cannot be reordered
+               out of existence. `data-branch-open` gets the same treatment:
+               the row holding an open submenu is where the keyboard still
+               is. */
+            /* ── AND THE ROW HAS TO SCROLL CLEAR OF THE EDGE RAMPS ────────
+               `scroll-m-1 scroll-mt-[...]` is the donor's, from the same
+               className (CustomMenu.tsx:182), where it clears its sticky
+               combobox. Ours clears the list's own overflow ramps, which is
+               the same problem with a different occluder: `scrollIntoView({
+               block: 'nearest' })` parks the row FLUSH with the scroller's
+               edge, and both ramps are drawn over exactly that edge --
+               `--color-surface` at full opacity for the first 25% of a 32px
+               band (`.chat-menu-edge`, index.css). Measured in the delivered
+               frames before this line existed: on the row that is both checked
+               and focused, the top ~15 device pixels of the focus rail read
+               1:1 against the fill because the ramp was painted over them,
+               dragging the median down the rail from 11.51:1 to 8.38:1. The
+               marker that proves the keyboard works cannot be the thing the
+               scroll affordance covers up. `--space-8` is the ramps' own
+               height, referenced rather than restated, so the two cannot
+               drift. */
+            class={`relative flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5
+              scroll-mt-[var(--space-8)] scroll-mb-[var(--space-8)]
+              transition-colors duration-fast before:absolute before:bottom-1 before:left-0
+              before:top-1 before:w-[3px] before:rounded-full before:bg-transparent
+              before:content-['']
+              data-[active=true]:bg-row-active data-[active=true]:before:bg-focus-bar
+              data-[branch-open=true]:bg-row-active data-[branch-open=true]:before:bg-focus-bar`}
           >
             {/* Check column, reserved on every row so labels line up whether or
-                not anything in this list is selected. */}
+                not anything in this list is selected. Untouched: the row's own
+                `px-2` already clears the 3px rail above, so the focus marker
+                costs the label no width and shifts nothing. */}
             <span class="mt-0.5 w-4 shrink-0 text-primary" aria-hidden="true">
               {row.selected === true && <Check size={14} />}
             </span>

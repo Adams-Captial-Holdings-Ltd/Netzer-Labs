@@ -62,6 +62,62 @@
     --color-surface: #ffffff;
     --color-surface-elevated: #f5f5f7;
     --color-surface-hover: #f0f0f5;
+
+    /* ── Row states: the CURRENT row, and a merely hovered one ──────────────
+       Two tokens, not one, because a list needs three legible grounds: the
+       panel, "the pointer is here", and "this is the one you are on". The
+       previous cut had a single fill and gave it to HOVER, then marked the
+       current row with a hairline — so a hovered row read as more selected
+       than the selected one (measured 1.02:1 apart, light desktop).
+
+       The donor's answer to the same problem is a fill you can see across the
+       room plus a rail: `--gray-200` on a `--gray-50` panel (1.20:1) light,
+       `#2f2f2f` on `#171717` (1.34:1) dark, both with a left marker. These are
+       that treatment in this palette's own grays, one step further apart:
+
+         light  panel #f5f5f7 → hover #e4e4ec (1.16:1) → active #d1d1db (1.39:1)
+         dark   panel #08080d → hover #1c1c2e (1.19:1) → active #2a2a3d (1.42:1)
+
+       `row-active` is also what the picker menus paint the KEYBOARD-ACTIVE row
+       with (CommandMenu), so "the thing you are on" is one colour wherever the
+       product draws a list — there it sits on `--color-surface` instead and
+       measures 1.52:1 light / 1.30:1 dark against it. */
+    --color-row-hover: #e4e4ec;   /* gray-200 */
+    --color-row-active: #d1d1db;  /* gray-300 */
+
+    /* The left-edge MARKER on the conversation rail's CURRENT row — "the
+       conversation you are in". Brand indigo, at the weight that actually
+       reads against `--color-row-active`: stock `--color-primary` (#6366f1)
+       on the light fill measures 2.95:1, so the hover shade is used instead
+       and lands it at 4.15:1. Defined as a `var()` of a brand token rather
+       than a literal so a white-label palette moves the marker with it
+       (applyBrand co-writes --color-primary and --color-primary-hover,
+       web/src/lib/theme.ts). */
+    --color-accent-bar: var(--color-primary-hover);
+
+    /* The KEYBOARD-FOCUS marker in the picker menus — "the row the arrow keys
+       are on". A SEPARATE token from `--color-accent-bar` above, and
+       deliberately achromatic, for two reasons a review caught:
+
+       1. ONE HUE, ONE MEANING. The first cut painted this rail in the same
+          brand indigo as the sidebar marker, so a single colour was saying
+          "the conversation you are in" on one surface and "where the keyboard
+          is" on another. They are different facts and now read as different
+          marks: indigo for place, the text ramp for focus.
+       2. STRENGTH. The brief quoted the donor's bar at 2.99:1 light / 3.71:1
+          dark; those were sampled off the bar's ANTIALIASED EDGE. The donor's
+          actual declaration is `data-[active-item]:before:bg-text-primary`
+          (Chat/Menus/Endpoints/CustomMenu.tsx:182) — its primary TEXT colour,
+          i.e. near-black on light and near-white on dark, which measures
+          12.5:1 / 9.8:1 against its own row fill. Indigo cannot reach that at
+          any weight. Copying the donor's actual choice can, in our own ramp:
+          #1a1a2e on the #d1d1db row fill measures 11.20:1 light, #e8e8f0 on
+          #2a2a3d measures 11.51:1 dark.
+
+       It tracks `--color-text-primary` rather than restating it, so a theme
+       that moves the text ramp moves the focus marker with it and the two
+       cannot drift apart. */
+    --color-focus-bar: var(--color-text-primary);
     --color-text-primary: #1a1a2e;
     --color-text-secondary: #64648c;
     --color-text-muted: #9898b0;
@@ -129,6 +185,23 @@
     --color-surface: #141420;
     --color-surface-elevated: #1c1c2e;
     --color-surface-hover: #22223a;
+
+    /* Dark mirrors of the row-state ladder. They travel UP from the sunken
+       panel here and DOWN from it in light mode, which is why they cannot be
+       one alpha token shared between the themes. */
+    --color-row-hover: #1c1c2e;   /* gray-850-ish, = surface-elevated */
+    --color-row-active: #2a2a3d;  /* gray-800 */
+
+    /* Dark inverts which shade reads: the fill is now the LIGHTER of the two,
+       so the sidebar marker wants the brighter brand tone, not the hover shade
+       (which is darker here). #818cf8 on #2a2a3d measures 4.70:1. */
+    --color-accent-bar: var(--color-primary);
+
+    /* The keyboard-focus marker needs no dark override of its own — it tracks
+       `--color-text-primary`, which flips to #e8e8f0 four lines below, so the
+       rail inverts with the theme exactly as the donor's `bg-text-primary`
+       does. Restated here only so the token is greppable in both blocks. */
+    --color-focus-bar: var(--color-text-primary);
     --color-text-primary: #e8e8f0;
     --color-text-secondary: #9898b0;
     --color-text-muted: #606078;
@@ -1103,3 +1176,4 @@
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
+

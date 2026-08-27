@@ -11,7 +11,7 @@
  *
  * COPIED (presentational, near-verbatim after token translation): the row
  * chrome — `group relative`, the FLEX row, the rounded hit area, the hover
- * fill, and the active state's 2px left rail drawn as a `before:`
+ * fill, the active state's FILL, and its left rail drawn as a `before:`
  * pseudo-element rather than a border, which is what lets the marker inset
  * from the row's top and bottom edges instead of running its full height.
  * `Convo.tsx`'s action-slot ladder — its `actionVisibilityClassName` /
@@ -85,6 +85,29 @@
  *      active states move with the ground (see the row below), or a recessed
  *      panel would have quietly cost them their contrast.
  *
+ * ── What round 6 changed, and why ─────────────────────────────────────────
+ *
+ * Three defects, all three answered by taking the donor's own treatment rather
+ * than a second hand-written one:
+ *
+ *   1. THE CURRENT CONVERSATION WAS NOT MARKED. Round 5 lifted the active row
+ *      to `--color-surface` and gave hover `surface-a/70`; on the recessed
+ *      panel those measured #ffffff and #fcfcfd — 1.02:1 apart — so in a 1:1
+ *      crop a hovered row read as a SECOND selected row, and the only thing
+ *      separating them was a 2px bar. The row below now carries a real fill in
+ *      the donor's direction and strength, and hover is a measurably weaker
+ *      step of the same ladder. See the row, and `--color-row-*` in index.css.
+ *
+ *   2. THE MOBILE DRAWER OPENER WAS HAND-WRITTEN. It was a bare `<button>`
+ *      around an 18px glyph — 30x30, no border, no ground — on a header where
+ *      every other control is a bordered pill. `DrawerToggle` at the bottom of
+ *      this file is the donor's `Chat/Menus/OpenSidebar.tsx` +
+ *      `UnifiedSidebar/mobile/Header.tsx` treatment instead, and it draws BOTH
+ *      states of the control from one function.
+ *
+ *   3. The `inert` flip and the focus handoff were two effects that could only
+ *      both be correct by luck; they are one ordered effect now. See it above.
+ *
  * ── The delete flow is NOT here ────────────────────────────────────────────
  *
  * This component renders the delete BUTTON and reports the click. Everything
@@ -106,7 +129,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren, RefObject } from 'preact';
-import { MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Trash2, X } from 'lucide-preact';
+import { PanelLeftClose, PanelLeftOpen, Plus, Trash2 } from 'lucide-preact';
 import type { Conversation } from '../../lib/chat/types';
 import { conversationTitle, relativeAge } from '../../lib/chat/helpers';
 import { groupConversationsByDate } from './conversation-groups';
@@ -128,6 +151,11 @@ const SCRIM_MOTION = 'transition-opacity duration-normal ease-out motion-reduce:
  * returns here when the drawer closes — donor `OPEN_SIDEBAR_ID`.
  */
 export const OPEN_SIDEBAR_ID = 'chat-open-sidebar';
+
+/** The drawer's own id. Donor `OpenSidebar.tsx`/`mobile/Header.tsx` both carry
+ *  `aria-controls="chat-history-nav"`; without it neither toggle says WHAT it
+ *  expands, and a screen reader announces two unrelated buttons. */
+const DRAWER_ID = 'chat-history-nav';
 
 /** Where the desktop collapse state is remembered. Sibling of the app shell's
  *  own `cce_sidebar_collapsed`, deliberately a different key: collapsing the
@@ -207,6 +235,9 @@ export function ConversationSidebar({
     return () => document.removeEventListener('keydown', onKey);
   }, [mobileOpen, onCloseMobile]);
 
+  // ONE effect, because `inert` and the focus handoff have to be SEQUENCED and
+  // two effects cannot promise that.
+  //
   // The drawer stays MOUNTED while closed so it can slide, and a translated
   // element is still focusable — a closed drawer would otherwise sit in the tab
   // order, in front of the composer, invisible. `inert` removes the whole
@@ -214,20 +245,33 @@ export function ConversationSidebar({
   // is set imperatively because it is not a JSX attribute Preact types. Feature
   // detection is via the property existing: where it does not, `aria-hidden`
   // and the off-viewport transform still hold, and the pointer cannot reach it.
+  //
+  // Donor `mobile/Header.tsx` (its `useEffect(… [expanded])`, and the comment
+  // above it): opening makes the pane behind inert, so focus has to move INTO
+  // the drawer or a keyboard reader is stranded on a control they can no longer
+  // see; closing puts it back on the control that opened it. Both directions
+  // depend on the order relative to `inert`, and in opposite ways —
+  //
+  //   opening: clear `inert` FIRST. `focus()` on an element inside an inert
+  //            subtree is a silent no-op, so a handoff that ran first would do
+  //            nothing at all.
+  //   closing: read `document.activeElement` BEFORE setting `inert`. Making a
+  //            subtree inert blurs whatever is inside it, so a containment
+  //            check made afterwards always answers "focus was not in here" and
+  //            the opener never gets focus back.
+  //
+  // The donor drives this off the commit rather than a timer for the same
+  // reason ("a wall-clock timer would race the deferred state flip"), and so
+  // does this.
   useEffect(() => {
     const el = drawerRef.current as (HTMLDivElement & { inert?: boolean }) | null;
-    if (!el) return;
-    el.inert = !mobileOpen;
-  }, [mobileOpen]);
-
-  // Donor `mobile/Header.tsx`: opening makes the pane behind inert, so focus
-  // has to move INTO the drawer or a keyboard reader is stranded on a control
-  // they can no longer see. Closing puts it back on the control that opened it.
-  useEffect(() => {
     if (mobileOpen) {
+      if (el) el.inert = false;
       closeRef.current?.focus();
-    } else if (drawerRef.current?.contains(document.activeElement)) {
-      document.getElementById(OPEN_SIDEBAR_ID)?.focus();
+    } else {
+      const hadFocus = el?.contains(document.activeElement) ?? false;
+      if (el) el.inert = true;
+      if (hadFocus) document.getElementById(OPEN_SIDEBAR_ID)?.focus();
     }
   }, [mobileOpen]);
 
@@ -263,20 +307,31 @@ export function ConversationSidebar({
                 // h-12 w-full items-center`) because the action slot has to be
                 // a sibling that can take zero width, not an overlay sitting
                 // on reserved padding — see ACTION SLOT below.
-                // The rail's ground is the RECESSED surface (see the shells
-                // below), so the row's states read as ELEVATION rather than as
-                // a tint: hover lifts part-way to `--color-surface` and the
-                // active row sits on it outright, with a shadow. That is the
-                // same direction in both themes — light #f5f5f7 → #ffffff,
-                // dark #08080d → #141420 — which a single tint token cannot
-                // be, and it is a bigger step than the 5% fill this row used
-                // to carry on a white panel.
+                //
+                // ROUND 6 — THE CURRENT ROW GETS THE FILL BACK. The previous
+                // cut lifted the active row to `--color-surface` and gave
+                // hover `surface-a/70`, which on this recessed panel measured
+                // #ffffff active against #fcfcfd hovered: 1.02:1 apart. Two
+                // rows, both pale, and the only thing telling them apart was a
+                // 2px bar — so in a 1:1 crop a hovered row read as a SECOND
+                // selected row. The donor does not make that trade: its active
+                // row is `--gray-200` on a `--gray-50` panel (1.20:1) with a
+                // 3px marker on top, a fill you can see across the room.
+                //
+                // So the ladder is now three legible grounds in the same
+                // direction, and the tokens carry the numbers (index.css):
+                //   light  #f5f5f7 panel → #e4e4ec hover → #d1d1db active
+                //   dark   #08080d panel → #1c1c2e hover → #2a2a3d active
+                // measured 1.39:1 / 1.42:1 active-vs-panel and 1.20:1 / 1.19:1
+                // active-vs-hover — every one of them at or above the donor's
+                // own active-vs-panel step, and hover unambiguously the weaker
+                // of the two. The rail widens 2px → 3px to match the donor's.
                 <li
                   key={c.chatId}
-                  class={`group relative flex items-center rounded-lg ${
+                  class={`group relative flex items-center rounded-lg transition-colors duration-fast ${
                     active
-                      ? "bg-surface shadow-xs before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-primary before:content-['']"
-                      : 'hover:bg-surface-a/70'
+                      ? "bg-row-active shadow-xs before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-[3px] before:rounded-full before:bg-accent-bar before:content-['']"
+                      : 'hover:bg-row-hover'
                   }`}
                 >
                   <button
@@ -303,7 +358,15 @@ export function ConversationSidebar({
                     >
                       {title}
                     </span>
-                    <span class="block text-caption text-muted">
+                    {/* `text-secondary`, not `text-muted`. The rail's grounds
+                        are darker now (light) and lighter (dark) than the
+                        panel, and muted ink on the active row's fill measures
+                        1.86:1 light / 2.30:1 dark — worse than the 2.82:1 it
+                        had on the old white row. Secondary ink puts the same
+                        line at 3.70:1 / 4.98:1 on the active row and 4.44:1 /
+                        5.94:1 on a hovered one, so the fill is paid for
+                        instead of charged to the metadata. */}
+                    <span class="block text-caption text-secondary">
                       {relativeAge(c.updatedAt)}
                       {c.messageCount ? ` · ${c.messageCount} msg` : ''}
                     </span>
@@ -488,6 +551,7 @@ export function ConversationSidebar({
       />
       <div
         ref={drawerRef}
+        id={DRAWER_ID}
         role="dialog"
         aria-modal={mobileOpen}
         aria-label="Conversation history"
@@ -496,23 +560,32 @@ export function ConversationSidebar({
           border-border bg-bg-sunken lg:hidden ${DRAWER_MOTION}
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
       >
-        {/* Donor `mobile/Header.tsx`: at drawer width there is nothing beside
-            the panel left to tap, so this close button is the primary
-            dismissal — and it is the element focus lands on when the drawer
-            opens. */}
-        <div class="flex items-center justify-between gap-2 border-b border-border px-3 py-3">
-          <h2 class="text-overline uppercase tracking-wider text-muted">Conversations</h2>
-          <div class="flex items-center gap-1">
-            {loading && <span class="text-caption text-muted">…</span>}
-            <IconButton
-              buttonRef={closeRef}
-              label="Close conversation history"
-              expanded={true}
-              onClick={onCloseMobile}
-            >
-              <X size={18} />
-            </IconButton>
-          </div>
+        {/* COPIED from donor `UnifiedSidebar/mobile/Header.tsx` — its row
+            (`flex h-14 flex-shrink-0 items-center gap-2 border-b … px-2`) and,
+            more importantly, its ORDER: the toggle leads the row in the far
+            LEFT slot, wearing the same chrome as the control that opened the
+            drawer, because "at full width there is nothing beside the drawer
+            left to tap, so this close button is the primary dismissal. It
+            mirrors the chat header's `OpenSidebar` toggle — same icon, same
+            look, same far-left slot — so opening the drawer reads as the one
+            persistent control flipping state, not a new X appearing
+            elsewhere."
+
+            The X that used to sit on the right is gone for exactly that
+            reason. Both states are drawn by ONE component (`DrawerToggle`), so
+            "same look" is guaranteed by construction rather than by two class
+            lists that happen to agree. */}
+        <div class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-2">
+          <DrawerToggle
+            buttonRef={closeRef}
+            label="Close conversation history"
+            expanded={true}
+            onClick={onCloseMobile}
+          />
+          <h2 class="min-w-0 flex-1 truncate text-overline uppercase tracking-wider text-muted">
+            Conversations
+          </h2>
+          {loading && <span class="shrink-0 text-caption text-muted">…</span>}
         </div>
         <ConversationList signal={listSignal}>{list}</ConversationList>
         <div class="border-t border-border p-3">
@@ -641,25 +714,99 @@ function ConversationList({ children, signal }: { children: ComponentChildren; s
 }
 
 /**
- * The control that opens the drawer. Lives in the chat header (below `lg`
+ * THE DRAWER TOGGLE, in both of its states.
+ *
+ * Ported from donor `Chat/Menus/OpenSidebar.tsx` and
+ * `UnifiedSidebar/mobile/Header.tsx`, which are the same control twice: the
+ * donor renders each as `<Button size="icon" variant="header-action">` with an
+ * `aria-label`, an `aria-expanded` reporting the drawer's state and an
+ * `aria-controls` naming the drawer. That is what is copied — the icon
+ * BUTTON's identity, not a bare glyph.
+ *
+ * ── What was wrong, and why a `<button>` was not enough ───────────────────
+ *
+ * The opener was hand-written here as a bare `<button>` wrapping an 18px glyph:
+ * no border, no background, no shadow, 30x30 measured at 375px. On a header
+ * whose every other control (both pickers, New chat, the id chip) is a
+ * bordered pill on `--color-surface`, the one control that reveals the
+ * conversation history was the only thing on the row with no edge — which is
+ * precisely why a neutral observer could not find it. It was also under the
+ * 44x44 touch minimum on the surface where it is the ONLY way to reach the
+ * history at all.
+ *
+ * So this is `variant="header-action"` expressed in this palette: a real edge
+ * (`border-border`), a real ground (`bg-surface`), a shadow lifting it off the
+ * header plate, and a 44x44 box. It is the same pill the pickers beside it
+ * already are, which is the donor's actual point — the toggle belongs to the
+ * header's control set, not to the background.
+ *
+ * ── One component, both states ────────────────────────────────────────────
+ *
+ * The donor's Header.tsx comment is explicit that the drawer's close control
+ * "mirrors the chat header's OpenSidebar toggle — same icon, same look, same
+ * far-left slot". Rendering both from this one function is how that survives
+ * the next edit. The icon flips `PanelLeftOpen` → `PanelLeftClose`, which is
+ * the same glyph mirrored and is already what this file's desktop strip uses
+ * for collapse/expand, so the whole product has one "the rail is over there"
+ * icon rather than an X that appears from nowhere.
+ */
+function DrawerToggle({
+  label,
+  expanded,
+  onClick,
+  buttonRef,
+  id,
+  class: extra = '',
+}: {
+  label: string;
+  expanded: boolean;
+  onClick: () => void;
+  buttonRef?: RefObject<HTMLButtonElement>;
+  id?: string;
+  class?: string;
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      id={id}
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-expanded={expanded}
+      aria-controls={DRAWER_ID}
+      title={label}
+      // `size-11` is 44px — the touch minimum, and the reason this is a sized
+      // box rather than padding around an 18px glyph.
+      class={`flex size-11 shrink-0 items-center justify-center rounded-lg border border-border
+        bg-surface text-secondary shadow-xs transition-colors duration-fast
+        hover:border-border-strong hover:bg-surface-hover hover:text-primary
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${extra}`}
+    >
+      {expanded ? (
+        <PanelLeftClose size={18} aria-hidden="true" />
+      ) : (
+        <PanelLeftOpen size={18} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+/**
+ * The control that OPENS the drawer. Lives in the chat header (below `lg`
  * only), because a control inside the drawer cannot be the thing that reveals
- * it — donor `Chat/Menus/OpenSidebar.tsx`, same icon, same far-left slot.
+ * it — donor `Chat/Menus/OpenSidebar.tsx`, which likewise sits in the chat
+ * header and not in the nav it opens. `-ml-0.5` only nudges the pill's edge
+ * onto the column's, nothing more.
  */
 export function OpenSidebarButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
+    <DrawerToggle
       id={OPEN_SIDEBAR_ID}
-      type="button"
+      label="Show conversation history"
+      expanded={false}
       onClick={onClick}
-      aria-label="Show conversation history"
-      aria-expanded={false}
-      title="Conversation history"
-      class="-ml-1 shrink-0 rounded-lg p-1.5 text-secondary transition-colors duration-fast
-        hover:bg-surface-hover hover:text-primary focus-visible:outline-none
-        focus-visible:ring-2 focus-visible:ring-primary lg:hidden"
-    >
-      <MessageSquare size={18} />
-    </button>
+      class="-ml-0.5 lg:hidden"
+    />
   );
 }
 
