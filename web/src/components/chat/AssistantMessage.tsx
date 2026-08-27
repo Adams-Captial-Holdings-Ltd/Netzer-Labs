@@ -81,15 +81,32 @@ export function AuthorLine({ agentName, ts }: AuthorLineProps) {
       </span>
       <span class="min-w-0 truncate">{agentName}</span>
       {time && (
-        // Reveal-on-hover, ported from the donor's `revealOnRowHoverClasses`:
-        // hidden until the row is hovered or something inside it takes keyboard
-        // focus. The `[@media(hover:hover)]` guard is the point — a touch
-        // device cannot hover, so it keeps the time permanently visible rather
-        // than making it unreachable.
+        // Reveal-on-hover, now taken verbatim from the donor's
+        // `revealOnRowHoverClasses` (Chat/Messages/styles.ts) rather than
+        // approximated. The earlier version substituted `focus-within` for the
+        // donor's `focus-visible` pair, which is the exact bug that file exists
+        // to prevent — and we ship its trigger: clicking the tool expand toggle
+        // parks focus inside the row, and `focus-within` then pinned this
+        // timestamp visible with the pointer nowhere near it.
+        //
+        // Both focus halves earn their keep. The row ITSELF is tested, not only
+        // its descendants, because `:has()` never matches its own subject.
+        // Text-entry controls are excluded from the descendant half because
+        // they match `:focus-visible` even under a mouse click.
+        //
+        // Two variants, deliberately not folded into one `group-[&:is(...)]`:
+        // folding makes Tailwind emit a bare `.group { opacity: 1 }`, which
+        // lightningcss rejects — failing the production CSS build while `tsc`
+        // stays perfectly green.
+        //
+        // `[@media(hover:hover)]` keeps the time permanently visible on a touch
+        // device, which cannot hover and would otherwise never reach it.
         <span
           class="ml-auto shrink-0 font-mono text-overline font-normal text-muted
-            transition-opacity duration-normal [@media(hover:hover)]:opacity-0
-            group-hover:opacity-100 group-focus-within:opacity-100"
+            transition-[opacity,color,background-color] duration-normal ease-out
+            motion-reduce:transition-none [@media(hover:hover)]:opacity-0
+            group-hover:opacity-100 group-focus-visible:opacity-100
+            group-has-[:focus-visible:not(:is(input,textarea,[contenteditable]))]:opacity-100"
         >
           {time}
         </span>
