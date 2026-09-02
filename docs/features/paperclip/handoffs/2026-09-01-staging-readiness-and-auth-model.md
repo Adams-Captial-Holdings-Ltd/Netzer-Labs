@@ -14,10 +14,10 @@ supersedes: 2026-08-24-paperclip-completion-audit.md
 
 - Branch: `codex/paperclip-phases-8-5-12`
 - Merge target: `development`
-- Start commit: `b3b427497d63d8f4d1faa147b46c9681c19bc460`; implementation commit: `712ab5a486b13743e30bb4bada334f4d45b09b11`.
+- Start commit: `b3b427497d63d8f4d1faa147b46c9681c19bc460`; implementation commit: `712ab5a486b13743e30bb4bada334f4d45b09b11`; CI-contract follow-up: `9b5edad`.
 - Pushed/PR: branch pushed and [PR #133](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/133) opened against `development`.
 - Deployed: no; production is untouched.
-- Working tree: follow-up compatibility-registry and mapped-diagram verification fixes for the first CI round are pending on the same branch.
+- PR state: green after the corrected CI round; this handoff-only closeout follows.
 
 ## 2. Executive summary
 
@@ -76,6 +76,7 @@ One installation equals one Paperclip instance/company. Setup owns secret genera
 - Feature-knowledge: PASS after staging only the intended paths, allowing the checker to resolve the four new relationship targets.
 - Three final fresh-context critics were dispatched in parallel, but each failed before inspecting files because the shared agent workspace is out of credits. That is not a critic pass; the prior IAM critic passed and the prior spec/standards findings were fixed.
 - PR #133 first CI round: LocalStack integration, hermetic CDK synth, rollback dry-run, secret scan, internal links, Mermaid rendering, and docs asset budget passed. The drift gate required five mapped diagram verification notes, and the unit job required registry entries for `PAPERCLIP_DISPATCH_URL` and `CCE_PAPERCLIP_ADMIN_EMAIL`; both findings are corrected in the follow-up.
+- PR #133 corrected CI round: all checks passed in runs `33638432087` and `33638432121`, including the full Typecheck + Unit Tests job and LocalStack integration.
 - Staging: `aws sts get-caller-identity` reports `NoCredentials`; the Better Auth secret repair, tenant bootstrap/dry-run/no-op proof, IAM rollout, workflow promotion, eight live CloudWatch markers, and live success/failure-path redaction evidence remain undone.
 
 ### 4.4 Durable facts promoted

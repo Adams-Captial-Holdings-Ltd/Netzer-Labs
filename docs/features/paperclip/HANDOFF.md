@@ -9,7 +9,7 @@ as_of_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
 # Paperclip integration handoff
 
 - **Branch:** `codex/paperclip-phases-8-5-12`; next merge target `development`.
-- **Source state:** the staging contract-probe readiness changes are committed at `712ab5a`, pushed, and open against `development` as [PR #133](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/133). A follow-up CI-contract fix is being committed on the same branch.
+- **Source state:** the staging contract-probe readiness changes and CI-contract follow-up are committed through `9b5edad`, pushed, and open against `development` as green [PR #133](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/133).
 - **Deployment:** the last green staging deploy is run [33067242593](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33067242593) at `ac70509` from PR #131. The current completion diff has not been deployed. Production is untouched and no release has been created.
 
 ## Current objective and required order
@@ -62,6 +62,7 @@ This decision is promoted to the feature README and ADR 0010's 2026-09-01 amendm
 - `node --env-file=C:\dev\Netzer-Labs\.env node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts` — infrastructure-backed validation could not execute: Docker is unavailable, so 9 LocalStack suites timed out in setup and all 64 tests skipped.
 - Three fresh final critics were launched in parallel, but the shared agent workspace rejected all three before inspection because it is out of credits; no verdict was produced. The earlier independent IAM critic remains PASS, and the earlier spec/standards findings are corrected.
 - PR #133 first CI round — integration, hermetic synth, rollback dry-run, secret scan, internal links, Mermaid rendering, and asset budget PASS. The diagram drift gate named five mapped diagrams and the full unit job found two missing compatibility-registry entries; both exact contract failures are corrected in the follow-up commit.
+- PR #133 corrected CI round — all eight checks PASS: Typecheck + Unit Tests, LocalStack Integration Tests, Hermetic CDK Synth, Rollback Dry-Run, Secret Scan, Internal links/runnable blocks, Mermaid rendering, Docs asset budget, and diagrams.map drift. Evidence: runs `33638432087` and `33638432121`.
 - Live staging probe — NOT RUN.
 
 ## Active blockers
@@ -75,7 +76,7 @@ This decision is promoted to the feature README and ADR 0010's 2026-09-01 amendm
 
 ## Smallest next action
 
-Get PR #133 green and obtain fresh critic verdicts. Then restore staging AWS
+Restore critic capacity and obtain fresh verdicts, then restore staging AWS
 credentials, perform the one-time tenant bootstrap without exposing credentials,
 and promote through `development` → `qa` → `staging`.
 
