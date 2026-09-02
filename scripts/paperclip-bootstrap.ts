@@ -39,7 +39,7 @@
  *
  * REQUIRED ENV (from `.env[.<name>]` or the process env)
  *   PAPERCLIP_BASE_URL        exact origin of the running instance
- *   PAPERCLIP_ADMIN_EMAIL     the ONE responsible user; named, never shared
+ *   CCE_PAPERCLIP_ADMIN_EMAIL per-environment responsible user; named, never shared
  *   PAPERCLIP_ADMIN_PASSWORD  its password
  *   PAPERCLIP_DISPATCH_URL    Netzar's inbound dispatch route (Phase 6)
  * OPTIONAL
@@ -92,6 +92,12 @@ import {
   type KeyOutcome,
   type PaperclipRequest,
 } from './lib/paperclip/bootstrap-core.js';
+import {
+  loadBootstrapSecretFields,
+  mergeBootstrapSecretFields,
+  parseBootstrapAgentKeys,
+  writeBootstrapSecretFields,
+} from './lib/paperclip/bootstrap-secret.js';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -195,7 +201,7 @@ async function main(): Promise<void> {
   const request = makeBoardRequest(baseUrl, new CookieJar());
   await signUpOrSignIn(request, {
     name: env.PAPERCLIP_ADMIN_NAME?.trim() || 'Netzar Operator',
-    email: required(env, 'PAPERCLIP_ADMIN_EMAIL'),
+    email: required(env, 'CCE_PAPERCLIP_ADMIN_EMAIL'),
     password: required(env, 'PAPERCLIP_ADMIN_PASSWORD'),
   });
   const invite = env.PAPERCLIP_BOOTSTRAP_INVITE?.trim();
@@ -225,7 +231,7 @@ async function main(): Promise<void> {
     );
   }
   // eslint-disable-next-line no-console
-  console.log(ok(`signed in as ${env.PAPERCLIP_ADMIN_EMAIL}`));
+  console.log(ok(`signed in as ${env.CCE_PAPERCLIP_ADMIN_EMAIL}`));
 
   // ── One company ───────────────────────────────────────────────────
   section('Company');
@@ -256,23 +262,25 @@ async function main(): Promise<void> {
   // of the flag is that an operator can inspect a running instance without AWS
   // credentials in hand. Everything downstream then behaves as if nothing is
   // stored, which is the conservative direction (it over-reports work to do).
-  let fields: Record<string, string> = {};
-  try {
-    const current = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretId }));
-    fields = JSON.parse(current.SecretString ?? '{}') as Record<string, string>;
-  } catch (err) {
-    if (!dryRun) throw err;
+  const fields = await loadBootstrapSecretFields({
+    secretId,
+    dryRun,
+    read: async () => {
+      const current = await secretsClient.send(
+        new GetSecretValueCommand({ SecretId: secretId }),
+      );
+      return current.SecretString;
+    },
     // eslint-disable-next-line no-console
-    console.log(warn(`could not read ${secretId} (${(err as Error).name}); assuming nothing stored`));
-  }
-  const storedAgentKeys = (() => {
-    try {
-      const parsed = JSON.parse(fields.agent_keys ?? '{}') as Record<string, string>;
-      return typeof parsed === 'object' && parsed !== null ? parsed : {};
-    } catch {
-      return {};
-    }
-  })();
+    warn: (message) => console.log(warn(message)),
+  });
+  const storedAgentKeys = parseBootstrapAgentKeys({
+    value: fields.agent_keys,
+    secretId,
+    dryRun,
+    // eslint-disable-next-line no-console
+    warn: (message) => console.log(warn(message)),
+  });
   const storedReconciler =
     fields.reconciler_key && fields.reconciler_key !== 'REPLACE_ME'
       ? fields.reconciler_key
@@ -371,19 +379,16 @@ async function main(): Promise<void> {
 
   // ── Write back, merged ────────────────────────────────────────────
   section('Secrets Manager');
-  const nextFields = { ...fields };
-  for (const outcome of outcomes) {
-    if (!outcome.token) continue;
-    if (outcome.keyName === RECONCILER_KEY_NAME) nextFields.reconciler_key = outcome.token;
-    else storedAgentKeys[outcome.slug] = outcome.token;
-  }
+  const nextFields = mergeBootstrapSecretFields({
+    current: fields,
+    companyId: company.id,
+    storedAgentKeys,
+    outcomes,
+  });
   // C-19: the SHIPPED spellings win — `agent_keys` (a JSON STRING, because an
   // ECS secret injects one field as one env var: PAPERCLIP_AGENT_KEYS_JSON)
   // and `dispatch_secret`. `agent_keys_json` / `dispatch_token` are the plan's
   // wrong variants, and a field mismatch is a task that cannot start.
-  nextFields.agent_keys = JSON.stringify(storedAgentKeys);
-  nextFields.company_id = company.id;
-
   // `fields` already carries a freshly minted dispatch_secret when there was
   // none, so compare against what Secrets Manager actually holds.
   const changed = mintedDispatchSecret || JSON.stringify(nextFields) !== JSON.stringify(fields);
@@ -391,15 +396,20 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(info(changed ? 'would write one new secret version' : 'secret already current'));
   } else if (changed) {
-    await secretsClient.send(
-      new PutSecretValueCommand({
-        SecretId: secretId,
-        // MERGED: `fields` is the whole current value and only named keys are
-        // overwritten, so better_auth_secret (phase b) and database_url
-        // (phase b.5) survive.
-        SecretString: JSON.stringify(nextFields),
-      }),
-    );
+    await writeBootstrapSecretFields({
+      fields: nextFields,
+      write: async (secretString) => {
+        await secretsClient.send(
+          new PutSecretValueCommand({
+            SecretId: secretId,
+            // MERGED: `fields` is the whole current value and only named keys are
+            // overwritten, so better_auth_secret (phase b) and database_url
+            // (phase b.5) survive.
+            SecretString: secretString,
+          }),
+        );
+      },
+    });
     // eslint-disable-next-line no-console
     console.log(ok(`wrote ${secretId} (fields: ${Object.keys(nextFields).sort().join(', ')})`));
   } else {

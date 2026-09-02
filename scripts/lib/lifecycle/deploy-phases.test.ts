@@ -204,6 +204,7 @@ describe('planSecretWrites', () => {
     // Merge, or the next deploy wipes reconciler_key / agent_keys /
     // dispatch_secret, which are minted against the RUNNING instance.
     expect(plan.mergeExisting).toBe(true);
+    expect(plan.writeIfAbsent).toEqual(['better_auth_secret']);
     // A deploy with CCE_PAPERCLIP_ENABLED unset must not fail on this write.
     expect(plan.configured).toBe(false);
   });
@@ -214,9 +215,9 @@ describe('planSecretWrites', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('mergeSecretValue', () => {
-  it('keeps live fields the plan does not name', () => {
-    // The exact Paperclip case: deploy owns better_auth_secret; the other
-    // three were minted against the running instance and must survive.
+  it('keeps every populated live Paperclip field, including the auth secret', () => {
+    // Secrets Manager owns better_auth_secret after its first seed. A stale
+    // local .env must not rotate it on a later deploy.
     const live = JSON.stringify({
       better_auth_secret: 'old',
       reconciler_key: 'minted-1',
@@ -224,14 +225,36 @@ describe('mergeSecretValue', () => {
       dispatch_secret: 'minted-3',
     });
     const merged = JSON.parse(
-      mergeSecretValue(live, JSON.stringify({ better_auth_secret: 'new' })),
+      mergeSecretValue(
+        live,
+        JSON.stringify({ better_auth_secret: 'new' }),
+        '{}',
+        ['better_auth_secret'],
+      ),
     );
     expect(merged).toEqual({
-      better_auth_secret: 'new',
+      better_auth_secret: 'old',
       reconciler_key: 'minted-1',
       agent_keys: 'minted-2',
       dispatch_secret: 'minted-3',
     });
+  });
+
+  it('seeds a missing or placeholder auth secret exactly once', () => {
+    const planned = JSON.stringify({ better_auth_secret: 'first-seed' });
+    expect(
+      JSON.parse(mergeSecretValue('{}', planned, '{}', ['better_auth_secret'])),
+    ).toEqual({ better_auth_secret: 'first-seed' });
+    expect(
+      JSON.parse(
+        mergeSecretValue(
+          JSON.stringify({ better_auth_secret: 'REPLACE_ME' }),
+          planned,
+          '{}',
+          ['better_auth_secret'],
+        ),
+      ),
+    ).toEqual({ better_auth_secret: 'first-seed' });
   });
 
   it('adds defaults only when missing and preserves a live bootstrapped value', () => {
@@ -272,7 +295,7 @@ describe('mergeSecretValue', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('populateSecretsV2', () => {
-  it('a merge plan preserves the Paperclip keys minted against the instance', async () => {
+  it('a first local seed replaces the shipped placeholder without losing live fields', async () => {
     const client = fakeSecretsClient(ALL_SECRET_IDS);
     // What the running instance left behind: CDK seeded four REPLACE_ME
     // fields and a later phase minted three of them for real.
@@ -295,6 +318,32 @@ describe('populateSecretsV2', () => {
     // and destroyed all three minted credentials.
     expect(JSON.parse(client.secrets.get(`${BASE}/paperclip`)!.value!)).toEqual({
       better_auth_secret: 'from-dot-env',
+      reconciler_key: 'minted-1',
+      agent_keys: 'minted-2',
+      dispatch_secret: 'minted-3',
+      company_id: 'company-live',
+    });
+  });
+
+  it('a later local deploy never rotates the auth secret Secrets Manager owns', async () => {
+    const client = fakeSecretsClient(ALL_SECRET_IDS);
+    client.secrets.get(`${BASE}/paperclip`)!.value = JSON.stringify({
+      better_auth_secret: 'secrets-manager-owner',
+      reconciler_key: 'minted-1',
+      agent_keys: 'minted-2',
+      dispatch_secret: 'minted-3',
+      company_id: 'company-live',
+    });
+    await populateSecretsV2({
+      client,
+      env: { ...MINIMAL_ENV, PAPERCLIP_BETTER_AUTH_SECRET: 'stale-dot-env' },
+      secretBase: BASE,
+      deployId: DEPLOY_ID,
+      region: REGION,
+      guardrails: GUARDRAILS,
+    });
+    expect(JSON.parse(client.secrets.get(`${BASE}/paperclip`)!.value!)).toEqual({
+      better_auth_secret: 'secrets-manager-owner',
       reconciler_key: 'minted-1',
       agent_keys: 'minted-2',
       dispatch_secret: 'minted-3',

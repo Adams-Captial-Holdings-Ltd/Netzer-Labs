@@ -135,6 +135,11 @@ export const SYNTH_INPUT_ALLOWLIST: readonly string[] = [
   // and the legacy mission handlers. Replaying it keeps a rollback serving
   // /api/missions from the same place the deploy it rolls back to did.
   'CCE_PAPERCLIP_ENABLED',
+  // Non-secret, environment-specific bootstrap configuration rendered into
+  // the orchestrator task definition. Infra rollback must replay it with the
+  // target deployment instead of silently retaining the current environment.
+  'PAPERCLIP_DISPATCH_URL',
+  'CCE_PAPERCLIP_ADMIN_EMAIL',
   // The ENVIRONMENT-SCOPED provisioning override, and it belongs here for the
   // same reason DEPLOY_TIER does: it decides what EXISTS. Staging is pinned to
   // Tier 0 and provisions the substrate through this variable alone, so a

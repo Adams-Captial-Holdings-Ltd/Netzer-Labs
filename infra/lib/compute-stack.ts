@@ -542,7 +542,11 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         // URL there would turn `PaperclipDisabledError` ("no base URL", with
         // the remediation) into a DNS failure inside a fetch.
         ...(paperclipProvisioned(props.tier)
-          ? { PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl }
+          ? {
+              PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl,
+              PAPERCLIP_DISPATCH_URL: process.env.PAPERCLIP_DISPATCH_URL ?? '',
+              CCE_PAPERCLIP_ADMIN_EMAIL: process.env.CCE_PAPERCLIP_ADMIN_EMAIL ?? '',
+            }
           : {}),
       },
       secrets: {
@@ -584,9 +588,10 @@ export class ComputeStack extends Stack implements ComputeOutputs {
           paperclipSecret,
           'dispatch_secret',
         ),
-        // The migration adds a placeholder before this provisioned task starts;
-        // env.ts treats it as unset. Bootstrap replaces it with the real id,
-        // which ECS resolves from the current secret version on the next rollout.
+        // Deploy phase b merge-adds a placeholder before this provisioned task
+        // starts; env.ts treats it as unset. The tenant bootstrap writes the
+        // selected company id into the same retained secret, and ECS resolves
+        // that current version on the required post-bootstrap rollout.
         // Tier 0 does not run that migration, so it must not reference the field.
         ...(paperclipProvisioned(props.tier)
           ? {
