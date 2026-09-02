@@ -1,3 +1,4 @@
+<!-- drift-gate: verified against the Paperclip staging-contract probe. SYNTH_INPUT_ALLOWLIST now records PAPERCLIP_DISPATCH_URL and CCE_PAPERCLIP_ADMIN_EMAIL so infra rollback re-synth preserves the existing orchestrator task definition; no rollback class, decision, precondition, or edge moved. -->
 <!-- drift-gate: verified against ADR 0010 Phase 9; no rollback class moved. DEPLOY_TIER/CCE_TIER preserve the tier-shaped Paperclip substrate during re-synth, while CCE_PAPERCLIP_IMAGE_DIGEST and CCE_PAPERCLIP_BOOTSTRAP preserve the image and recoverable desired-count state. The retired console hostname is intentionally not replayed. -->
 # Rollback classes, decision flowchart
 
