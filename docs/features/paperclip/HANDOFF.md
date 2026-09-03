@@ -3,24 +3,25 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-09-02
-as_of_commit: 37e4a1a71a8fb5fb19bc3b1c485c8e92a2dda095
+as_of_commit: cecc5c9f5ef80cc5e6050262ab9e47d7380cdb69
 ---
 
 # Paperclip integration handoff
 
-- **Branch:** `codex/paperclip-phases-8-5-12`; next merge target `development`. Neither reaches an AWS environment; staging is reached only by the later `qa` → `staging` merge.
-- **Source state:** the staging contract probe and its CI-contract follow-up are committed and pushed through `291a457` and open against `development` as [PR #133](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/133) (CI run 33639063032 and Docs CI run 33639063012 green at that tip). This session's cuts — 22 files, 189 insertions, 356 deletions against `291a457` — are committed as four path-scoped commits (`7c4bbd1` infra, `06d9c11` probe, `14ed070` bootstrap, `37e4a1a` injection cut) and pushed to PR #133 together with this handoff; see the [2026-09-02 session handoff](handoffs/2026-09-02-staging-probe-cut-and-deploy.md).
-- **Deployment:** the last green staging deploy is run [33067242593](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33067242593) at `ac70509` from PR #131. Nothing from this branch has been deployed; the probe has never run live. Production is untouched and no release exists.
+- **Branch:** `fix/paperclip-allowed-hostnames` (from `development` `d8c6f7e`); next merge target `development`, then `qa`, then `staging` (merging `qa` → `staging` is the deploy). `codex/paperclip-phases-8-5-12` is merged and finished.
+- **Source state:** the staging contract probe and its CI-contract follow-up are committed and pushed through `291a457` and open against `development` as [PR #133](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/133) (CI run 33639063032 and Docs CI run 33639063012 green at that tip). This session's cuts — 22 files, 189 insertions, 356 deletions against `291a457` — were committed as four path-scoped commits (`7c4bbd1` infra, `06d9c11` probe, `14ed070` bootstrap, `37e4a1a` injection cut) plus the docs commit `2623a87`. PR #133 merged into `development` as `d8c6f7e`; [PR #134](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/134) promoted it to `qa` (`345f238`, 19/19 checks); [PR #138](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/138) promoted it to `staging` (`fd04227`, 20/20 checks). The follow-up on this branch is one Paperclip task-definition variable, `PAPERCLIP_ALLOWED_HOSTNAMES`, with a literal test and a drift-gate note; see the [2026-09-02 session handoff](handoffs/2026-09-02-staging-probe-cut-and-deploy.md).
+- **Deployment:** staging Deploy run [33733071639](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33733071639) at `fd04227` (attempt 4) ran every bar step green through `Force ECS rollout` — staging now runs orchestrator task definition `:14`, the image that carries `dist/ops` — and then **failed at the new probe step**: the probe executed as ECS task `e071943c4f2c45b2be381ddd3073c0b7` and its stream holds exactly one line, `PAPERCLIP_PHASE_PROBE_FAILED PaperclipPhaseProbeError: request-rejected (HTTP 403)`, so its first request (`GET /api/companies/{cid}/org`) was refused and the smoke test was skipped. Attempts 1-3 of the same run never reached deployment (image build: one stall, two `npm install` read timeouts in the emulated `[build]` stage; lockfiles and Dockerfile unchanged since the bar). The last **green** staging deploy remains [33067242593](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33067242593) at `ac70509`. Production is untouched and no release exists.
 
 ## Current objective and required order
 
 Scope decision (user, 2026-09-02): this branch lands the staging contract probe only. Phase 8.5, the same-origin UI/session bridge and Phases 10-12 move to a separate plan after it lands, in the README's order (probe → 8.5 → bridge → 10 → 11 → 12). Production needs its own go-ahead.
 
-1. Commit and push this session's cuts to PR #133.
-2. Run the one-time staging tenant bootstrap (P4) against the live instance: ECS Exec `bootstrap-ceo` invite → SSM port-forward → `--dry-run` → real run → no-op re-run → names-only secret diff.
-3. Merge PR #133 into `development`; open and merge `development` → `qa`.
-4. Open and merge `qa` → `staging` (merging is the deploy). Verify the run against 33067242593: the same job/step list plus the one probe step, all eight markers in CloudWatch, the redaction greps, the three `PaperclipProbe*` Sids live.
-5. Final handoff pass with the run id.
+1. Done — cuts committed and pushed; PR #133 merged (`d8c6f7e`).
+2. Done 2026-09-03 — one-time staging tenant bootstrap: invite via ECS Exec, SSM port-forward, `--dry-run`, real run (company `Netzar OS` prefix `NZR`, agents `main`/`research`, keys `netzar-reconciler`/`netzar-agent-main`/`netzar-agent-research`, one new secret version), no-op re-run (`agents created 0, reused 2; keys created 0, reused 3`), independently re-verified by a fresh-context critic (prior fields byte-identical by hash).
+3. Done — PR #134 `development` → `qa` (`345f238`).
+4. Done, red — PR #138 `qa` → `staging` (`fd04227`); run 33733071639 attempt 4 deployed and the probe ran live and was refused with HTTP 403 (see Deployment and Active blockers).
+5. **Now:** ship `PAPERCLIP_ALLOWED_HOSTNAMES` (this branch) through `development` → `qa` → `staging`; verify the new run against 33067242593: the same job/step list plus the one probe step, all eight markers in CloudWatch, the redaction greps, the three `PaperclipProbe*` Sids live.
+6. Final handoff pass with the green run id and the eight observed shapes.
 
 Then, separately and in order: Phase 8.5 from the observed contracts, the UI/session bridge, Phases 10-12, production, release.
 
@@ -41,7 +42,7 @@ Per-install Better Auth secret; recorded in the [README](README.md) section 6 an
 ## Phase status
 
 - Base integration: deployed and healthy in staging (run 33067242593).
-- Staging contract probe: source and tests only; never run live; not merged; not deployed.
+- Staging contract probe: merged and deployed to staging (orchestrator `:14`); ran live once (run 33733071639, attempt 4) and was refused with HTTP 403 on its first request by Paperclip's private-hostname guard — the finding the probe exists to make. Fix on this branch, not yet deployed.
 - Phase 8.5: not implemented; deferred to a separate plan after the probe lands (scope decision 2026-09-02); still gated on live `/org` and goals shapes.
 - Same-origin UI/session bridge (bar-and-phases Part F): does not exist; deferred to the same plan.
 - Phases 10-12: not implemented; deferred behind the bridge.
@@ -61,25 +62,27 @@ This session only, on the working tree with the cuts applied; the validation run
 - `node scripts/ci/docs-links.mjs` — `docs-links: 124 markdown files · 1420 internal links checked · 44 external links skipped` / `docs-links: OK`, exit 0 (run after the docs were written, 2026-09-03)
 - `node scripts/ci/feature-knowledge.mjs` — `feature-knowledge: OK`, exit 0 (run after the docs were written, 2026-09-03; the validator checks only the two canonical files, so the new session file is not inspected by it)
 - Fresh-context critics, one per cut, verifying by execution, round 1, all PASS. Probe: 14/14 tests; `dist` `redactShape({id,title,<uuid>:{t}})` printed `{"<uuid-key>":{"t":"string"},"id":"string","title":"string"}`; a malformed `PAPERCLIP_AGENT_KEYS_JSON` yields only `PAPERCLIP_PHASE_PROBE_FAILED PaperclipPhaseProbeError: invalid-agent-keys-json`. Bootstrap: 76/76 then 37/37 focused tests; `--dry-run` against `http://127.0.0.1:9` exits 1 at the health check before any AWS call; a local stub saw exactly one GET; with real credentials the dry-run printed field names only and the secret stayed at 2 versions; one `PutSecretValueCommand` call site. Injection: `git diff origin/development` empty for `manifest.ts`/`deploy.ts`/`env.ts`/`deprecations.json`/`rollback-classes.md`; hermetic synth 0 hits; staging synth 3 `PaperclipProbe*` Sids; diagrams-drift clean across 27 files.
-- Live staging probe — NOT RUN.
-- Tenant bootstrap, real run — NOT RUN.
+- Tenant bootstrap (2026-09-03, gated script): `--dry-run` exit 0; real run exit 0 (`agents created 2, reused 0; keys created 3, reused 0`, one `wrote /claudeclaw-staging/paperclip` line); no-op re-run exit 0 (`agents created 0, reused 2; keys created 0, reused 3`, `nothing written`); secret AWSCURRENT 2026-09-03T04:04:37-04:00 with all seven fields set; 0 token-pattern hits across the saved logs. Fresh-context critic: PASS (AWSPREVIOUS vs AWSCURRENT per-field hashes: `admin_password`, `better_auth_secret`, `database_url` identical; nothing dropped; `/api/agents/me` and `/org` 200 with the main key, `/issues?limit=1` 200 with the reconciler key, 401 without a key).
+- Live staging probe — RAN in run 33733071639 attempt 4 as ECS task `e071943c4f2c45b2be381ddd3073c0b7`: exactly one log line, `PAPERCLIP_PHASE_PROBE_FAILED PaperclipPhaseProbeError: request-rejected (HTTP 403)`; no marker, no token fragment (the live failure path redacted correctly).
+- Reproduction over the SSM tunnel with the task's Host header forced: `GET /org` with `Host: paperclip.claudeclaw-staging.internal:3100` → 403 `{"error":"Hostname 'paperclip.claudeclaw-staging.internal' is not allowed for this Paperclip instance ..."}`; the same request with `Host: 127.0.0.1:3100` → 200; unauthenticated `/api/health` with the internal Host → 403. Instance `config.json` `server.allowedHostnames` is `[]`. The goal created while checking `POST /goals` (201 via loopback) was deleted; the goal list is empty again.
+- Second full validation on `fix/paperclip-allowed-hostnames` (runner finished 2026-09-03T14:20:02Z): `npm run typecheck` 0; `npm test` exit 1 with the same five Windows-only files by name (`Tests 1 failed | 3004 passed | 6 skipped (3011)`); `npm run build` 0; `npm --prefix web run typecheck` 0; `npm --prefix web run build` 0; `git diff --check` 0; integration NOT RUN (Docker absent). New test `allows the orchestrator hostname through the private-hostname guard` failed on `undefined` before the change and passes after (53/53 in `infra/lib/paperclip-stack.test.ts`).
 
 ## Active blockers
 
-- Staging tenant not bootstrapped: `company_id`, `agent_keys`, `reconciler_key`, `dispatch_secret` are `REPLACE_ME` in `/claudeclaw-staging/paperclip`; the probe fails correctly on them.
-- Live probe evidence does not exist, and there is no pre-flight path: the running orchestrator (task definition `:13`, 2026-08-27) predates `dist/ops`.
+- **Paperclip refuses the orchestrator's hostname.** In `authenticated`/`private` mode the pinned image's `privateHostnameGuard` answers 403 to every request — `/api/health` included — whose Host is neither loopback nor in `PAPERCLIP_ALLOWED_HOSTNAMES`; the task definition never set that variable and `config.json` has `server.allowedHostnames: []`, while the orchestrator dials `paperclip.claudeclaw-staging.internal`. Nothing in Netzar can talk to Paperclip in staging until the fix on this branch is deployed. The SSM tunnel never showed it because its Host is `127.0.0.1`.
+- The staging Deploy run is red at the probe step; the smoke test did not run. Staging serves orchestrator `:14` and Paperclip `:2`, both 1/1.
 - Docker daemon unreachable here: the integration suite is NOT RUN locally; CI runs it.
-- Resolved since 2026-09-01: the Better Auth secret is set; AWS credentials are live in the operator shell.
+- Resolved: tenant bootstrapped; Better Auth secret set; AWS credentials live.
 
 ## Smallest next action
 
-Commit and push the working-tree cuts to PR #133, then run the P4 tenant bootstrap.
+Open the PR for this branch into `development`, wait for 9/9, merge; promote `development` → `qa` → `staging`; watch the Deploy run's probe step and verify it against 33067242593.
 
 ## Guardrails for the resuming agent
 
-- Work only in `C:\dev\Netzer-Labs\.worktrees\paperclip-promote` on `codex/paperclip-phases-8-5-12`.
+- Work only in `C:\dev\Netzer-Labs\.worktrees\paperclip-promote` on `fix/paperclip-allowed-hostnames` (branched from `development`).
 - Preserve unrelated work and keep commits path-scoped.
-- Do not open the `qa` → `staging` PR until the tenant bootstrap has completed and its no-op re-run is proven.
+- The tenant is bootstrapped; do not run the bootstrap again except to prove the no-op. Never use `x-forwarded-host` to work around the hostname guard — it is honoured before `Host` and would silently disable the guard.
 - Never print, commit, or paste a secret value; diff secrets by field name only.
 - Do not invent live payload types; capture redacted staging evidence first.
 - Do not start Phase 8.5, the bridge or Phases 10-12 on this branch; they belong to the follow-on plan.
