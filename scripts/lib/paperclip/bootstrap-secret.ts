@@ -7,13 +7,7 @@ export type BootstrapSecretFields = Record<string, string>;
 
 interface LoadBootstrapSecretFieldsOptions {
   secretId: string;
-  dryRun: boolean;
   read: () => Promise<string | undefined>;
-  warn: (message: string) => void;
-}
-
-function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : 'UnknownError';
 }
 
 function recordOfStrings(value: unknown): value is BootstrapSecretFields {
@@ -27,9 +21,8 @@ function recordOfStrings(value: unknown): value is BootstrapSecretFields {
 
 /**
  * Read the retained Paperclip secret without turning an unreadable live state
- * into an empty credential set. A real run must stop before reconcileKey can
- * revoke one-time keys; a dry run may safely over-report work because it never
- * mutates Paperclip or Secrets Manager.
+ * into an empty credential set: the run stops here, before reconcileKey can
+ * revoke one-time keys.
  */
 export async function loadBootstrapSecretFields(
   options: LoadBootstrapSecretFieldsOptions,
@@ -43,24 +36,16 @@ export async function loadBootstrapSecretFields(
     }
     return parsed;
   } catch (error) {
-    if (!options.dryRun) {
-      throw new Error(
-        `could not read or parse ${options.secretId}; refusing to reconcile live one-time agent keys`,
-        { cause: error },
-      );
-    }
-    options.warn(
-      `could not read ${options.secretId} (${errorName(error)}); assuming nothing stored for --dry-run`,
+    throw new Error(
+      `could not read or parse ${options.secretId}; refusing to reconcile live one-time agent keys`,
+      { cause: error },
     );
-    return {};
   }
 }
 
 interface ParseBootstrapAgentKeysOptions {
   value: string | undefined;
   secretId: string;
-  dryRun: boolean;
-  warn: (message: string) => void;
 }
 
 /**
@@ -81,17 +66,10 @@ export function parseBootstrapAgentKeys(
     }
     return parsed;
   } catch (error) {
-    if (!options.dryRun) {
-      throw new Error(
-        `could not parse agent_keys in ${options.secretId}; refusing to reconcile live one-time agent keys`,
-        { cause: error },
-      );
-    }
-    options.warn(
-      `could not parse agent_keys in ${options.secretId} (${errorName(error)}); ` +
-        'assuming no stored agent keys for --dry-run',
+    throw new Error(
+      `could not parse agent_keys in ${options.secretId}; refusing to reconcile live one-time agent keys`,
+      { cause: error },
     );
-    return {};
   }
 }
 
@@ -115,16 +93,4 @@ export function mergeBootstrapSecretFields(
   next.agent_keys = JSON.stringify(options.storedAgentKeys);
   next.company_id = options.companyId;
   return next;
-}
-
-interface WriteBootstrapSecretFieldsOptions {
-  fields: BootstrapSecretFields;
-  write: (secretString: string) => Promise<void>;
-}
-
-/** Serialize the exact object used by the real PutSecretValue call. */
-export async function writeBootstrapSecretFields(
-  options: WriteBootstrapSecretFieldsOptions,
-): Promise<void> {
-  await options.write(JSON.stringify(options.fields));
 }
