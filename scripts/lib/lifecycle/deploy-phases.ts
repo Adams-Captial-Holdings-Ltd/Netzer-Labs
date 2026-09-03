@@ -109,6 +109,11 @@ export interface SecretWritePlan {
   mergeExisting?: boolean;
   /** JSON fields added only when absent from the live value. */
   defaults?: string;
+  /**
+   * Planned JSON fields that may seed an absent/placeholder live field but
+   * must never replace a populated value.
+   */
+  writeIfAbsent?: string[];
 }
 
 /**
@@ -122,8 +127,11 @@ export interface SecretWritePlan {
  * Without this merge the next routine deploy would overwrite those minted
  * credentials with the placeholders CDK seeded.
  *
- * Planned fields win; every other live field survives. Defaults sit below the
- * live value, so additive migrations never replace data already written by the
+ * Planned fields win unless named by writeIfAbsent; every other live field
+ * survives. A write-if-absent field treats the shipped REPLACE_ME sentinel and
+ * an empty string as absent, so `.env` can seed a fresh install but can never
+ * rotate the value Secrets Manager already owns. Defaults sit below the live
+ * value, so additive migrations never replace data already written by the
  * running service. A missing or malformed live value degrades to the defaults
  * plus planned value rather than failing the deploy.
  */
@@ -131,6 +139,7 @@ export function mergeSecretValue(
   existing: string | undefined,
   planned: string,
   defaults: string = '{}',
+  writeIfAbsent: readonly string[] = [],
 ): string {
   let live: unknown;
   try {
@@ -138,11 +147,21 @@ export function mergeSecretValue(
   } catch {
     live = null;
   }
-  const base = live !== null && typeof live === 'object' && !Array.isArray(live) ? live : {};
+  const base: Record<string, unknown> =
+    live !== null && typeof live === 'object' && !Array.isArray(live)
+      ? (live as Record<string, unknown>)
+      : {};
+  const plannedFields = JSON.parse(planned) as Record<string, unknown>;
+  for (const field of writeIfAbsent) {
+    const liveValue = base[field];
+    if (liveValue !== undefined && liveValue !== '' && liveValue !== 'REPLACE_ME') {
+      delete plannedFields[field];
+    }
+  }
   return JSON.stringify({
     ...(JSON.parse(defaults) as object),
     ...base,
-    ...(JSON.parse(planned) as object),
+    ...plannedFields,
   });
 }
 
@@ -266,10 +285,9 @@ export function planSecretWrites(
   // (plan-audit P1-C4; the code wins, per P5). A fromSecretsManager field
   // mismatch produces a task that cannot start.
   //
-  // The value is generated ONCE by `npm run setup` and carried in .env. It
-  // is deliberately NOT minted here: planSecretWrites runs on EVERY deploy,
-  // so generating at this point would rotate the auth secret every deploy
-  // and invalidate every Paperclip session.
+  // Secrets Manager owns the live value. `npm run setup` may provide the
+  // first-write seed from .env, but a later local deploy must preserve a
+  // populated value even when that .env contains a different seed.
   plans.push({
     leaf: 'paperclip',
     secretId: `${secretBase}/paperclip`,
@@ -281,6 +299,7 @@ export function planSecretWrites(
     }),
     defaults: JSON.stringify({ company_id: 'REPLACE_ME' }),
     mergeExisting: true,
+    writeIfAbsent: ['better_auth_secret'],
     // Not a configured surface until the Paperclip service exists: a
     // deploy at a tier that does not provision Paperclip must not fail here.
     configured: false,
@@ -450,7 +469,12 @@ export async function populateSecretsV2(
         const cur = (await opts.client.send(
           new GetSecretValueCommand({ SecretId: plan.secretId }),
         )) as { SecretString?: string };
-        valueToWrite = mergeSecretValue(cur.SecretString, plan.value, plan.defaults);
+        valueToWrite = mergeSecretValue(
+          cur.SecretString,
+          plan.value,
+          plan.defaults,
+          plan.writeIfAbsent,
+        );
       } catch (err) {
         const message = `${plan.label} secret (${plan.secretId}): GetSecretValue failed: ${errMessage(err)}`;
         if (plan.configured) {

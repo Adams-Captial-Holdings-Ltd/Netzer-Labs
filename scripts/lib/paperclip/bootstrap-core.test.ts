@@ -206,14 +206,14 @@ describe('API keys', () => {
     const { agents } = await ensureAgents(request, COMPANY, SPECS);
     const main = agents.get('main')!;
 
-    const first = await reconcileKey(request, main, agentKeyName('main'), 'main', undefined, false);
+    const first = await reconcileKey(request, main, agentKeyName('main'), 'main', undefined);
     expect(first.action).toBe('created');
     expect(first.scope).toBe('standard');
     const stored = first.token;
     const afterFirst = calls.length;
 
     // Second run: the key is active on Paperclip AND its token is held here.
-    const second = await reconcileKey(request, main, agentKeyName('main'), 'main', stored, false);
+    const second = await reconcileKey(request, main, agentKeyName('main'), 'main', stored);
     expect(second.action).toBe('reused');
     expect(second.token).toBeUndefined();
     expect(second.keyId).toBe(first.keyId);
@@ -227,10 +227,10 @@ describe('API keys', () => {
     const { request, calls } = fakePaperclip();
     const { agents } = await ensureAgents(request, COMPANY, SPECS);
     const main = agents.get('main')!;
-    await reconcileKey(request, main, agentKeyName('main'), 'main', undefined, false);
+    await reconcileKey(request, main, agentKeyName('main'), 'main', undefined);
     const afterFirst = calls.length;
 
-    const replaced = await reconcileKey(request, main, agentKeyName('main'), 'main', undefined, false);
+    const replaced = await reconcileKey(request, main, agentKeyName('main'), 'main', undefined);
     expect(replaced.action).toBe('replaced');
     expect(calls.slice(afterFirst).some((c) => c.method === 'DELETE')).toBe(true);
   });
@@ -258,7 +258,6 @@ describe('API keys', () => {
         agentKeyName('main'),
         'main',
         'pcp_held',
-        false,
       ),
     ).rejects.toThrow(/task_bridge/);
 
@@ -271,26 +270,10 @@ describe('API keys', () => {
         agentKeyName('main'),
         'main',
         'pcp_held',
-        false,
       ),
     ).rejects.toThrow(/no responsible user/);
   });
 
-  it('creates nothing at all in --dry-run', async () => {
-    const { request, calls } = fakePaperclip();
-    const { agents } = await ensureAgents(request, COMPANY, SPECS);
-    const afterAgents = calls.length;
-    const outcome = await reconcileKey(
-      request,
-      agents.get('main')!,
-      agentKeyName('main'),
-      'main',
-      undefined,
-      true,
-    );
-    expect(outcome.token).toBeUndefined();
-    expect(calls.slice(afterAgents).filter((c) => c.method !== 'GET')).toEqual([]);
-  });
 });
 
 describe('no token ever printed', () => {
@@ -307,7 +290,6 @@ describe('no token ever printed', () => {
       agentKeyName('main'),
       'main',
       undefined,
-      false,
     );
     expect(outcome.token).toMatch(/^pcp_/);
     const printed = `${outcome.keyName} id=${outcome.keyId} scope=${outcome.scope}`;

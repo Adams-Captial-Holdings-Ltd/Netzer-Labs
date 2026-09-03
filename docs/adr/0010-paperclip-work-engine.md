@@ -1,6 +1,6 @@
 # ADR 0010 — Paperclip is the missions work engine
 
-**Status:** Accepted (2026-08-18, Paperclip integration plan §34; amended 2026-08-18, see "Amendment" below)
+**Status:** Accepted (2026-08-18, Paperclip integration plan §34; amended 2026-08-18 and 2026-09-01, see "Amendment" sections below)
 
 ## Context
 
@@ -158,6 +158,23 @@ disagree.
 **Re-pin rule:** on every future artifact bump, first check whether upstream
 has implemented `updatedSince`; the patch is dropped in the same change the
 moment a release carries it natively.
+
+## Amendment (2026-09-01) — each install owns one stable Better Auth secret
+
+Paperclip's `BETTER_AUTH_SECRET` is an internal session-signing key for one
+installation, not a credential supplied by Paperclip and not a fleet-wide
+customer secret. The installation's Secrets Manager record is the single owner
+after first write. Setup may seed it from the install's local state, and CI may
+mint a 32-byte random value when the field is absent or still `REPLACE_ME`, but
+neither path overwrites a populated value. A Netzer-operated GitHub environment
+secret is therefore an optional first-write override, not a deployment
+requirement.
+
+This ownership rule prevents two independent writers from silently rotating the
+signing key. Rotation would invalidate every Paperclip login session, so an
+ordinary local or CI deploy must preserve the stored value. Each customer
+installation receives its own independently generated key, and no
+repository-wide value may be shared across installations.
 
 ## Relationship to ADR 0009
 
