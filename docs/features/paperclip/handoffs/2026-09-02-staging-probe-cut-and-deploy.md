@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: session-handoff
 status: current
-observed_at: 2026-09-02
-as_of_commit: 44fa53f7f911513a47bcf33ef1bc440d06ac4a5a
+observed_at: 2026-09-03
+as_of_commit: 53dfc2a4df90bbce2936374db38fc58f85c22e45
 session_slug: staging-probe-cut-and-deploy
 supersedes: 2026-09-01-staging-readiness-and-auth-model.md
 ---
@@ -20,14 +20,16 @@ supersedes: 2026-09-01-staging-readiness-and-auth-model.md
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none yet — a transient branch deploys nothing and `development` deploys nothing; staging is reached only when the later `qa` → `staging` promotion PR merges, per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `291a457b8aa191dffe0de6e04e377778bbc1d818` |
-| Commit at session end | `37e4a1a71a8fb5fb19bc3b1c485c8e92a2dda095` for the cuts (the docs commit follows it); the closing pass after the staging deploy updates this row |
-| Pushed | yes — the cuts (`7c4bbd1`, `06d9c11`, `14ed070`, `37e4a1a`) and this handoff are pushed to PR #133 |
-| PR | `#133` merged into `development` (`d8c6f7e`, 9/9 at `2623a87`); `#134` `development` → `qa` merged (`345f238`, 19/19); `#138` `qa` → `staging` merged (`fd04227`, 20/20); `#139` allowed-hostname fix merged (`65f5f29`, 9/9), `#140` → `qa` (`fc7ec05`, 19/19), `#141` → `staging` (`3a6e040`, 20/20); the bind-mode fix PR is opened from this branch |
-| Deployed | yes and red twice: run 33733071639 attempt 4 deployed `fd04227` and the probe was refused (HTTP 403); run 33773788920 deployed `3a6e040` (hostname allowed) and the probe's fetch got no response in attempts 1 and 2; last green staging deploy is still 33067242593 |
+| Commit at session end | `53dfc2a` on `development` (code); this closing docs commit follows it on `docs/paperclip-staging-probe-green` |
+| Pushed | yes — every branch of this session is merged into `development`, `qa` and `staging`; this closing pass is pushed as its own PR |
+| PR | cuts #133 → `development` (`d8c6f7e`), #134 → `qa`, #138 → `staging`; hostname #139 (`65f5f29`), #140, #141; bind #142 (`53dfc2a`), #143, #144 (`47a69db`); every rung green (9/9, 19/19, 20/20); this docs PR into `development` |
+| Deployed | yes, green: staging Deploy run 33783021194 at `47a69db` (the same steps as bar run 33067242593 plus the probe step, all eight markers, smoke test passed). Earlier: 33733071639 (probe refused, HTTP 403) and 33773788920 (probe fetch got no response) |
 
 ## 2. Current state summary
 
 This session took over PR #133 (Codex's staging contract probe, committed and pushed through `291a457`, CI green) with six files still dirty in the worktree, audited the whole diff, kept what was correct, and cut three things that were wrong or dead: the `<field-N>` redaction that destroyed the schema evidence the probe exists to capture; the bootstrap script's dead dry-run/checkpoint machinery and its source-text tests; and the task-definition injection of `PAPERCLIP_DISPATCH_URL` / `CCE_PAPERCLIP_ADMIN_EMAIL`, which nothing read. Each cut passed a fresh-context critic that verified by execution. The full validation (development.md step 7) then ran on the resulting tree: typecheck, build, web typecheck and web build exit 0; `npm test` exits 1 on five Windows-only files named in section 7, none of which this branch touches; the integration suite is NOT RUN here because the Docker daemon is unreachable. The user decided on 2026-09-02 that this branch lands the probe to staging only: Phase 8.5, the same-origin UI/session bridge and Phases 10-12 move to a separate plan afterwards, and production needs its own go-ahead. Where it is left: the cuts are committed (`7c4bbd1` … `37e4a1a`) and pushed to PR #133; the staging tenant is not bootstrapped (`company_id`, `agent_keys`, `reconciler_key`, `dispatch_secret` are `REPLACE_ME`); the probe has never run live. The next thing to type is the P4 tenant bootstrap.
+
+**Closing state (2026-09-03 17:41 UTC).** Staging is green at `47a69db` with the probe in the deploy: run 33783021194 matched bar run 33067242593 job for job and step for step, plus the one added probe step, which found all eight markers in CloudWatch. Getting there took two more findings than the plan anticipated, both surfaced by the probe's first live runs and both fixed with one task-definition variable each: `PAPERCLIP_ALLOWED_HOSTNAMES` (the private-hostname guard refused the orchestrator's Cloud Map hostname) and `PAPERCLIP_BIND=lan` (the EFS `config.json` says `server.bind: loopback`, so a re-booted task listened on 127.0.0.1 only while its localhost health check kept passing). The Actions log of the green run holds no company id and no token-shaped string; the stream-level greps are the one check left, because the operator AWS session expired mid-ladder.
 
 ## 3. Codebase understanding
 
@@ -137,6 +139,8 @@ Working tree against `291a457` (`git diff HEAD --stat`: 22 files, 189 insertions
 | The eight observed probe shapes | README / the Phase 8.5 plan | no — they do not exist until the staging run; promoted in the final pass |
 | `MSYS_NO_PATHCONV=1` for leading-slash `aws` arguments in Git Bash | `development.md` Troubleshooting | no — present in two other feature handoffs, not yet in `development.md`; outside this piece's edit scope; recorded as P37 |
 | The five Windows-only failing test files and their causes | `development.md` Troubleshooting | no — outside this piece's edit scope; recorded as A52 |
+
+Promoted in this closing pass to the feature README: the two Paperclip task-definition variables the probe surfaced (section 6), and the eight observed org/goals shapes from run 33783021194 as Phase 8.5's input (section 6). The P4 runbook lives in section 6.2 of this file and in the `paperclip-bootstrap.ts` header; it is not duplicated in the README.
 
 ## 5. Carried-forward mistakes, assumptions and precautions
 
@@ -449,13 +453,15 @@ are the facts that run produced, and several of them correct a document.
 | P41 | Precaution | ECS forgets stopped tasks after about an hour, so the probe task cannot be found by `list-tasks --desired-status STOPPED` later. | Find it in CloudWatch: `describe-log-streams --order-by LastEventTime --descending` (no prefix — the API refuses prefix + LastEventTime), then `filter-log-events` for `PAPERCLIP_PHASE_PROBE` on each candidate stream. |
 | M58 | Mistake (found by the probe) | With the hostname allowed (run 33773788920), the probe's fetch never got a response, in two attempts, the second with no Paperclip change. Upstream `server/src/config.ts` resolves the bind mode as `PAPERCLIP_BIND` ?? `config.json` `server.bind` ?? inferred from `HOST`, and `resolveRuntimeBind` maps `loopback` to `127.0.0.1` whatever `HOST` says. The EFS `config.json` holds `server.bind: loopback` (writer not identified: `auth bootstrap-ceo` only reads; quickstart onboarding would have written `lan` from `HOST=0.0.0.0`), so the task booted after the hostname fix listened on loopback only while its localhost health check kept passing. The task it replaced had booted before the file said that, which is why it could answer the 403. | Set `PAPERCLIP_BIND=lan` explicitly on the task definition beside `HOST`; pinned by a literal test. Every knob the file can override must be set by the task definition, or a re-boot silently inherits whatever the file accumulated. |
 | P42 | Precaution | A container health check on `localhost` cannot see a listener that shrank to loopback; ECS, CloudFormation and the deploy all report green while nothing in the VPC can connect. | The probe is the only check on that path; read its failure code literally — `request-failed-before-response` means no TCP/HTTP answer at all, not a refusal. |
+| A54 | Assumption (now evidence) | Run 33783021194 recorded the live shapes: `/api/companies/{cid}/org` is an array of agents with nested `reports`; `/api/agents/me` is a wide object (`access`, `chainOfCommand`, `orgChainHealth`, `reportsTo`, `permissions` among its keys); goals are `{companyId, createdAt, description, id, level, ownerAgentId, parentId, status, title, updatedAt}`; `goals-list` is an empty array on a fresh company; `org.svg` is served as `image/svg+xml`. Values were never logged, only types. | Phase 8.5 types `org.ts` and `goals.ts` against these shapes (promoted to README section 6), not against the OpenAPI's `additionalProperties: {}`. |
+| P43 | Precaution | Seven deploy attempts were needed for three green-capable runs: two npm timeouts and one stall in the emulated image build (A53), then two probe findings. Each attempt costs ~30 minutes. | Budget an hour per staging round trip and keep the AWS session alive across it (`aws login` lasts less than the ladder did). |
 | M56 | Mistake | This file's first draft copied the comment at `infra/lib/compute-stack.ts:236-244` ("secrets-stack.ts creates all four … `company_id` … with the secret itself") into section 3.3 as a convention. The code disagrees: `infra/lib/secrets-stack.ts:113-118` creates `better_auth_secret`, `reconciler_key`, `agent_keys`, `dispatch_secret` only, and `company_id` is merge-added as `REPLACE_ME` by deploy phase b (`scripts/lib/lifecycle/deploy-phases.ts:300-302`). Caught by the piece-4 critic. | M15 again: a comment is a document, and P5 applies to it. Before writing "X creates Y", open the constructor or the plan that creates Y, not the comment beside its consumer. The comment itself stays wrong in source until the deferred fix in section 6.4 lands. |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Open the `fix/paperclip-bind-lan` PR into `development`; after 9/9, merge and promote `development` → `qa` → `staging`; verify the Deploy run's probe step (eight markers, exit 0, redaction greps) against 33067242593 — the redaction greps need a fresh `aws login`.
+`aws login`, then the stream-level redaction greps for run 33783021194 (commands in HANDOFF.md, Smallest next action). Then write the follow-on plan: Phase 8.5 from README section 6's observed shapes, the UI/session bridge, Phases 10-12.
 
 ### 6.2 Immediate next steps
 
@@ -530,6 +536,20 @@ Anything not run, and why:
 - A local baseline on the untouched `291a457` — not re-run; CI at that commit (both runs above) stands in.
 - `node scripts/ci/secret-scan.mjs` — not re-run this session; CI `Secret Scan` passed at `291a457` (run 33639063032).
 - Live staging probe and tenant bootstrap — pieces 5-7; nothing is deployed or bootstrapped.
+
+### 7.1 After the fixes (2026-09-03, second and third validation runs and the deploys)
+
+| Check | Result |
+|---|---|
+| step-7 runner on `fix/paperclip-allowed-hostnames` (finished 2026-09-03T14:20:02Z) | typecheck 0, build 0, web typecheck 0, web build 0, `git diff --check` 0; `npm test` exit 1: `Tests 1 failed \| 3004 passed \| 6 skipped (3011)`, the same five Windows-only files by name (A52); integration NOT RUN (Docker absent) |
+| step-7 runner on `fix/paperclip-bind-lan` (finished 2026-09-03T16:48:45Z) | typecheck 0, build 0, web typecheck 0, web build 0, `git diff --check` 0; `npm test` exit 1: `Tests 3 failed \| 3003 passed \| 6 skipped (3012)`, the five Windows-only files plus `src/adapters/dashboard/jarvis.flow.test.ts` (documented load-sensitive timeout; it ran while a critic was synthesizing; 18/18 in isolation afterwards); integration NOT RUN |
+| Fresh-context critics for the two fixes | PASS by execution: upstream v2026.722.0 semantics cited by line; CI-equivalent staging synth shows `PAPERCLIP_ALLOWED_HOSTNAMES=paperclip.claudeclaw-staging.internal`, `PAPERCLIP_BIND=lan`, `HOST=0.0.0.0` on the service task only; 53/53 then 54/54 infra tests; literal assertions |
+| CI on #139, #140, #141, #142, #143, #144 | 9/9, 19/19, 20/20, 9/9, 19/19, 20/20 |
+| Deploy run 33773788920 (`3a6e040`, hostname fix) | attempt 1 and attempt 2: red at the probe step, `request-failed-before-response`; every other step green |
+| Deploy run 33783021194 (`47a69db`, bind fix) | **success**; job list identical to 33067242593; deploy-job steps identical plus one added `success  Characterize Paperclip org and goals contracts`; probe markers `org` 200, `whoami` 200, `goals-list` 200, `org-svg` 200, `goal-create` 201, `goal-get` 200, `goal-update` 200, `goal-delete` 200; `Smoke test (health)` success |
+| Redaction, Actions log of run 33783021194 | `grep -c -F <company id>` → 0; `grep -c -E 'pcp_[A-Za-z0-9]{6,}'` → 0 (3699 lines) |
+| Redaction, probe task CloudWatch stream | NOT RUN — AWS session expired 15:33 UTC; needs `aws login` |
+| Live deploy role `PaperclipProbe*` Sids | read live after run 33733071639 attempt 1 applied them: `PaperclipProbeRunTaskStaging` (cluster-conditioned), `PaperclipProbePassRoleStaging` (exact task role + `CCE-STAGING-Compute-TaskExecutionRole*`, `iam:PassedToService=ecs-tasks.amazonaws.com`), `PaperclipProbeLogsStaging` (orchestrator log group only) |
 
 ## 8. Environment state
 

@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: index
 status: current
-observed_at: 2026-09-01
-as_of_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+observed_at: 2026-09-03
+as_of_commit: 53dfc2a4df90bbce2936374db38fc58f85c22e45
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/paperclip/client.ts
@@ -169,21 +169,22 @@ Present in the current source and working tree:
   pinned artifact's open email-signup route until upstream provides a safe
   signup control or a separately reviewed access-controlled listener exists.
 
-The behavior above is present in source. The Paperclip base is also verified in
-staging at run `33067242593` on `ac70509`; the staging contract-probe completion
-diff remains local and has not yet produced deployment evidence.
+The behavior above is present in source and deployed to staging: the Paperclip
+base went green in run `33067242593` on `ac70509`, and the staging contract
+probe went green in run `33783021194` on `47a69db` with all eight CloudWatch
+markers (section 3).
 
 ## 3. Current status and current source commit
 
-The current branch is `codex/paperclip-phases-8-5-12` at
-`b3b427497d63d8f4d1faa147b46c9681c19bc460` before its uncommitted probe
-completion work; that commit is byte-identical to `origin/development`. The
-Paperclip base reached staging successfully in run `33067242593` at `ac70509`
-(PR #131). The current contract-probe, bootstrap, secret-ownership, and
-least-privilege IAM changes have not yet been deployed, so their evidence is
-still source/test evidence rather than staging evidence. The legacy router and
-`CCE_PAPERCLIP_ENABLED` remain intentionally present until the separately
-reviewed retirement gate has two clean production weeks of evidence.
+The current source commit is `53dfc2a` on `development`, and it is deployed to
+staging: run `33783021194` at `47a69db` (the `qa` → `staging` promotion of that
+commit) is green and includes the staging contract probe, which ran as a
+one-shot task from the live orchestrator task definition and found all eight
+CloudWatch markers. The probe's first two live runs each found a real defect,
+both fixed with one variable on the Paperclip service task definition (section
+6). The legacy router and `CCE_PAPERCLIP_ENABLED` remain intentionally present
+until the separately reviewed retirement gate has two clean production weeks of
+evidence.
 
 Still not implemented in the required execution order: Phase 8.5, the Four
 Pillars work in Phases 10–12, and the final legacy retirement. The
@@ -339,17 +340,34 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
   close the session when finished. Shared logins and public ALB/hostname rules
   are not supported while the pinned artifact allows unauthenticated signup.
 
+### Paperclip task-definition variables the probe made necessary
+
+- `PAPERCLIP_ALLOWED_HOSTNAMES` = the Cloud Map hostname the orchestrator dials (`paperclip.<app>.internal`). In `authenticated`/`private` mode the pinned image's private-hostname guard answers 403 to every request, `/api/health` included, whose Host is neither loopback nor on this list; the list replaces `config.json`'s `server.allowedHostnames`. Found by run 33733071639.
+- `PAPERCLIP_BIND=lan` beside `HOST=0.0.0.0`. The bind mode resolves as `PAPERCLIP_BIND` ?? `config.json` `server.bind` ?? inferred from `HOST`, and `loopback` forces the listener onto 127.0.0.1 whatever `HOST` says; the EFS `config.json` holds `loopback`, so a re-booted task without this variable answers only its own localhost health check. Found by run 33773788920.
+
+Both are pinned by literal tests in `infra/lib/paperclip-stack.test.ts`; the migrate task carries neither.
+
+### Observed org and goals shapes (staging, run 33783021194, values never logged)
+
+These are the redacted shapes the probe recorded from the pinned artifact through the orchestrator's own path. Phase 8.5 types `org.ts` and `goals.ts` against them, not against the OpenAPI's `additionalProperties: {}`.
+
+- `org` — 200, `application/json`, an array of agents: `{id, name, role, status, reports: [{id, name, role, status, reports: []}]}` (nested `reports` is the hierarchy).
+- `whoami` (`/api/agents/me`) — 200, an object whose top-level keys include `access {canAssignTasks, grants[], membership}`, `adapterConfig`, `adapterType`, `budgetMonthlyCents`, `capabilities`, `chainOfCommand`, `companyId`, `createdAt`, `defaultEnvironmentId`, `errorReason`, `icon`, `id`, `lastHeartbeatAt`, `metadata`, `name`, `orgChainHealth`, `pauseReason`, `pausedAt`, `permissions`, `reportsTo`, `role`, `runtimeConfig`, `spentMonthlyCents`, `status`, `title`, `updatedAt`, `urlKey`.
+- `goals-list` — 200, an empty array on a fresh company.
+- `org-svg` — 200, `image/svg+xml`, a document containing `<svg`.
+- `goal-create` — 201; `goal-get`, `goal-update`, `goal-delete` — 200; all four return the same goal object `{companyId, createdAt, description, id, level, ownerAgentId (null), parentId (null), status, title, updatedAt}`.
+
 ## 7. Known runtime risks and approved next work
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| The staging contract probe has source/test evidence but no live marker evidence | [HANDOFF](HANDOFF.md) separates the green base deploy from the still-local probe completion | Complete the one-time staging tenant bootstrap, promote through the authorized branch chain, and require all eight CloudWatch markers |
+| The orchestrator image build runs under QEMU and sits on npm's socket-inactivity timeout | Three of seven staging deploy attempts on 2026-09-03 failed or stalled in `Build + Push (linux/arm64)` before any code ran; lockfiles and Dockerfile unchanged | One `npm_config_fetch_timeout` line in the Dockerfile `[build]` stage, or stop installing `aws-cdk-lib` in the image build; its own PR |
 | Paperclip is a single service task | [ADR 0010](../../adr/0010-paperclip-work-engine.md) DL-8 and `infra/lib/paperclip-stack.ts` pin `desiredCount: 1` with no autoscaling | Keep the pin until upstream supports shared node identity; expect a restart gap rather than pretending this is HA |
 | The first T1+ install creates an always-on database/task floor | [Cost guide](../../cost-guide.md) and `scripts/cost-estimate.mjs` price about $104/month for the Paperclip substrate | Keep Paperclip out of ordinary T0; require the existing money confirmation before deploy and show the Paperclip lines in that gate |
 | The vendored `updatedSince` patch can diverge from upstream | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Re-evaluate every artifact re-pin and drop the patch when an upstream release implements the proven contract |
 | Node-vs-Postgres clock skew beyond the configured overlap can still lose a row | `src/lib/paperclip/watermark.ts` documents the exact limit; overlap fixes truncation, not unbounded clock skew | Monitor watermark lag and keep `paperclip/poll_overlap_ms` sized from observed clocks |
 | Legacy retirement is not yet allowed | [bar-and-phases.md](bar-and-phases.md) Phase 9 requires two clean production weeks and a separately reviewed final commit | Keep the router switch, legacy handlers and `paperclip_disabled`; delete only after the production evidence gate |
-| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order only after the live staging contract probe passes |
+| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | The probe is green; continue in the recorded order (8.5 from the observed shapes below, then the UI/session bridge, then 10–12) |
 
 ## 8. Exact focused and full validation commands
 
