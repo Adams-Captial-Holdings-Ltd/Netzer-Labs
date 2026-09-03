@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: index
 status: current
-observed_at: 2026-08-24
-as_of_commit: 7220d3eef301f9b3f527b9916922d33b0a2db360
+observed_at: 2026-09-01
+as_of_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/paperclip/client.ts
@@ -25,6 +25,9 @@ implemented_by:
   - src/lib/tools/privacy-tools.ts
   - src/lib/state/kill-switches-repo.ts
   - scripts/mission.ts
+  - scripts/paperclip-bootstrap.ts
+  - scripts/lib/paperclip/bootstrap-secret.ts
+  - src/ops/paperclip-phase-probe.ts
   - tests/fixtures/paperclip-bootstrap.ts
   - vendor/paperclip/Dockerfile
   - vendor/paperclip/updated-since.patch
@@ -63,6 +66,8 @@ tested_by:
   - infra/lib/paperclip-stack.test.ts
   - scripts/lib/cost-gate.test.ts
   - scripts/lib/lifecycle/paperclip-image-pipeline.test.ts
+  - scripts/lib/paperclip/bootstrap-secret.test.ts
+  - src/ops/paperclip-phase-probe.test.ts
 decisions:
   - docs/adr/0010-paperclip-work-engine.md
   - docs/adr/0009-mission-container-model.md
@@ -164,25 +169,21 @@ Present in the current source and working tree:
   pinned artifact's open email-signup route until upstream provides a safe
   signup control or a separately reviewed access-controlled listener exists.
 
-This is **source evidence, not deployment evidence**. The Phase 8 commit is
-local, Phase 9 still has uncommitted work under final review, and none of the
-current Paperclip service/default-install changes has been verified in AWS.
+The behavior above is present in source. The Paperclip base is also verified in
+staging at run `33067242593` on `ac70509`; the staging contract-probe completion
+diff remains local and has not yet produced deployment evidence.
 
 ## 3. Current status and current source commit
 
-**Source evidence only.** The current branch is
-`feature/paperclip-phase-1-5`. Phases 0–7 are in its history; Phase 8 passed its
-independent execution critic and is committed locally as `7220d3e`. Phase 9 is
-the active working-tree change: default provisioning, same-run deploy safety,
-six-state/four-priority projection widening and CLI repair are implemented and
-under final propagation and critic review. The legacy router and
+The current branch is `codex/paperclip-phases-8-5-12` at
+`b3b427497d63d8f4d1faa147b46c9681c19bc460` before its uncommitted probe
+completion work; that commit is byte-identical to `origin/development`. The
+Paperclip base reached staging successfully in run `33067242593` at `ac70509`
+(PR #131). The current contract-probe, bootstrap, secret-ownership, and
+least-privilege IAM changes have not yet been deployed, so their evidence is
+still source/test evidence rather than staging evidence. The legacy router and
 `CCE_PAPERCLIP_ENABLED` remain intentionally present until the separately
 reviewed retirement gate has two clean production weeks of evidence.
-
-Deployment evidence **does not exist for the current work**. No AWS claim on
-this page is inferred from synth or unit tests, and no current Paperclip
-service/default-install change has been promoted or verified in staging.
-Source evidence and deployment evidence are different facts.
 
 Still not implemented in the required execution order: Phase 8.5, the Four
 Pillars work in Phases 10–12, and the final legacy retirement. The
@@ -308,6 +309,11 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
 ## 6. Current business/state rules
 
 - One Netzar deployment maps to one Paperclip company (DL-5).
+- Each installation owns one stable, independently generated Paperclip Better
+  Auth session-signing secret in its Secrets Manager record. Setup or CI may
+  seed an absent/placeholder field, but later deploys preserve the stored value;
+  a GitHub environment secret is only an optional first-write override for a
+  Netzer-operated environment, never a fleet-wide customer credential.
 - Unassigned Paperclip issues are rejected by the projection with a typed error;
   the ACL filters them rather than inventing an owner.
 - The reconciler queries `updatedSince` from
@@ -337,13 +343,13 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| Phase 9 has source/test evidence but no AWS evidence | [HANDOFF](HANDOFF.md) records the exact focused results and explicitly says no deployment/staging evidence exists | Finish the execution critic and full validation before any promotion; verify the same-run bootstrap/migrate/redeploy path in staging |
+| The staging contract probe has source/test evidence but no live marker evidence | [HANDOFF](HANDOFF.md) separates the green base deploy from the still-local probe completion | Complete the one-time staging tenant bootstrap, promote through the authorized branch chain, and require all eight CloudWatch markers |
 | Paperclip is a single service task | [ADR 0010](../../adr/0010-paperclip-work-engine.md) DL-8 and `infra/lib/paperclip-stack.ts` pin `desiredCount: 1` with no autoscaling | Keep the pin until upstream supports shared node identity; expect a restart gap rather than pretending this is HA |
 | The first T1+ install creates an always-on database/task floor | [Cost guide](../../cost-guide.md) and `scripts/cost-estimate.mjs` price about $104/month for the Paperclip substrate | Keep Paperclip out of ordinary T0; require the existing money confirmation before deploy and show the Paperclip lines in that gate |
 | The vendored `updatedSince` patch can diverge from upstream | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Re-evaluate every artifact re-pin and drop the patch when an upstream release implements the proven contract |
 | Node-vs-Postgres clock skew beyond the configured overlap can still lose a row | `src/lib/paperclip/watermark.ts` documents the exact limit; overlap fixes truncation, not unbounded clock skew | Monitor watermark lag and keep `paperclip/poll_overlap_ms` sized from observed clocks |
 | Legacy retirement is not yet allowed | [bar-and-phases.md](bar-and-phases.md) Phase 9 requires two clean production weeks and a separately reviewed final commit | Keep the router switch, legacy handlers and `paperclip_disabled`; delete only after the production evidence gate |
-| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order after the Phase 4.5 execution critic passes |
+| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order only after the live staging contract probe passes |
 
 ## 8. Exact focused and full validation commands
 

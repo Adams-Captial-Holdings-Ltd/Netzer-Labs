@@ -1301,6 +1301,64 @@ export class IamStack extends Stack implements IamOutputs {
           },
         }),
       );
+
+      // The contract probe is a one-shot invocation of the deployed
+      // orchestrator task definition. Without this grant, CI cannot start the
+      // probe or observe its exit status, so staging could go green without
+      // exercising the live Paperclip contract.
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipProbeRunTaskStaging',
+          effect: Effect.ALLOW,
+          actions: ['ecs:RunTask', 'ecs:DescribeTasks'],
+          resources: [
+            `arn:aws:ecs:${this.region}:${this.account}:task-definition/claudeclaw-staging-orchestrator:*`,
+            `arn:aws:ecs:${this.region}:${this.account}:task/claudeclaw-staging-cluster/*`,
+          ],
+          conditions: {
+            ArnEquals: {
+              'ecs:cluster': `arn:aws:ecs:${this.region}:${this.account}:cluster/claudeclaw-staging-cluster`,
+            },
+          },
+        }),
+      );
+      // RunTask must pass both the exact orchestrator task role from this
+      // stack and Compute's CDK-generated execution role. Without this grant,
+      // ECS rejects the probe before its container starts. Only the execution
+      // role uses a construct-name pattern because referencing it exactly from
+      // Iam would create a Compute -> Iam -> Compute dependency cycle.
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipProbePassRoleStaging',
+          effect: Effect.ALLOW,
+          actions: ['iam:PassRole'],
+          resources: [
+            this.taskRole.roleArn,
+            `arn:aws:iam::${this.account}:role/CCE-STAGING-Compute-TaskExecutionRole*`,
+          ],
+          conditions: {
+            StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' },
+          },
+        }),
+      );
+      // The workflow proves the live contract from the orchestrator's emitted
+      // markers. Without these reads, the task could run while CI remained
+      // unable to prove marker completeness or redaction from CloudWatch.
+      deployRoleRef.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'PaperclipProbeLogsStaging',
+          effect: Effect.ALLOW,
+          actions: [
+            'logs:GetLogEvents',
+            'logs:FilterLogEvents',
+            'logs:DescribeLogStreams',
+          ],
+          resources: [
+            `arn:aws:logs:${this.region}:${this.account}:log-group:/claudeclaw-staging/orchestrator`,
+            `arn:aws:logs:${this.region}:${this.account}:log-group:/claudeclaw-staging/orchestrator:*`,
+          ],
+        }),
+      );
     }
 
     // v5.6: ECS RunTask for consolidation worker (Fargate one-shots)

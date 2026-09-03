@@ -463,7 +463,6 @@ export async function reconcileKey(
   keyName: string,
   slug: string,
   storedToken: string | undefined,
-  dryRun: boolean,
 ): Promise<KeyOutcome> {
   const active = await listActiveKeys(request, agent.id);
   const existing = active.find((k) => k.name === keyName);
@@ -481,10 +480,6 @@ export async function reconcileKey(
       throw new Error(`${keyName} has no responsible user; revoke it and re-run`);
     }
     return { slug, keyName, keyId: existing.id, scope: 'standard', action: 'reused' };
-  }
-
-  if (dryRun) {
-    return { slug, keyName, keyId: '(dry-run)', scope: 'standard', action: 'created' };
   }
 
   let action: KeyOutcome['action'] = 'created';
