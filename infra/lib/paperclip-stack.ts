@@ -435,6 +435,14 @@ export class PaperclipStack extends Stack {
       environment: {
         NODE_ENV: 'production',
         HOST: '0.0.0.0',
+        // Explicit bind mode. Upstream resolves it as PAPERCLIP_BIND ??
+        // config.json server.bind ?? inferred-from-HOST, and 'loopback' forces
+        // 127.0.0.1 whatever HOST says. The instance file on EFS came to hold
+        // server.bind=loopback, so a freshly booted task listened on loopback
+        // only while its localhost health check kept passing (staging Deploy
+        // run 33773788920). 'lan' is 0.0.0.0 and is valid for
+        // authenticated/private; this line keeps the file from shrinking it.
+        PAPERCLIP_BIND: 'lan',
         PORT: String(PAPERCLIP_PORT),
         PAPERCLIP_HOME: '/paperclip',
         PAPERCLIP_INSTANCE_ID: 'default',

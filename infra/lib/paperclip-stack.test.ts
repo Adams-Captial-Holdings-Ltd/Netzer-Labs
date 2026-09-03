@@ -696,6 +696,20 @@ describe('orchestrator to Paperclip reachability', () => {
     );
   });
 
+  it('binds Paperclip to every interface explicitly, so config.json cannot shrink it to loopback', () => {
+    // Upstream resolves the bind mode as PAPERCLIP_BIND ?? config.json
+    // server.bind ?? inferred-from-HOST, and a loopback mode forces the
+    // listener onto 127.0.0.1 whatever HOST says. The instance file on EFS
+    // came to hold server.bind=loopback, so the first task booted after the
+    // hostname fix listened on loopback only: its own health check passed,
+    // and the probe's fetch never got a response (staging Deploy run
+    // 33773788920, attempts 1 and 2). 'lan' is all interfaces and is valid
+    // for authenticated/private. A20: literal.
+    const env = envOf(serviceContainer);
+    expect(env.PAPERCLIP_BIND).toBe('lan');
+    expect(env.HOST).toBe('0.0.0.0');
+  });
+
   it('sets NO base URL at Tier 0, where no engine is provisioned', () => {
     // Tier 0 creates no Paperclip at all. A URL there would turn the typed
     // PaperclipDisabledError ("no base URL", with its remediation) into a DNS
