@@ -3,7 +3,7 @@ feature: paperclip
 document_role: session-handoff
 status: current
 observed_at: 2026-09-02
-as_of_commit: 37e4a1a71a8fb5fb19bc3b1c485c8e92a2dda095
+as_of_commit: cecc5c9f5ef80cc5e6050262ab9e47d7380cdb69
 session_slug: staging-probe-cut-and-deploy
 supersedes: 2026-09-01-staging-readiness-and-auth-model.md
 ---
@@ -16,14 +16,14 @@ supersedes: 2026-09-01-staging-readiness-and-auth-model.md
 |---|---|
 | Session started | 2026-09-02 |
 | Feature folder | `docs/features/paperclip/` |
-| Branch worked on | `codex/paperclip-phases-8-5-12` |
+| Branch worked on | `codex/paperclip-phases-8-5-12` (cuts; merged), then `fix/paperclip-allowed-hostnames` from `development` `d8c6f7e` (the probe finding) |
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none yet — a transient branch deploys nothing and `development` deploys nothing; staging is reached only when the later `qa` → `staging` promotion PR merges, per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `291a457b8aa191dffe0de6e04e377778bbc1d818` |
 | Commit at session end | `37e4a1a71a8fb5fb19bc3b1c485c8e92a2dda095` for the cuts (the docs commit follows it); the closing pass after the staging deploy updates this row |
 | Pushed | yes — the cuts (`7c4bbd1`, `06d9c11`, `14ed070`, `37e4a1a`) and this handoff are pushed to PR #133 |
-| PR | `#133` open against `development` (CI run 33639063032 and Docs CI run 33639063012 green at `291a457`); promotion PRs `development` → `qa` and `qa` → `staging` pending |
-| Deployed | no |
+| PR | `#133` merged into `development` (`d8c6f7e`, 9/9 at `2623a87`); `#134` `development` → `qa` merged (`345f238`, 19/19); `#138` `qa` → `staging` merged (`fd04227`, 20/20); the allowed-hostname fix PR is opened from this branch |
+| Deployed | yes and red: staging Deploy run 33733071639 attempt 4 deployed `fd04227` (orchestrator `:14`) and failed at the probe step with HTTP 403; last green staging deploy is still 33067242593 |
 
 ## 2. Current state summary
 
@@ -442,13 +442,18 @@ are the facts that run produced, and several of them correct a document.
 | P37 | Precaution | In Git Bash, prefix `aws` calls that take a leading-slash argument (`--secret-id /claudeclaw-staging/paperclip`, log-group names) with `MSYS_NO_PATHCONV=1`. | MSYS rewrites the argument into a Windows path and the call fails validation. |
 | P38 | Precaution | Diff secrets by field name and set/`REPLACE_ME` state only; the dry-run prints names, the deploy step prints "value not shown". | No handoff, log, PR or chat ever carries a value. |
 | P39 | Precaution | The probe cannot be pre-flighted against the running orchestrator: task definition `:13` predates `dist/ops`. Its first live run is inside the staging deploy run, after the tenant bootstrap. | Do not open the `qa` → `staging` PR until the bootstrap's no-op re-run has been proven; the probe fails correctly on `REPLACE_ME` fields. |
+| M56 | Mistake (found by the probe) | Paperclip's `privateHostnameGuard` (authenticated/private mode, pinned `v2026.722.0`) answers 403 to every request — `/api/health` included — whose Host is neither loopback nor in `PAPERCLIP_ALLOWED_HOSTNAMES`. The stack never set that variable and `config.json` holds `server.allowedHostnames: []`, while the orchestrator dials the Cloud Map name `paperclip.claudeclaw-staging.internal`. The probe's first live run (staging Deploy run 33733071639 attempt 4, task `e071943c4f2c45b2be381ddd3073c0b7`) was refused on its first `GET`; every earlier check had gone through the SSM tunnel, whose Host is `127.0.0.1`. | Set `PAPERCLIP_ALLOWED_HOSTNAMES` on the Paperclip task definition to the bare Cloud Map hostname (upstream `server/src/config.ts`: comma list, lowercased, replaces the file list; the guard compares `URL.hostname`). Pinned by a literal test. When a private service is reached through a tunnel, force the real Host header at least once. |
+| P40 | Precaution | The guard reads `x-forwarded-host` before `Host`, so a forged forwarded header (`127.0.0.1:3100`) bypasses it — observed 200 over the tunnel. | Never use it as a workaround; it disables the control silently. |
+| M57 | Mistake | `stop_forward` in the operator helper used `pkill`, which this Git Bash does not have, so the first dry port-forward check leaked a `session-manager-plugin.exe` (PID 106732) for six hours; the piece-5 critic found it. | Kill the plugin by image name with `taskkill //PID … //F` (`tasklist //FI "IMAGENAME eq session-manager-plugin.exe"`); verify with `netstat -ano \| findstr :3100`. |
+| A53 | Assumption | The orchestrator image's `[build]` stage (`npm install` with devDependencies, `aws-cdk-lib` included, under QEMU arm64) sits on npm's socket-inactivity timeout: 259 s in the bar run, `read ETIMEDOUT` at ~266-274 s in two consecutive attempts, one 83-minute stall before that; `deps` and `web` stage timings matched the bar to the second; lockfiles and Dockerfile unchanged since `ac70509`. | Re-running is the current remedy (attempt 4 built in 9 m 19 s). The durable fix is one `ENV npm_config_fetch_timeout=…` line in the `[build]` stage, or not installing `aws-cdk-lib` in the image build at all; it belongs to its own PR. |
+| P41 | Precaution | ECS forgets stopped tasks after about an hour, so the probe task cannot be found by `list-tasks --desired-status STOPPED` later. | Find it in CloudWatch: `describe-log-streams --order-by LastEventTime --descending` (no prefix — the API refuses prefix + LastEventTime), then `filter-log-events` for `PAPERCLIP_PHASE_PROBE` on each candidate stream. |
 | M56 | Mistake | This file's first draft copied the comment at `infra/lib/compute-stack.ts:236-244` ("secrets-stack.ts creates all four … `company_id` … with the secret itself") into section 3.3 as a convention. The code disagrees: `infra/lib/secrets-stack.ts:113-118` creates `better_auth_secret`, `reconciler_key`, `agent_keys`, `dispatch_secret` only, and `company_id` is merge-added as `REPLACE_ME` by deploy phase b (`scripts/lib/lifecycle/deploy-phases.ts:300-302`). Caught by the piece-4 critic. | M15 again: a comment is a document, and P5 applies to it. Before writing "X creates Y", open the constructor or the plan that creates Y, not the comment beside its consumer. The comment itself stays wrong in source until the deferred fix in section 6.4 lands. |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Run the P4 tenant bootstrap against staging (ECS Exec invite, SSM port-forward, `--dry-run`, real run, no-op re-run, names-only secret diff); the cuts are already pushed to PR #133.
+Open the `fix/paperclip-allowed-hostnames` PR into `development`; after 9/9, merge and promote `development` → `qa` → `staging`; verify the Deploy run's probe step (eight markers, exit 0, redaction greps) against 33067242593.
 
 ### 6.2 Immediate next steps
 
