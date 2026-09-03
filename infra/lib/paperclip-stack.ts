@@ -457,6 +457,13 @@ export class PaperclipStack extends Stack {
         // gate sign-up; see the A38 note above.
         PAPERCLIP_DEPLOYMENT_MODE: 'authenticated',
         PAPERCLIP_DEPLOYMENT_EXPOSURE: 'private',
+        // The private-hostname guard answers 403 to every request whose Host is
+        // neither loopback nor listed here, /api/health included. The
+        // orchestrator dials the Cloud Map name, so this line is the difference
+        // between an integration and a 403 (staging Deploy run 33733071639,
+        // first probe request). Bare hostname, no port: the guard compares
+        // URL.hostname, and this list replaces config.json's allowedHostnames.
+        PAPERCLIP_ALLOWED_HOSTNAMES: new URL(RESOURCE_NAMES.paperclipInternalUrl).hostname,
         // PAPERCLIP_MIGRATION_AUTO_APPLY is deliberately ABSENT here. See the
         // class doc; paperclip-stack.test.ts asserts the absence.
       },

@@ -683,6 +683,19 @@ describe('orchestrator to Paperclip reachability', () => {
     );
   });
 
+  it('allows the orchestrator hostname through the private-hostname guard', () => {
+    // Paperclip's privateHostnameGuard (authenticated/private mode) answers
+    // 403 to EVERY request, /api/health included, whose Host is neither
+    // loopback nor on PAPERCLIP_ALLOWED_HOSTNAMES. The orchestrator dials the
+    // Cloud Map name above, so without this variable nothing in Netzar can
+    // reach Paperclip at all. Observed live: staging Deploy run 33733071639,
+    // whose probe task logged `request-rejected (HTTP 403)` on its first GET.
+    // Bare hostname, no port: the guard compares URL.hostname. A20: literal.
+    expect(envOf(serviceContainer).PAPERCLIP_ALLOWED_HOSTNAMES).toBe(
+      'paperclip.claudeclaw.internal',
+    );
+  });
+
   it('sets NO base URL at Tier 0, where no engine is provisioned', () => {
     // Tier 0 creates no Paperclip at all. A URL there would turn the typed
     // PaperclipDisabledError ("no base URL", with its remediation) into a DNS
