@@ -3,14 +3,14 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-09-02
-as_of_commit: cecc5c9f5ef80cc5e6050262ab9e47d7380cdb69
+as_of_commit: 44fa53f7f911513a47bcf33ef1bc440d06ac4a5a
 ---
 
 # Paperclip integration handoff
 
-- **Branch:** `fix/paperclip-allowed-hostnames` (from `development` `d8c6f7e`); next merge target `development`, then `qa`, then `staging` (merging `qa` → `staging` is the deploy). `codex/paperclip-phases-8-5-12` is merged and finished.
-- **Source state:** the staging contract probe and its CI-contract follow-up are committed and pushed through `291a457` and open against `development` as [PR #133](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/133) (CI run 33639063032 and Docs CI run 33639063012 green at that tip). This session's cuts — 22 files, 189 insertions, 356 deletions against `291a457` — were committed as four path-scoped commits (`7c4bbd1` infra, `06d9c11` probe, `14ed070` bootstrap, `37e4a1a` injection cut) plus the docs commit `2623a87`. PR #133 merged into `development` as `d8c6f7e`; [PR #134](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/134) promoted it to `qa` (`345f238`, 19/19 checks); [PR #138](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/138) promoted it to `staging` (`fd04227`, 20/20 checks). The follow-up on this branch is one Paperclip task-definition variable, `PAPERCLIP_ALLOWED_HOSTNAMES`, with a literal test and a drift-gate note; see the [2026-09-02 session handoff](handoffs/2026-09-02-staging-probe-cut-and-deploy.md).
-- **Deployment:** staging Deploy run [33733071639](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33733071639) at `fd04227` (attempt 4) ran every bar step green through `Force ECS rollout` — staging now runs orchestrator task definition `:14`, the image that carries `dist/ops` — and then **failed at the new probe step**: the probe executed as ECS task `e071943c4f2c45b2be381ddd3073c0b7` and its stream holds exactly one line, `PAPERCLIP_PHASE_PROBE_FAILED PaperclipPhaseProbeError: request-rejected (HTTP 403)`, so its first request (`GET /api/companies/{cid}/org`) was refused and the smoke test was skipped. Attempts 1-3 of the same run never reached deployment (image build: one stall, two `npm install` read timeouts in the emulated `[build]` stage; lockfiles and Dockerfile unchanged since the bar). The last **green** staging deploy remains [33067242593](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33067242593) at `ac70509`. Production is untouched and no release exists.
+- **Branch:** `fix/paperclip-bind-lan` (from `development` `65f5f29`); next merge target `development`, then `qa`, then `staging` (merging `qa` → `staging` is the deploy). `codex/paperclip-phases-8-5-12` and `fix/paperclip-allowed-hostnames` are merged and finished.
+- **Source state:** the staging contract probe and its CI-contract follow-up are committed and pushed through `291a457` and open against `development` as [PR #133](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/133) (CI run 33639063032 and Docs CI run 33639063012 green at that tip). This session's cuts — 22 files, 189 insertions, 356 deletions against `291a457` — were committed as four path-scoped commits (`7c4bbd1` infra, `06d9c11` probe, `14ed070` bootstrap, `37e4a1a` injection cut) plus the docs commit `2623a87`. PR #133 merged into `development` as `d8c6f7e`; [PR #134](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/134) promoted it to `qa` (`345f238`, 19/19 checks); [PR #138](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/138) promoted it to `staging` (`fd04227`, 20/20 checks). [PR #139](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/139) (`PAPERCLIP_ALLOWED_HOSTNAMES`) merged into `development` as `65f5f29`, then `qa` (#140, `fc7ec05`) and `staging` (#141, `3a6e040`). This branch adds the second variable the probe surfaced, `PAPERCLIP_BIND=lan`, with a literal test and a drift-gate note; see the [2026-09-02 session handoff](handoffs/2026-09-02-staging-probe-cut-and-deploy.md).
+- **Deployment:** staging Deploy run [33773788920](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33773788920) at `3a6e040` deployed the hostname fix (the Paperclip service was replaced 16:00-16:05:54 UTC with `PAPERCLIP_ALLOWED_HOSTNAMES`; staging now runs orchestrator `:16` and Paperclip `:3`), and the probe failed in attempts 1 and 2 with `request-failed-before-response`: its fetch never got a response, where the run before it had reached the guard from the same subnets and security group. Attempt 2 changed nothing on Paperclip, so the replaced task is persistently unreachable from the VPC — see Active blockers. Before that, run [33733071639](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33733071639) at `fd04227` (attempt 4) ran every bar step green through `Force ECS rollout` — staging now runs orchestrator task definition `:14`, the image that carries `dist/ops` — and then **failed at the new probe step**: the probe executed as ECS task `e071943c4f2c45b2be381ddd3073c0b7` and its stream holds exactly one line, `PAPERCLIP_PHASE_PROBE_FAILED PaperclipPhaseProbeError: request-rejected (HTTP 403)`, so its first request (`GET /api/companies/{cid}/org`) was refused and the smoke test was skipped. Attempts 1-3 of the same run never reached deployment (image build: one stall, two `npm install` read timeouts in the emulated `[build]` stage; lockfiles and Dockerfile unchanged since the bar). The last **green** staging deploy remains [33067242593](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33067242593) at `ac70509`. Production is untouched and no release exists.
 
 ## Current objective and required order
 
@@ -20,7 +20,8 @@ Scope decision (user, 2026-09-02): this branch lands the staging contract probe 
 2. Done 2026-09-03 — one-time staging tenant bootstrap: invite via ECS Exec, SSM port-forward, `--dry-run`, real run (company `Netzar OS` prefix `NZR`, agents `main`/`research`, keys `netzar-reconciler`/`netzar-agent-main`/`netzar-agent-research`, one new secret version), no-op re-run (`agents created 0, reused 2; keys created 0, reused 3`), independently re-verified by a fresh-context critic (prior fields byte-identical by hash).
 3. Done — PR #134 `development` → `qa` (`345f238`).
 4. Done, red — PR #138 `qa` → `staging` (`fd04227`); run 33733071639 attempt 4 deployed and the probe ran live and was refused with HTTP 403 (see Deployment and Active blockers).
-5. **Now:** ship `PAPERCLIP_ALLOWED_HOSTNAMES` (this branch) through `development` → `qa` → `staging`; verify the new run against 33067242593: the same job/step list plus the one probe step, all eight markers in CloudWatch, the redaction greps, the three `PaperclipProbe*` Sids live.
+5. Done, red — `PAPERCLIP_ALLOWED_HOSTNAMES` shipped (#139 → #140 → #141); run 33773788920 deployed it and the probe's fetch got no response (attempts 1 and 2).
+6. **Now:** ship `PAPERCLIP_BIND=lan` (this branch) through `development` → `qa` → `staging`; verify the new run against 33067242593: the same job/step list plus the one probe step, all eight markers in CloudWatch, the redaction greps, the three `PaperclipProbe*` Sids live.
 6. Final handoff pass with the green run id and the eight observed shapes.
 
 Then, separately and in order: Phase 8.5 from the observed contracts, the UI/session bridge, Phases 10-12, production, release.
@@ -42,7 +43,7 @@ Per-install Better Auth secret; recorded in the [README](README.md) section 6 an
 ## Phase status
 
 - Base integration: deployed and healthy in staging (run 33067242593).
-- Staging contract probe: merged and deployed to staging (orchestrator `:14`); ran live once (run 33733071639, attempt 4) and was refused with HTTP 403 on its first request by Paperclip's private-hostname guard — the finding the probe exists to make. Fix on this branch, not yet deployed.
+- Staging contract probe: merged and deployed to staging; ran live three times. Run 33733071639: refused with HTTP 403 by Paperclip's private-hostname guard (fixed by `PAPERCLIP_ALLOWED_HOSTNAMES`, deployed). Run 33773788920, attempts 1 and 2: the fetch never got a response — the replaced Paperclip task listens on loopback only (fix `PAPERCLIP_BIND=lan` on this branch, not yet deployed).
 - Phase 8.5: not implemented; deferred to a separate plan after the probe lands (scope decision 2026-09-02); still gated on live `/org` and goals shapes.
 - Same-origin UI/session bridge (bar-and-phases Part F): does not exist; deferred to the same plan.
 - Phases 10-12: not implemented; deferred behind the bridge.
@@ -69,18 +70,20 @@ This session only, on the working tree with the cuts applied; the validation run
 
 ## Active blockers
 
-- **Paperclip refuses the orchestrator's hostname.** In `authenticated`/`private` mode the pinned image's `privateHostnameGuard` answers 403 to every request — `/api/health` included — whose Host is neither loopback nor in `PAPERCLIP_ALLOWED_HOSTNAMES`; the task definition never set that variable and `config.json` has `server.allowedHostnames: []`, while the orchestrator dials `paperclip.claudeclaw-staging.internal`. Nothing in Netzar can talk to Paperclip in staging until the fix on this branch is deployed. The SSM tunnel never showed it because its Host is `127.0.0.1`.
-- The staging Deploy run is red at the probe step; the smoke test did not run. Staging serves orchestrator `:14` and Paperclip `:2`, both 1/1.
+- **The replaced Paperclip task listens on loopback only.** Upstream resolves the bind mode as `PAPERCLIP_BIND` ?? `config.json` `server.bind` ?? inferred from `HOST`, and `loopback` maps the listener to `127.0.0.1` whatever `HOST` says (`packages/shared/src/network-bind.ts`, `resolveRuntimeBind`). The instance file on EFS holds `server.bind: "loopback", host: "127.0.0.1"` (read via ECS Exec on 2026-09-03; which upstream path wrote it is not identified — `bootstrap-ceo` only reads the file, and the quickstart onboarding would have written `lan` from `HOST=0.0.0.0`). The task booted by run 33773788920 therefore answers its own localhost health check and nothing else; the orchestrator's connection gets no response. The task it replaced had booted on 2026-09-02, before the file held that value, and listened on all interfaces (it answered the 403). Fix on this branch: `PAPERCLIP_BIND=lan` on the task definition, so the file can no longer shrink the listener.
+- Resolved by #139 and deployed: the private-hostname guard no longer refuses `paperclip.claudeclaw-staging.internal` (the hostname is in `PAPERCLIP_ALLOWED_HOSTNAMES` on Paperclip `:3`). Not yet proven live, because the listener problem above sits in front of it.
+- The staging Deploy run is red at the probe step; the smoke test did not run. Staging serves orchestrator `:16` and Paperclip `:3`, both 1/1.
+- The operator AWS session expired at 15:33 UTC on 2026-09-03; live ECS, Cloud Map and CloudWatch reads need `aws login` again.
 - Docker daemon unreachable here: the integration suite is NOT RUN locally; CI runs it.
 - Resolved: tenant bootstrapped; Better Auth secret set; AWS credentials live.
 
 ## Smallest next action
 
-Open the PR for this branch into `development`, wait for 9/9, merge; promote `development` → `qa` → `staging`; watch the Deploy run's probe step and verify it against 33067242593.
+Open the PR for this branch (`PAPERCLIP_BIND=lan`) into `development`, wait for 9/9, merge; promote `development` → `qa` → `staging`; watch the Deploy run's probe step and verify it against 33067242593. Then `aws login` and run the redaction greps against the green run's Actions log and probe stream.
 
 ## Guardrails for the resuming agent
 
-- Work only in `C:\dev\Netzer-Labs\.worktrees\paperclip-promote` on `fix/paperclip-allowed-hostnames` (branched from `development`).
+- Work only in `C:\dev\Netzer-Labs\.worktrees\paperclip-promote` on `fix/paperclip-bind-lan` (branched from `development`).
 - Preserve unrelated work and keep commits path-scoped.
 - The tenant is bootstrapped; do not run the bootstrap again except to prove the no-op. Never use `x-forwarded-host` to work around the hostname guard — it is honoured before `Host` and would silently disable the guard.
 - Never print, commit, or paste a secret value; diff secrets by field name only.
