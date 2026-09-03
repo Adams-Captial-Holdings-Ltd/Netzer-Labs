@@ -492,9 +492,8 @@ jobs:
         if: steps.tiergate.outputs.paperclip_enabled == '1'
         env:
           APP_SLUG: ${{ env.TARGET_ENV == 'staging' && 'claudeclaw-staging' || 'claudeclaw' }}
-          # The one owner of better_auth_secret. Same spelling as .env, so a
-          # local deploy and a CI deploy converge on one value instead of
-          # rotating each other's. Unset is tolerated (warn + skip), never fatal.
+          # Optional first-write override. Secrets Manager owns the value once
+          # populated; local lifecycle deploys and CI both preserve that owner.
           PAPERCLIP_BETTER_AUTH_SECRET: ${{ secrets.PAPERCLIP_BETTER_AUTH_SECRET }}
         run: |
           set -uo pipefail
@@ -540,10 +539,9 @@ jobs:
             echo "added company_id placeholder without replacing live fields"
           fi
 
-          # better_auth_secret has exactly ONE owner: the operator-held
-          # PAPERCLIP_BETTER_AUTH_SECRET, the same value and the same spelling
-          # `npm run setup` mints into .env and phase (b) writes via
-          # scripts/lib/lifecycle/deploy-phases.ts.
+          # better_auth_secret has exactly ONE owner: this installation's
+          # Secrets Manager field. PAPERCLIP_BETTER_AUTH_SECRET and the value
+          # `npm run setup` stores in .env are optional FIRST-WRITE seeds only.
           #
           # This step used to mint its own with `openssl rand -hex 32` when the
           # field was REPLACE_ME. That made TWO independent minters for one
@@ -553,23 +551,28 @@ jobs:
           # claimed it was "minted once, then never touched". A value no
           # operator can see and no second driver can reproduce is not owned.
           #
-          # So CI consumes, never mints. Absent -> defer with instructions,
-          # the same shape as the missing-secret paths above; a deploy is not
-          # failed over a value the operator can set in one place.
+          # The revert was correct until the second writer was fixed. Phase (b)
+          # is now write-if-absent for this field, so neither a stale .env nor a
+          # later repo secret can rotate a populated installation. CI can safely
+          # seed a missing field and Secrets Manager remains the single owner.
           if [ "$(jq -r '.better_auth_secret // "REPLACE_ME"' current.json)" = "REPLACE_ME" ]; then
             if [ -n "${PAPERCLIP_BETTER_AUTH_SECRET:-}" ]; then
               printf '%s' "$PAPERCLIP_BETTER_AUTH_SECRET" > auth.txt
               jq --rawfile v auth.txt '.better_auth_secret = $v' current.json > next.json
               mv next.json current.json
               rm -f auth.txt
-              echo "wrote better_auth_secret from the repo secret (value not shown)"
+              echo "seeded better_auth_secret from the optional repo secret (value not shown)"
             else
-              echo "::warning::$SECRET still has better_auth_secret=REPLACE_ME."
-              echo "Set the repository secret PAPERCLIP_BETTER_AUTH_SECRET (the same value"
-              echo "'npm run setup' writes to .env as PAPERCLIP_BETTER_AUTH_SECRET), then"
-              echo "re-run. Generate one with: openssl rand -hex 32"
-              echo "Paperclip sign-in stays broken until it is set; nothing else is blocked."
+              openssl rand -hex 32 | tr -d '\r\n' > auth.txt
+              jq --rawfile v auth.txt '.better_auth_secret = $v' current.json > next.json
+              mv next.json current.json
+              rm -f auth.txt
+              echo "minted the per-install better_auth_secret from 32 random bytes (value not shown)"
             fi
+          fi
+          if [ "$(jq '(.better_auth_secret // "") != "REPLACE_ME" and ((.better_auth_secret // "") | length) >= 32' current.json)" != "true" ]; then
+            echo "::error::$SECRET has no valid better_auth_secret; refusing this deploy." >&2
+            exit 1
           fi
 
           # database_url: composed from the Aurora-generated secret, which is
@@ -1037,7 +1040,6 @@ jobs:
         env:
           APP_SLUG: ${{ env.TARGET_ENV == 'staging' && 'claudeclaw-staging' || 'claudeclaw' }}
           STACK: ${{ steps.cfg.outputs.stack_name }}-Paperclip
-          PAPERCLIP_BETTER_AUTH_SECRET: ${{ secrets.PAPERCLIP_BETTER_AUTH_SECRET }}
           CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
           DOMAIN_NAME: ${{ steps.cfg.outputs.public_host }}
@@ -1088,11 +1090,9 @@ jobs:
                  + ((.[1].port // 5432) | tostring) + "/" + (.[1].dbname // "paperclip")
                  + "?sslmode=require")}' \
              current.json db.json > next.json
-          if [ "$(jq -r '.better_auth_secret // "REPLACE_ME"' next.json)" = "REPLACE_ME" ] && [ -n "${PAPERCLIP_BETTER_AUTH_SECRET:-}" ]; then
-            printf '%s' "$PAPERCLIP_BETTER_AUTH_SECRET" > auth.txt
-            jq --rawfile v auth.txt '.better_auth_secret = $v' next.json > merged.json
-            mv merged.json next.json
-            rm -f auth.txt
+          if [ "$(jq '(.better_auth_secret // "") != "REPLACE_ME" and ((.better_auth_secret // "") | length) >= 32' next.json)" != "true" ]; then
+            echo "::error::$SECRET has no valid better_auth_secret after bootstrap composition." >&2
+            exit 1
           fi
           aws secretsmanager put-secret-value --secret-id "$SECRET" \
             --secret-string "file://next.json" --region "$AWS_REGION" \
@@ -1159,6 +1159,117 @@ jobs:
             --cluster "$CLUSTER" \
             --services "$SERVICE" \
             --region "$AWS_REGION"
+
+      - name: Characterize Paperclip org and goals contracts
+        if: steps.tiergate.outputs.paperclip_enabled == '1' && env.TARGET_ENV == 'staging'
+        env:
+          APP_SLUG: claudeclaw-staging
+          CLUSTER: ${{ steps.cfg.outputs.cluster }}
+          SERVICE: ${{ steps.cfg.outputs.service }}
+        run: |
+          set -euo pipefail
+          expected_markers=(org whoami goals-list org-svg goal-create goal-get goal-update goal-delete)
+          max_attempts=12
+          delay=10
+          tmpdir=$(mktemp -d)
+          trap 'rm -rf -- "$tmpdir"' EXIT
+
+          aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --region "$AWS_REGION" --query 'services[0]' --output json > "$tmpdir/service.json"
+          if ! task_definition=$(jq -er '.taskDefinition | select(type == "string" and length > 0)' "$tmpdir/service.json"); then
+            echo "::error::The live orchestrator service has no task definition." >&2
+            exit 1
+          fi
+          if ! network=$(jq -ce \
+            '.networkConfiguration.awsvpcConfiguration
+             | select(type == "object")
+             | {awsvpcConfiguration: .}' "$tmpdir/service.json"); then
+            echo "::error::The live orchestrator service has no awsvpc configuration." >&2
+            exit 1
+          fi
+
+          # Keep overrides command-only. Environment overrides are exposed by
+          # DescribeTasks and would create a second, inspectable secret path.
+          overrides='{"containerOverrides":[{"name":"orchestrator","command":["node","dist/ops/paperclip-phase-probe.js"]}]}'
+          aws ecs run-task --cluster "$CLUSTER" --task-definition "$task_definition" \
+            --launch-type FARGATE --count 1 --network-configuration "$network" \
+            --overrides "$overrides" --region "$AWS_REGION" \
+            --output json > "$tmpdir/run-task.json"
+          if [ "$(jq '.failures | length' "$tmpdir/run-task.json")" -ne 0 ]; then
+            echo "::error::ECS rejected the Paperclip probe task." >&2
+            jq -r '.failures[] | "  " + (.reason // "unknown ECS failure")' \
+              "$tmpdir/run-task.json" >&2
+            exit 1
+          fi
+          if ! task=$(jq -er '.tasks[0].taskArn | select(type == "string" and length > 0)' "$tmpdir/run-task.json"); then
+            echo "::error::ECS returned no Paperclip probe task ARN." >&2
+            exit 1
+          fi
+
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$task" --region "$AWS_REGION"
+          aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task" \
+            --region "$AWS_REGION" --output json > "$tmpdir/stopped-task.json"
+          exit_code=$(jq -r \
+            '.tasks[0].containers[]? | select(.name == "orchestrator") | .exitCode // empty' \
+            "$tmpdir/stopped-task.json")
+          task_id="${task##*/}"
+          stream="task/orchestrator/$task_id"
+          events_file="$tmpdir/events.json"
+          printf '%s' '{"events":[]}' > "$events_file"
+
+          missing=("${expected_markers[@]}")
+          failure_seen=0
+          for attempt in $(seq 1 "$max_attempts"); do
+            if ! aws logs filter-log-events \
+              --log-group-name "/$APP_SLUG/orchestrator" \
+              --log-stream-names "$stream" \
+              --filter-pattern '"PAPERCLIP_PHASE_PROBE"' \
+              --region "$AWS_REGION" --output json > "$events_file" 2> "$tmpdir/log-read.err"; then
+              printf '%s' '{"events":[]}' > "$events_file"
+            fi
+
+            if jq -e --arg failure "PAPERCLIP_PHASE_PROBE_FAILED" \
+              '.events[]?.message | select(startswith($failure))' \
+              "$events_file" > /dev/null; then
+              failure_seen=1
+            fi
+            missing=()
+            for marker in "${expected_markers[@]}"; do
+              if ! jq -e --arg marker "$marker" '
+                .events[]?.message
+                | select(startswith("PAPERCLIP_PHASE_PROBE "))
+                | ltrimstr("PAPERCLIP_PHASE_PROBE ")
+                | fromjson?
+                | select(.name == $marker)
+              ' "$events_file" > /dev/null; then
+                missing+=("$marker")
+              fi
+            done
+            if [ "$failure_seen" -eq 1 ] || [ "${#missing[@]}" -eq 0 ]; then
+              break
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              echo "Paperclip probe logs incomplete (${#missing[@]} markers missing); ingestion retry $attempt/$max_attempts."
+              sleep "$delay"
+            fi
+          done
+
+          jq -r '.events[]?.message | select(startswith("PAPERCLIP_PHASE_PROBE "))' \
+            "$events_file"
+          if [ "$failure_seen" -eq 1 ]; then
+            jq -r '.events[]?.message | select(startswith("PAPERCLIP_PHASE_PROBE_FAILED"))' \
+              "$events_file" >&2
+            echo "::error::Paperclip probe emitted its failure marker." >&2
+            exit 1
+          fi
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::Paperclip probe task exited ${exit_code:-without an exit code}." >&2
+            exit 1
+          fi
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Paperclip probe logs never contained every expected marker: ${missing[*]}" >&2
+            exit 1
+          fi
 
       - name: Smoke test (health)
         env:

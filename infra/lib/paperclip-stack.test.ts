@@ -601,14 +601,6 @@ describe('orchestrator to Paperclip reachability', () => {
       'utf8',
     );
     expect(deployPhases).toContain("defaults: JSON.stringify({ company_id: 'REPLACE_ME' })");
-
-    // ECS resolves the current secret version at task start, so this write is
-    // what the post-bootstrap rollout receives instead of the placeholder.
-    const bootstrap = readFileSync(
-      new URL('../../scripts/paperclip-bootstrap.ts', import.meta.url),
-      'utf8',
-    );
-    expect(bootstrap).toContain('nextFields.company_id = company.id;');
   });
 
   it('does not reference the additive company-id field at Tier 0', () => {
@@ -848,7 +840,10 @@ describe('service boundary', () => {
 interface Statement {
   Sid?: string;
   Action?: string | string[];
-  Resource?: string | string[];
+  Resource?:
+    | string
+    | Record<string, unknown>
+    | Array<string | Record<string, unknown>>;
   Condition?: Record<string, Record<string, string>>;
 }
 
@@ -999,5 +994,53 @@ describe('deploy role grants for the CI Paperclip steps (M34)', () => {
         'ecs-tasks.amazonaws.com',
       );
     }
+  });
+
+  it('runs the staging contract probe only through the orchestrator task family', () => {
+    const s = bySid(staging, 'PaperclipProbeRunTaskStaging');
+    expect(actionsOf(s).sort()).toEqual(['ecs:DescribeTasks', 'ecs:RunTask']);
+    expect(resourcesOf(s)).toContain(
+      ':task-definition/claudeclaw-staging-orchestrator:*',
+    );
+    expect(resourcesOf(s)).toContain(':task/claudeclaw-staging-cluster/*');
+    expect(resourcesOf(s)).not.toContain(
+      ':task-definition/claudeclaw-staging-paperclip:',
+    );
+    expect(s.Condition?.ArnEquals?.['ecs:cluster']).toBe(
+      'arn:aws:ecs:us-east-1:637423318609:cluster/claudeclaw-staging-cluster',
+    );
+  });
+
+  it('passes only the exact task role and narrow staging execution-role family', () => {
+    const s = bySid(staging, 'PaperclipProbePassRoleStaging');
+    const resources = Array.isArray(s.Resource) ? s.Resource : [s.Resource];
+    expect(actionsOf(s)).toEqual(['iam:PassRole']);
+    expect(resourcesOf(s)).toContain('"Fn::GetAtt":["TaskRole');
+    expect(resourcesOf(s)).toContain(
+      ':role/CCE-STAGING-Compute-TaskExecutionRole*',
+    );
+    expect(resourcesOf(s)).not.toContain(':role/CCE-STAGING-Compute-*');
+    expect(resources).not.toContain('*');
+    expect(s.Condition?.StringEquals?.['iam:PassedToService']).toBe(
+      'ecs-tasks.amazonaws.com',
+    );
+  });
+
+  it('reads only the staging orchestrator log group for probe evidence', () => {
+    const s = bySid(staging, 'PaperclipProbeLogsStaging');
+    expect(actionsOf(s).sort()).toEqual([
+      'logs:DescribeLogStreams',
+      'logs:FilterLogEvents',
+      'logs:GetLogEvents',
+    ]);
+    expect(resourcesOf(s)).toContain(
+      ':log-group:/claudeclaw-staging/orchestrator"',
+    );
+    expect(resourcesOf(s)).toContain(
+      ':log-group:/claudeclaw-staging/orchestrator:*',
+    );
+    expect(resourcesOf(s)).not.toContain(
+      ':log-group:/claudeclaw/orchestrator',
+    );
   });
 });

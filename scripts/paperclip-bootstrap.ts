@@ -37,9 +37,12 @@
  * env loading, printing and Secrets Manager: the parts a test would have to
  * mock rather than exercise.
  *
+ * `--dry-run` proves the instance answers `GET /api/health` and the secret is
+ * readable, prints the plan, and returns: no POST, no write.
+ *
  * REQUIRED ENV (from `.env[.<name>]` or the process env)
  *   PAPERCLIP_BASE_URL        exact origin of the running instance
- *   PAPERCLIP_ADMIN_EMAIL     the ONE responsible user; named, never shared
+ *   CCE_PAPERCLIP_ADMIN_EMAIL per-environment responsible user; named, never shared
  *   PAPERCLIP_ADMIN_PASSWORD  its password
  *   PAPERCLIP_DISPATCH_URL    Netzar's inbound dispatch route (Phase 6)
  * OPTIONAL
@@ -81,17 +84,17 @@ import {
   ensureAgents,
   ensureCompany,
   jsonResponse,
-  listAgents,
-  listCompanies,
-  netzarAgentId,
   makeBoardRequest,
   reconcileKey,
   signUpOrSignIn,
-  type AgentRecord,
   type AgentSpec,
   type KeyOutcome,
-  type PaperclipRequest,
 } from './lib/paperclip/bootstrap-core.js';
+import {
+  loadBootstrapSecretFields,
+  mergeBootstrapSecretFields,
+  parseBootstrapAgentKeys,
+} from './lib/paperclip/bootstrap-secret.js';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -126,24 +129,6 @@ function specsFromEnv(env: Record<string, string>, dispatchSecret: string): Agen
   });
 }
 
-/**
- * Read-only twin of `ensureAgents` for --dry-run: reports which agents WOULD be
- * created without creating any. Kept beside the real call rather than as a flag
- * inside it, so the write path has no dry-run branch to get wrong.
- */
-async function previewAgents(
-  request: PaperclipRequest,
-  companyId: string,
-  specs: AgentSpec[],
-): Promise<{ agents: Map<string, AgentRecord>; created: string[] }> {
-  const bySlug = new Map<string, AgentRecord>();
-  for (const agent of await listAgents(request, companyId)) {
-    const slug = netzarAgentId(agent);
-    if (slug) bySlug.set(slug, agent);
-  }
-  return { agents: bySlug, created: specs.filter((s) => !bySlug.has(s.slug)).map((s) => s.slug) };
-}
-
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (
@@ -152,7 +137,7 @@ async function main(): Promise<void> {
       oneLiner: 'idempotent Paperclip tenant bootstrap: company, responsible user, agents, keys',
       flags: [
         ['--env=<name>', 'read .env.<name> instead of .env'],
-        ['--dry-run', 'report what would change; create nothing, write nothing'],
+        ['--dry-run', 'prove the instance and the secret are readable; create nothing, write nothing'],
       ],
       contract:
         'Creates Paperclip records and writes ONE Secrets Manager version; no AWS infrastructure ' +
@@ -176,6 +161,8 @@ async function main(): Promise<void> {
   const region = env.AWS_REGION?.trim() || 'us-east-1';
   // Fail fast on the one required value agentSpecs() needs, before any call.
   required(env, 'PAPERCLIP_DISPATCH_URL');
+  const adminEmail = required(env, 'CCE_PAPERCLIP_ADMIN_EMAIL');
+  const adminPassword = required(env, 'PAPERCLIP_ADMIN_PASSWORD');
 
   // eslint-disable-next-line no-console
   console.log('\n' + bold('Paperclip tenant bootstrap'));
@@ -188,15 +175,86 @@ async function main(): Promise<void> {
   if (dryRun) {
     // eslint-disable-next-line no-console
     console.log(warn('--dry-run: nothing will be created or written'));
+    // Sign-in is a POST that becomes account creation on a virgin instance, so
+    // reachability is proven with the unauthenticated health route instead.
+    const health = await fetch(`${baseUrl}/api/health`).catch((error: unknown) => {
+      throw new Error(`health check GET ${baseUrl}/api/health failed`, { cause: error });
+    });
+    if (!health.ok) {
+      throw new Error(`health check GET ${baseUrl}/api/health returned HTTP ${health.status}`);
+    }
+    // eslint-disable-next-line no-console
+    console.log(ok('instance reachable (GET /api/health)'));
   }
+
+  // ── Existing credentials ──────────────────────────────────────────
+  // Validate the complete retained secret before the first Paperclip POST.
+  // Otherwise a malformed or unreadable one-time key map could fail only
+  // after sign-up consumed the invite or company creation changed the board.
+  section('Stored credentials');
+  const secretsClient = new SecretsManagerClient({ region });
+  const fields = await loadBootstrapSecretFields({
+    secretId,
+    read: async () => {
+      const current = await secretsClient.send(
+        new GetSecretValueCommand({ SecretId: secretId }),
+      );
+      return current.SecretString;
+    },
+  });
+  const storedAgentKeys = parseBootstrapAgentKeys({ value: fields.agent_keys, secretId });
+  if (dryRun) {
+    // Field NAMES, and whether each still holds the shipped placeholder. Never a value.
+    for (const name of Object.keys(fields).sort()) {
+      // eslint-disable-next-line no-console
+      console.log(`  ${dim(fields[name] === 'REPLACE_ME' ? 'REPLACE_ME' : 'set')} ${name}`);
+    }
+    section('Read-only plan');
+    // eslint-disable-next-line no-console
+    console.log(info(`would authenticate the named operator ${adminEmail}`));
+    // eslint-disable-next-line no-console
+    console.log(
+      info(
+        env.PAPERCLIP_BOOTSTRAP_INVITE?.trim()
+          ? 'would accept the supplied one-time bootstrap invite'
+          : 'would use the existing operator membership (no invite supplied)',
+      ),
+    );
+    // eslint-disable-next-line no-console
+    console.log(info('would ensure one company, the configured agents, and N+1 standard keys'));
+    // eslint-disable-next-line no-console
+    console.log(info(`would merge the company id, dispatch secret and keys into ${secretId}`));
+    // eslint-disable-next-line no-console
+    console.log(ok('dry-run complete: nothing was created or written'));
+    return;
+  }
+  const storedReconciler =
+    fields.reconciler_key && fields.reconciler_key !== 'REPLACE_ME'
+      ? fields.reconciler_key
+      : undefined;
+  // Minted ONCE and then left alone: re-minting on every run would rotate the
+  // secret out from under the adapter_config that carries it.
+  const mintedDispatchSecret =
+    !fields.dispatch_secret || fields.dispatch_secret === 'REPLACE_ME';
+  if (mintedDispatchSecret) {
+    const { randomBytes } = await import('node:crypto');
+    fields.dispatch_secret = randomBytes(32).toString('hex');
+  }
+  // eslint-disable-next-line no-console
+  console.log(
+    mintedDispatchSecret
+      ? ok('minted dispatch_secret (value not shown)')
+      : dim('  dispatch_secret already present'),
+  );
+  const specs = specsFromEnv(env, fields.dispatch_secret);
 
   // ── Board session as the ONE responsible user ─────────────────────
   section('Responsible user');
   const request = makeBoardRequest(baseUrl, new CookieJar());
   await signUpOrSignIn(request, {
     name: env.PAPERCLIP_ADMIN_NAME?.trim() || 'Netzar Operator',
-    email: required(env, 'PAPERCLIP_ADMIN_EMAIL'),
-    password: required(env, 'PAPERCLIP_ADMIN_PASSWORD'),
+    email: adminEmail,
+    password: adminPassword,
   });
   const invite = env.PAPERCLIP_BOOTSTRAP_INVITE?.trim();
   if (invite) {
@@ -225,19 +283,11 @@ async function main(): Promise<void> {
     );
   }
   // eslint-disable-next-line no-console
-  console.log(ok(`signed in as ${env.PAPERCLIP_ADMIN_EMAIL}`));
+  console.log(ok(`signed in as ${adminEmail}`));
 
   // ── One company ───────────────────────────────────────────────────
   section('Company');
-  const listed = await listCompanies(request);
-  if (dryRun && listed.length === 0) {
-    // eslint-disable-next-line no-console
-    console.log(info('would create the company; nothing further can be reported without it'));
-    return;
-  }
-  const company = dryRun
-    ? listed[0]
-    : await ensureCompany(request, {
+  const company = await ensureCompany(request, {
     // Paperclip derives the issue prefix from the name it is CREATED with and
     // keeps it across renames, so the create name carries the prefix and the
     // display name is set immediately after.
@@ -247,60 +297,12 @@ async function main(): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(ok(`company ${company.name} (${company.id}) prefix ${company.issuePrefix}`));
 
-  // ── Existing credentials ──────────────────────────────────────────
-  // Read BEFORE the agents are created, because an agent's adapter_config
-  // carries the dispatch secret and Paperclip does not interpolate it.
-  section('Stored credentials');
-  const secretsClient = new SecretsManagerClient({ region });
-  // In --dry-run an unreadable secret is reported, not fatal: the whole point
-  // of the flag is that an operator can inspect a running instance without AWS
-  // credentials in hand. Everything downstream then behaves as if nothing is
-  // stored, which is the conservative direction (it over-reports work to do).
-  let fields: Record<string, string> = {};
-  try {
-    const current = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretId }));
-    fields = JSON.parse(current.SecretString ?? '{}') as Record<string, string>;
-  } catch (err) {
-    if (!dryRun) throw err;
-    // eslint-disable-next-line no-console
-    console.log(warn(`could not read ${secretId} (${(err as Error).name}); assuming nothing stored`));
-  }
-  const storedAgentKeys = (() => {
-    try {
-      const parsed = JSON.parse(fields.agent_keys ?? '{}') as Record<string, string>;
-      return typeof parsed === 'object' && parsed !== null ? parsed : {};
-    } catch {
-      return {};
-    }
-  })();
-  const storedReconciler =
-    fields.reconciler_key && fields.reconciler_key !== 'REPLACE_ME'
-      ? fields.reconciler_key
-      : undefined;
-  // Minted ONCE and then left alone: re-minting on every run would rotate the
-  // secret out from under the adapter_config that carries it.
-  const mintedDispatchSecret =
-    !fields.dispatch_secret || fields.dispatch_secret === 'REPLACE_ME';
-  if (mintedDispatchSecret) {
-    const { randomBytes } = await import('node:crypto');
-    fields.dispatch_secret = randomBytes(32).toString('hex');
-  }
-  // eslint-disable-next-line no-console
-  console.log(
-    mintedDispatchSecret
-      ? (dryRun ? info('would mint dispatch_secret') : ok('minted dispatch_secret (value not shown)'))
-      : dim('  dispatch_secret already present'),
-  );
-  const specs = specsFromEnv(env, fields.dispatch_secret);
-
   // ── N agents ──────────────────────────────────────────────────────
   section('Agents');
-  const { agents, created } = dryRun
-    ? await previewAgents(request, company.id, specs)
-    : await ensureAgents(request, company.id, specs);
+  const { agents, created } = await ensureAgents(request, company.id, specs);
   for (const slug of created) {
     // eslint-disable-next-line no-console
-    console.log(dryRun ? info(`would create ${slug}`) : ok(`created ${slug}`));
+    console.log(ok(`created ${slug}`));
   }
   for (const spec of specs) {
     const agent = agents.get(spec.slug);
@@ -323,43 +325,34 @@ async function main(): Promise<void> {
 
   // ── N+1 keys ──────────────────────────────────────────────────────
   section('API keys');
-  const outcomes: KeyOutcome[] = [];
   const mainAgent = agents.get('main');
-  if (!dryRun && !mainAgent) throw new Error("the 'main' agent is missing after provisioning");
-  if (!mainAgent) {
-    // eslint-disable-next-line no-console
-    console.log(info("would mint N+1 keys once the 'main' agent exists"));
-  }
-  if (mainAgent) {
-    // ONE company-wide reconciler key, on the ceo actor. Standard scope.
+  if (!mainAgent) throw new Error("the 'main' agent is missing after provisioning");
+  const outcomes: KeyOutcome[] = [];
+  // ONE company-wide reconciler key, on the ceo actor. Standard scope.
+  outcomes.push(
+    await reconcileKey(
+      request,
+      mainAgent,
+      RECONCILER_KEY_NAME,
+      '(reconciler)',
+      storedReconciler,
+    ),
+  );
+  for (const spec of specs) {
+    const agent = agents.get(spec.slug)!;
     outcomes.push(
       await reconcileKey(
         request,
-        mainAgent,
-        RECONCILER_KEY_NAME,
-        '(reconciler)',
-        storedReconciler,
-        dryRun,
+        agent,
+        agentKeyName(spec.slug),
+        spec.slug,
+        storedAgentKeys[spec.slug],
       ),
     );
-    for (const spec of specs) {
-      const agent = agents.get(spec.slug)!;
-      outcomes.push(
-        await reconcileKey(
-          request,
-          agent,
-          agentKeyName(spec.slug),
-          spec.slug,
-          storedAgentKeys[spec.slug],
-          dryRun,
-        ),
-      );
-    }
   }
   for (const outcome of outcomes) {
-    const mark = dryRun
-      ? info(outcome.action === 'reused' ? 'is current' : 'would mint')
-      : outcome.action === 'reused'
+    const mark =
+      outcome.action === 'reused'
         ? dim('reused  ')
         : outcome.action === 'replaced'
           ? warn('replaced')
@@ -371,26 +364,20 @@ async function main(): Promise<void> {
 
   // ── Write back, merged ────────────────────────────────────────────
   section('Secrets Manager');
-  const nextFields = { ...fields };
-  for (const outcome of outcomes) {
-    if (!outcome.token) continue;
-    if (outcome.keyName === RECONCILER_KEY_NAME) nextFields.reconciler_key = outcome.token;
-    else storedAgentKeys[outcome.slug] = outcome.token;
-  }
+  const nextFields = mergeBootstrapSecretFields({
+    current: fields,
+    companyId: company.id,
+    storedAgentKeys,
+    outcomes,
+  });
   // C-19: the SHIPPED spellings win — `agent_keys` (a JSON STRING, because an
   // ECS secret injects one field as one env var: PAPERCLIP_AGENT_KEYS_JSON)
   // and `dispatch_secret`. `agent_keys_json` / `dispatch_token` are the plan's
   // wrong variants, and a field mismatch is a task that cannot start.
-  nextFields.agent_keys = JSON.stringify(storedAgentKeys);
-  nextFields.company_id = company.id;
-
   // `fields` already carries a freshly minted dispatch_secret when there was
   // none, so compare against what Secrets Manager actually holds.
   const changed = mintedDispatchSecret || JSON.stringify(nextFields) !== JSON.stringify(fields);
-  if (dryRun) {
-    // eslint-disable-next-line no-console
-    console.log(info(changed ? 'would write one new secret version' : 'secret already current'));
-  } else if (changed) {
+  if (changed) {
     await secretsClient.send(
       new PutSecretValueCommand({
         SecretId: secretId,

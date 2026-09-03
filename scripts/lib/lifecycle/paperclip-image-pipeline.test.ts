@@ -28,6 +28,10 @@ import { fileURLToPath } from 'node:url';
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
+import {
+  PAPERCLIP_PHASE_PROBE_FAILURE_MARKER,
+  PAPERCLIP_PHASE_PROBE_SUCCESS_MARKERS,
+} from '../../../src/ops/paperclip-phase-probe.js';
 import { buildResourceNames } from '../../../infra/lib/constants.js';
 import { DynamoStack } from '../../../infra/lib/dynamo-stack.js';
 import { IamStack } from '../../../infra/lib/iam-stack.js';
@@ -480,7 +484,7 @@ describe('Paperclip tier gate (.github/workflows/deploy.yml)', () => {
     // this build, secret population and migration. One resolved condition.
     expect(
       WORKFLOW.split("if: steps.tiergate.outputs.paperclip_enabled == '1'").length - 1,
-    ).toBe(4);
+    ).toBe(5);
     expect(WORKFLOW).toContain('if [ "$PAPERCLIP_TIER_ENABLED" = "1" ]; then');
     // And NOT the bare spelling: the plan's unbuilt router flag is called
     // PAPERCLIP_ENABLED, so that name must not appear in the workflow at all.
@@ -1030,6 +1034,21 @@ describe('Paperclip first install (.github/workflows/deploy.yml)', () => {
     expect(populateAt).toBeLessThan(deployAt);
   });
 
+  it('seeds a missing Better Auth secret once without exposing the value', () => {
+    const populate = workflowStep('Populate Paperclip secret');
+    expect(populate).toContain(".better_auth_secret // \"REPLACE_ME\"");
+    expect(populate).toContain("openssl rand -hex 32 | tr -d '\\r\\n' > auth.txt");
+    expect(populate).toContain("jq --rawfile v auth.txt '.better_auth_secret = $v'");
+    expect(populate).toContain('32 random bytes (value not shown)');
+    expect(populate).toContain('length) >= 32');
+    expect(populate).not.toContain('CI consumes, never mints');
+    expect(populate).not.toContain('echo "$PAPERCLIP_BETTER_AUTH_SECRET"');
+
+    const finish = workflowStep('Complete fresh Paperclip bootstrap');
+    expect(finish).not.toContain('PAPERCLIP_BETTER_AUTH_SECRET:');
+    expect(finish).not.toContain('openssl rand -hex 32');
+  });
+
   it('never exits 1 for a state a first install is guaranteed to be in', () => {
     // The step runs BEFORE `CDK deploy`, so exiting 1 here blocks the entire
     // deploy — orchestrator included — and the next run reaches the same
@@ -1077,6 +1096,44 @@ describe('Paperclip first install (.github/workflows/deploy.yml)', () => {
     const rolloutAt = WORKFLOW.indexOf('      - name: Force ECS rollout');
     expect(mainDeployAt).toBeLessThan(finishAt);
     expect(finishAt).toBeLessThan(rolloutAt);
+  });
+
+  it('runs the redacted org/goals characterization after rollout and before smoke', () => {
+    const name = 'Characterize Paperclip org and goals contracts';
+    const probe = workflowStep(name);
+    expect(probe).toContain("env.TARGET_ENV == 'staging'");
+    expect(probe).toContain('dist/ops/paperclip-phase-probe.js');
+    expect(probe).toContain('aws ecs describe-services');
+    expect(probe).toContain('.networkConfiguration.awsvpcConfiguration');
+    expect(probe).toContain('aws ecs wait tasks-stopped');
+    expect(probe).toContain('aws ecs describe-tasks');
+    expect(probe).toContain('stream="task/orchestrator/$task_id"');
+
+    const override = probe.match(/overrides='([^'\n]+)'/)?.[1];
+    expect(override).toBeDefined();
+    expect(JSON.parse(override!)).toEqual({
+      containerOverrides: [
+        { name: 'orchestrator', command: ['node', 'dist/ops/paperclip-phase-probe.js'] },
+      ],
+    });
+
+    const workflowMarkers = probe.match(/expected_markers=\(([^)]+)\)/)?.[1]?.trim().split(/\s+/);
+    expect(workflowMarkers).toEqual(PAPERCLIP_PHASE_PROBE_SUCCESS_MARKERS);
+    expect(probe).toContain(`--arg failure "${PAPERCLIP_PHASE_PROBE_FAILURE_MARKER}"`);
+    expect(probe).toContain('max_attempts=12');
+    expect(probe).toContain('aws logs filter-log-events');
+    expect(probe).toContain('--log-stream-names "$stream"');
+    expect(probe).toContain('fromjson?');
+    expect(probe).toContain('logs never contained every expected marker');
+    expect(probe).toContain('probe emitted its failure marker');
+    expect(probe).toContain('probe task exited ${exit_code:-without an exit code}');
+    expect(probe).not.toContain('aws logs get-log-events');
+    expect(WORKFLOW.indexOf('      - name: Force ECS rollout')).toBeLessThan(
+      WORKFLOW.indexOf(`      - name: ${name}`),
+    );
+    expect(WORKFLOW.indexOf(`      - name: ${name}`)).toBeLessThan(
+      WORKFLOW.indexOf('      - name: Smoke test (health)'),
+    );
   });
 });
 
