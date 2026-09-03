@@ -877,16 +877,6 @@
     },
     {
       "surface": "env",
-      "id": "PAPERCLIP_DISPATCH_URL",
-      "introduced": "v1.9.0"
-    },
-    {
-      "surface": "env",
-      "id": "CCE_PAPERCLIP_ADMIN_EMAIL",
-      "introduced": "v1.9.0"
-    },
-    {
-      "surface": "env",
       "id": "PAPERCLIP_DEFAULT_AGENT",
       "introduced": "v1.9.0"
     },

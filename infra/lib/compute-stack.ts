@@ -234,11 +234,11 @@ export class ComputeStack extends Stack implements ComputeOutputs {
       props.secrets.vendorKeysSecret.secretArn,
     );
     // Paperclip bridge credentials (ADR 0010). Safe to inject on day one even
-    // though the fields still read REPLACE_ME: secrets-stack.ts creates all
-    // four (`agent_keys`, `reconciler_key`, `dispatch_secret`, `company_id`)
-    // with the secret itself, and src/config/env.ts declares each with
-    // optionalNonPlaceholder(), so a placeholder resolves to "unset" rather
-    // than to a bad credential. A missing FIELD would be different in kind: it
+    // though the fields still read REPLACE_ME: secrets-stack.ts creates
+    // `agent_keys`, `reconciler_key` and `dispatch_secret` with the secret
+    // itself, deploy phase b merge-adds `company_id`, and src/config/env.ts
+    // declares each with optionalNonPlaceholder(), so a placeholder resolves
+    // to "unset" rather than to a bad credential. A missing FIELD would be different in kind: it
     // fails the task at START with a ResourceInitializationError. That is the
     // cloudflared rollout failure, and it is why these are added now rather
     // than left for a later "when the values exist" commit.
@@ -542,11 +542,7 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         // URL there would turn `PaperclipDisabledError` ("no base URL", with
         // the remediation) into a DNS failure inside a fetch.
         ...(paperclipProvisioned(props.tier)
-          ? {
-              PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl,
-              PAPERCLIP_DISPATCH_URL: process.env.PAPERCLIP_DISPATCH_URL ?? '',
-              CCE_PAPERCLIP_ADMIN_EMAIL: process.env.CCE_PAPERCLIP_ADMIN_EMAIL ?? '',
-            }
+          ? { PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl }
           : {}),
       },
       secrets: {
@@ -588,11 +584,11 @@ export class ComputeStack extends Stack implements ComputeOutputs {
           paperclipSecret,
           'dispatch_secret',
         ),
-        // Deploy phase b merge-adds a placeholder before this provisioned task
-        // starts; env.ts treats it as unset. The tenant bootstrap writes the
-        // selected company id into the same retained secret, and ECS resolves
-        // that current version on the required post-bootstrap rollout.
-        // Tier 0 does not run that migration, so it must not reference the field.
+        // Referenced only when Paperclip is provisioned: an ECS secret naming a
+        // field the stored secret lacks fails the task at start. Deploy phase b
+        // merge-adds a REPLACE_ME placeholder (env.ts treats it as unset) and the
+        // tenant bootstrap writes the real company id into the same retained
+        // secret; ECS resolves the current version on the next rollout.
         ...(paperclipProvisioned(props.tier)
           ? {
               PAPERCLIP_COMPANY_ID: EcsSecret.fromSecretsManager(

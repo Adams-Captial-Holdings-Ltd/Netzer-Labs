@@ -1503,12 +1503,6 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // and `cdk deploy` drops unmatched names silently when other names match,
     // so the deploy reported green having created no Aurora and no EFS.
     CCE_PAPERCLIP_ENABLED: env.CCE_PAPERCLIP_ENABLED === '1' ? '1' : '',
-    // Per-environment, non-secret tenant-bootstrap inputs. compute-stack puts
-    // them in the provisioned orchestrator task definition so a staged
-    // bootstrap/probe run uses the same values CI synthesized. Forwarding is
-    // required here because .env values do not otherwise reach CDK's process.
-    PAPERCLIP_DISPATCH_URL: env.PAPERCLIP_DISPATCH_URL ?? '',
-    CCE_PAPERCLIP_ADMIN_EMAIL: env.CCE_PAPERCLIP_ADMIN_EMAIL ?? '',
     // Set by phase a (the resolved image digest), never by the operator's env
     // file. It changes what synth PRODUCES — app.ts passes it to
     // paperclip-stack.ts, which pins both task definitions to it — so a

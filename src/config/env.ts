@@ -278,7 +278,7 @@ const envSchema = z.object({
   NOVA_HTTP2_TIMEOUT_MS: z.coerce.number().int().min(1000).default(470_000),
 
   // ── Paperclip (ADR 0010) ────────────────────────────────────────
-  // Nine runtime keys are read through src/lib/paperclip/config.ts,
+  // Nine keys, all optional and all read through src/lib/paperclip/config.ts,
   // which turns "unset" into a typed PaperclipDisabledError naming the
   // remediation location rather than letting a request reach `undefined/api/…`.
   //
@@ -303,10 +303,6 @@ const envSchema = z.object({
   CCE_PAPERCLIP_ENABLED: optionalNonPlaceholder(),
   /** Origin only, no path. Runtime-config `paperclip/base_url` wins over this. */
   PAPERCLIP_BASE_URL: optionalNonPlaceholder(),
-  /** Per-environment callback persisted into Paperclip agent adapter config at bootstrap. */
-  PAPERCLIP_DISPATCH_URL: optionalNonPlaceholder(),
-  /** Per-environment accountable operator used only for tenant bootstrap. */
-  CCE_PAPERCLIP_ADMIN_EMAIL: optionalNonPlaceholder(),
   /** The single tenant's company uuid; what company-id pinning compares against. */
   PAPERCLIP_COMPANY_ID: optionalNonPlaceholder(),
   /** JSON object, agent slug → agent API key. Secret field `agent_keys`. */

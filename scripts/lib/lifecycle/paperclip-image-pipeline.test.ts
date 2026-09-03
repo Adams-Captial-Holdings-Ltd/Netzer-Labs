@@ -1098,16 +1098,6 @@ describe('Paperclip first install (.github/workflows/deploy.yml)', () => {
     expect(finishAt).toBeLessThan(rolloutAt);
   });
 
-  it('threads the per-environment bootstrap inputs through both workflow synths', () => {
-    for (const name of ['CDK deploy', 'Complete fresh Paperclip bootstrap']) {
-      const synth = workflowStep(name);
-      expect(synth).toContain('PAPERCLIP_DISPATCH_URL: ${{ vars.PAPERCLIP_DISPATCH_URL }}');
-      expect(synth).toContain(
-        'CCE_PAPERCLIP_ADMIN_EMAIL: ${{ vars.CCE_PAPERCLIP_ADMIN_EMAIL }}',
-      );
-    }
-  });
-
   it('runs the redacted org/goals characterization after rollout and before smoke', () => {
     const name = 'Characterize Paperclip org and goals contracts';
     const probe = workflowStep(name);

@@ -941,11 +941,6 @@ jobs:
           # /api/missions over to the engine, and `--body 0` forces it back to
           # the legacy handlers without touching any infrastructure.
           CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
-          # Non-secret, environment-specific inputs for the one-time tenant
-          # bootstrap. They must be present on every synth that publishes the
-          # orchestrator task definition.
-          PAPERCLIP_DISPATCH_URL: ${{ vars.PAPERCLIP_DISPATCH_URL }}
-          CCE_PAPERCLIP_ADMIN_EMAIL: ${{ vars.CCE_PAPERCLIP_ADMIN_EMAIL }}
           # Pin both Paperclip task definitions to the image the build step
           # above just resolved. Absent until now, so synth fell back to an
           # unpullable placeholder TAG: a task definition that could never
@@ -1056,8 +1051,6 @@ jobs:
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
           CCE_CICD_ENABLED: '1'
           CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
-          PAPERCLIP_DISPATCH_URL: ${{ vars.PAPERCLIP_DISPATCH_URL }}
-          CCE_PAPERCLIP_ADMIN_EMAIL: ${{ vars.CCE_PAPERCLIP_ADMIN_EMAIL }}
           CCE_PAPERCLIP_IMAGE_DIGEST: ${{ steps.paperclipimg.outputs.digest }}
           CCE_PAPERCLIP_BOOTSTRAP: ''
           CCE_PAPERCLIP_TEARDOWN: ''
