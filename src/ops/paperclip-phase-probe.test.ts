@@ -108,6 +108,30 @@ describe('Paperclip phase probe redaction', () => {
     for (const secret of responseSecrets) expect(output).not.toContain(secret);
   });
 
+  it('normalizes attacker-controlled success content types before logging', async () => {
+    const headerSecret = 'attacker-secret-content-type';
+    const logs: string[] = [];
+    await runPaperclipPhaseProbe({
+      env: ENV,
+      log: (line) => logs.push(line),
+      fetchFn: sequence([
+        text('opaque', `application/${headerSecret}`),
+        json({ ok: true }),
+        json([]),
+        text('<svg/>', 'image/svg+xml'),
+        json({ id: 'goal-live-id' }),
+        json({ id: 'goal-live-id' }),
+        json({ id: 'goal-live-id' }),
+        json({ deleted: true }),
+      ]),
+    });
+
+    const output = logs.join('\n');
+    expect(logs).toHaveLength(PAPERCLIP_PHASE_PROBE_SUCCESS_MARKERS.length);
+    expect(output).toContain('"contentType":"other"');
+    expect(output).not.toContain(headerSecret);
+  });
+
   it('redacts malformed agent JSON from the failure marker', async () => {
     const secret = '{"main":"agent-secret-fragment"';
     const line = await failureLine({ env: { ...ENV, PAPERCLIP_AGENT_KEYS_JSON: secret } });

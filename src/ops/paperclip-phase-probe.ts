@@ -128,12 +128,11 @@ function mediaType(response: Response): string | null {
   }
   if (raw === null) return null;
   const type = raw.split(';', 1)[0]!.trim().toLowerCase();
-  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type) ? type : 'other';
+  if (type === 'application/json' || type.endsWith('+json')) return 'application/json';
+  if (type === 'image/svg+xml') return type;
+  return 'other';
 }
 
-function jsonMediaType(type: string | null): boolean {
-  return type === 'application/json' || type?.endsWith('+json') === true;
-}
 
 async function request(
   baseUrl: string,
@@ -166,7 +165,7 @@ async function request(
   }
 
   let body: unknown = text;
-  if (jsonMediaType(contentType)) {
+  if (contentType === 'application/json') {
     try {
       body = text.length === 0 ? null : JSON.parse(text);
     } catch {
