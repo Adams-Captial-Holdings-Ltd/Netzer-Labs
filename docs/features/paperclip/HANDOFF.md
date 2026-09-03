@@ -3,7 +3,7 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-09-03
-as_of_commit: 53dfc2a4df90bbce2936374db38fc58f85c22e45
+as_of_commit: 64082d73f08caaae70808583116e99b0601b83f0
 ---
 
 # Paperclip integration handoff
@@ -99,6 +99,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Staging probe green and two findings](handoffs/2026-09-03-staging-probe-green-and-two-findings.md) | 2026-09-03 | Diagnosed and fixed the two defects the probe found live (hostname guard, loopback listener), took staging green at 47a69db in run 33783021194, verified it against the bar, closed the docs; records the follow-on gauntlet prompt |
 | [Staging probe cut and deploy](handoffs/2026-09-02-staging-probe-cut-and-deploy.md) | 2026-09-02 → 2026-09-03 | Cut Codex's over-build, bootstrapped the staging tenant, promoted through the ladder; the probe's first two live runs found the hostname guard and the loopback listener; run 33783021194 green with all eight markers |
 | [Staging readiness and auth model](handoffs/2026-09-01-staging-readiness-and-auth-model.md) | 2026-09-01 | Records the live-probe blocker, per-install secret model, validation, and exact next action |
 | [Completion audit](handoffs/2026-08-24-paperclip-completion-audit.md) | 2026-08-24 | Closed/committed Phase 8 and recorded the interrupted Phase 9 state |
