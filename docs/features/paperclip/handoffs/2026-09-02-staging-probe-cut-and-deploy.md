@@ -3,7 +3,7 @@ feature: paperclip
 document_role: session-handoff
 status: current
 observed_at: 2026-09-02
-as_of_commit: cecc5c9f5ef80cc5e6050262ab9e47d7380cdb69
+as_of_commit: 44fa53f7f911513a47bcf33ef1bc440d06ac4a5a
 session_slug: staging-probe-cut-and-deploy
 supersedes: 2026-09-01-staging-readiness-and-auth-model.md
 ---
@@ -16,14 +16,14 @@ supersedes: 2026-09-01-staging-readiness-and-auth-model.md
 |---|---|
 | Session started | 2026-09-02 |
 | Feature folder | `docs/features/paperclip/` |
-| Branch worked on | `codex/paperclip-phases-8-5-12` (cuts; merged), then `fix/paperclip-allowed-hostnames` from `development` `d8c6f7e` (the probe finding) |
+| Branch worked on | `codex/paperclip-phases-8-5-12` (cuts; merged), then `fix/paperclip-allowed-hostnames` from `development` `d8c6f7e` (first probe finding; merged), then `fix/paperclip-bind-lan` from `development` `65f5f29` (second probe finding) |
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none yet — a transient branch deploys nothing and `development` deploys nothing; staging is reached only when the later `qa` → `staging` promotion PR merges, per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `291a457b8aa191dffe0de6e04e377778bbc1d818` |
 | Commit at session end | `37e4a1a71a8fb5fb19bc3b1c485c8e92a2dda095` for the cuts (the docs commit follows it); the closing pass after the staging deploy updates this row |
 | Pushed | yes — the cuts (`7c4bbd1`, `06d9c11`, `14ed070`, `37e4a1a`) and this handoff are pushed to PR #133 |
-| PR | `#133` merged into `development` (`d8c6f7e`, 9/9 at `2623a87`); `#134` `development` → `qa` merged (`345f238`, 19/19); `#138` `qa` → `staging` merged (`fd04227`, 20/20); the allowed-hostname fix PR is opened from this branch |
-| Deployed | yes and red: staging Deploy run 33733071639 attempt 4 deployed `fd04227` (orchestrator `:14`) and failed at the probe step with HTTP 403; last green staging deploy is still 33067242593 |
+| PR | `#133` merged into `development` (`d8c6f7e`, 9/9 at `2623a87`); `#134` `development` → `qa` merged (`345f238`, 19/19); `#138` `qa` → `staging` merged (`fd04227`, 20/20); `#139` allowed-hostname fix merged (`65f5f29`, 9/9), `#140` → `qa` (`fc7ec05`, 19/19), `#141` → `staging` (`3a6e040`, 20/20); the bind-mode fix PR is opened from this branch |
+| Deployed | yes and red twice: run 33733071639 attempt 4 deployed `fd04227` and the probe was refused (HTTP 403); run 33773788920 deployed `3a6e040` (hostname allowed) and the probe's fetch got no response in attempts 1 and 2; last green staging deploy is still 33067242593 |
 
 ## 2. Current state summary
 
@@ -447,13 +447,15 @@ are the facts that run produced, and several of them correct a document.
 | M57 | Mistake | `stop_forward` in the operator helper used `pkill`, which this Git Bash does not have, so the first dry port-forward check leaked a `session-manager-plugin.exe` (PID 106732) for six hours; the piece-5 critic found it. | Kill the plugin by image name with `taskkill //PID … //F` (`tasklist //FI "IMAGENAME eq session-manager-plugin.exe"`); verify with `netstat -ano \| findstr :3100`. |
 | A53 | Assumption | The orchestrator image's `[build]` stage (`npm install` with devDependencies, `aws-cdk-lib` included, under QEMU arm64) sits on npm's socket-inactivity timeout: 259 s in the bar run, `read ETIMEDOUT` at ~266-274 s in two consecutive attempts, one 83-minute stall before that; `deps` and `web` stage timings matched the bar to the second; lockfiles and Dockerfile unchanged since `ac70509`. | Re-running is the current remedy (attempt 4 built in 9 m 19 s). The durable fix is one `ENV npm_config_fetch_timeout=…` line in the `[build]` stage, or not installing `aws-cdk-lib` in the image build at all; it belongs to its own PR. |
 | P41 | Precaution | ECS forgets stopped tasks after about an hour, so the probe task cannot be found by `list-tasks --desired-status STOPPED` later. | Find it in CloudWatch: `describe-log-streams --order-by LastEventTime --descending` (no prefix — the API refuses prefix + LastEventTime), then `filter-log-events` for `PAPERCLIP_PHASE_PROBE` on each candidate stream. |
+| M58 | Mistake (found by the probe) | With the hostname allowed (run 33773788920), the probe's fetch never got a response, in two attempts, the second with no Paperclip change. Upstream `server/src/config.ts` resolves the bind mode as `PAPERCLIP_BIND` ?? `config.json` `server.bind` ?? inferred from `HOST`, and `resolveRuntimeBind` maps `loopback` to `127.0.0.1` whatever `HOST` says. The EFS `config.json` holds `server.bind: loopback` (writer not identified: `auth bootstrap-ceo` only reads; quickstart onboarding would have written `lan` from `HOST=0.0.0.0`), so the task booted after the hostname fix listened on loopback only while its localhost health check kept passing. The task it replaced had booted before the file said that, which is why it could answer the 403. | Set `PAPERCLIP_BIND=lan` explicitly on the task definition beside `HOST`; pinned by a literal test. Every knob the file can override must be set by the task definition, or a re-boot silently inherits whatever the file accumulated. |
+| P42 | Precaution | A container health check on `localhost` cannot see a listener that shrank to loopback; ECS, CloudFormation and the deploy all report green while nothing in the VPC can connect. | The probe is the only check on that path; read its failure code literally — `request-failed-before-response` means no TCP/HTTP answer at all, not a refusal. |
 | M56 | Mistake | This file's first draft copied the comment at `infra/lib/compute-stack.ts:236-244` ("secrets-stack.ts creates all four … `company_id` … with the secret itself") into section 3.3 as a convention. The code disagrees: `infra/lib/secrets-stack.ts:113-118` creates `better_auth_secret`, `reconciler_key`, `agent_keys`, `dispatch_secret` only, and `company_id` is merge-added as `REPLACE_ME` by deploy phase b (`scripts/lib/lifecycle/deploy-phases.ts:300-302`). Caught by the piece-4 critic. | M15 again: a comment is a document, and P5 applies to it. Before writing "X creates Y", open the constructor or the plan that creates Y, not the comment beside its consumer. The comment itself stays wrong in source until the deferred fix in section 6.4 lands. |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Open the `fix/paperclip-allowed-hostnames` PR into `development`; after 9/9, merge and promote `development` → `qa` → `staging`; verify the Deploy run's probe step (eight markers, exit 0, redaction greps) against 33067242593.
+Open the `fix/paperclip-bind-lan` PR into `development`; after 9/9, merge and promote `development` → `qa` → `staging`; verify the Deploy run's probe step (eight markers, exit 0, redaction greps) against 33067242593 — the redaction greps need a fresh `aws login`.
 
 ### 6.2 Immediate next steps
 
