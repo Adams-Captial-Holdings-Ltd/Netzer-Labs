@@ -1315,6 +1315,11 @@ export class IamStack extends Stack implements IamOutputs {
             `arn:aws:ecs:${this.region}:${this.account}:task-definition/claudeclaw-staging-orchestrator:*`,
             `arn:aws:ecs:${this.region}:${this.account}:task/claudeclaw-staging-cluster/*`,
           ],
+          conditions: {
+            ArnEquals: {
+              'ecs:cluster': `arn:aws:ecs:${this.region}:${this.account}:cluster/claudeclaw-staging-cluster`,
+            },
+          },
         }),
       );
       // RunTask must pass both the exact orchestrator task role from this

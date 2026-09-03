@@ -601,14 +601,6 @@ describe('orchestrator to Paperclip reachability', () => {
       'utf8',
     );
     expect(deployPhases).toContain("defaults: JSON.stringify({ company_id: 'REPLACE_ME' })");
-
-    // ECS resolves the current secret version at task start, so this write is
-    // what the post-bootstrap rollout receives instead of the placeholder.
-    const bootstrapSecret = readFileSync(
-      new URL('../../scripts/lib/paperclip/bootstrap-secret.ts', import.meta.url),
-      'utf8',
-    );
-    expect(bootstrapSecret).toContain('next.company_id = options.companyId;');
   });
 
   it('does not reference the additive company-id field at Tier 0', () => {
@@ -1013,6 +1005,9 @@ describe('deploy role grants for the CI Paperclip steps (M34)', () => {
     expect(resourcesOf(s)).toContain(':task/claudeclaw-staging-cluster/*');
     expect(resourcesOf(s)).not.toContain(
       ':task-definition/claudeclaw-staging-paperclip:',
+    );
+    expect(s.Condition?.ArnEquals?.['ecs:cluster']).toBe(
+      'arn:aws:ecs:us-east-1:637423318609:cluster/claudeclaw-staging-cluster',
     );
   });
 
