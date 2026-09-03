@@ -169,9 +169,10 @@ Present in the current source and working tree:
   pinned artifact's open email-signup route until upstream provides a safe
   signup control or a separately reviewed access-controlled listener exists.
 
-The behavior above is present in source. The Paperclip base is also verified in
-staging at run `33067242593` on `ac70509`; the staging contract-probe completion
-diff remains local and has not yet produced deployment evidence.
+The behavior above is present in source and deployed to staging: the Paperclip
+base went green in run `33067242593` on `ac70509`, and the staging contract
+probe went green in run `33783021194` on `47a69db` with all eight CloudWatch
+markers (section 3).
 
 ## 3. Current status and current source commit
 
