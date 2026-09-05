@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-09-03
-as_of_commit: 64082d73f08caaae70808583116e99b0601b83f0
+observed_at: 2026-09-05
+as_of_commit: fc2968a7b9f96e4f19ab8e46adc29c604914e601
 ---
 
 # Paperclip integration handoff
@@ -13,6 +13,8 @@ as_of_commit: 64082d73f08caaae70808583116e99b0601b83f0
 - **Deployment:** staging Deploy run [33783021194](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33783021194) at `47a69db` is **green** and is the new bar: the same three jobs and the same deploy-job steps as run 33067242593 plus exactly one added step, `Characterize Paperclip org and goals contracts` (68 s), which ran the probe as a one-shot task from the live orchestrator task definition and found all eight markers in CloudWatch (`org` 200, `whoami` 200, `goals-list` 200, `org-svg` 200 `image/svg+xml`, `goal-create` 201, `goal-get`/`goal-update`/`goal-delete` 200); the smoke test then passed. The two earlier runs were red at that step and each surfaced one real defect (see Phase status). Production is untouched and no release exists.
 
 ## Current objective and required order
+
+Superseding order (owner, 2026-09-05): the campaign now follows [missions-engine-plan.md](missions-engine-plan.md): P0-0 image-build timeout (own PR), Phase 0 arm and collaborate, Phase 1 hierarchy, 8.5, the board bridge on missions.staging.pgnos.ai, then 10, 11, 12. The numbered list below is the 2026-09-03 state and stays as history.
 
 Scope decision (user, 2026-09-02): this branch lands the staging contract probe only. Phase 8.5, the same-origin UI/session bridge and Phases 10-12 move to a separate plan after it lands, in the README's order (probe → 8.5 → bridge → 10 → 11 → 12). Production needs its own go-ahead.
 
@@ -99,6 +101,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Goal-first missions engine](handoffs/2026-09-05-goal-first-missions-engine.md) | 2026-09-05 | Runs the approved missions-engine plan as a per-piece gauntlet: P0-0 image-build timeout first, then arm staging, the collaboration predicate, hierarchy, 8.5, the board bridge, 10-12 |
 | [Staging probe green and two findings](handoffs/2026-09-03-staging-probe-green-and-two-findings.md) | 2026-09-03 | Diagnosed and fixed the two defects the probe found live (hostname guard, loopback listener), took staging green at 47a69db in run 33783021194, verified it against the bar, closed the docs; records the follow-on gauntlet prompt |
 | [Staging probe cut and deploy](handoffs/2026-09-02-staging-probe-cut-and-deploy.md) | 2026-09-02 → 2026-09-03 | Cut Codex's over-build, bootstrapped the staging tenant, promoted through the ladder; the probe's first two live runs found the hostname guard and the loopback listener; run 33783021194 green with all eight markers |
 | [Staging readiness and auth model](handoffs/2026-09-01-staging-readiness-and-auth-model.md) | 2026-09-01 | Records the live-probe blocker, per-install secret model, validation, and exact next action |
