@@ -40,6 +40,13 @@ FROM public.ecr.aws/docker/library/node:20-alpine AS build
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+
+# The build-stage npm install ran 259 s in green run 33783021194; two attempts
+# in the 2026-09-03 session died here with `read ETIMEDOUT` at ~266-274 s. npm's
+# default fetch-timeout is 300000 ms (proved with `npm config get fetch-timeout`
+# on npm 11.17.0 locally; the image runs npm 10.x, same option name).
+# 600000 doubles that bound - slack for a slow arm64/QEMU read, still finite.
+ENV npm_config_fetch_timeout=600000
 RUN --mount=type=cache,target=/root/.npm \
     npm install --ignore-scripts --no-audit --no-fund
 
