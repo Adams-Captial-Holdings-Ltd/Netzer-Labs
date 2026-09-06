@@ -198,6 +198,13 @@ export function toWireMission(
  * because `Mission` is the DYNAMODB row type and the legacy substrate has no
  * source for any of these. Every field being optional keeps `Mission` and
  * `WireMission` mutually assignable, so no caller signature has to change.
+ *
+ * THE DASHBOARD CARRIES A COPY OF THIS SHAPE (A3-8). `interface Mission` in
+ * `web/src/pages/Missions.tsx` redeclares these same four keys as optional
+ * fields (the SPA has no generated client for this route), and
+ * `web/src/lib/missions-hierarchy.ts` derives parent / children / blocked
+ * from them across the boards the page has loaded. Both cite this type by
+ * name. Change the shape here and change it there in the same commit.
  */
 export type WireMission = Mission & MissionHierarchyFields & { childCount?: number };
 
