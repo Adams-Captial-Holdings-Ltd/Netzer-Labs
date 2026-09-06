@@ -163,7 +163,16 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
     if (!ctx) {
       logger.warn({ reason: 'invalid_body' }, 'paperclip dispatch body rejected');
       return c.json(
-        { error: 'invalid_body', required: ['netzarAgentId', 'issueId', 'runId'] },
+        // `required` DESCRIBES THE ACCEPTED SHAPES rather than listing three
+        // top-level keys, because the issue id is accepted at either level
+        // and the real Paperclip push sends it inside `context` (see the
+        // measured-shape header in `dispatch-worker.ts`). A list that named
+        // only the top-level spelling told the caller to send a field the
+        // sender does not have, which is worse than saying nothing.
+        {
+          error: 'invalid_body',
+          required: ['netzarAgentId', 'runId', 'issueId (top-level or context.issueId)'],
+        },
         400,
       );
     }
