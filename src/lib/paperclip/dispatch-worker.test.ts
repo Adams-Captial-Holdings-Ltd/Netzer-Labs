@@ -44,6 +44,10 @@ import {
 } from './dispatch-worker.js';
 
 const RUN_ID = '11111111-2222-4333-8444-555555555555';
+/** Paperclip's own agent uuid, which its adapter merges in as `agentId`. */
+const PAPERCLIP_AGENT_ID = '99999999-8888-4777-8666-555555555555';
+/** A second issue id, used only to prove which spelling wins when both are sent. */
+const OTHER_ISSUE_ID = 'a1b2c3d4-0000-4000-8000-000000000009';
 
 beforeEach(() => {
   releaseOnce.mockClear();
@@ -155,6 +159,128 @@ describe('parseDispatchBody (pure; the route turns null into a 400)', () => {
     expect(parseDispatchBody(['main'])).toBeNull();
     expect(parseDispatchBody('main')).toBeNull();
     expect(parseDispatchBody(null)).toBeNull();
+  });
+
+  // THE SHAPE PAPERCLIP ACTUALLY PUSHES (measured 2026-09-06, staging dd16ca4,
+  // Paperclip v2026.722.0). The adapter builds its body in the PINNED IMAGE at
+  // `/app/server/src/adapters/http/execute.ts:13` (digest in
+  // vendor/paperclip/Dockerfile:20) as
+  // `{ ...payloadTemplate, agentId: agent.id, runId, context }`, where
+  // `payloadTemplate` is `{ netzarAgentId: <slug> }` (bootstrap-core.ts:423-434)
+  // and `context` is the run's contextSnapshot, onto which heartbeat.ts:4219
+  // writes `contextSnapshot.issueId`. So the issue id arrives INSIDE `context`
+  // and there is no top-level `issueId` at all — which is why 15 pushes were
+  // answered 400 `invalid_body` in CloudWatch while Paperclip logged
+  // `HTTP invoke failed with status 400` from adapters/http/execute.ts:30.
+  //
+  // PROVENANCE, stated because it bounds the claim: this body was NOT captured
+  // from a log line. The orchestrator's rejection log carries only `{reason}`.
+  // It is a read of the pinned image's source plus the 15 live 400s.
+  it('takes the issue id from `context` — the shape the real push sends', () => {
+    const parsed = parseDispatchBody({
+      netzarAgentId: 'research',
+      agentId: PAPERCLIP_AGENT_ID,
+      runId: RUN_ID,
+      context: {
+        issueId: TEST_ISSUE_ID,
+        wakeReason: 'assignment',
+        taskId: 't',
+        taskKey: 'k',
+        wakeSource: 'assignment',
+        wakeTriggerDetail: 'system',
+      },
+    });
+    expect(parsed, 'the measured Paperclip push must not be rejected').not.toBeNull();
+    expect(parsed?.netzarAgentId).toBe('research');
+    expect(parsed?.runId).toBe(RUN_ID);
+    expect(parsed?.issueId).toBe(TEST_ISSUE_ID);
+    expect(parsed?.dedupeKey).toBe(`${RUN_ID}#${TEST_ISSUE_ID}`);
+    // The string-only `context` copy is unchanged by the promotion: every
+    // string value the push sent is still carried, `issueId` included, because
+    // it really was in the map. Nothing is injected and nothing is dropped.
+    expect(parsed?.context).toEqual({
+      issueId: TEST_ISSUE_ID,
+      wakeReason: 'assignment',
+      taskId: 't',
+      taskKey: 'k',
+      wakeSource: 'assignment',
+      wakeTriggerDetail: 'system',
+    });
+  });
+
+  it('still returns null when NO issue id appears at EITHER level — fail closed', () => {
+    // Reading the id out of `context` widens where it may be spelled, never
+    // whether it is required: without one there is no issue to dispatch
+    // against and no half of the dedupe key, so the answer stays a 400.
+    expect(
+      parseDispatchBody({
+        netzarAgentId: 'research',
+        agentId: PAPERCLIP_AGENT_ID,
+        runId: RUN_ID,
+        context: { wakeReason: 'assignment', taskId: 't', wakeSource: 'assignment' },
+      }),
+      'a push carrying no issue id anywhere must not be dispatched',
+    ).toBeNull();
+    expect(
+      parseDispatchBody({
+        netzarAgentId: 'research',
+        runId: RUN_ID,
+        context: { issueId: '   ' },
+      }),
+      'a blank context issue id is treated exactly like an absent one',
+    ).toBeNull();
+  });
+
+  it('keeps the TOP-LEVEL issue id when both levels carry one', () => {
+    const parsed = parseDispatchBody({
+      netzarAgentId: 'main',
+      issueId: TEST_ISSUE_ID,
+      runId: RUN_ID,
+      context: { issueId: OTHER_ISSUE_ID, wakeReason: 'assignment' },
+    });
+    expect(parsed?.issueId).toBe(TEST_ISSUE_ID);
+    expect(parsed?.dedupeKey).toBe(`${RUN_ID}#${TEST_ISSUE_ID}`);
+    // The context copy stays a verbatim string copy — the losing spelling is
+    // still interpolated, because rewriting the caller's map would make the
+    // prompt disagree with what the caller sent.
+    expect(parsed?.context).toEqual({ issueId: OTHER_ISSUE_ID, wakeReason: 'assignment' });
+  });
+});
+
+describe('the measured Paperclip push, pinned as a fixture', () => {
+  // A CHARACTERIZATION of the vendor's wire shape, in the spirit of
+  // tests/contract/artifact-characterization.json but hand-written, because no
+  // probe drives the adapter push and there is therefore nothing to regenerate.
+  // The point is the failure DIRECTION: if a future image bump renames a field
+  // or moves the issue id back to the top level, this goes red in the unit lane
+  // — before staging answers 400 fifteen times again.
+  it('parses tests/contract/paperclip-push.json, so an image bump that moves a field fails HERE first', async () => {
+    const pinned = JSON.parse(
+      await readFile(new URL('../../../tests/contract/paperclip-push.json', import.meta.url), 'utf8'),
+    ) as { provenance: Record<string, string>; body: unknown };
+
+    const parsed = parseDispatchBody(pinned.body);
+    expect(
+      parsed,
+      'the pinned push shape no longer parses: re-read execute.ts and heartbeat.ts at the new digest before changing either side',
+    ).not.toBeNull();
+    expect(parsed?.netzarAgentId).toBe('research');
+    expect(parsed?.issueId, 'the issue id must survive the promotion out of context').toBe(
+      TEST_ISSUE_ID,
+    );
+    expect(parsed?.dedupeKey).toBe(`${parsed?.runId}#${parsed?.issueId}`);
+
+    // The fixture is only as good as the story attached to it: a bump that
+    // edits the body without re-stating where the shape came from is the
+    // failure this asserts against (A42 — a comment states proved facts).
+    for (const key of ['measuredOn', 'image', 'bodyBuiltAt', 'issueIdSetAt', 'howObserved']) {
+      expect(pinned.provenance[key], `provenance.${key} must say where the shape came from`)
+        .toBeTruthy();
+    }
+    expect(
+      pinned.provenance.howObserved,
+      'the fixture must keep saying the body is NOT a log capture',
+    ).toContain('NOT CAPTURED FROM A LOG LINE');
   });
 });
 

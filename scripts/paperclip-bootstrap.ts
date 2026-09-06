@@ -11,11 +11,15 @@
  *
  * FOUR PROPERTIES THIS SCRIPT IS BUILT AROUND
  *
- *  1. IDEMPOTENT, PROVABLY. A second run performs zero POSTs, PATCHes and
- *     DELETEs, and says so: it prints `created 0 / reused N`. Everything is
- *     recognized by a deterministic identifier — an agent by
- *     `metadata.netzarAgentId`, a key by its name — never by position or by
- *     display name.
+ *  1. IDEMPOTENT, PROVABLY. A second run against unchanged inputs performs zero
+ *     POSTs, PATCHes and DELETEs, and says so: it prints
+ *     `created 0, reused N, updated 0`. Everything is recognized by a
+ *     deterministic identifier — an agent by `metadata.netzarAgentId`, a key by
+ *     its name — never by position or by display name. The one write a re-run
+ *     CAN make is the adapter reconcile: an agent whose live `adapter_config`
+ *     no longer matches its spec — a slug added to or dropped from
+ *     `PAPERCLIP_DISPATCH_SLUGS` — is PATCHed back to the spec and counted in
+ *     `updated`.
  *  2. NO TOKEN IS EVER PRINTED. Paperclip reveals an API token exactly once,
  *     at creation. It goes straight into Secrets Manager and nowhere else: not
  *     stdout, not the journal, not an error message. What is printed is the
@@ -49,6 +53,10 @@
  *   PAPERCLIP_AGENTS          comma-separated Netzar agent slugs, default
  *                             `main,research`; `main` is the `ceo` and every
  *                             other agent reports to it
+ *   PAPERCLIP_DISPATCH_SLUGS  comma-separated slugs whose adapter_config gets
+ *                             the dispatch `url`, default `main`; `main` is
+ *                             always included. Adding a slug arms it on the
+ *                             next run, dropping one PATCHes its url away
  *   PAPERCLIP_BOOTSTRAP_INVITE  one-time invite token from
  *                             `auth bootstrap-ceo`, for a brand-new instance
  *   PAPERCLIP_COMPANY_NAME    display name, default `Netzar OS`
@@ -85,6 +93,7 @@ import {
   ensureCompany,
   jsonResponse,
   makeBoardRequest,
+  parseDispatchSlugs,
   reconcileKey,
   signUpOrSignIn,
   type AgentSpec,
@@ -126,6 +135,9 @@ function specsFromEnv(env: Record<string, string>, dispatchSecret: string): Agen
       .filter(Boolean),
     dispatchUrl: required(env, 'PAPERCLIP_DISPATCH_URL'),
     dispatchSecret,
+    // Which agents are armed. `main` always is; everything else is opt-in per
+    // environment, and dropping a slug here disarms it on the next run.
+    dispatchSlugs: parseDispatchSlugs(env.PAPERCLIP_DISPATCH_SLUGS),
   });
 }
 
@@ -222,6 +234,11 @@ async function main(): Promise<void> {
     );
     // eslint-disable-next-line no-console
     console.log(info('would ensure one company, the configured agents, and N+1 standard keys'));
+    const armed = parseDispatchSlugs(env.PAPERCLIP_DISPATCH_SLUGS).join(', ');
+    // eslint-disable-next-line no-console
+    console.log(info('would re-point any agent whose adapter_config has drifted'));
+    // eslint-disable-next-line no-console
+    console.log(info(`would arm the dispatch url for: ${armed}`));
     // eslint-disable-next-line no-console
     console.log(info(`would merge the company id, dispatch secret and keys into ${secretId}`));
     // eslint-disable-next-line no-console
@@ -299,10 +316,16 @@ async function main(): Promise<void> {
 
   // ── N agents ──────────────────────────────────────────────────────
   section('Agents');
-  const { agents, created } = await ensureAgents(request, company.id, specs);
+  const { agents, created, updated } = await ensureAgents(request, company.id, specs);
   for (const slug of created) {
     // eslint-disable-next-line no-console
     console.log(ok(`created ${slug}`));
+  }
+  for (const slug of updated) {
+    // The slug and the fact of the rewrite. NEVER the config: it carries the
+    // dispatch secret in an authorization header (P38).
+    // eslint-disable-next-line no-console
+    console.log(ok(`updated ${slug} adapter_config`));
   }
   for (const spec of specs) {
     const agent = agents.get(spec.slug);
@@ -399,10 +422,11 @@ async function main(): Promise<void> {
   section('Result');
   // eslint-disable-next-line no-console
   console.log(
-    `  agents created ${created.length}, reused ${specs.length - created.length}; ` +
+    `  agents created ${created.length}, reused ${specs.length - created.length}, ` +
+      `updated ${updated.length}; ` +
       `keys created ${createdKeys}, reused ${outcomes.length - createdKeys}`,
   );
-  if (created.length === 0 && createdKeys === 0 && !changed) {
+  if (created.length === 0 && updated.length === 0 && createdKeys === 0 && !changed) {
     // eslint-disable-next-line no-console
     console.log(ok('no-op: this run created nothing and wrote nothing'));
   } else {
