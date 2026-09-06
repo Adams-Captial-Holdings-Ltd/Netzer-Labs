@@ -45,12 +45,24 @@ vi.mock('../../adapters/slack/send.js', () => ({ postMessage: slackMock }));
 vi.mock('../../adapters/slack/multi-agent.js', () => ({
   getSlackAgentCredsAsync: credsMock,
 }));
-vi.mock('../missions/mission-acl.js', () => ({
-  createBoardMission: createMock,
-  listBoardMissions: vi.fn(() => Promise.resolve([])),
-  listBoardMissionsByStatus: vi.fn(() => Promise.resolve([])),
-  setBoardMissionStatus: vi.fn(() => Promise.resolve(true)),
-}));
+vi.mock('../missions/mission-acl.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../missions/mission-acl.js')>();
+  return {
+    // The REAL module first, then the board FUNCTIONS as doubles. This file
+    // drives the real `mission-tools.ts`, which also ASKS the ACL's pure
+    // predicates (`canReadBoard` in `list_missions`, `canMutateMission` in
+    // `update_mission`). `create_mission` — the only tool invoked below —
+    // asks neither today, so the enumerated factory this replaces still
+    // passed; it is replaced anyway because enumerating is what handed the two
+    // command-scope parity suites an `undefined` predicate the moment those
+    // rules landed.
+    ...actual,
+    createBoardMission: createMock,
+    listBoardMissions: vi.fn(() => Promise.resolve([])),
+    listBoardMissionsByStatus: vi.fn(() => Promise.resolve([])),
+    setBoardMissionStatus: vi.fn(() => Promise.resolve(true)),
+  };
+});
 vi.mock('../state/inter-agent-tasks-repo.js', () => ({ sendInterAgent: interAgentMock }));
 vi.mock('../config/agent-loader.js', () => ({
   listKnownAgents: () => ['main', 'ops', 'research'],

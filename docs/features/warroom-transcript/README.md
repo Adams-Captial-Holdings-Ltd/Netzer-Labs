@@ -67,6 +67,7 @@ Source evidence at the `as_of_commit` above, on branch `fix/warroom-scroll-and-p
 | Emoji/CJK in agent replies render as missing glyphs in the PDF | pdfkit standard fonts are WinAnsi; `ponytail:` comment at the route | Embed a TTF in `buildPdf` if a real transcript needs it |
 | Markdown in agent replies appears raw in the PDF | Design choice, §2 | None approved |
 | The on-screen transcript still shows at most 100 turns (pre-existing `getHistory` page cap in the poll) | `src/lib/warroom/publisher.ts` | None approved; the PDF is complete regardless |
+| **Staging War Room is unusable** (every read 500s), so the export cannot be verified end-to-end there | Staging orchestrator log 2026-09-06: task role denied `dynamodb:Scan` on `claudeclaw-warroom-meetings` (unsuffixed production name); task definitions 17/18 set no `TABLE_WARROOM_*` while `claudeclaw-staging-warroom-*` exist | Infra: add `TABLE_WARROOM_MEETINGS`/`TABLE_WARROOM_TURNS` (and grants) to the staging task definition; not part of this change |
 
 ## 8. Exact focused and full validation commands
 

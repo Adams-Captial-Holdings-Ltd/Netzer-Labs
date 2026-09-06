@@ -192,3 +192,17 @@ Bad:
   [ADR 0002](0002-single-tenant.md), which is Accepted and prices this at ~2
   weeks plus indefinite scoping risk, warranted only when the customer base is
   large and per-customer revenue small. Neither is true.
+
+## Amendment 2026-09-05 — missions authorization predicate
+
+The former self-only owner rule (previously enforced in `mission-tools.ts`
+(`list_missions` and `update_mission` refused `owner !== self`) and asserted in
+`mission-tools.authz.test.ts`) is lifted to
+this ADR's participation predicate as instantiated by the owner: any agent may
+read any board in the company (`canReadBoard`, constant-true today, the one
+seam for tightening); an agent may mutate a mission iff it owns or created it
+(`canMutateMission`). Creator and judge share one identity, the board scope
+(`boardSelf`): `ctx.boardAgentId ?? ctx.agentId`. Parent-owner (delegation)
+widening is deferred to P1-3, when `parentId` reaches the wire.
+`mission-tools.authz.test.ts` was rewritten against this predicate, citing
+this amendment. Dashboard capability gates are unchanged.

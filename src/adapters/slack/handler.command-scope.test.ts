@@ -54,12 +54,15 @@ vi.mock('./media.js', () => ({
   stageLabel: () => '',
   deliverSlackMedia: vi.fn(async () => {}),
 }));
-vi.mock('../../lib/missions/mission-acl.js', async () => {
-  const real = await vi.importActual<typeof import('../../lib/missions/mission-acl.js')>(
-    '../../lib/missions/mission-acl.js',
-  );
+vi.mock('../../lib/missions/mission-acl.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/missions/mission-acl.js')>();
   return {
-    AmbiguousMissionPrefixError: real.AmbiguousMissionPrefixError,
+    // The REAL module first, then the board FUNCTIONS as doubles. The ACL's
+    // pure predicates are rules, not substrate: enumerating exports here left
+    // `canReadBoard` undefined, and `list_missions` calls it before it reads
+    // the board (`mission-tools.ts:408`), so the parity case below died with a
+    // TypeError instead of proving which board the tool read.
+    ...actual,
     createBoardMission: h.createBoardMission,
     listBoardMissions: h.listBoardMissions,
     listBoardMissionsByStatus: h.listBoardMissionsByStatus,
