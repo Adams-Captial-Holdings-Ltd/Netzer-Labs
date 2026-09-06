@@ -190,9 +190,37 @@ describe('malformed and unusable bodies', () => {
       expect(res.status, `a body with no ${missing} was accepted`).toBe(400);
       expect(await res.json()).toEqual({
         error: 'invalid_body',
-        required: ['netzarAgentId', 'issueId', 'runId'],
+        required: ['netzarAgentId', 'runId', 'issueId (top-level or context.issueId)'],
       });
     }
+  });
+
+  it('202s the MEASURED push, whose issue id rides inside `context`', async () => {
+    // The shape that was answered 400 fifteen times on 2026-09-06 (staging
+    // dd16ca4, Paperclip v2026.722.0): no top-level `issueId` at all, because
+    // the pinned image builds the body as
+    // `{ ...payloadTemplate, agentId, runId, context }`
+    // (`/app/server/src/adapters/http/execute.ts:13`) and the id is set on the
+    // context snapshot (`heartbeat.ts:4219`). The bytes are a source read, not
+    // a log capture — the rejection log carries only `{reason}`.
+    const res = await post(app(), {
+      auth: `Bearer ${SECRET}`,
+      json: {
+        netzarAgentId: 'main',
+        agentId: '99999999-8888-4777-8666-555555555555',
+        runId: RUN_ID,
+        context: {
+          issueId: ISSUE_ID,
+          wakeReason: 'assignment',
+          taskId: 't',
+          taskKey: 'k',
+          wakeSource: 'assignment',
+          wakeTriggerDetail: 'system',
+        },
+      },
+    });
+    expect(res.status, 'the real push must be accepted, not 400ed').toBe(202);
+    expect(await res.json()).toEqual({ ok: true, accepted: true, issueId: ISSUE_ID });
   });
 
   it('404s an unknown agent — in-band identity is a claim, never a fact', async () => {

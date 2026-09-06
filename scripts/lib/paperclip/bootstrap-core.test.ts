@@ -27,6 +27,7 @@ import {
   createKey,
   ensureAgents,
   netzarAgentId,
+  parseDispatchSlugs,
   reconcileKey,
   type AgentKeyRecord,
   type AgentRecord,
@@ -77,6 +78,18 @@ function fakePaperclip(): { request: PaperclipRequest; calls: Recorded[] } {
       };
       agents.push(created);
       return json(created);
+    }
+
+    // PATCH /api/agents/{id} — the adapter reconcile route. Declared by the
+    // pinned OpenAPI snapshot (tests/contract/openapi.snapshot.json), which is
+    // where this fake gets its shape from; see the note on ensureAgents.
+    const agentItem = /^\/api\/agents\/([^/]+)$/.exec(pathname);
+    if (agentItem && method === 'PATCH') {
+      const agent = agents.find((a) => a.id === agentItem[1]);
+      if (!agent) return json({ error: 'agent not found' }, 404);
+      const patch = body as { adapterConfig?: AgentRecord['adapterConfig'] };
+      if (patch.adapterConfig !== undefined) agent.adapterConfig = patch.adapterConfig;
+      return json(agent);
     }
 
     const keyList = /^\/api\/agents\/([^/]+)\/keys$/.exec(pathname);
@@ -330,12 +343,13 @@ describe('Phase 6: exactly one agent is pointed at the dispatch route', () => {
   });
 
   it('arms a different set on request, and blanking the url is the rollback', () => {
-    // ROLLBACK IS A DATA EDIT, NOT A DEPLOY: an adapter row with no url has
-    // nothing for Paperclip to POST to. UNVERIFIED and stated as such — no
-    // agent-UPDATE call exists in this repo and no probe drives one, so
-    // blanking an ALREADY-CREATED agent's url is a board-UI operation today,
-    // not something this bootstrap performs. What is shown here is only that
-    // the spec builder can produce either state.
+    // ROLLBACK IS AN ENV EDIT PLUS A RE-RUN, NOT A DEPLOY: an adapter row with
+    // no url has nothing for Paperclip to POST to, and since P0-2b-2
+    // `ensureAgents` applies that state to an ALREADY-CREATED agent too (the
+    // drift tests above). What is shown HERE is only that the spec builder can
+    // produce either state; that the PATCH is accepted by a LIVE Paperclip is
+    // still unproven — no probe in the 21-probe set drives
+    // `PATCH /api/agents/{id}`.
     const armed = agentSpecs({
       slugs: ['main', 'research'],
       dispatchUrl: 'https://netzar.example/api/paperclip/dispatch',
@@ -343,5 +357,117 @@ describe('Phase 6: exactly one agent is pointed at the dispatch route', () => {
       dispatchSlugs: [],
     });
     expect(armed.filter((s) => typeof s.adapterConfig.url === 'string')).toHaveLength(0);
+  });
+});
+
+
+describe('adapter_config drift is reconciled, not left behind', () => {
+  // P0-2b-2. Measured on staging 2026-09-06: the `research` agent record held
+  // adapterConfig keys [method, payloadTemplate, timeoutMs] and NO url, so
+  // Paperclip logged `HTTP adapter missing url` and escalated every
+  // research-assigned issue to Main. The bootstrap had created that agent on a
+  // run whose spec carried no url and never revisited it.
+  const DISPATCH_URL = 'https://netzar.example/api/paperclip/dispatch';
+  const specsFor = (dispatchSlugs: string[]) =>
+    agentSpecs({
+      slugs: ['main', 'research'],
+      dispatchUrl: DISPATCH_URL,
+      dispatchSecret: 'dispatch-secret-value',
+      dispatchSlugs,
+    });
+
+  it('PATCHes the drifted agent exactly once, with exactly {adapterConfig}', async () => {
+    const { request, calls } = fakePaperclip();
+    const first = await ensureAgents(request, COMPANY, specsFor(['main']));
+    expect(first.created).toEqual(['main', 'research']);
+    expect(first.updated).toEqual([]);
+    const researchId = first.agents.get('research')!.id;
+    const afterFirst = calls.length;
+
+    const armed = specsFor(['main', 'research']);
+    const second = await ensureAgents(request, COMPANY, armed);
+
+    // The request log, not a spy count: one write, and it is the PATCH.
+    expect(calls.slice(afterFirst).filter((c) => c.method !== 'GET')).toEqual([
+      {
+        method: 'PATCH',
+        pathname: `/api/agents/${researchId}`,
+        body: { adapterConfig: armed.find((s) => s.slug === 'research')!.adapterConfig },
+      },
+    ]);
+    expect(second.created).toEqual([]);
+    expect(second.updated).toEqual(['research']);
+  });
+
+  it('is a PROVABLE no-op when the live adapter_config already matches: zero PATCHes', async () => {
+    // The 2026-09-03 contract ("agents created 0, reused 2 ... nothing
+    // written") survives the new reconcile: a converged run still writes
+    // nothing at all.
+    const { request, calls } = fakePaperclip();
+    await ensureAgents(request, COMPANY, SPECS);
+    const afterFirst = calls.length;
+
+    const second = await ensureAgents(request, COMPANY, SPECS);
+    expect(second.created).toEqual([]);
+    expect(second.updated).toEqual([]);
+    expect(calls.slice(afterFirst).filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+
+  it('creates a missing agent, and never PATCHes the agent it just created', async () => {
+    const { request, calls } = fakePaperclip();
+    const result = await ensureAgents(request, COMPANY, SPECS);
+    expect(result.created).toEqual(['main', 'research']);
+    expect(result.updated).toEqual([]);
+    expect(calls.filter((c) => c.method === 'PATCH')).toEqual([]);
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(2);
+  });
+
+  it('compares by VALUE, not by key order: Paperclip stores adapter_config as jsonb', async () => {
+    // jsonb does not preserve object key order, so a byte comparison of
+    // JSON.stringify would PATCH on every run forever and turn the no-op
+    // contract into a write loop.
+    const { request, calls } = fakePaperclip();
+    const first = await ensureAgents(request, COMPANY, SPECS);
+    const research = SPECS.find((s) => s.slug === 'research')!;
+    const reordered = Object.fromEntries(Object.entries(research.adapterConfig).reverse());
+    expect(Object.keys(reordered)).not.toEqual(Object.keys(research.adapterConfig));
+    await request(`/api/agents/${first.agents.get('research')!.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ adapterConfig: reordered }),
+    });
+    const afterSetup = calls.length;
+
+    const second = await ensureAgents(request, COMPANY, SPECS);
+    expect(second.updated).toEqual([]);
+    expect(calls.slice(afterSetup).filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+});
+
+describe('PAPERCLIP_DISPATCH_SLUGS decides which agents are armed', () => {
+  const armedSlugs = (value: string | undefined): string[] =>
+    agentSpecs({
+      slugs: ['main', 'research'],
+      dispatchUrl: 'https://netzar.example/api/paperclip/dispatch',
+      dispatchSecret: 'dispatch-secret-value',
+      dispatchSlugs: parseDispatchSlugs(value),
+    })
+      .filter((s) => typeof s.adapterConfig.url === 'string')
+      .map((s) => s.slug);
+
+  it('arms `research` only when it is listed', () => {
+    expect(armedSlugs(undefined)).toEqual(['main']);
+    expect(armedSlugs('')).toEqual(['main']);
+    expect(armedSlugs('main,research')).toEqual(['main', 'research']);
+    expect(armedSlugs(' research , main ')).toEqual(['main', 'research']);
+  });
+
+  it('keeps `main` armed whatever the variable says', () => {
+    // `main` is the ceo, the actor the reconciler key belongs to and the
+    // terminal of Paperclip's escalation ladder. A typo that silently
+    // disarmed it would stop every dispatch with no error anywhere.
+    expect(parseDispatchSlugs(undefined)).toEqual(['main']);
+    expect(parseDispatchSlugs('research')).toEqual(['main', 'research']);
+    expect(parseDispatchSlugs('main,main')).toEqual(['main']);
+    expect(armedSlugs('research')).toEqual(['main', 'research']);
   });
 });

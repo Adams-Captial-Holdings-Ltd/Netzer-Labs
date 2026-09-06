@@ -33,20 +33,43 @@
  * `issues_checkout_run_id_heartbeat_runs_id_fk` rather than a clean 4xx, which
  * is the shipped probe "FI-4".
  *
- * UNVERIFIED, and the most load-bearing gap in this file: NO PROBE DRIVES
- * PAPERCLIP'S ADAPTER PUSH, so the field spellings below are not measured. What
- * IS established, by running code rather than a source read, is
- * `agentSpecs()` in `scripts/lib/paperclip/bootstrap-core.ts`: it writes each
- * agent's `adapter_config` as `{ url, method: 'POST', headers: { authorization:
+ * THE PUSH SHAPE IS NOW MEASURED, and this paragraph replaces the UNVERIFIED
+ * one that guessed it. On 2026-09-06, against staging dd16ca4 running Paperclip
+ * v2026.722.0, EVERY push to `POST /api/paperclip/dispatch` was answered 400
+ * `invalid_body` — 15 of them in CloudWatch, with Paperclip logging `HTTP invoke
+ * failed with status 400` from its own `adapters/http/execute.ts:30`. The cause
+ * was this parser: it demanded a TOP-LEVEL `issueId` and the push has none.
+ *
+ * WHAT THE PUSH ACTUALLY SENDS, read from the PINNED image (digest in
+ * `vendor/paperclip/Dockerfile:20`) at `/app/server/src/adapters/http/execute.ts:13`:
+ *   `const body = { ...payloadTemplate, agentId: agent.id, runId, context };`
+ * `payloadTemplate` is ours by construction — `agentSpecs()` in
+ * `scripts/lib/paperclip/bootstrap-core.ts:423-434` writes each agent's
+ * `adapter_config` as `{ url, method: 'POST', headers: { authorization:
  * 'Bearer <secret>' }, payloadTemplate: { netzarAgentId: <slug> }, timeoutMs:
- * 10_000 }`. So POST, a bearer, and a body carrying at least `netzarAgentId`
- * are ours BY CONSTRUCTION. `issueId` is the spelling the live wakeup body uses
- * for an issue reference (probe A1-12 drives `payload: { issueId }`), and
- * `runId` is the field name the run-id header pins. Anything Paperclip merges
- * in beyond those is ignored rather than guessed at. If the real push spells a
- * field differently, this route answers 400 `invalid_body` — a loud, logged,
- * diagnosable failure, which is the failure mode to prefer over a tolerant
- * parser that silently dispatches with a missing issue id.
+ * 10_000 }` — and `context` is the run's contextSnapshot, onto which
+ * `heartbeat.ts:4219` writes `contextSnapshot.issueId = issueIdFromPayload`
+ * alongside wakeReason, taskId, taskKey, wakeSource and wakeTriggerDetail. So
+ * the wire JSON is
+ *   `{ netzarAgentId, agentId, runId, context: { issueId, wakeReason, ... } }`
+ * and the issue id is a key INSIDE `context`. The headers are `content-type:
+ * application/json` plus the configured `authorization` (execute.ts:21-24):
+ * there is no X-Paperclip header and no run-id header on this direction.
+ *
+ * HOW MUCH OF THAT IS MEASURED, stated because the difference matters (A1-16):
+ * the 400s are live CloudWatch evidence; the BODY IS NOT A LOG CAPTURE. The
+ * orchestrator logs only `{reason}` on rejection, so no line anywhere holds the
+ * bytes. The shape above is a read of the pinned image source, corroborated by
+ * the 400s it predicts. `tests/contract/paperclip-push.json` pins it so an image
+ * bump that moves a field fails a test here before it fails in production.
+ *
+ * BOTH SPELLINGS PARSE, top level winning: `issueId` is also the spelling the
+ * live wakeup body uses (probe A1-12 drives `payload: { issueId }`), and the
+ * existing route callers send it there. Anything Paperclip merges in beyond
+ * these is still ignored rather than guessed at, and a body with no issue id at
+ * EITHER level still answers 400 `invalid_body` — a loud, logged, diagnosable
+ * failure, which stays the failure mode to prefer over a tolerant parser that
+ * silently dispatches with a missing issue id.
  */
 import { logger, truncateForLog } from '../../observability/logger.js';
 import { runAgentTurn } from '../../agent/agent-loop.js';
@@ -123,6 +146,17 @@ function nonEmptyString(value: unknown): string | undefined {
 }
 
 /**
+ * The `context` map narrowed ONCE, because two readers now need it: the issue
+ * id may live inside it, and the string-only copy iterates it. Arrays and
+ * `null` are objects to `typeof`, so both are rejected here rather than at each
+ * call site.
+ */
+function contextObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+/**
  * PURE. Returns the validated context or `null`; the route decides the status
  * code (house pattern: `parseUpdate`'s role on the Telegram surface).
  *
@@ -135,14 +169,26 @@ export function parseDispatchBody(raw: unknown): PaperclipDispatchContext | null
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const body = raw as PaperclipDispatchBody;
   const netzarAgentId = nonEmptyString(body.netzarAgentId);
-  const issueId = nonEmptyString(body.issueId);
+  // WHERE THE ISSUE ID IS READ FROM, and why it is two places. The measured
+  // push (see the header) carries no top-level `issueId` at all: Paperclip
+  // merges `context` in whole, and the id is a key INSIDE it. Both spellings
+  // are accepted and the TOP-LEVEL one wins, so the probe-driven wakeup shape
+  // and the adapter push both parse and neither is silently reinterpreted.
+  //
+  // This widens WHERE the id may be spelled, never WHETHER it is required:
+  // absent from both is still `null`, which is still a 400. There is no issue
+  // to dispatch against without one, and no second half of the dedupe key.
+  const rawContext = contextObject(body.context);
+  const issueId = nonEmptyString(body.issueId) ?? nonEmptyString(rawContext?.issueId);
   const runId = nonEmptyString(body.runId);
   if (netzarAgentId === undefined) return null;
   if (issueId === undefined) return null;
   if (runId === undefined) return null;
+  // The string-only copy is VERBATIM. An `issueId` promoted out of `context`
+  // above is NOT written back in, and one that was already there is not
+  // removed: the interpolated block shows what the caller actually sent.
   const context: Record<string, string> = {};
-  const rawContext = body.context;
-  if (typeof rawContext === 'object' && rawContext !== null && !Array.isArray(rawContext)) {
+  if (rawContext !== undefined) {
     for (const [key, value] of Object.entries(rawContext)) {
       if (typeof value !== 'string') continue;
       // Cardinality is bounded HERE as well as at interpolation, so a huge map

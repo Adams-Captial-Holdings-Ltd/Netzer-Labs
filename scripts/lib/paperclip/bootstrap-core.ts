@@ -259,18 +259,95 @@ export async function createAgent(
 }
 
 /**
- * Create the agents in `specs` that do not already exist, in the order given
- * so a manager exists before its report. Idempotent: an agent is recognized
- * by `metadata.netzarAgentId`, never by name.
+ * Stable-key JSON. Paperclip stores `adapter_config` as jsonb, which does not
+ * preserve object key order, so `JSON.stringify(a) === JSON.stringify(b)` is
+ * not a usable equality here: the same config read back can serialize
+ * differently and would look like drift on every single run.
+ */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+}
+
+/**
+ * The comparable projection of an adapter_config: every field by value, EXCEPT
+ * `headers`, which is reduced to its sorted key names.
  *
- * Returns every mapped agent keyed by Netzar slug, plus how many were created
- * — which is what lets a caller PROVE a re-run was a no-op.
+ * P38: the authorization header carries the dispatch secret, and nothing in
+ * this module prints or compares a secret value. The cost is named rather than
+ * hidden — a ROTATED secret with the same header key set does not read as
+ * drift, so rotation is still a deliberate act (call
+ * `updateAgentAdapterConfig`, or delete the agent so the bootstrap recreates
+ * it), not something a re-run heals. Arming and disarming, which is what this
+ * comparison exists for, turn on `url` and on the PRESENCE of the header — and
+ * both of those this projection does see.
+ */
+function comparableAdapterConfig(config: unknown): string {
+  const record = (config ?? {}) as Record<string, unknown>;
+  const headers = record.headers;
+  return stableJson(
+    headers !== null && typeof headers === 'object'
+      ? { ...record, headers: Object.keys(headers as Record<string, unknown>).sort() }
+      : record,
+  );
+}
+
+/**
+ * Rewrite ONE existing agent's `adapter_config`.
+ *
+ * ROUTE PROVENANCE. `PATCH /api/agents/{id}` carrying an `adapterConfig`
+ * object is declared by the PINNED OpenAPI snapshot
+ * (`tests/contract/openapi.snapshot.json`) — an artifact fact, not a plan claim
+ * and not a Paperclip source read (A1-16). What the snapshot does NOT settle is
+ * live behaviour: no probe in the 21-probe set drives this route, so its auth
+ * and its response body stay UNVERIFIED until the first real bootstrap run
+ * exercises it. Only the STATUS is relied on here — `jsonResponse` rejects
+ * anything that is not 2xx.
+ *
+ * The body carries `adapterConfig` and nothing else, so this call cannot
+ * silently re-role, rename or re-parent an agent.
+ */
+export async function updateAgentAdapterConfig(
+  request: PaperclipRequest,
+  agentId: string,
+  adapterConfig: Record<string, unknown>,
+): Promise<void> {
+  await jsonResponse<unknown>(
+    await request(`/api/agents/${agentId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ adapterConfig }),
+    }),
+    'Paperclip agent adapter_config update',
+  );
+}
+
+/**
+ * Create the agents in `specs` that do not already exist, in the order given
+ * so a manager exists before its report, and RECONCILE the `adapter_config` of
+ * the ones that do. Idempotent: an agent is recognized by
+ * `metadata.netzarAgentId`, never by name.
+ *
+ * The reconcile exists because a create-only bootstrap freezes whatever the
+ * FIRST run happened to build. Staging, measured 2026-09-06: the `research`
+ * agent record held adapterConfig keys [method, payloadTemplate, timeoutMs] and
+ * no `url`, Paperclip logged `HTTP adapter missing url`, and every
+ * research-assigned issue escalated to Main instead of dispatching. Re-running
+ * the bootstrap with a corrected spec changed nothing, because nothing here
+ * ever updated an existing agent.
+ *
+ * Returns every mapped agent keyed by Netzar slug, plus which slugs were
+ * created and which were updated — which is what lets a caller PROVE a re-run
+ * was a no-op: both lists empty, and zero non-GET requests.
  */
 export async function ensureAgents(
   request: PaperclipRequest,
   companyId: string,
   specs: AgentSpec[],
-): Promise<{ agents: Map<string, AgentRecord>; created: string[] }> {
+): Promise<{ agents: Map<string, AgentRecord>; created: string[]; updated: string[] }> {
   const existing = await listAgents(request, companyId);
   const bySlug = new Map<string, AgentRecord>();
   for (const agent of existing) {
@@ -278,8 +355,24 @@ export async function ensureAgents(
     if (slug) bySlug.set(slug, agent);
   }
   const created: string[] = [];
+  const updated: string[] = [];
   for (const spec of specs) {
-    if (bySlug.has(spec.slug)) continue;
+    const present = bySlug.get(spec.slug);
+    if (present) {
+      const live = comparableAdapterConfig(present.adapterConfig);
+      if (live !== comparableAdapterConfig(spec.adapterConfig)) {
+        await updateAgentAdapterConfig(request, present.id, spec.adapterConfig);
+        // The local record takes the config that was just ACCEPTED, not one
+        // read back out of the response: this route's response body shape is
+        // not established by anything green here (see above), only its status.
+        bySlug.set(spec.slug, {
+          ...present,
+          adapterConfig: spec.adapterConfig as AgentRecord['adapterConfig'],
+        });
+        updated.push(spec.slug);
+      }
+      continue;
+    }
     const reportsTo = spec.reportsToSlug ? (bySlug.get(spec.reportsToSlug)?.id ?? null) : null;
     if (spec.reportsToSlug && !reportsTo) {
       throw new Error(
@@ -289,7 +382,7 @@ export async function ensureAgents(
     bySlug.set(spec.slug, await createAgent(request, companyId, spec, reportsTo));
     created.push(spec.slug);
   }
-  return { agents: bySlug, created };
+  return { agents: bySlug, created, updated };
 }
 
 export async function listActiveKeys(
@@ -358,6 +451,25 @@ export function assertResponsibleUserAuthzUnset(env: Record<string, string | und
 }
 
 /**
+ * Parse `PAPERCLIP_DISPATCH_SLUGS`: the comma list of slugs that get a dispatch
+ * `url`, i.e. the agents Paperclip is allowed to hand work to. Default `main`.
+ *
+ * `main` is in the result whatever the variable says. It is the `ceo`, the actor
+ * the company-wide reconciler key belongs to, and the terminal of Paperclip's
+ * escalation ladder, so a typo that silently disarmed it would stop every
+ * dispatch with no error anywhere. Widening the set is what this variable is
+ * for; the switch that can close `main` is the app-side
+ * `paperclip/enabled_agents` runtime-config row.
+ */
+export function parseDispatchSlugs(value: string | undefined): string[] {
+  const listed = (value ?? '')
+    .split(',')
+    .map((slug) => slug.trim())
+    .filter(Boolean);
+  return [...new Set(['main', ...listed])];
+}
+
+/**
  * Build the agent specs from a slug list.
  *
  * `main` is the `ceo` at the top of the chart and everything else reports to
@@ -370,26 +482,29 @@ export function assertResponsibleUserAuthzUnset(env: Record<string, string | und
  * a placeholder would be sent as the bearer and every dispatch would 401. It
  * is stored as plaintext jsonb — recorded, not hidden (C-17).
  *
- * ROTATION WART, named rather than hidden: `ensureAgents` only CREATES missing
- * agents, so re-running with a rotated secret does not rewrite an existing
- * agent's adapter_config. Rotating means updating the agent in the Paperclip
- * board (or deleting it so the bootstrap recreates it) in the same change as
- * the secret.
+ * ROTATION WART, NARROWED (P0-2b-2) AND NOT CLOSED. `ensureAgents` now
+ * reconciles an existing agent's adapter_config against the spec, so arming,
+ * disarming, a changed url and a changed payload template are all healed by a
+ * re-run. What a re-run still does NOT heal is a ROTATED `dispatchSecret`: the
+ * comparison reads the `headers` KEY NAMES and never a header value (P38), so a
+ * new bearer under the same key does not read as drift. Rotating means calling
+ * `updateAgentAdapterConfig` deliberately, or deleting the agent so the
+ * bootstrap recreates it, in the same change as the secret.
  *
- * PHASE 6 DID NOT CLOSE IT, AND SAYS SO RATHER THAN PAPERING OVER IT.
- * UNVERIFIED: there is no agent-UPDATE call anywhere in this repo — this module
- * has `listAgents` and `createAgent` and nothing else — and no probe in the
- * 21-probe set exercises one, so the method and path that would rewrite an
- * existing `adapter_config` are established by NOTHING green here. A1-16
- * forbids settling it from the plan document, which is already wrong about this
- * route's auth. So rotation AND rollback are, today, a BOARD-UI OPERATION:
- * blank the agent's `adapter_config.url` in the Paperclip board and dispatch
- * for that agent stops, with no redeploy and no image. The complementary
- * app-side switch, which this repo CAN prove, is the `paperclip/enabled_agents`
+ * WHAT THAT CHANGED ABOUT ROLLBACK, SAID PLAINLY. Blanking an agent's
+ * `adapter_config.url` in the Paperclip board still stops dispatch for that
+ * agent at once, but it is no longer DURABLE: the next bootstrap run re-arms it
+ * from the spec. The rollback that survives a re-run is the spec itself — drop
+ * the slug from `PAPERCLIP_DISPATCH_SLUGS` and the next run PATCHes the url
+ * away — and, app-side and independent, the `paperclip/enabled_agents`
  * runtime-config row: removing a slug from it makes the dispatch route answer
  * 202 `{ignored:'agent_not_enabled'}` within one 30 s config-cache TTL.
- * Writing `PATCH /api/agents/{id}` into code on the strength of the plan alone
- * is exactly the move that must not happen; it needs a probe first.
+ *
+ * STILL UNVERIFIED, and the first thing a real run has to prove: no probe in
+ * the 21-probe set drives `PATCH /api/agents/{id}`, so its live auth and its
+ * response are established by the pinned OpenAPI snapshot alone. The in-memory
+ * Paperclip in `bootstrap-core.test.ts` proves what this module SENDS, never
+ * what Paperclip accepts.
  */
 export function agentSpecs(opts: {
   slugs: string[];
@@ -400,12 +515,14 @@ export function agentSpecs(opts: {
    * agent, so the first install dispatches for exactly one actor rather than
    * arming the whole chart at once.
    *
-   * THE URL IS THE ARMING SWITCH, and that is what makes rollback a DATA EDIT
-   * rather than a deploy: an agent whose `adapter_config` carries no `url` has
-   * nothing for Paperclip to POST to. The app-side arming switch is the
-   * separate `paperclip/enabled_agents` runtime-config row the dispatch route
-   * reads; the two are independent on purpose, so an operator can close either
-   * end without touching the other and without shipping an image.
+   * THE URL IS THE ARMING SWITCH: an agent whose `adapter_config` carries no
+   * `url` has nothing for Paperclip to POST to. Since P0-2b-2 that switch is
+   * driven by `PAPERCLIP_DISPATCH_SLUGS` and APPLIED BY `ensureAgents` on every
+   * run, to already-created agents as well as new ones, so arming and rollback
+   * are both an env edit plus a re-run rather than a deploy. The app-side arming
+   * switch is the separate `paperclip/enabled_agents` runtime-config row the
+   * dispatch route reads; the two are independent on purpose, so an operator can
+   * close either end without touching the other and without shipping an image.
    */
   dispatchSlugs?: readonly string[];
 }): AgentSpec[] {
