@@ -562,10 +562,17 @@ export class AmbiguousMissionPrefixError extends Error {
   }
 }
 
+/**
+ * Returns a `WireMission`, not a `Mission`, since P1-3a: the row it hands back
+ * is one of the rows `listBoardMissions` just built, so it carries `parentId`
+ * whenever the substrate supplied one — and `mission-tools.ts` needs that field
+ * to know whether a parent lookup is even possible. The widening is type-only;
+ * `WireMission` extends `Mission`, so no caller signature changes.
+ */
 export async function resolveBoardMission(
   owner: string,
   missionId: string,
-): Promise<Mission | undefined> {
+): Promise<WireMission | undefined> {
   const rows = await listBoardMissions(owner, RESOLVE_WINDOW);
   // The matching itself is `resolveMissionRef` in the shared module — the same
   // function the chat router and `paperclip_comment` call, so a ref means one
@@ -578,7 +585,12 @@ export async function resolveBoardMission(
   if (match.kind === 'ambiguous') {
     throw new AmbiguousMissionPrefixError(owner, missionId, match.matches.map((m) => m.id));
   }
-  return match.kind === 'found' ? match.mission : undefined;
+  // The cast is sound by construction and not a widening: `resolveMissionRef`
+  // returns ONE OF THE ELEMENTS it was handed, and what it was handed is
+  // `rows` — `WireMission[]`. Its parameter is `readonly Mission[]` only
+  // because it is the shared pure module, called from surfaces that hold plain
+  // legacy rows too.
+  return match.kind === 'found' ? (match.mission as WireMission) : undefined;
 }
 
 /**
@@ -586,11 +598,27 @@ export async function resolveBoardMission(
  *
  * The ADR: "it may write a task iff that task is assigned to it, or it is the
  * coordinator." The owner's 2026-09-05 decision instantiates that for Netzar as
- * OWNER-OR-CREATOR — otherwise `main` can open a mission for `research` and then
- * be unable to cancel the delegation it just made. It is deliberately narrower
- * than the ADR's end state: "or whose parent it owns" needs `parentId` on the
- * wire and lands in P1-3, and THIS FUNCTION is the only place that widening has
- * to happen.
+ * OWNER-OR-CREATOR-OR-PARENT-OWNER — otherwise `main` can open a mission for
+ * `research` and then be unable to cancel the delegation it just made, and an
+ * agent that owns a piece of work cannot touch the subtasks hanging off it.
+ *
+ * THE THIRD ARM ARRIVED IN P1-3a, and the widening happened HERE, exactly as
+ * the P0-3 version of this comment said it would have to.
+ *
+ * WHY THE PARENT IS AN ARGUMENT AND NOT A FIELD. `parentId` is on the wire
+ * (P1-2) but it is a UUID: the row says which mission its parent is and
+ * nothing at all about who owns it. Worse, the parent may sit on ANOTHER
+ * agent's board, which is precisely the case this arm exists to authorize —
+ * so the owner-scoped `resolveBoardMission` below cannot be the thing that
+ * fetches it. Fetching is `resolveParentMission`; JUDGING is here. This
+ * function stays pure, synchronous and I/O-free, so its truth table can be
+ * read off `mission-acl.test.ts` without a substrate.
+ *
+ * `parent` ABSENT MEANS REFUSE. The caller hands in `undefined` for a 404, an
+ * unknown assignee, an engine error, and for a row with no `parentId` at all —
+ * four different unknowns that must all fail closed. `?.` rather than a
+ * truthiness check is what keeps `{ownerAgent: ''}` from matching an empty
+ * actor, the same hole the guard on the first line closes.
  *
  * READS are not scoped by it. The same ADR line scopes reads by PARTICIPATION,
  * which for a single-company deployment is every board; that half is
@@ -606,9 +634,66 @@ export async function resolveBoardMission(
 export function canMutateMission(
   actor: string,
   mission: { ownerAgent?: string; createdByAgent?: string },
+  parent?: Pick<Mission, 'ownerAgent'> | null,
 ): boolean {
   if (!actor) return false;
-  return mission.ownerAgent === actor || mission.createdByAgent === actor;
+  return (
+    mission.ownerAgent === actor ||
+    mission.createdByAgent === actor ||
+    parent?.ownerAgent === actor
+  );
+}
+
+/**
+ * THE FETCH the third arm needs, kept apart from the JUDGING above.
+ *
+ * `resolveBoardMission` CANNOT do this job. It lists ONE owner's board and
+ * matches within it, and the parent of a delegated mission may sit on any
+ * board in the company — which is exactly the case the arm exists to
+ * authorize. Pointing an owner-scoped read at a parent would answer "not
+ * found" for every parent that mattered, and the widening would look shipped
+ * while authorizing nothing.
+ *
+ * NO NEW ENGINE METHOD. `MissionEngine.getMission` already reads one row by
+ * uuid — `paperclip-mission-engine.ts:84-87` does `client.getIssue` and
+ * projects it through `issueToMission` with the AgentIdMap — which is exactly
+ * the read this needs. P1-3a adds nothing to that interface.
+ *
+ * ONLY `ownerAgent` CROSSES (A1-15). The projection is NOT provenance-joined
+ * on this path, so its `createdByAgent` is the literal `'paperclip'`. Handing
+ * a whole Mission back would put an unrepaired row in front of the next rule
+ * someone writes against it; the predicate reads one field, so one field is
+ * returned.
+ *
+ * IT NEVER THROWS, DELIBERATELY. This runs only after owner and creator have
+ * both already answered false — the answer is refusal unless the parent
+ * widens it — so every failure mode collapses to `undefined`: a 404, an
+ * assignee outside the agent map (`UnknownAgentError` out of the projection),
+ * a transport fault. The alternative is a tool that refuses with a Paperclip
+ * stack trace instead of its own sentence, changing the error shape of a
+ * decision that was already made. The swallowed error is logged.
+ *
+ * LEGACY ANSWERS `undefined` WITHOUT AN ENGINE. `Mission` is the DynamoDB row
+ * type and carries no `parentId` at all, so with the flag off the arm is
+ * unreachable; reaching across to the Paperclip engine anyway would be the
+ * per-request stack hop C-8 forbids.
+ */
+export async function resolveParentMission(
+  parentId: string,
+): Promise<Pick<Mission, 'ownerAgent'> | undefined> {
+  if (typeof parentId !== 'string' || !parentId.trim()) return undefined;
+  if (!paperclipRoutingEnabled()) return undefined;
+  try {
+    const engine = await missionEngine();
+    const parent = await engine.getMission(parentId);
+    return { ownerAgent: parent.ownerAgent };
+  } catch (err) {
+    logger.info(
+      { parentId, err: err instanceof Error ? err.message : String(err) },
+      'parent mission unreadable; the mutation stays refused on the owner-or-creator answer',
+    );
+    return undefined;
+  }
 }
 
 /**
