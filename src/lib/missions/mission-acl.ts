@@ -203,7 +203,7 @@ async function decorate(projected: readonly ProjectedMission[]): Promise<Mission
  * SCOPING parameter. Legacy scoped with a DynamoDB partition key: an owner with
  * no partition was `{count: 0}`, never a failure. Two different legacy answers
  * ride on that, and both come back for free by answering with an empty board
- * here: R1 returns `200 {owner, count:0, missions:[]}`, and `resolveOwned` finds
+ * here: R1 returns `200 {owner, count:0, missions:[]}`, and `resolveBoardMission` finds
  * nothing, so R3/R4 return the legacy `404 {error:'not_found', owner, id}`.
  *
  * The catch is narrowed to `err.slug === ownerAgent` so it can only ever swallow
@@ -483,7 +483,10 @@ export class AmbiguousMissionPrefixError extends Error {
   }
 }
 
-async function resolveOwned(owner: string, missionId: string): Promise<Mission | undefined> {
+export async function resolveBoardMission(
+  owner: string,
+  missionId: string,
+): Promise<Mission | undefined> {
   const rows = await listBoardMissions(owner, RESOLVE_WINDOW);
   // The matching itself is `resolveMissionRef` in the shared module — the same
   // function the chat router and `paperclip_comment` call, so a ref means one
@@ -499,14 +502,85 @@ async function resolveOwned(owner: string, missionId: string): Promise<Mission |
   return match.kind === 'found' ? match.mission : undefined;
 }
 
-/** `false` means "no mission matches for this owner" — the legacy 404 signal, unchanged. */
+/**
+ * WHO MAY MUTATE A MISSION — ADR 0009 :93-96, stated in ONE place (A3-1).
+ *
+ * The ADR: "it may write a task iff that task is assigned to it, or it is the
+ * coordinator." The owner's 2026-09-05 decision instantiates that for Netzar as
+ * OWNER-OR-CREATOR — otherwise `main` can open a mission for `research` and then
+ * be unable to cancel the delegation it just made. It is deliberately narrower
+ * than the ADR's end state: "or whose parent it owns" needs `parentId` on the
+ * wire and lands in P1-3, and THIS FUNCTION is the only place that widening has
+ * to happen.
+ *
+ * READS are not scoped by it. The same ADR line scopes reads by PARTICIPATION,
+ * which for a single-company deployment is every board; that half is
+ * `canReadBoard` below, and `list_missions` asks that one, not this one.
+ *
+ * Placed beside the resolver because the row it judges is the row the resolver
+ * returns: a caller learns the creator by resolving, then asks this.
+ *
+ * The empty-actor guard is not decoration. Legacy rows coerce a missing
+ * `createdByAgent` to `''` (`mission-tasks-repo.ts:259`) and an actor is a
+ * string by type only, so without it `'' === ''` would authorize a mutation.
+ */
+export function canMutateMission(
+  actor: string,
+  mission: { ownerAgent?: string; createdByAgent?: string },
+): boolean {
+  if (!actor) return false;
+  return mission.ownerAgent === actor || mission.createdByAgent === actor;
+}
+
+/**
+ * WHO MAY READ A BOARD — the OTHER half of ADR 0009 :93-96, stated once (A3-1).
+ *
+ * The ADR: "an agent may read a mission iff it has a task on that mission, or
+ * it is the coordinator." The owner's 2026-09-05 decision instantiates that
+ * participation test for a single-company Netzar deployment as READ ANY BOARD —
+ * every agent in the company is a participant in the company's work, and an
+ * agent that cannot see the queue it is being asked about answers about the
+ * wrong one.
+ *
+ * SO IT IS CONSTANT-TRUE AT THIS COMMIT, and the refusal branch guarding it in
+ * `list_missions` is unreachable. It is a function anyway because a rule with
+ * no address is a rule that gets restated: the read half lived only in a
+ * comment, and the next caller that wanted it would have written its own
+ * comparison in its own file. Tightening it — per-mission participation, or a
+ * real company boundary once there is more than one company — is an edit HERE,
+ * and can never be an edit in an adapter.
+ *
+ * The parameters are underscored because `noUnusedParameters` is on and this
+ * rule does not consult its arguments yet. They are named for what the
+ * tightened rule needs, so widening it adds no call site: every caller already
+ * passes both.
+ */
+export function canReadBoard(_actor: string, _owner: string): boolean {
+  return true;
+}
+
+/**
+ * `false` means "no mission matches for this owner" — the legacy 404 signal,
+ * unchanged.
+ *
+ * `resolved` is the row a caller ALREADY resolved off this same board with
+ * `resolveBoardMission(ownerAgent, missionId)`. `mission-tools.ts` has to
+ * resolve before it can apply `canMutateMission` — the creator is only knowable
+ * from the row — so handing that row back keeps an authorized cross-board
+ * update at ONE board read instead of two ON THE PAPERCLIP BRANCH ONLY. The
+ * legacy branch below ignores it and returns first: `repoUpdateMissionStatus`
+ * re-scans the board itself (`mission-tasks-repo.ts:184`), and reproducing
+ * legacy byte for byte matters more here than saving it a read. Omitted,
+ * both branches behave exactly as they did before.
+ */
 export async function setBoardMissionStatus(
   ownerAgent: string,
   missionId: string,
   status: MissionStatus,
+  resolved?: Mission,
 ): Promise<boolean> {
   if (!paperclipRoutingEnabled()) return repoUpdateMissionStatus(ownerAgent, missionId, status);
-  const target = await resolveOwned(ownerAgent, missionId);
+  const target = resolved ?? (await resolveBoardMission(ownerAgent, missionId));
   if (!target) return false;
   const engine = await missionEngine();
   await engine.setStatus(target.id, status);
@@ -520,7 +594,7 @@ export async function reassignBoardMission(
   newOwner: string,
 ): Promise<Mission | null> {
   if (!paperclipRoutingEnabled()) return repoReassignMission(currentOwner, missionId, newOwner);
-  const target = await resolveOwned(currentOwner, missionId);
+  const target = await resolveBoardMission(currentOwner, missionId);
   if (!target) return null;
   // Legacy short-circuits a no-op reassign and returns the row UNMODIFIED — no
   // write, `updatedAt` untouched — still a 200. Reproduced rather than

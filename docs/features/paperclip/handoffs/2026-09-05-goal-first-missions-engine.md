@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: session-handoff
 status: current
-observed_at: 2026-09-05
-as_of_commit: fc2968a7b9f96e4f19ab8e46adc29c604914e601
+observed_at: 2026-09-06
+as_of_commit: cf2a29bdf27caa6c9032d29cabe2631956335063
 session_slug: goal-first-missions-engine
 supersedes: 2026-09-03-staging-probe-green-and-two-findings.md
 ---
@@ -20,14 +20,14 @@ supersedes: 2026-09-03-staging-probe-green-and-two-findings.md
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none directly; staging is reached via `qa` → `staging` promotions |
 | Commit at session start | `fc2968a` |
-| Commit at session end | TBD |
+| Commit at session end | `cf2a29b` (fast-forwarded to `development`; no unique commits; uncommitted Phase 0 diff on top; the lead commits) |
 | Pushed | no |
-| PR | none yet |
-| Deployed | no |
+| PR | #148/#149/#150 merged (P0-0 to development/qa/staging); #151-#155 merged separately (another session's War Room work, no overlap with Phase 0 files); the Phase 0 PR (this branch, `feat/paperclip-p0-arm-and-collaborate` -> `development`) is pending |
+| Deployed | run 33989570600 (P0-0 only, at `9873f28`); run 34004002068 (War Room promotion, `5a5bf65`, 2026-09-06T01:28Z) armed `CCE_PAPERCLIP_ENABLED=1` live in staging |
 
 ## 2. Current state summary
 
-This session runs the approved plan [`missions-engine-plan.md`](../missions-engine-plan.md) (tracked at `fc2968a`) as a builder/critic gauntlet, one piece at a time. P0-0 (the Dockerfile build-stage npm fetch timeout, ledger A53) is the first piece and its own PR; P0-1 through P0-3, Phase 1, 8.5, the bridge, and 10, 11, 12 follow in that order. Production is untouched.
+P0-0 (the Dockerfile build-stage npm fetch timeout, ledger A53) shipped through PRs #148 (`fix/paperclip-image-fetch-timeout` → `development` `17f0456`, 9/9), #149 (`development` → `qa` `874ae48`, 19/19) and #150 (`qa` → `staging` `9873f28`, 20/20), and deployed at staging run 33989570600 (green, equal to the bar). The staging environment variable `CCE_PAPERCLIP_ENABLED=1` was set 2026-09-05T21:01Z. Another session promoted unrelated work (#151-#155, no overlap with Phase 0 files) through the ladder while this session was blocked on the account usage limit: `development` is now `cf2a29b`, `qa` is `7d958e5`, and staging is `5a5bf65`; staging Deploy run 34004002068 (2026-09-06T01:28Z, at `5a5bf65`) read the staging environment variable, so `CCE_PAPERCLIP_ENABLED=1` armed Paperclip live in staging **before** this branch deployed (A57) -- it is no longer pending this branch's deploy. Pre-flip staging held 2 legacy DynamoDB mission rows (both `cancelled`), now hidden from the board (DL-7, no migration). P0-3, the owner-or-creator missions authorization predicate, was built on `feat/paperclip-p0-arm-and-collaborate` (from the P0-0 tip `288e5c6`, contained in `development` `17f0456`); this branch has since fast-forwarded to `development` `cf2a29b` (no unique commits; no merge commit). P0-1's live check (board read against Paperclip) is runnable NOW, blocked only on `aws login`; P0-2's live check (wakeup/dispatch) and P0-3's live check (test-turn cases) still wait for this branch's own deploy. Production is untouched. P0-3 passed its critic in round 3: after round 2's focused PASS the full suite found two adapter command-scope files failing (enumerating mission-acl.js mocks); mission-assignment-push.test.ts was converted as the third file that runs real mission-tools; fixed test-side, regression closed (6.3, 7).
 
 ## 3. Codebase understanding
 
@@ -39,8 +39,12 @@ The operating rules, reuse map and promotion ladder for this campaign live in [`
 
 | File | Purpose | Why it mattered this session |
 |---|---|---|
-| `Dockerfile:39-60` | The `build` stage (P0-0 target) | Only this stage may change for P0-0; it is where the npm fetch-timeout ENV line goes. |
+| `Dockerfile:39-67` | The `build` stage (P0-0 target) | Only this stage may change for P0-0; it is where the npm fetch-timeout ENV line goes. |
 | `scripts/lib/lifecycle/orchestrator-dockerfile.test.ts` | New; P0-0's literal test | Asserts the Dockerfile text carries the fetch-timeout ENV line. |
+| `src/lib/missions/mission-acl.ts` | `canReadBoard`, `canMutateMission`, `resolveBoardMission` | P0-3's authorization predicates: read is company-wide (constant true today, one seam for tightening); mutate iff owner or creator. |
+| `src/lib/tools/mission-tools.ts` | `boardSelf`; `list_missions` calls `canReadBoard`, `update_mission` calls `canMutateMission` | One identity (`boardSelf`) used for creation and for judgment, closing the creator/actor split the round-1 critic found. |
+| `src/lib/missions/mission-acl.test.ts` (extended, +88), `src/lib/tools/mission-tools.authz.test.ts` (rewritten, +222/-21) | Test coverage | Red-first proof (18 failures with sources reverted, 53/53 restored) for the P0-3 predicates. |
+| `src/lib/missions/format.ts` | Comment corrections | Stale comment cleanup accompanying the P0-3 change. |
 
 ### 3.3 Patterns and conventions to follow
 
@@ -50,7 +54,10 @@ Cross-surface chat work must respect the parity rule in [`CLAUDE.md`](../../../.
 
 ### 4.1 Tasks finished
 
-- [x] P0-0 — Dockerfile build-stage ENV npm_config_fetch_timeout=600000 (Dockerfile:48) with the literal test scripts/lib/lifecycle/orchestrator-dockerfile.test.ts; critic PASS round 1 (P0-0, A53, A42, M54, TDD PASS; LIVE pending the staging Build + Push step)
+- [x] P0-0 — Dockerfile build-stage ENV npm_config_fetch_timeout=600000 (Dockerfile:49) with the literal test scripts/lib/lifecycle/orchestrator-dockerfile.test.ts; critic PASS round 1 (P0-0, A53, A42, M54, TDD PASS); evidence: staging run 33989570600 (green, equal to the bar)
+- [x] P0-1 — staging environment variable `CCE_PAPERCLIP_ENABLED=1` set 2026-09-05T21:01Z (`gh variable set ... --env staging`); armed live in staging by run 34004002068 (2026-09-06T01:28Z, at `5a5bf65`, A57); pre-flip legacy mission count 2 (both `cancelled`), now hidden; live check (board read) runnable now, blocked only on `aws login`; P0-2/P0-3 live checks still pending this branch's own deploy
+- [x] P0-3 — owner-or-creator missions authorization predicate; critic verdict PASS (round 3, full suite both flag states): P0-3, A3-1, PHASE-8, C-16, PHASE-7-1, TDD, FLAGS all PASS; LIVE = PENDING-DEPLOY
+- [ ] P0-2 — pending the deploy
 
 ### 4.2 Files modified
 
@@ -60,19 +67,30 @@ Cross-surface chat work must respect the parity rule in [`CLAUDE.md`](../../../.
 | `scripts/lib/lifecycle/orchestrator-dockerfile.test.ts` | New; literal stage parse asserting the ENV line is present in the `[build]` stage | Proves text only, M54 |
 | `docs/features/paperclip/HANDOFF.md` | Recorded P0-0 shipped and the pending live evidence step | docs |
 | `docs/features/paperclip/handoffs/2026-09-05-goal-first-missions-engine.md` | This file | docs |
+| `src/lib/missions/mission-acl.ts` | Added `canReadBoard`, `canMutateMission`, `resolveBoardMission` | P0-3 |
+| `src/lib/tools/mission-tools.ts` | Added `boardSelf`; `list_missions`/`update_mission` call the predicates | P0-3, closes the creator/actor identity split |
+| `src/lib/missions/mission-acl.test.ts`, `src/lib/tools/mission-tools.authz.test.ts` | `mission-acl.test.ts` extended (+88); `mission-tools.authz.test.ts` rewritten (+222/-21) | P0-3, red-first (TDD) |
+| `src/adapters/telegram/handler.command-scope.test.ts`, `src/adapters/slack/handler.command-scope.test.ts` | Fixed `vi.mock` factories for `mission-acl.js`: spread `importOriginal` instead of enumerating exports, so the new `canReadBoard`/`canMutateMission` are present | Full suite after round 2's focused PASS found these two enumerating mocks broke `list_missions`; round-3 fix, test-side only |
+| `src/lib/tools/mission-assignment-push.test.ts` | Same `vi.mock` factory fix (third file that runs real `mission-tools.ts`) | Round-3, converted as a precaution (same mock pattern); this file never failed |
+| `src/lib/missions/format.ts` | Comment corrections | P0-3 critic nit |
+| `docs/features/paperclip/README.md` | Business-rules section states the owner-or-creator predicate and the flag-flip legacy-mission fact | P0-3, P0-1 |
+| `docs/adr/0009-mission-container-model.md` | Amendment 2026-09-05: self-only owner rule lifted to the participation predicate | P0-3 |
 
 ### 4.3 Decisions made
 
 | Decision | Options considered | Why this one |
 |---|---|---|
 | "600000 ms, not unbounded" | "unbounded / add fetch-retries" | doubles the proved 300000 default while staying finite; retries left at npm default because the ledger shows no exhausted retries; plan asks for one line |
+| `boardSelf(ctx) = ctx.boardAgentId ?? ctx.agentId` is the one identity for `create_mission` (owner default, `createdByAgent`), `list_missions` and `update_mission` | keep the session identity (`ctx.agentId`) for judgment; split identity by tool | the tools address the board of the bot that received the message, so creator and judge must be the same scope (Telegram sticky default, agent-loop.ts:178-197) |
+| `canReadBoard(actor, owner)` returns true for every pair today | scope reads to the actor's own board now | ADR 0009 :93-96 participation predicate instantiated as company-wide read; `list_missions` keeps one typed refusal branch, unreachable at this commit, as the seam for future tightening |
+| Parent-owner delegation widening deferred to P1-3 | build it now alongside `canMutateMission` | `parentId` is not yet on the wire; scope kept minimal for P0-3 |
 
 ### 4.4 Durable facts promoted out of this log
 
 | Fact learned | Promoted into | Done |
 |---|---|---|
-
-filled at phase close.
+| Any agent may list any board; an agent may mutate a mission it owns or created; creator and judge share the board scope | README.md section 6 (business rules) | [x] |
+| The self-only owner rule is ADR 0009's participation predicate instantiated by the owner | ADR 0009 amendment 2026-09-05 | [x] |
 
 ## 5. Carried-forward mistakes, assumptions and precautions
 
@@ -405,61 +423,69 @@ are the facts that run produced, and several of them correct a document.
 
 | ID | Type | New finding | Required correction or precaution |
 |---|---|---|---|
-| (none yet) | | | |
+| A56 | Assumption (one green run) | Staging run 33989570600's build stage took 251.6 s vs 230.9 s in the bar, both under the old 300 s default fetch timeout. | Run 33989570600 did not exercise the new timeout, so the causal claim for A53 stays open. |
+| P46 | Precaution | A process restart orphaned a Monitor, a background watch and the running P0-3 workflow; the builder result was already in the journal and only the critic needed to be re-run by resuming the workflow. | Read the journal before rebuilding anything a restart appears to have lost. |
+| M60 | Mistake | `create_mission` stamped the SESSION scope `ctx.agentId` as creator while `list_missions`/`update_mission` judged the BOARD scope `ctx.boardAgentId ?? ctx.agentId`, so under Telegram's sticky default the agent that opened a mission could not transition it. Corrected by `boardSelf`. | Provenance and authorization must use one identity; a test must exercise the surface where the two scopes differ. |
+| P47 | Precaution | graft indexes the main checkout, not a branch with uncommitted edits. | On such a branch, use grep/sed in the worktree for changed files instead of graft. |
+| M61 | Mistake | Focused critic sets passed while the full suite failed on two adapter parity tests whose partial vi.mock omitted the new exports; P4 caught it. | A critic for a src/lib change runs the full suite; partial module mocks spread importOriginal. |
+| A57 | Assumption (now evidence) | Another session promoted unrelated work (#151-#155) through the ladder while this session was blocked; staging run 34004002068 armed Paperclip before the Phase 0 branch deployed. | Check `git log origin/development` and `gh run list --branch staging` at every resume; a variable set for the next deploy is consumed by whichever deploy comes next. |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Finish the P0-0 critic round, run the step-7 validation list in both flag states, open the PR to development.
+The two `handler.command-scope.test.ts` mocks (`src/adapters/slack/` and `src/adapters/telegram/`), plus `src/lib/tools/mission-assignment-push.test.ts`, are fixed (round 3): each `vi.mock('mission-acl.js', ...)` factory now spreads `importOriginal` instead of enumerating exports, so `canReadBoard`/`canMutateMission` are present and the full suite (both flag states) fails on exactly the five A52 Windows-baseline files. The regression is closed. Commit the Phase 0 diff (P0-3 plus the three parity-test mock fixes) and this docs pass, and open the PR `feat/paperclip-p0-arm-and-collaborate` -> `development`, then `qa`, then `staging`. In parallel, after `aws login`, run P0-1's live check (`GET /api/missions?owner=main` from Paperclip) against the already-armed staging (run 34004002068, A57) -- it does not wait for this branch. After this branch's own deploy: P0-2 (enabled_agents write + wakeup + dispatch 202 line) and P0-3 (test-turn cases).
 
 ### 6.2 Immediate next steps
 
-1. P0-1 — from the plan.
-2. P0-2 — from the plan.
-3. P0-3 — from the plan.
+1. P0-2 — from the plan.
+2. Phase 1 — P1-1 through P1-3 (P1-3: parent-owner delegation widening).
+3. Phase 8.5 — 8.5-1 through 8.5-5.
+4. Bridge — B-1 through B-6.
+5. Phase 10 — 10-1 through 10-5.
+6. Phase 11 — 11-1 through 11-3.
+7. Phase 12 — 12-1 through 12-3.
 
 ### 6.3 Blockers and open questions
 
-- [ ] Blocker: none yet; the AWS root session was alive at session start and expires within about two hours (A55).
+- [ ] Blocker: `aws login` is needed before the Phase 0 live round trip (A55).
+- [x] RESOLVED (round 3) -- `src/adapters/slack/handler.command-scope.test.ts` and `src/adapters/telegram/handler.command-scope.test.ts` failed because their `vi.mock` factories for `mission-acl.js` enumerated exports and omitted `canReadBoard`/`canMutateMission`; `src/lib/tools/mission-assignment-push.test.ts` never failed (it only invokes `create_mission`, which calls neither `canReadBoard` (:408) nor `canMutateMission` (:505)) but was converted the same way as a precaution; fixed by spreading `importOriginal`. Full suite in both flag states now fails on exactly the five A52 files.
 
 ### 6.4 Deferred, and why
 
 - Production and release — separate go-ahead.
+- Parent-owner delegation (P1-3) — `parentId` is not yet on the wire.
 
 ## 7. Verification actually performed
 
+Worktree: `C:\dev\Netzer-Labs\.worktrees\paperclip-promote`. Pre-check: `git status --short` showed the uncommitted Phase 0 diff (12 files; line counts at this pre-check, before this docs pass): the 5 P0-3 source/test files (`mission-acl.ts`, `mission-acl.test.ts`, `format.ts`, `mission-tools.ts`, `mission-tools.authz.test.ts`), 3 test-mock fixes (`handler.command-scope.test.ts` in `src/adapters/telegram/` and `src/adapters/slack/`, `mission-assignment-push.test.ts`), and 4 docs (this session handoff, `HANDOFF.md`, `README.md`, `docs/adr/0009-mission-container-model.md`); `git diff HEAD --stat` confirmed the same file count. No source files were edited during this validation pass.
+
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
-| `npm run typecheck` | CI at development b2df90e (green on #146) | exit 0 |
-| `npm test` | CI at development b2df90e (green on #146) | exit 1; 5 failed / 235 passed / 1 skipped test files (3009 passed, 1 failed, 6 skipped tests); failing files match the A52 baseline exactly: `scripts/ci/docs-links.test.ts`, `scripts/ci/feature-knowledge.test.ts`, `scripts/ci/runnable-blocks.test.ts`, `scripts/release/sync-deprecations.test.ts`, `scripts/lib/lifecycle/rollback-classes.test.ts` |
-| `CCE_PAPERCLIP_ENABLED=1 npm test` | CI at development b2df90e (green on #146) | exit 1; 5 failed / 235 passed / 1 skipped test files (3009 passed, 1 failed, 6 skipped tests); same A52 baseline files, flag-on parity confirmed |
-| `npm run build` | CI at development b2df90e (green on #146) | exit 0 |
-| `npm --prefix web run typecheck` | CI at development b2df90e (green on #146) | exit 0 |
-| `npm --prefix web run build` | CI at development b2df90e (green on #146) | exit 0, built in 7.32s |
-| `npm run local:test:integration` | CI at development b2df90e (green on #146) | NOT RUN locally (see note below) |
-| `node scripts/ci/docs-links.mjs` | CI at development b2df90e (green on #146) | exit 0, OK (127 markdown files, 1482 internal links checked, 58 external skipped) |
-| `node scripts/ci/feature-knowledge.mjs` | CI at development b2df90e (green on #146) | exit 0, OK |
-| `git diff --check` | CI at development b2df90e (green on #146) | exit 0 (only a benign LF/CRLF warning on `Dockerfile`) |
+| `npm run typecheck` | CI green on #148 at development 17f0456 | exit 0; `tsc --noEmit` clean, no output |
+| `npm test -- --minWorkers=1 --maxWorkers=1` | CI green on #148 at development 17f0456 | This pass, HEAD cf2a29b: exit 1; "Test Files 5 failed | 236 passed | 1 skipped (242)" / "Tests 1 failed | 3028 passed | 6 skipped (3035)". Failing files exactly the A52 five (`scripts/ci/docs-links.test.ts`, `scripts/ci/feature-knowledge.test.ts`, `scripts/ci/runnable-blocks.test.ts`, `scripts/release/sync-deprecations.test.ts` each `SyntaxError: Invalid or unexpected token` at collection on CRLF `.mjs`; `scripts/lib/lifecycle/rollback-classes.test.ts` fails 1 test, the Windows path-separator artifact). The two adapter command-scope regressions found by the full suite after round 2 no longer appear -- fixed in round 3 (see 4.2, 6.1, 6.3) |
+| `CCE_PAPERCLIP_ENABLED=1 npm test -- --minWorkers=1 --maxWorkers=1` | CI green on #148 at development 17f0456 | This pass, HEAD cf2a29b: exit 1; IDENTICAL counts to the flag-off run -- "Test Files 5 failed | 236 passed | 1 skipped (242)" / "Tests 1 failed | 3028 passed | 6 skipped (3035)", same five A52 files; no jarvis.flow.test.ts flake observed, no re-run needed |
+| `npm run build` | CI green on #148 at development 17f0456 | exit 0; `tsc -p tsconfig.build.json` clean |
+| `npm --prefix web run typecheck` | CI green on #148 at development 17f0456 | exit 0; clean |
+| `npm --prefix web run build` | CI green on #148 at development 17f0456 | exit 0; vite build succeeded, 1760 modules transformed, built in 4.46s |
+| `docker info` | not run at baseline (CI does not run `docker info`) | exit 0; Docker Desktop (WSL2) reachable, client v29.7.2 |
+| `npm run local:test:integration` | CI green on #148 at development 17f0456 (`Integration Tests (LocalStack)` job) | NOT RUN -- exit 1 before any test executed: `node: .env: not found` (no `.env` file in this worktree); a missing-config failure, not a docker or code failure. CI runs it on the PR |
+| `node scripts/ci/docs-links.mjs` | not run at baseline; last real run 2026-09-03 (124 markdown files, 1420 internal links, 44 external skipped) | exit 0; OK (131 markdown files, 1546 internal links checked, 68 external skipped, before this docs pass) |
+| `node scripts/ci/feature-knowledge.mjs` | not run at baseline; last real run 2026-09-03 | exit 0; OK |
+| `git diff --check` | not run at baseline (CI does not gate on this) | exit 0; no whitespace/conflict-marker errors, no output |
+| `node scripts/ci/diagrams-drift.mjs` | not run at baseline (inert locally without `GITHUB_BASE_REF`; last real run 2026-09-03) | exit 0; 8 mapped diagrams, all paths valid; no `GITHUB_BASE_REF` locally (path validation only) |
+| `grep -n "mission-acl\|mission-tools" docs/diagrams.map` | n/a | exit 1; no matches — none of the 5 changed P0-3 files are referenced in `docs/diagrams.map`, so the changed files are not mapped by the diagram-drift system |
 
-`npm run local:test:integration` was NOT RUN: `docker info` failed first with
-"failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine;
-check if the path is correct and if the daemon is running: open
-//./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified."
-Docker Desktop is not running on this machine; CI runs the integration suite.
+Regressions found by the full suite after round 2 (P4), fixed and verified closed in round 3: `src/adapters/slack/handler.command-scope.test.ts` and `src/adapters/telegram/handler.command-scope.test.ts` failed because their `vi.mock('mission-acl.js', ...)` factories enumerated exports and omitted `canReadBoard`/`canMutateMission`, so `list_missions` threw before the repo call at `mission-tools.ts:408`; `src/lib/tools/mission-assignment-push.test.ts` never failed (it only invokes `create_mission`, calling neither predicate) but was converted the same way as a precaution, the third file that runs real `mission-tools.ts`. The round-3 fix spreads `importOriginal` in each factory (test-side only, same substrate doubles); red-first reproduced by the critic before the fix. The full suite in both flag states now fails on exactly the five A52 files (see the table above).
 
-`docs/diagrams.map` does not reference `Dockerfile` — drift gate not applicable
-for this change; `scripts/ci/diagrams-drift.mjs` was not run.
-
-Anything not run, and why: the integration suite (Docker absent, see above);
-`scripts/ci/diagrams-drift.mjs` (Dockerfile unmapped).
+Anything not run, and why: `npm run local:test:integration` — NOT RUN (exit 1 before any test: no `.env` in this worktree); CI runs it on the PR. Every other command in the step-7 list ran.
 
 ## 8. Environment state
 
-- Operator machine: Windows 11, Node 24.19.0, aws-cli 2.36.21, session-manager-plugin 1.2.835.0, Docker absent, Git Bash without `jq` or `pkill`.
-- AWS: root session alive at session start.
-- Environment variable names used, no values: none yet.
-- Uncommitted work left in the tree: none but this session's.
+- Operator machine: Windows 11, Node 24.19.0, npm 11.17.0, aws-cli 2.36.21, Docker Desktop (WSL2) present and reachable, Git Bash without `jq` or `pkill`.
+- AWS: root session alive at 2026-09-06T04:30Z, expired by 2026-09-06T07:18Z; `aws login` needed (account 239887088812).
+- Environment variable names used, no values: `CCE_PAPERCLIP_ENABLED`.
+- Uncommitted work left in the tree: the Phase 0 diff (12 files: 5 P0-3 source/test, 3 test-mock fixes, 4 docs; see section 7) plus this docs pass; the lead commits.
 
 ## 9. Related documents
 
@@ -468,7 +494,7 @@ Anything not run, and why: the integration suite (Docker absent, see above);
 - [2026-09-02 session](2026-09-02-staging-probe-cut-and-deploy.md) — the cuts, the bootstrap, the first promotion
 - [bar-and-phases.md](../bar-and-phases.md) — the bar for the follow-on plan
 - [ADR 0010](../../../adr/0010-paperclip-work-engine.md)
-- Runs: [33067242593](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33067242593) (old bar), [33733071639](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33733071639), [33773788920](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33773788920), [33783021194](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33783021194) (new bar)
-- PRs #139 to #145
+- Runs: [33067242593](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33067242593) (old bar), [33733071639](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33733071639), [33773788920](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33773788920), [33783021194](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33783021194) (new bar), [33989570600](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/33989570600) (P0-0 deploy), [34004002068](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/34004002068) (War Room promotion, armed `CCE_PAPERCLIP_ENABLED=1` live in staging)
+- PRs #148 to #150 (P0-0, merged); #151 to #155 (another session's War Room work, merged, no overlap with Phase 0 files); the Phase 0 PR (this branch) is pending
 - [missions-engine-plan.md](../missions-engine-plan.md)
 - [Previous session handoff](2026-09-03-staging-probe-green-and-two-findings.md)
