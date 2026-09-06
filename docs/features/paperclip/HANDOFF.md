@@ -14,6 +14,8 @@ as_of_commit: cf2a29bdf27caa6c9032d29cabe2631956335063
 
 ## Current objective and required order
 
+**Now (2026-09-06 18:15Z):** read [the P0/P1 state and 8.5 + bridge handoff](handoffs/2026-09-06-p0-p1-state-and-8-5-bridge-handoff.md); its section 4 is the ordered next-action list and section 6 the brief for the next phases.
+
 Superseding order (owner, 2026-09-05): the campaign now follows [missions-engine-plan.md](missions-engine-plan.md): P0-0 image-build timeout (own PR), Phase 0 arm and collaborate, Phase 1 hierarchy, 8.5, the board bridge on missions.staging.pgnos.ai, then 10, 11, 12. The numbered list below is the 2026-09-03 state and stays as history.
 
 ### Phase 0 status
@@ -118,6 +120,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [P0/P1 state and the 8.5 + bridge brief](handoffs/2026-09-06-p0-p1-state-and-8-5-bridge-handoff.md) | 2026-09-06 | Phase 0 live results (dispatch turns run; disposition loop and cross-board provenance open), Phase 1 code-complete on feat/paperclip-p1-hierarchy, P0-0b built; paste-ready brief for Phase 8.5 and the bridge |
 | [Goal-first missions engine](handoffs/2026-09-05-goal-first-missions-engine.md) | 2026-09-05 | Runs the approved missions-engine plan as a per-piece gauntlet: P0-0 image-build timeout first, then arm staging, the collaboration predicate, hierarchy, 8.5, the board bridge, 10-12 |
 | [Staging probe green and two findings](handoffs/2026-09-03-staging-probe-green-and-two-findings.md) | 2026-09-03 | Diagnosed and fixed the two defects the probe found live (hostname guard, loopback listener), took staging green at 47a69db in run 33783021194, verified it against the bar, closed the docs; records the follow-on gauntlet prompt |
 | [Staging probe cut and deploy](handoffs/2026-09-02-staging-probe-cut-and-deploy.md) | 2026-09-02 → 2026-09-03 | Cut Codex's over-build, bootstrapped the staging tenant, promoted through the ladder; the probe's first two live runs found the hostname guard and the loopback listener; run 33783021194 green with all eight markers |
