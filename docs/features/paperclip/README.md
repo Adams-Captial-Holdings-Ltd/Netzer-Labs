@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: index
 status: current
-observed_at: 2026-09-03
-as_of_commit: 53dfc2a4df90bbce2936374db38fc58f85c22e45
+observed_at: 2026-09-06
+as_of_commit: cf2a29b
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/paperclip/client.ts
@@ -167,7 +167,7 @@ Present in the current source and working tree:
   linked from the Netzar SPA. Operators reach port 3100 only through an
   AWS-authenticated ECS Exec/SSM tunnel. This network boundary contains the
   pinned artifact's open email-signup route until upstream provides a safe
-  signup control or a separately reviewed access-controlled listener exists.
+  signup control or a separately reviewed access-controlled listener exists. The plan replaces SSM-only access with a host-based bridge on missions.staging.pgnos.ai (plan B-1..B-6) once Phase 1 and 8.5 land.
 
 The behavior above is present in source and deployed to staging: the Paperclip
 base went green in run `33067242593` on `ac70509`, and the staging contract
@@ -176,20 +176,22 @@ markers (section 3).
 
 ## 3. Current status and current source commit
 
-The current source commit is `53dfc2a` on `development`, and it is deployed to
-staging: run `33783021194` at `47a69db` (the `qa` → `staging` promotion of that
-commit) is green and includes the staging contract probe, which ran as a
-one-shot task from the live orchestrator task definition and found all eight
-CloudWatch markers. The probe's first two live runs each found a real defect,
-both fixed with one variable on the Paperclip service task definition (section
-6). The legacy router and `CCE_PAPERCLIP_ENABLED` remain intentionally present
-until the separately reviewed retirement gate has two clean production weeks of
-evidence.
+Source: `development` `cf2a29b` (P0-0 `17f0456` contained; another session's War Room work, #151-#155, merged on top with no overlap with Phase 0 files); staging `5a5bf65` (Deploy run 34004002068, 2026-09-06T01:28Z); the Phase 0 branch (`feat/paperclip-p0-arm-and-collaborate`) is pending.
 
-Still not implemented in the required execution order: Phase 8.5, the Four
-Pillars work in Phases 10–12, and the final legacy retirement. The
-volatile pass/fail counts and exact next action belong in
-[HANDOFF.md](HANDOFF.md), not this index.
+P0-0 (the Dockerfile build-stage npm fetch timeout) shipped and deployed:
+staging run `33989570600` at `9873f28` is green and equal to the bar. The
+staging environment variable `CCE_PAPERCLIP_ENABLED=1` was set 2026-09-05 and
+took effect at staging Deploy run 34004002068 (2026-09-06T01:28Z, `5a5bf65`) -- Paperclip is LIVE in staging now, not pending this branch's deploy; the repo-level variable stays `0`
+and the production environment sets none. The legacy
+router remains intentionally present until the separately reviewed retirement
+gate has two clean production weeks of evidence.
+
+Required execution order from here: Phase 0 (P0-0 done/deployed; P0-1 variable
+set, armed live in staging by run 34004002068, live check (board read) runnable now, blocked only on `aws login`; P0-3 built, critic PASS round 3, pending
+deploy; P0-2 pending the deploy) → Phase 1 (hierarchy, including P1-3 parent-
+owner delegation) → Phase 8.5 → the same-origin UI/session bridge → Phases
+10–12 → the final legacy retirement. The volatile pass/fail counts and exact
+next action belong in [HANDOFF.md](HANDOFF.md), not this index.
 
 ## 4. Source of truth
 
@@ -219,7 +221,7 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Client and engine | `src/lib/paperclip/client.ts`, `config.ts`, `agent-map.ts`, `mission-engine.ts`, `paperclip-mission-engine.ts` | Authenticated API boundary with pagination, timeout/rate-limit errors, retry-safe writes, circuit breaking, actor-key selection and no synthesized run ids |
 | Reconciler | `src/lib/paperclip/reconciler.ts`, `watermark.ts` | Observing poller over the patched feed; overlaps the stored max timestamp, dedupes `(id, updatedAt)`, refuses corrupt or unfiltered feeds, and advances the watermark conditionally |
 | Inbound dispatch | `src/adapters/dashboard/paperclip-dispatch.ts`, `src/lib/paperclip/dispatch-worker.ts` | Constant-time shared-secret check, fast 202 acknowledgement, durable one-shot claim, genuine run-id propagation, refusal-aware retry/recovery |
-| Missions ACL and privacy | `src/lib/missions/mission-acl.ts`, `src/adapters/dashboard/missions.ts`, `src/lib/tools/privacy-tools.ts` | Preserves the four `/api/missions*` envelopes/capability gates, resolves the public 8-character reference without silent ambiguity, and joins Netzar-side provenance into privacy exports |
+| Missions ACL and privacy | `src/lib/missions/mission-acl.ts` (`canReadBoard`, `canMutateMission`), `src/adapters/dashboard/missions.ts`, `src/lib/tools/privacy-tools.ts` | Preserves the four `/api/missions*` envelopes/capability gates, resolves the public 8-character reference without silent ambiguity, and joins Netzar-side provenance into privacy exports |
 | Mission surfaces and tools | `src/lib/missions/format.ts`, `src/lib/tools/mission-tools.ts`, `src/lib/tools/paperclip-tools.ts` | One status/priority vocabulary across chat surfaces; assignment notification parity; exact approved Paperclip verbs; one audit record per successful mutation |
 | Dashboard and CLI | `web/src/pages/Missions.tsx`, `web/src/lib/glossary.ts`, `scripts/mission.ts` | Six ordered kanban lanes, four priority labels and no due-date rendering; CLI list uses `owner`, create sends the actual route body, and show scans bounded real owner boards because no detail route exists |
 | Harness and artifact | `docker-compose.paperclip.yml`, `vendor/paperclip/` | Builds and runs the immutable pinned image plus the approved `updatedSince` patch with PostgreSQL 17; `npm run test:paperclip:up/down/all` |
@@ -339,6 +341,17 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
   `http://localhost:3100`, use an individually named Paperclip account, and
   close the session when finished. Shared logins and public ALB/hostname rules
   are not supported while the pinned artifact allows unauthenticated signup.
+  The planned same-origin UI/session bridge (missions.staging.pgnos.ai) will
+  replace this break-glass tunnel for ordinary board access; it is plan items
+  B-1..B-6 in missions-engine-plan.md, after Phase 1 and 8.5; it does not exist
+  yet.
+- Any agent may list any board in the company; an agent may mutate a mission it
+  owns or created (ADR 0009 :93-96, instantiated 2026-09-05); the identity that
+  acts on a board is the board scope (`boardAgentId`, else the session agent)
+  for creation and for judgment alike; parent-owner delegation lands in P1-3.
+  Dashboard routes keep their capability gates.
+- Flipping `CCE_PAPERCLIP_ENABLED` hides legacy DynamoDB missions from the board
+  (DL-7, no migration); staging had 2, both cancelled, before the flip.
 
 ### Paperclip task-definition variables the probe made necessary
 
@@ -361,13 +374,13 @@ These are the redacted shapes the probe recorded from the pinned artifact throug
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| The orchestrator image build runs under QEMU and sits on npm's socket-inactivity timeout | Three of seven staging deploy attempts on 2026-09-03 failed or stalled in `Build + Push (linux/arm64)` before any code ran; lockfiles and Dockerfile unchanged | Shipped by P0-0 (2026-09-05): `ENV npm_config_fetch_timeout=600000` in the Dockerfile `[build]` stage, pinned by `scripts/lib/lifecycle/orchestrator-dockerfile.test.ts`; behavioural evidence is the next staging run's `Build + Push (linux/arm64)` step |
+| The orchestrator image build runs under QEMU and sits on npm's socket-inactivity timeout | Three of seven staging deploy attempts on 2026-09-03 failed or stalled in `Build + Push (linux/arm64)` before any code ran; lockfiles and Dockerfile unchanged | Shipped by P0-0 (2026-09-05): `ENV npm_config_fetch_timeout=600000` in the Dockerfile `[build]` stage, pinned by `scripts/lib/lifecycle/orchestrator-dockerfile.test.ts`. Two staging runs have completed since without exercising it: 33989570600's build-stage npm install took 251.6 s (bar 230.9 s), under the old 300 s default, and 34004002068's Build + Push took 396 s; the 600 s timeout was not exercised (A56). |
 | Paperclip is a single service task | [ADR 0010](../../adr/0010-paperclip-work-engine.md) DL-8 and `infra/lib/paperclip-stack.ts` pin `desiredCount: 1` with no autoscaling | Keep the pin until upstream supports shared node identity; expect a restart gap rather than pretending this is HA |
 | The first T1+ install creates an always-on database/task floor | [Cost guide](../../cost-guide.md) and `scripts/cost-estimate.mjs` price about $104/month for the Paperclip substrate | Keep Paperclip out of ordinary T0; require the existing money confirmation before deploy and show the Paperclip lines in that gate |
 | The vendored `updatedSince` patch can diverge from upstream | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Re-evaluate every artifact re-pin and drop the patch when an upstream release implements the proven contract |
 | Node-vs-Postgres clock skew beyond the configured overlap can still lose a row | `src/lib/paperclip/watermark.ts` documents the exact limit; overlap fixes truncation, not unbounded clock skew | Monitor watermark lag and keep `paperclip/poll_overlap_ms` sized from observed clocks |
 | Legacy retirement is not yet allowed | [bar-and-phases.md](bar-and-phases.md) Phase 9 requires two clean production weeks and a separately reviewed final commit | Keep the router switch, legacy handlers and `paperclip_disabled`; delete only after the production evidence gate |
-| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | The probe is green; continue in the recorded order (8.5 from the observed shapes below, then the UI/session bridge, then 10–12) |
+| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order: Phase 0 (P0-1 live check now after `aws login`; P0-2 and the P0-2/P0-3 live checks pending this branch's deploy) → Phase 1 (including P1-3 parent-owner delegation) → 8.5 from the observed shapes in section 6 → the UI/session bridge → 10–12 |
 
 ## 8. Exact focused and full validation commands
 
