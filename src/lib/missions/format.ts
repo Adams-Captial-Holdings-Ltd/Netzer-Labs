@@ -214,7 +214,7 @@
  * `MISSION_RESOLVE_WINDOW` (200) rows. **Both halves of that rule live in this
  * file, and every consumer delegates to them** — the chat router
  * (`/mission <ref>`), the `paperclip_add_comment` tool, and the Mission ACL's
- * `resolveOwned` (which wraps the `ambiguous` result in
+ * `resolveBoardMission` (which wraps the `ambiguous` result in
  * `AmbiguousMissionPrefixError`). They previously read the same ref at THREE
  * different widths (15 / 100 / 200 rows), which is why `/mission aaaaaa30`
  * could answer "no mission matches" for a mission `/mission done aaaaaa30`
@@ -301,11 +301,11 @@ export const MISSION_REF_LENGTH = 8;
 
 /**
  * How many of an owner's rows a ref is resolved against — ONE number for every
- * consumer (the chat router, `paperclip_add_comment`, and the ACL's `resolveOwned`).
- * 200 is the legacy `listMissionsForAgent(owner, 200)` window, kept so a
- * mutation still costs exactly one issue-list read; see the long note above
- * `resolveOwned` in `mission-acl.ts` for why the window is one page and not a
- * walk.
+ * consumer (the chat router, `paperclip_add_comment`, and the ACL's
+ * `resolveBoardMission`). 200 is the legacy `listMissionsForAgent(owner, 200)`
+ * window, kept so a mutation still costs exactly one issue-list read; see the
+ * long note above `resolveBoardMission` in `mission-acl.ts` for why the window
+ * is one page and not a walk.
  */
 export const MISSION_RESOLVE_WINDOW = 200;
 

@@ -15,23 +15,33 @@
 
 import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
 import { tools } from './registry.js';
+import type { ToolContext } from './registry.js';
 import {
   MISSION_PRIORITIES,
   MISSION_STATUSES,
+  type Mission,
   type MissionPriority,
   type MissionStatus,
 } from '../state/mission-tasks-repo.js';
-// The SAME ACL the dashboard route, Jarvis and the GDPR export use. Only the
-// three call sites below change. Phase 9 deliberately widens the status schemas,
+// The SAME ACL the dashboard route, Jarvis and the GDPR export use. Phase 7
+// repointed three SUBSTRATE call sites here — create, list, set-status. P0-3
+// adds three more: `resolveBoardMission`, which reads the board to fetch the
+// row an authorization decision needs, and the two pure predicates that make
+// the decision, `canReadBoard` and `canMutateMission`. The rules are
+// STATED there and only ASKED here, so a second caller cannot restate them
+// (A3-1). Phase 9 deliberately widens the status schemas,
 // changes priority to the exact four bands, and removes the retired due date.
 //
 // Phase 9 makes the shared domain match Paperclip's four exact priority bands;
 // there is no numeric projection or due-date field to lose at this boundary.
 import {
   AmbiguousMissionPrefixError,
+  canMutateMission,
+  canReadBoard,
   createBoardMission,
   listBoardMissions,
   listBoardMissionsByStatus,
+  resolveBoardMission,
   setBoardMissionStatus,
 } from '../missions/mission-acl.js';
 import { sendInterAgent } from '../state/inter-agent-tasks-repo.js';
@@ -129,6 +139,35 @@ export function parseAssignResponse(
   return { owner, reason: reason || 'no rationale given' };
 }
 
+/**
+ * THE IDENTITY THE MISSION TOOLS ACT AS — one scope, used by all three.
+ *
+ * `ctx.agentId` is the SESSION scope (whose history and records this turn uses)
+ * and `ctx.boardAgentId` is the BOARD scope (whose mission board this chat
+ * addresses); the doc comment at `agent-loop.ts:178-197` is the authority on
+ * the difference. They diverge only where a surface runs more than one bot AND
+ * the picker can answer as someone else — Telegram, where the sticky default
+ * answers `main` inside `/tg/research/webhook`. Slack's per-agent apps and the
+ * dashboard pass one id and the two coincide.
+ *
+ * THESE TOOLS ADDRESS A BOARD, so they take the board scope — and they take it
+ * for PROVENANCE as much as for scoping. The identity that acts on a board is
+ * the identity that later transitions its rows, so the creator recorded by
+ * `create_mission` and the actor judged by `canMutateMission` have to be the
+ * SAME scope. Stamping the session actor and judging the board agent would fail
+ * closed, and would fail closed on Telegram ONLY: the agent that opened a
+ * mission would be refused as its own creator on one surface and allowed on the
+ * other two. That is the parity failure CLAUDE.md is about, and it is why this
+ * is a named function rather than the expression repeated four times.
+ *
+ * `ctx.agentId` still names the SESSION actor where the fact is about who did
+ * the thing rather than about which board it happened on: the assignment push's
+ * sender and the inter-agent note's `fromAgent`, both below.
+ */
+function boardSelf(ctx: ToolContext): string {
+  return ctx.boardAgentId ?? ctx.agentId;
+}
+
 tools.register('create_mission', {
   spec: spec(
     'create_mission',
@@ -161,13 +200,10 @@ tools.register('create_mission', {
     // "No Open missions for main", and `create_mission` writing where
     // `/mission new` does not. `boardAgentId` is absent on every surface with
     // one identity per conversation (Slack per-agent, the dashboard), where it
-    // collapses to the old behaviour exactly.
-    //
-    // It is the BOARD scope only. `ctx.agentId` still names the actor for
-    // provenance (`createdByAgent`), for the push's sender fallback and for the
-    // "assigned by" line — those are facts about who did the thing, not about
-    // which board it happened on.
-    const self = ctx.boardAgentId ?? ctx.agentId;
+    // collapses to the old behaviour exactly. `boardSelf` above says why this
+    // scope is also the one RECORDED as the creator, and why `ctx.agentId`
+    // still names the sender of the push and the inter-agent note below.
+    const self = boardSelf(ctx);
     const title = String(args.title ?? '').trim();
     const body = String(args.body ?? '').trim();
     if (!title) return { text: formatMissingArgument('title'), isError: true };
@@ -205,7 +241,12 @@ tools.register('create_mission', {
 
     const mission = await createBoardMission({
       ownerAgent: owner,
-      createdByAgent: ctx.agentId,
+      // THE BOARD SCOPE, not `ctx.agentId` — the same `self` this tool scopes
+      // with. The creator recorded here is the actor `canMutateMission` judges
+      // when someone later transitions this row, so recording the session actor
+      // while judging the board agent would refuse an agent its own mission
+      // wherever the two differ, and only there. See `boardSelf`.
+      createdByAgent: self,
       // The provenance value. `mission.id` below is the Paperclip issue uuid,
       // which is still a stable, 8-char-sliceable id — both the return text and
       // the inbox note depend on that and neither changes.
@@ -320,13 +361,13 @@ tools.register('create_mission', {
 tools.register('list_missions', {
   spec: spec(
     'list_missions',
-    'List your own missions. Defaults to your open missions.',
+    "List missions on any agent's board. Defaults to your own open missions.",
     {
       type: 'object',
       properties: {
         owner: {
           type: 'string',
-          description: 'Owner agent id; must be your own agent id (the default).',
+          description: "Owner agent id; any agent's board. Defaults to your own.",
         },
         status: {
           type: 'string',
@@ -345,13 +386,28 @@ tools.register('list_missions', {
   async invoke(args, ctx) {
     // The board scope, exactly as in `create_mission` above: this must be the
     // same board `/missions` reads in this chat, or one conversation has two.
-    const self = ctx.boardAgentId ?? ctx.agentId;
+    const self = boardSelf(ctx);
     const owner = typeof args.owner === 'string' && args.owner ? args.owner : self;
-    // Missions are per-agent state: another agent's queue may carry context
-    // this agent (or whoever is steering it) was never meant to see.
-    if (owner !== self) {
+    // THE READ GATE, asked at invoke time (Phase 8) and STATED IN `src/lib`
+    // rather than here (A3-1). `canReadBoard` is ADR 0009 :93-96's
+    // participation test — "an agent may read a mission iff it has a task on
+    // that mission, or it is the coordinator" — as the owner instantiated it on
+    // 2026-09-05: read any board in the company. The refusal it replaces read
+    // another agent's board as leakage; the board IS the shared work surface,
+    // and an agent that cannot see the queue it is being asked about answers
+    // about the wrong one. The MUTATION half of that same ADR line stays
+    // narrow, in `update_mission` below.
+    //
+    // THE BRANCH BELOW IS UNREACHABLE AT THIS COMMIT: the predicate answers
+    // true for every pair. It is still written and still asked, because the
+    // alternative is a rule that exists only as this comment — which is what it
+    // was, and which is why nothing stopped a second caller from inventing its
+    // own comparison. When reads tighten, the change lands in `canReadBoard`
+    // and this call site does not move; it never lands in an adapter (A3-1),
+    // and a chat surface cannot make the call for us (A3-12).
+    if (!canReadBoard(self, owner)) {
       return {
-        text: `You can only list your own missions (owner '${self}').`,
+        text: `You can only list boards you may read (owner '${self}').`,
         isError: true,
       };
     }
@@ -395,7 +451,8 @@ tools.register('update_mission', {
         },
         owner: {
           type: 'string',
-          description: 'Owner agent id; must be your own agent id (the default).',
+          description:
+            "Owner agent id — whose board the mission is on. Defaults to your own. You may transition a mission on another agent's board only if you opened it.",
         },
         status: {
           type: 'string',
@@ -407,19 +464,13 @@ tools.register('update_mission', {
   ),
   async invoke(args, ctx) {
     // The board scope, exactly as in `create_mission` above: `/mission done`
-    // and this tool must transition rows on the same board.
-    const self = ctx.boardAgentId ?? ctx.agentId;
+    // and this tool must transition rows on the same board. It is also the
+    // identity `canMutateMission` judges below, and the identity
+    // `create_mission` stamped as the creator — one scope, by `boardSelf`.
+    const self = boardSelf(ctx);
     const id = String(args.mission_id ?? '').trim();
     if (!id) return { text: formatMissingArgument('mission_id'), isError: true };
     const owner = typeof args.owner === 'string' && args.owner ? args.owner : self;
-    // Only the owning agent may transition a mission. Without this, any agent
-    // that learns an id prefix could cancel another agent's work.
-    if (owner !== self) {
-      return {
-        text: `You can only update your own missions (owner '${self}').`,
-        isError: true,
-      };
-    }
     const status = String(args.status ?? '') as MissionStatus;
     // `id` may be an 8-char prefix — the schema above says so and
     // `list_missions` prints one. The ACL resolves prefixes owner-scoped, the
@@ -432,7 +483,33 @@ tools.register('update_mission', {
     // no-match one used to be spelled without quotes here and with quotes in
     // three other places (A3-4).
     try {
-      const ok = await setBoardMissionStatus(owner, id, status);
+      // THE MUTATION GATE, at invoke time (Phase 8) and stated in `src/lib`
+      // rather than here (A3-1): the rule itself is `canMutateMission`, ADR 0009
+      // :93-96 instantiated as owner-or-creator. It is asked HERE because chat
+      // surfaces carry no capability model (A3-12), so the tool is the gate.
+      //
+      // Naming YOUR OWN board costs no extra read. A board read is owner-scoped
+      // — `mission-acl.test.ts` "a mission addressed to the WRONG owner is not
+      // found" — so every row `owner === self` could resolve to already has
+      // `ownerAgent === self` and already satisfies the predicate. Naming
+      // ANOTHER agent's board does need the row, because only the row says who
+      // created it. That row is handed on to `setBoardMissionStatus`, which
+      // REUSES it on the Paperclip branch — one board read for the whole
+      // mutation, not two. The legacy branch ignores it and re-scans inside the
+      // repo (`mission-tasks-repo.ts:184`), so a cross-board update costs it
+      // two reads; that branch is reproduced byte for byte, not optimized.
+      let resolved: Mission | undefined;
+      if (owner !== self) {
+        resolved = await resolveBoardMission(owner, id);
+        if (!resolved) return { text: formatNoMatch({ owner, ref: id }), isError: true };
+        if (!canMutateMission(self, resolved)) {
+          return {
+            text: `You can only update missions you own or created (owner '${self}').`,
+            isError: true,
+          };
+        }
+      }
+      const ok = await setBoardMissionStatus(owner, id, status, resolved);
       return ok
         ? { text: formatStatusChanged({ ref: id, status }) }
         : { text: formatNoMatch({ owner, ref: id }), isError: true };

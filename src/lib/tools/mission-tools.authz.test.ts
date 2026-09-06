@@ -55,13 +55,24 @@ vi.mock('../state/mission-tasks-repo.js', async (importActual) => {
   };
 });
 // The provenance join the ACL performs on every Paperclip read. Empty is the
-// honest default here: these cases assert scoping, not the C-11 restore.
+// default: most cases assert scoping, not the C-11 restore. It is ARMABLE
+// because the mutation rule reads `createdByAgent`, and on the Paperclip stack
+// that field comes from this join — the projection itself only says
+// `'paperclip'`. A stack that could not arm it could not tell an
+// owner-or-creator predicate from an owner-only one.
+const { getProvenanceMock } = vi.hoisted(() => ({ getProvenanceMock: vi.fn() }));
 vi.mock('../state/mission-provenance-repo.js', () => ({
-  getMissionProvenance: vi.fn(() => Promise.resolve(new Map())),
+  getMissionProvenance: getProvenanceMock,
   putMissionProvenance: vi.fn(() => Promise.resolve()),
   listProvenanceForChat: vi.fn(() => Promise.resolve([])),
 }));
-vi.mock('../state/inter-agent-tasks-repo.js', () => ({ sendInterAgent: vi.fn() }));
+// `create_mission` chains `.catch()` onto this call, so the mock has to return
+// a promise — a bare `vi.fn()` answers `undefined` and the tool throws before
+// it returns. It only fires on a CROSS-BOARD create, which is exactly what the
+// identity cases at the bottom of this file make.
+vi.mock('../state/inter-agent-tasks-repo.js', () => ({
+  sendInterAgent: vi.fn(() => Promise.resolve()),
+}));
 vi.mock('../config/agent-loader.js', () => ({
   listKnownAgents: listKnownAgentsMock,
   loadAgent: vi.fn(),
@@ -106,20 +117,28 @@ const PROJECTED_ROW: ProjectedMission = {
 interface EngineSpies {
   listMissions: ReturnType<typeof vi.fn>;
   setStatus: ReturnType<typeof vi.fn>;
+  createMission: ReturnType<typeof vi.fn>;
 }
 
 function injectEngine(rows: ProjectedMission[]): EngineSpies {
   const listMissions = vi.fn(() => Promise.resolve(rows));
   const setStatus = vi.fn(() => Promise.resolve(rows[0]));
+  // The engine echoes the seed back as a projected row, which is what the real
+  // one does. The ACL then joins the provenance it just wrote over that row, so
+  // `createdByAgent` reaches the caller by the same two-step route as in
+  // production — the projection itself only ever says `'paperclip'`.
+  const createMission = vi.fn((seed: Mission) =>
+    Promise.resolve({ ...PROJECTED_ROW, id: seed.id, ownerAgent: seed.ownerAgent }),
+  );
   __setMissionEngineForTest({
     listMissions,
     setStatus,
     getMission: vi.fn(),
-    createMission: vi.fn(),
+    createMission,
     reassign: vi.fn(),
     comment: vi.fn(),
   } as unknown as MissionEngine);
-  return { listMissions, setStatus };
+  return { listMissions, setStatus, createMission };
 }
 
 /** One mutation the substrate accepted: `{owner?, id, status}`, however it got there. */
@@ -133,10 +152,14 @@ interface Stack {
   flagValue: string | undefined;
   /** Arm the substrate with one open mission owned by `research`. */
   arm(): void;
+  /** Arm the substrate with one mission that reads back as exactly `row`. */
+  armRow(row: Mission): void;
   /** The owner each scoped list read was made for, on the substrate that served it. */
   listedOwners(): string[];
   /** Status mutations that actually reached the substrate. */
   statusWrites(): StatusWrite[];
+  /** The rows `create_mission` handed the substrate, as the substrate saw them. */
+  createdRows(): Mission[];
   /** Nothing reached the OTHER substrate — the flag picks one whole stack (C-8). */
   expectOtherStackUntouched(): void;
 }
@@ -148,8 +171,11 @@ const STACKS: Stack[] = [
     name: 'legacy DynamoDB stack (flag off)',
     flagValue: undefined,
     arm() {
-      listByStatusMock.mockResolvedValue([WIRE_ROW]);
-      listForAgentMock.mockResolvedValue([WIRE_ROW]);
+      this.armRow(WIRE_ROW);
+    },
+    armRow(row: Mission) {
+      listByStatusMock.mockResolvedValue([row]);
+      listForAgentMock.mockResolvedValue([row]);
       updateStatusMock.mockResolvedValue(true);
     },
     listedOwners() {
@@ -163,16 +189,38 @@ const STACKS: Stack[] = [
         status: call[2] as string,
       }));
     },
+    createdRows() {
+      return createMissionMock.mock.calls.map((call) => call[0] as Mission);
+    },
     expectOtherStackUntouched() {
       expect(engine.listMissions).not.toHaveBeenCalled();
       expect(engine.setStatus).not.toHaveBeenCalled();
+      expect(engine.createMission).not.toHaveBeenCalled();
     },
   },
   {
     name: 'Paperclip stack (CCE_PAPERCLIP_ENABLED=1)',
     flagValue: '1',
     arm() {
-      engine = injectEngine([PROJECTED_ROW]);
+      this.armRow(WIRE_ROW);
+    },
+    armRow(row: Mission) {
+      // Owner comes off the projection, creator off the provenance join — the
+      // same split the real stack has, so both stacks still hand the tools the
+      // SAME wire mission.
+      engine = injectEngine([{ ...PROJECTED_ROW, id: row.id, ownerAgent: row.ownerAgent }]);
+      getProvenanceMock.mockResolvedValue(
+        new Map([
+          [
+            row.id,
+            {
+              missionId: row.id,
+              createdByAgent: row.createdByAgent,
+              createdByChat: row.createdByChat,
+            },
+          ],
+        ]),
+      );
     },
     listedOwners() {
       return engine.listMissions.mock.calls.map(
@@ -185,7 +233,11 @@ const STACKS: Stack[] = [
         status: call[1] as string,
       }));
     },
+    createdRows() {
+      return engine.createMission.mock.calls.map((call) => call[0] as Mission);
+    },
     expectOtherStackUntouched() {
+      expect(createMissionMock).not.toHaveBeenCalled();
       expect(listByStatusMock).not.toHaveBeenCalled();
       expect(listForAgentMock).not.toHaveBeenCalled();
       expect(updateStatusMock).not.toHaveBeenCalled();
@@ -196,32 +248,53 @@ const STACKS: Stack[] = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getProvenanceMock.mockResolvedValue(new Map());
   listKnownAgentsMock.mockReturnValue(['main', 'research', 'ops']);
   listByStatusMock.mockResolvedValue([]);
   listForAgentMock.mockResolvedValue([]);
   updateStatusMock.mockResolvedValue(true);
+  // `create_mission` reads `mission.id` back off the substrate for the ref it
+  // prints, so the legacy repo has to answer with the row it was handed. The
+  // Paperclip half of this is in `injectEngine`. Armed once here rather than
+  // per stack: it is the substrate's default behaviour, not a case's setup.
+  createMissionMock.mockImplementation((args: Mission) =>
+    Promise.resolve({ ...WIRE_ROW, ...args, id: MISSION_ID }),
+  );
   // Every case arms its own stack; an engine is always injected so the
   // legacy-stack cases can assert it was never reached.
   engine = injectEngine([PROJECTED_ROW]);
   __setMissionEngineForTest(undefined);
 });
 
-// Missions are per-agent state. An agent naming another agent's owner id must
-// be refused on both the read and the write path; without these checks any
-// prompt-injected agent could read or cancel another agent's queue.
-describe.each(STACKS)('mission tool ownership checks — $name', (stack: Stack) => {
+// ADR 0009 :93-96 splits the two paths, and the owner's 2026-09-05 decision
+// instantiates it for Netzar: an agent may READ any board in the company, and
+// may MUTATE a mission only if it owns or created it. So a foreign owner id is
+// no longer a refusal by itself — it is one only when the row it names is
+// one this agent neither owns nor opened, which is knowable only after the row
+// has been resolved.
+describe.each(STACKS)('mission tool authorization — $name', (stack: Stack) => {
   beforeEach(() => {
     flag.value = stack.flagValue;
     stack.arm();
   });
 
-  it('list_missions refuses a foreign owner', async () => {
+  // ADR 0009 :93-96 is the reason the old refusal is gone: reads are scoped by
+  // PARTICIPATION, not by ownership ("an agent may read a mission iff it has a
+  // task on that mission, or it is the coordinator"), which the owner's
+  // 2026-09-05 decision instantiates for Netzar as "read any board in the
+  // company". Only MUTATION stays narrow, and that half is asserted below.
+  //
+  // THIS CASE PROVES THE TOOL, NOT THE RULE. The rule is `canReadBoard` and its
+  // truth table is in `mission-acl.test.ts`; what is asserted here is that
+  // `list_missions` ASKS it and then actually reads the board it was given.
+  it("list_missions reads another agent's board", async () => {
     const out = await tools.invoke('list_missions', { owner: 'ops' }, ctx);
-    expect(out.isError).toBe(true);
-    // The refusal is ABOVE the ACL: neither substrate is read at all.
-    expect(listByStatusMock).not.toHaveBeenCalled();
-    expect(listForAgentMock).not.toHaveBeenCalled();
-    expect(engine.listMissions).not.toHaveBeenCalled();
+    expect(out.isError).toBeFalsy();
+    // P31: assert the READ REACHED THE SUBSTRATE, scoped to the named board.
+    // `out.isError` being falsy is not enough on its own — a tool that quietly
+    // returned an empty board without reading anything would satisfy it.
+    expect(stack.listedOwners()).toEqual(['ops']);
+    stack.expectOtherStackUntouched();
   });
 
   it('list_missions defaults to the calling agent', async () => {
@@ -245,15 +318,63 @@ describe.each(STACKS)('mission tool ownership checks — $name', (stack: Stack) 
     stack.expectOtherStackUntouched();
   });
 
-  it('update_mission refuses a foreign owner', async () => {
+  // ADR 0009 :93-96: "it may write a task iff that task is assigned to it, or
+  // it is the coordinator" — owner-or-creator for Netzar. `research` is neither.
+  it('update_mission refuses an agent that neither owns nor created the mission', async () => {
+    stack.armRow({ ...WIRE_ROW, ownerAgent: 'ops', createdByAgent: 'ops' });
     const out = await tools.invoke(
       'update_mission',
       { mission_id: PREFIX, owner: 'ops', status: 'cancelled' },
       ctx,
     );
     expect(out.isError).toBe(true);
-    expect(updateStatusMock).not.toHaveBeenCalled();
-    expect(engine.setStatus).not.toHaveBeenCalled();
+    expect(out.text).toBe("You can only update missions you own or created (owner 'research').");
+    // The refusal lands AFTER resolution and BEFORE the write: the creator is
+    // knowable only from the row, so the board is read once and nothing is
+    // written. Asserting the read (P31) is what makes this a proof that the
+    // PREDICATE refused, rather than that the tool never got that far.
+    expect(stack.listedOwners()).toEqual(['ops']);
+    expect(stack.statusWrites()).toEqual([]);
+    stack.expectOtherStackUntouched();
+  });
+
+  it('update_mission lets the CREATOR transition a mission owned by another agent', async () => {
+    // The delegation P0-3 unblocks: `research` opened this one for `ops`, and
+    // can still transition it.
+    stack.armRow({ ...WIRE_ROW, ownerAgent: 'ops', createdByAgent: 'research' });
+    const out = await tools.invoke(
+      'update_mission',
+      { mission_id: PREFIX, owner: 'ops', status: 'done' },
+      ctx,
+    );
+    expect(out.isError).toBeFalsy();
+    expect(out.text).toBe(`Mission ${PREFIX} → Done.`);
+    // P31: the write REACHED the substrate. A tool that printed the happy
+    // sentence and wrote nothing would satisfy an `isError`-only assertion.
+    const writes = stack.statusWrites();
+    expect(writes.length).toBe(1);
+    expect(writes[0].status).toBe('done');
+    expect(writes[0].id).toBe(stack.flagValue === undefined ? PREFIX : MISSION_ID);
+    // And it was scoped to the board that was NAMED, not to the caller's own.
+    if (stack.flagValue === undefined) {
+      expect(updateStatusMock.mock.calls[0][0]).toBe('ops');
+    }
+    // The read this authorization cost, scoped to the board that was NAMED.
+    //
+    // ON THE PAPERCLIP STACK that is the WHOLE cost: the row the tool resolved
+    // in order to authorize is the row `setBoardMissionStatus` then writes
+    // against, so a cross-board update is one board read, not two (A1-10).
+    //
+    // ON LEGACY IT IS NOT, and this assertion cannot see the difference. The
+    // flag-off path ignores the resolved row and calls
+    // `repoUpdateMissionStatus`, which re-scans the board itself
+    // (`mission-tasks-repo.ts:184`) — but that function is mocked whole here, so
+    // its scan never runs and never lands in `listedOwners()`. A cross-board
+    // update on legacy really costs TWO reads. It cost zero before, because it
+    // was refused before the ACL; the extra read is the price of knowing who
+    // created the row, and it is charged only on the cross-board branch.
+    expect(stack.listedOwners()).toEqual(['ops']);
+    stack.expectOtherStackUntouched();
   });
 
   it('update_mission still works on your own missions', async () => {
@@ -277,5 +398,85 @@ describe.each(STACKS)('mission tool ownership checks — $name', (stack: Stack) 
       expect(stack.listedOwners()).toEqual(['research']);
     }
     stack.expectOtherStackUntouched();
+  });
+
+  // ── ONE IDENTITY STAMPS THE CREATOR AND JUDGES IT ──────────────────────────
+  //
+  // `ctx.agentId` is the SESSION actor; `ctx.boardAgentId` is the BOARD this
+  // chat addresses (`agent-loop.ts:178-197`). They differ exactly where one
+  // surface runs several bots and the picker can answer as someone else — on
+  // Telegram the sticky default answers `main` inside another bot's webhook.
+  //
+  // If `create_mission` stamped the session actor while `update_mission` asked
+  // about the board, then ON THAT SURFACE the agent that opened a mission is
+  // refused as its creator. That fails closed, so no test of a refusal would
+  // have caught it; what it breaks is the delegation this piece exists to ship,
+  // and it breaks it on ONE surface, which is the shape of bug CLAUDE.md's
+  // parity rule is about. The two cases below pin both directions: the board
+  // identity is stamped and may act, and the session identity alone may not
+  // inherit what the board identity created.
+  const boardCtx = { agentId: 'main', boardAgentId: 'research', chatId: 'owner:emmanuel' };
+
+  it('stamps the BOARD identity as creator, and that identity may then transition the row', async () => {
+    const created = await tools.invoke(
+      'create_mission',
+      { owner: 'ops', title: 'Ship the ACL', body: 'Byte for byte.' },
+      boardCtx,
+    );
+    expect(created.isError).toBeFalsy();
+    // P31: the create REACHED the substrate, and the creator it recorded is the
+    // BOARD agent. `ctx.agentId` is `main` here, and `main` must not appear.
+    const rows = stack.createdRows();
+    expect(rows.length).toBe(1);
+    expect(rows[0].createdByAgent).toBe('research');
+    expect(rows[0].ownerAgent).toBe('ops');
+
+    // Read that same row back and transition it with the SAME ctx. The row is
+    // built FROM what the create recorded, not from a literal, so the two
+    // halves cannot drift apart without this failing: a create that stamped
+    // `main` arms a row created by `main`, which the update then refuses.
+    stack.armRow({
+      ...WIRE_ROW,
+      ownerAgent: rows[0].ownerAgent,
+      createdByAgent: rows[0].createdByAgent,
+    });
+    const out = await tools.invoke(
+      'update_mission',
+      { mission_id: PREFIX, owner: 'ops', status: 'done' },
+      boardCtx,
+    );
+    expect(out.isError).toBeFalsy();
+    // P31 again: the transition reached the substrate, it was not just narrated.
+    const writes = stack.statusWrites();
+    expect(writes.length).toBe(1);
+    expect(writes[0].status).toBe('done');
+    expect(writes[0].id).toBe(stack.flagValue === undefined ? PREFIX : MISSION_ID);
+  });
+
+  it('refuses the SESSION identity alone on a mission the BOARD identity created', async () => {
+    await tools.invoke(
+      'create_mission',
+      { owner: 'ops', title: 'Ship the ACL', body: 'Byte for byte.' },
+      boardCtx,
+    );
+    const rows = stack.createdRows();
+    stack.armRow({
+      ...WIRE_ROW,
+      ownerAgent: rows[0].ownerAgent,
+      createdByAgent: rows[0].createdByAgent,
+    });
+    // Same mission, same session actor, no board scope — so `self` is `main`,
+    // and `main` neither owns this row nor created it: `research` did, as the
+    // board. The refusal is what proves the creator stamped above is the BOARD
+    // identity and not the session one; if it were the session one, `main`
+    // would inherit the mutation right and this update would land.
+    const out = await tools.invoke(
+      'update_mission',
+      { mission_id: PREFIX, owner: 'ops', status: 'cancelled' },
+      { agentId: 'main', chatId: 'owner:emmanuel' },
+    );
+    expect(out.isError).toBe(true);
+    expect(out.text).toBe("You can only update missions you own or created (owner 'main').");
+    expect(stack.statusWrites()).toEqual([]);
   });
 });

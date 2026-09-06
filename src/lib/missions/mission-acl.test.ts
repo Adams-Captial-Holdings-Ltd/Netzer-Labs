@@ -59,6 +59,8 @@ import { paperclipTestClient } from '../paperclip/test-helpers.js';
 import {
   AmbiguousMissionPrefixError,
   __setMissionEngineForTest,
+  canMutateMission,
+  canReadBoard,
   createBoardMission,
   listBoardMissions,
   listBoardMissionsByStatus,
@@ -467,6 +469,92 @@ describe('owner scoping and prefix resolution', () => {
     const row = await reassignBoardMission('main', ISSUE_A, 'main');
     expect(spies.reassign).not.toHaveBeenCalled();
     expect(row?.updatedAt).toBe('2026-08-20T10:00:00.000Z');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * WHO MAY MUTATE A MISSION — the predicate, stated once (A3-1).
+ *
+ * ADR 0009 :93-96 says "it may write a task iff that task is assigned to it, or
+ * it is the coordinator". The owner's 2026-09-05 decision instantiates that for
+ * Netzar as OWNER-OR-CREATOR, so the agent that opened a mission for someone
+ * else can still transition it. Delegation (the owner of the parent mission)
+ * widens the predicate in P1-3, once `parentId` reaches the wire.
+ *
+ * It is pure and it lives beside the resolver that fetches the row it judges,
+ * so `mission-tools.ts` — and any later caller — states the rule by CALLING it,
+ * never by re-typing the comparison.
+ */
+describe('canMutateMission — owner or creator (ADR 0009 :93-96)', () => {
+  it('the owner may mutate', () => {
+    expect(canMutateMission('main', { ownerAgent: 'main', createdByAgent: 'research' })).toBe(true);
+  });
+
+  it('the CREATOR may mutate a mission owned by someone else', () => {
+    // The case P0-3 exists to unblock: `main` opens a mission for `research`
+    // and can still cancel or re-lane it afterwards.
+    expect(canMutateMission('main', { ownerAgent: 'research', createdByAgent: 'main' })).toBe(true);
+  });
+
+  it('a third agent may do neither', () => {
+    expect(canMutateMission('ops', { ownerAgent: 'research', createdByAgent: 'main' })).toBe(false);
+  });
+
+  it('answers false for a row carrying neither field', () => {
+    // Neither substrate produces this today — legacy `toMission` coerces a
+    // missing `createdByAgent` to `''` (`mission-tasks-repo.ts:259`) and the
+    // projection hardcodes `'paperclip'` — but the parameter accepts a partial
+    // row, so the answer is pinned rather than left to `undefined === 'main'`.
+    expect(canMutateMission('main', {})).toBe(false);
+  });
+
+  it('FAILS CLOSED on an empty actor, which the EMPTY row fields would match', () => {
+    // This is the case that can actually happen: legacy rows carry `''` for a
+    // missing creator, and `ctx.boardAgentId ?? ctx.agentId` is a string by type
+    // only. Without the guard, `'' === ''` authorizes a mutation.
+    expect(canMutateMission('', { ownerAgent: '', createdByAgent: '' })).toBe(false);
+    expect(canMutateMission('', {})).toBe(false);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * WHO MAY READ A BOARD — the OTHER half of ADR 0009 :93-96, stated once (A3-1).
+ *
+ * The ADR scopes reads by PARTICIPATION: "an agent may read a mission iff it
+ * has a task on that mission, or it is the coordinator". The owner's 2026-09-05
+ * decision instantiates that for a single-company Netzar deployment as READ ANY
+ * BOARD — every agent in the company is a participant in the company's work —
+ * so this predicate answers true for every pair at this commit.
+ *
+ * A constant is still worth exporting, and worth pinning here. It is the SEAM:
+ * the read rule now has ONE address, so tightening it (per-mission
+ * participation, or a company boundary once there is more than one company)
+ * is an edit to this function and to these cases, and can never be an edit to
+ * an adapter. Left as a comment in `list_missions` — which is all it was before
+ * this test — the rule had no address at all, and the next surface to want it
+ * would have restated it.
+ */
+describe('canReadBoard — every board in the company (ADR 0009 :93-96)', () => {
+  it('an agent may read its own board', () => {
+    expect(canReadBoard('research', 'research')).toBe(true);
+  });
+
+  it("an agent may read ANOTHER agent's board", () => {
+    // The read half of what P0-3 unblocks: `main` is asked about `research`'s
+    // queue and answers from the board instead of from a refusal.
+    expect(canReadBoard('main', 'research')).toBe(true);
+  });
+
+  it('answers true for degenerate arguments, because it does not read them yet', () => {
+    // Pinned on purpose. The answer today does not depend on either argument,
+    // and saying so HERE is what makes a future `false` a visible decision
+    // rather than a silent behaviour change. `mission-tools.ts` does not produce
+    // these calls with a non-empty `ctx.agentId` (it resolves `owner` before
+    // asking), so this pins the predicate, not a reachable path.
+    expect(canReadBoard('main', undefined as unknown as string)).toBe(true);
+    expect(canReadBoard('', '')).toBe(true);
   });
 });
 

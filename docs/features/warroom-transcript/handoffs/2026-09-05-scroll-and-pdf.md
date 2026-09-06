@@ -22,8 +22,8 @@ supersedes: none
 | Commit at session start | `17f0456b670296b3877c0b782708ebcbe0d35b31` |
 | Commit at session end | `f8863b0b56fa67e5e5db3c7254690814412c4c81` (code) plus the docs commit that follows it |
 | Pushed | yes |
-| PR | [#151](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/151) into `development` |
-| Deployed | no |
+| PR | [#151](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/151) into `development` (merged); promotions [#152](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/152), [#153](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/153) (merged); [production promotion](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/61) open |
+| Deployed | staging, automatically: `deploy.yml` run 34004002068 on the push to `staging`. Production: no. |
 
 ## 2. Current state summary
 
@@ -167,13 +167,14 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ### 6.1 Smallest next action
 
-Open the pull request from `fix/warroom-scroll-and-pdf` into `development` and wait for CI and Docs CI to go green.
+A human merges the [production promotion PR](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/61) and dispatches `deploy.yml` with `env: prod` and the typed confirmation.
 
 ### 6.2 Immediate next steps
 
-1. Merge the PR into `development`; delete the branch (P7).
-2. Promote `development → qa` (review gate, deploys nothing), then `qa → staging` **only after** `gh run list --workflow=deploy.yml` shows no deploy in progress (the Paperclip staging deploy, run 33989570600, finished green at 17:08 local on 2026-09-05) and `git log origin/staging..origin/qa` contains only this change. Merging to `staging` deploys staging automatically.
-3. On https://staging.pgnos.ai re-run checks 2, 4 and 5 against a real room, then open the `staging → production` PR. A human dispatches the production deploy.
+1. ~~Merge into `development`, delete the branch~~ — done (#151, branch deleted).
+2. ~~Promote `development → qa → staging` behind the deploy gate~~ — done (#152, #153; gate checked twice, no deploy.yml run in progress; staging deploy run 34004002068).
+3. ~~Verify on staging~~ — API-level verification done: the deployed bundle carries the new UI (Jump-to-latest, Export PDF, the `/warroom-transcripts/` call, no `scrollIntoView` in the War Room chunk) and the route is mounted and gated (no token → 401). The end-to-end PDF check could not run: every War Room read on staging returns 500 because the staging task definition sets no `TABLE_WARROOM_MEETINGS`/`TABLE_WARROOM_TURNS`, so the orchestrator reads the unsuffixed production table name and the staging task role is denied `dynamodb:Scan` (log evidence from 04:04Z, before this deploy rolled at 04:24Z). Pre-existing infra fault, out of scope; recorded in README §7.
+4. Human: merge the production promotion PR and dispatch `deploy.yml` (`env: prod`).
 
 ### 6.3 Blockers and open questions
 
