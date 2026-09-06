@@ -1,0 +1,29 @@
+{
+  "$comment": "The body Paperclip's HTTP adapter pushes at POST /api/paperclip/dispatch, pinned so an image bump that moves a field fails a test before it fails in production. UNLIKE artifact-characterization.json IN THIS DIRECTORY, THIS FILE IS HAND-WRITTEN: no probe drives the adapter push, so there is nothing to regenerate with UPDATE_PAPERCLIP_SNAPSHOT=1. Read `provenance` below for exactly how much of it is measured and how much is a source read. The ids are PLACEHOLDERS; only the KEY NAMES and their nesting are the contract. Its reader is `parseDispatchBody` in src/lib/paperclip/dispatch-worker.ts, asserted in dispatch-worker.test.ts.",
+  "provenance": {
+    "measuredOn": "2026-09-06",
+    "environment": "staging dd16ca4",
+    "paperclipVersion": "2026.722.0",
+    "image": "ghcr.io/paperclipai/paperclip:2026.722.0@sha256:6b9daa3c7b0659cce1ddb1f35454162342bc48bb5682123043fcd4d44aea237c",
+    "imagePinnedAt": "vendor/paperclip/Dockerfile:20",
+    "bodyBuiltAt": "/app/server/src/adapters/http/execute.ts:13 (inside the pinned image): const body = { ...payloadTemplate, agentId: agent.id, runId, context };",
+    "payloadTemplateFrom": "scripts/lib/paperclip/bootstrap-core.ts:423-434 - agentSpecs() writes payloadTemplate: { netzarAgentId: <slug> }, so netzarAgentId is ours by construction",
+    "issueIdSetAt": "/app/server/src/.../heartbeat.ts:4219 (inside the pinned image): contextSnapshot.issueId = issueIdFromPayload - which is why the issue id is nested under context and not at the top level",
+    "headers": "content-type: application/json plus the configured authorization (execute.ts:21-24). There is NO X-Paperclip header and NO run-id header on this direction.",
+    "howObserved": "THIS BODY WAS NOT CAPTURED FROM A LOG LINE. The orchestrator logs only {reason} when it rejects a dispatch, so no line anywhere holds the bytes. What IS live evidence: 15 CloudWatch answers of 400 invalid_body to POST /api/paperclip/dispatch, with Paperclip logging \"HTTP invoke failed with status 400\" from adapters/http/execute.ts:30. The shape below is a read of the pinned image source that predicts exactly those 400s against the parser as it stood.",
+    "whatAChangeHereMeans": "A red test on this fixture means the pinned image now pushes a different shape. Re-read execute.ts and heartbeat.ts at the NEW digest, update this file and its provenance together, and never edit one without the other."
+  },
+  "body": {
+    "netzarAgentId": "research",
+    "agentId": "99999999-8888-4777-8666-555555555555",
+    "runId": "11111111-2222-4333-8444-555555555555",
+    "context": {
+      "issueId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "wakeReason": "assignment",
+      "taskId": "t",
+      "taskKey": "k",
+      "wakeSource": "assignment",
+      "wakeTriggerDetail": "system"
+    }
+  }
+}
