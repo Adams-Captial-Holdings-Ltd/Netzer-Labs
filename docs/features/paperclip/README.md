@@ -3,7 +3,7 @@ feature: paperclip
 document_role: index
 status: current
 observed_at: 2026-09-06
-as_of_commit: cf2a29b
+as_of_commit: 68db92f
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/paperclip/client.ts
@@ -117,6 +117,8 @@ maintained since. Two things have already overtaken it:
 
 Present in the current source and working tree:
 
+Paperclip is live in staging as the missions system of record; the 2026-09-06 live critic found the inbound dispatch push being rejected and one agent's adapter missing a working push URL, and both are being repaired on `fix/paperclip-p0-2-dispatch-push` (see [HANDOFF.md](HANDOFF.md)).
+
 - **A patched, pinned artifact and disposable live harness.**
   `vendor/paperclip/` builds `netzer-paperclip:2026.722.0-netzar.1` from an
   immutable upstream digest plus the approved `updatedSince` patch;
@@ -142,7 +144,7 @@ Present in the current source and working tree:
 - **Cross-surface mission parity.** Dashboard, Jarvis, Telegram, Slack, Discord
   and CLI formatting share the same mission vocabulary. Assignment push is an
   honest notification path; the two native Paperclip verbs are exposed through
-  the approved `paperclip_*` tools; successful mutations write one audit record.
+  the approved `paperclip_*` tools; successful `paperclip_*` mutations write one `tool_invoke` audit record; mission-tool mutations do not (P49).
 - **The widened public Mission model.** The board and every text surface use six
   ordered states (`open`, `in_progress`, `blocked`, `in_review`, `done`,
   `cancelled`) and four priority bands (`critical`, `high`, `medium`, `low`).
@@ -176,19 +178,19 @@ markers (section 3).
 
 ## 3. Current status and current source commit
 
-Source: `development` `cf2a29b` (P0-0 `17f0456` contained; another session's War Room work, #151-#155, merged on top with no overlap with Phase 0 files); staging `5a5bf65` (Deploy run 34004002068, 2026-09-06T01:28Z); the Phase 0 branch (`feat/paperclip-p0-arm-and-collaborate`) is pending.
+Source: `development` `0a59063` (Phase 0 `#156` merged); staging `dd16ca4` (Deploy run `34021795520`); `fix/paperclip-p0-2-dispatch-push` pending.
 
 P0-0 (the Dockerfile build-stage npm fetch timeout) shipped and deployed:
 staging run `33989570600` at `9873f28` is green and equal to the bar. The
 staging environment variable `CCE_PAPERCLIP_ENABLED=1` was set 2026-09-05 and
-took effect at staging Deploy run 34004002068 (2026-09-06T01:28Z, `5a5bf65`) -- Paperclip is LIVE in staging now, not pending this branch's deploy; the repo-level variable stays `0`
+took effect at staging Deploy run 34004002068 (2026-09-06T01:28Z, `5a5bf65`) -- Paperclip is LIVE in staging now, not pending the dispatch fix's deploy (which only repairs the push); the repo-level variable stays `0`
 and the production environment sets none. The legacy
 router remains intentionally present until the separately reviewed retirement
 gate has two clean production weeks of evidence.
 
-Required execution order from here: Phase 0 (P0-0 done/deployed; P0-1 variable
-set, armed live in staging by run 34004002068, live check (board read) runnable now, blocked only on `aws login`; P0-3 built, critic PASS round 3, pending
-deploy; P0-2 pending the deploy) → Phase 1 (hierarchy, including P1-3 parent-
+The 2026-09-06 Phase 0 live critic (staging `dd16ca4`, run 34021795520) found the inbound dispatch push rejected 400 `invalid_body` on every attempt and the Research agent's adapter missing a push `url`; both are fixed on `fix/paperclip-p0-2-dispatch-push` (`0e09c9e` fix(paperclip): accept the real adapter push, whose issue id rides under context; `cd4c664` fix(paperclip): reconcile a reused agent's adapter config and arm dispatch slugs from the environment), PR pending against `development`.
+
+Required execution order from here: Phase 0 (P0-0 done/deployed; P0-1 live PASS -- board read confirmed over the tunnel 2026-09-06; P0-3 live PASS on refusal and list, its update case confounded by the P0-2 dispatch defect; P0-2 fixed on `fix/paperclip-p0-2-dispatch-push`, live re-check pending that branch's deploy and the bootstrap repair with `PAPERCLIP_DISPATCH_SLUGS=main,research`) → Phase 1 (hierarchy, including P1-3 parent-
 owner delegation) → Phase 8.5 → the same-origin UI/session bridge → Phases
 10–12 → the final legacy retirement. The volatile pass/fail counts and exact
 next action belong in [HANDOFF.md](HANDOFF.md), not this index.
@@ -352,13 +354,19 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
   Dashboard routes keep their capability gates.
 - Flipping `CCE_PAPERCLIP_ENABLED` hides legacy DynamoDB missions from the board
   (DL-7, no migration); staging had 2, both cancelled, before the flip.
+- Paperclip 2026.722.0 does not dedupe wakeups by `idempotencyKey`; the orchestrator's `(runId, issueId)` claim is the only guard.
+- `tool_invoke` audit rows are written only by tools that call `writeAudit` (`paperclip_add_comment`, `paperclip_create_subtask`); mission tools do not.
 
 ### Paperclip task-definition variables the probe made necessary
 
 - `PAPERCLIP_ALLOWED_HOSTNAMES` = the Cloud Map hostname the orchestrator dials (`paperclip.<app>.internal`). In `authenticated`/`private` mode the pinned image's private-hostname guard answers 403 to every request, `/api/health` included, whose Host is neither loopback nor on this list; the list replaces `config.json`'s `server.allowedHostnames`. Found by run 33733071639.
 - `PAPERCLIP_BIND=lan` beside `HOST=0.0.0.0`. The bind mode resolves as `PAPERCLIP_BIND` ?? `config.json` `server.bind` ?? inferred from `HOST`, and `loopback` forces the listener onto 127.0.0.1 whatever `HOST` says; the EFS `config.json` holds `loopback`, so a re-booted task without this variable answers only its own localhost health check. Found by run 33773788920.
 
-Both are pinned by literal tests in `infra/lib/paperclip-stack.test.ts`; the migrate task carries neither.
+Both task-definition variables are pinned by literal tests in `infra/lib/paperclip-stack.test.ts`; the migrate task carries neither.
+
+### Bootstrap variables (not on the task definition)
+
+- `PAPERCLIP_DISPATCH_SLUGS` = a comma-separated list of Netzar agent slugs to arm with a live dispatch `url` at bootstrap time; `main` is always kept even if omitted or the value is malformed. Read by `scripts/paperclip-bootstrap.ts`'s `specsFromEnv` via `parseDispatchSlugs`. Made necessary by the 2026-09-06 live critic (Research had no `url`), not by the probe.
 
 ### Observed org and goals shapes (staging, run 33783021194, values never logged)
 
@@ -370,6 +378,49 @@ These are the redacted shapes the probe recorded from the pinned artifact throug
 - `org-svg` — 200, `image/svg+xml`, a document containing `<svg`.
 - `goal-create` — 201; `goal-get`, `goal-update`, `goal-delete` — 200; all four return the same goal object `{companyId, createdAt, description, id, level, ownerAgentId (null), parentId (null), status, title, updatedAt}`.
 
+### Observed dispatch and board shapes (staging, 2026-09-06, values never logged)
+
+Measured by the Phase 0 live critic (staging `dd16ca4`, run 34021795520) over the SSM tunnel and by direct read of the pinned image source. Values are never recorded; only shapes.
+
+- `GET /api/missions?owner=<agent>` -- 200, `{owner: string, count: number, missions: [{assignmentReason, body, createdAt, createdByAgent, createdByChat, id: uuid, ownerAgent, priority, status, title, updatedAt}]}`. `POST /api/missions` -- 201, `{mission: <same row shape>}`.
+- `GET /api/config/paperclip` -- `{category, values{enabled_agents, ...}}`; `POST /api/config/paperclip/enabled_agents` -- 200, `{ok, category, key, value}`.
+- `GET /api/companies/{cid}/agents` -- the two Netzar http agents (Main, Research) each carry `{adapterType, adapterConfig, metadata.netzarAgentId, role, ...}` (measured on Main; Research shares the shape minus `url`); two `claude_local` agents (Summarizer, Reflection Coach) are also present, paused, and were not probed. The armed Main agent's `adapterConfig` keys are `[headers(authorization), method, payloadTemplate, timeoutMs, url]` and its `payloadTemplate` is `{netzarAgentId: <slug>}`; an agent not in `PAPERCLIP_DISPATCH_SLUGS` at bootstrap time has `adapterConfig` keys `[method, payloadTemplate, timeoutMs]` -- no `url`, so it cannot receive a push.
+- `POST /agents/:id/wakeup` -- 202 body keys include `agentId, companyId, contextSnapshot{actorId, forceFreshSession, triggeredBy, wakeReason, wakeSource, wakeTriggerDetail}, continuationAttempt, createdAt, id, invocationSource, resultJson, status, wakeupRequestId` (and more); waking an agent that is not the caller's own returns 403 `{error:'Agent can only invoke itself'}`.
+- Orchestrator rejection log line, one per bad push: `{env, level:40, msg:'paperclip dispatch body rejected', reason:'invalid_body', service, time}`.
+- The adapter push body itself (pinned image `/app/server/src/adapters/http/execute.ts:13`, digest pinned at `vendor/paperclip/Dockerfile:20` -- read from source and confirmed by the live 400s, not a captured log line, since the body is never logged): `{netzarAgentId, agentId, runId, context: {issueId, wakeReason, taskId, taskKey, wakeSource, wakeTriggerDetail, ...}}`, headers `content-type: application/json` plus whatever is configured under `adapterConfig.headers` (ours: `authorization`); there is no `X-Paperclip-*` header. The issue id rides under `context.issueId`, not top-level -- the defect this branch's dispatch-parser fix corrects.
+
+### Issue hierarchy and blocking (staging, 2026-09-06)
+
+Measured by the Phase 0 live critic (P1-1) creating a small parent/child/blocked-by fixture over the tunnel and reading it back through every route that could plausibly carry hierarchy or dependency state.
+
+| field | route | observed type | list row? | detail? | note |
+|---|---|---|---|---|---|
+| `parentId` | 201 of company create and `/children`; `GET /api/issues/{id}`; list row | `string uuid \| null` | YES (full and `view=compact`) | YES | Persisted on 201 and re-read; `?parentId=<uuid>` returns exactly the children (200); `?parentId=<malformed>` -> 500. |
+| `blockedByIssueIds` | request only (company create, PATCH) | array of uuid strings (request) | n/a | n/a | Never echoed back; the response name is `blockedBy`. |
+| `blockedBy` | 201 bodies, detail | `array<object{activeRecoveryAction?, assigneeAgentId, assigneeUserId, id, identifier, priority, status, title}>` | NO | YES | Element is an object, not a bare uuid. |
+| `blocks` | 201 bodies, detail | same element shape as `blockedBy` | NO | YES | Reciprocal of `blockedBy` on the blocking issue. |
+| `blockerAttention` | list row (full and compact), detail | `object{state, reason, unresolvedBlockerCount, coveredBlockerCount, stalledBlockerCount, attentionBlockerCount, sampleBlockerIdentifier, sampleStalledBlockerIdentifier}` | YES | YES | The only blocking-related signal on a LIST row; `state` seen: `none`, `needs_attention`. |
+| `children` / `childCount` | -- | ABSENT | NO | NO | Not on any 201, list row, or detail. Derive via `?parentId=` or `diagnostics/subtree`. |
+| `ancestors` | detail only | `array<object{...,goal,goalId,id,identifier,priority,project,projectId,status,title}>` | NO | YES | Length 1 per child (the parent); empty on the parent. |
+| `status` | everywhere | enum string | YES | YES | `blockedByIssueIds` does NOT itself produce `status:'blocked'`; the graph does not drive status in either direction. |
+| `requestDepth` | 201, list, detail | `number` | YES | YES | Company route with `parentId`: 0. `/children` route: 1. Not tree depth -- set by which create route was used. |
+| `GET /api/issues/{id}/diagnostics/subtree` | agent key: 200 | `{..., nodeCount, nodes: array<{..., depth, parentId, ...}>, ...}` | -- | -- | This IS the children/descendant listing, with per-node `parentId` and `depth`. |
+| `PATCH /api/issues/{id}` `blockedByIssueIds` | -- | -- | -- | -- | `[]` clears; a non-empty array REPLACES the prior set (not append). |
+| `blockParentUntilDone` (request, `/children` only) | boolean | n/a | n/a | n/a | Writes a `blockedBy` entry naming the child onto the *parent*; not reachable from the company create route. |
+| `GET /api/issues/{id}/diagnostics/blockers` | agent key: 200 | `{blockers: array<{...}>, readiness{allBlockersDone, isDependencyReady, ...}, ...}` | -- | -- | Lists only the blockers actually gating run-claiming (e.g. a `blockParentUntilDone` edge), not every `parentId` child. |
+| `GET /api/issues/{id}/tree-control/state` | 403 with the agent key | `{error}` | -- | -- | Not agent-callable. |
+| `executionState` | 201, list row (full only, dropped by `view=compact`), detail | `null` observed | YES (full) | YES | Never expressed blocking in this run. |
+| `activeRun`, `lastActivityAt` | list row only | `null`, string | YES | NO | The only two keys the list row carries that detail lacks. |
+| `relations` | -- | ABSENT | NO | NO | The key some prior notes referenced does not exist on this artifact. |
+| `relatedWork` | company-route 201, detail | `object{inbound, outbound}` | NO | YES | Absent from the `/children` 201 body (which does carry `referencedIssueIdentifiers`) -- the two create routes return different key sets (54 vs 52 keys); not a parent/child relation carrier (empty here). |
+| `GET /api/issues/{id}/runs` | agent key: 200 | `array<object{adapterType, agentId, continuationAttempt, createdAt, environment, environmentLease, errorCode, finishedAt, invocationSource, lastUsefulActionAt, livenessReason, livenessState, logBytes, nextAction, responsibleUserId, resultJson, retryExhaustedReason, retryOfRunId, runId, scheduledRetryAt, scheduledRetryAttempt, scheduledRetryReason, startedAt, status, usageJson}>` | -- | -- | Used to attribute the status flips: the parent's first run ended `cancelled` with `errorCode:"issue_dependencies_blocked"`. |
+
+- What the dependency graph actually gates is **run claiming**, not `status`: a queued run for a blocked issue is cancelled with `errorCode:"issue_dependencies_blocked"`; `blockerAttention` counts a plain `parentId` child as an implicit blocker of its parent even without `blockParentUntilDone`.
+- `status:"blocked"` is **not** dependency state on this artifact -- Paperclip rewrites status to `blocked` after an `adapter_failed` run, independent of the blocking graph.
+- `blockedBy` / `blocks` appear only on the 201 create response and the detail read, never on a list row.
+- There is no `children` or `childCount` key anywhere; enumerate children via `?parentId=<uuid>` or `GET /api/issues/{id}/diagnostics/subtree`.
+- `PATCH .../blockedByIssueIds` REPLACES the set; `[]` clears it.
+
 ## 7. Known runtime risks and approved next work
 
 | Risk | Evidence | Approved next work |
@@ -380,7 +431,8 @@ These are the redacted shapes the probe recorded from the pinned artifact throug
 | The vendored `updatedSince` patch can diverge from upstream | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Re-evaluate every artifact re-pin and drop the patch when an upstream release implements the proven contract |
 | Node-vs-Postgres clock skew beyond the configured overlap can still lose a row | `src/lib/paperclip/watermark.ts` documents the exact limit; overlap fixes truncation, not unbounded clock skew | Monitor watermark lag and keep `paperclip/poll_overlap_ms` sized from observed clocks |
 | Legacy retirement is not yet allowed | [bar-and-phases.md](bar-and-phases.md) Phase 9 requires two clean production weeks and a separately reviewed final commit | Keep the router switch, legacy handlers and `paperclip_disabled`; delete only after the production evidence gate |
-| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order: Phase 0 (P0-1 live check now after `aws login`; P0-2 and the P0-2/P0-3 live checks pending this branch's deploy) → Phase 1 (including P1-3 parent-owner delegation) → 8.5 from the observed shapes in section 6 → the UI/session bridge → 10–12 |
+| Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order: Phase 0 (P0-2 live re-check and P0-3's update case after this branch's deploy and the bootstrap repair) → Phase 1 (including P1-3 parent-owner delegation) → 8.5 from the observed shapes in section 6 → the UI/session bridge → 10–12 |
+| Dispatch was rejected on every push until the P0-2 fix; the research adapter had no url until the bootstrap reconcile runs | 2026-09-06 Phase 0 live critic (staging `dd16ca4`, run 34021795520): every push 400 `invalid_body`; Research's `adapterConfig` had no `url` and Paperclip escalated its issues to Main within ~1 s | Fixed on `fix/paperclip-p0-2-dispatch-push`; deploy this branch, run the bootstrap over the tunnel with `PAPERCLIP_DISPATCH_SLUGS=main,research`, then re-run the live critic for P0-2 and P0-3's update case |
 
 ## 8. Exact focused and full validation commands
 
