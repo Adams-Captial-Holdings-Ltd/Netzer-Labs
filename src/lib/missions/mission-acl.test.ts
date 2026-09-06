@@ -721,3 +721,112 @@ describe('a failed provenance write UNWINDS the create rather than orphaning it'
     ).rejects.toBe(boom);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// P1-2 SLICE 2 — the additive crossing, and the grouping the artifact does not
+// do for us.
+//
+// The P1-1 live run (staging Paperclip v2026.722.0, 2026-09-06) REFUTED
+// `children` and `childCount` on every route it read: the 56-key list row, the
+// `view=compact` row, the 70-key detail and both create responses. The only
+// proven way to learn a row's children is `?parentId=<uuid>`, an extra read
+// per parent. So `childCount` here is DERIVED — grouped from the rows this
+// board read already holds — and it means exactly that.
+// ───────────────────────────────────────────────────────────────────────────
+describe('P1-2: the hierarchy fields cross the envelope ADDITIVELY', () => {
+  /**
+   * The recorded legacy bytes for `projected()`, captured from the shipped
+   * `toWireMission` BEFORE the P1-2 fields existed. Every assertion below that
+   * claims byte-identity compares against this literal, not against a second
+   * call of the function under test.
+   */
+  const LEGACY_WIRE =
+    '{"id":"aaaaaaaa-1111-4111-8111-111111111111","ownerAgent":"main",' +
+    '"createdByAgent":"paperclip","createdByChat":"paperclip",' +
+    '"title":"Ship the ACL","body":"Byte for byte.","priority":"medium",' +
+    '"status":"open","createdAt":"2026-08-20T10:00:00.000Z",' +
+    '"updatedAt":"2026-08-20T10:00:00.000Z"}';
+
+  /** PARENT + one child of it, the shape `?parentId=` proved on the artifact. */
+  const board = (): ProjectedMission[] => [
+    projected({ id: ISSUE_A, parentId: null, paperclipStatus: 'in_progress' }),
+    projected({
+      id: ISSUE_B,
+      parentId: ISSUE_A,
+      paperclipStatus: 'blocked',
+      blockerAttention: { state: 'needs_attention', reason: 'attention_required' },
+    }),
+  ];
+
+  it('ARRANGE: the legacy literal above IS what the crossing emits for a row with no P1-2 fields', () => {
+    expect(JSON.stringify(toWireMission(projected()))).toBe(LEGACY_WIRE);
+  });
+
+  it('groups the FETCHED board by parentId — parent childCount 1, child NO key (absent, not 0)', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const rows = await listBoardMissions('main', 100);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ id: ISSUE_A, childCount: 1 });
+    // ABSENT, not zero. A `0` would read as a measured fact about the board;
+    // the absence of the key reads as "no child of this row was in the rows
+    // this read fetched", which is all the grouping can honestly claim.
+    expect('childCount' in rows[1]).toBe(false);
+  });
+
+  it('appends the new keys AFTER the ten legacy keys, in one fixed order', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const rows = await listBoardMissions('main', 100);
+    const LEGACY_KEYS = [
+      'id',
+      'ownerAgent',
+      'createdByAgent',
+      'createdByChat',
+      'title',
+      'body',
+      'priority',
+      'status',
+      'createdAt',
+      'updatedAt',
+    ];
+    expect(Object.keys(rows[0])).toEqual([...LEGACY_KEYS, 'parentId', 'paperclipStatus', 'childCount']);
+    expect(Object.keys(rows[1])).toEqual([...LEGACY_KEYS, 'parentId', 'paperclipStatus', 'blockerAttention']);
+  });
+
+  it('carries a null parentId, the raw status and a two-key blockerAttention', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const rows = await listBoardMissions('main', 100);
+    expect(rows[0].parentId).toBe(null);
+    expect(rows[0].paperclipStatus).toBe('in_progress');
+    expect(rows[0]).not.toHaveProperty('blockerAttention');
+    expect(rows[1].parentId).toBe(ISSUE_A);
+    // The RAW status and the domain status are two different facts: Paperclip
+    // writes `blocked` after a FAILED RUN, not from the dependency graph
+    // (measured 2026-09-06). The domain lane is untouched by P1-2.
+    expect(rows[1].paperclipStatus).toBe('blocked');
+    expect(rows[1].status).toBe('open');
+    expect(rows[1].blockerAttention).toEqual({
+      state: 'needs_attention',
+      reason: 'attention_required',
+    });
+  });
+
+  it('leaves a LEGACY board byte-identical through the list path, grouping included', async () => {
+    flag.value = '1';
+    fakeEngine([projected()]);
+    const rows = await listBoardMissions('main', 100);
+    expect(JSON.stringify(rows[0])).toBe(LEGACY_WIRE);
+  });
+
+  it('a SINGLE-ROW path never claims a childCount, even when the board has children', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const wire = await reassignBoardMission('main', ISSUE_A, 'research');
+    // `reassign` answers off ONE projected row; nothing there has seen the
+    // siblings, so the count is not knowable and is not invented.
+    expect(wire).not.toHaveProperty('childCount');
+    expect(wire).toMatchObject({ parentId: null, paperclipStatus: 'in_progress' });
+  });
+});

@@ -83,7 +83,11 @@ import {
 import { paperclipClientFromEnvironment } from '../paperclip/client.js';
 import { createPaperclipMissionEngine } from '../paperclip/paperclip-mission-engine.js';
 import type { MissionEngine } from '../paperclip/mission-engine.js';
-import { UnknownAgentError, type ProjectedMission } from '../paperclip/mission-projection.js';
+import {
+  UnknownAgentError,
+  type MissionHierarchyFields,
+  type ProjectedMission,
+} from '../paperclip/mission-projection.js';
 import { MISSION_RESOLVE_WINDOW, formatAmbiguousRef, resolveMissionRef } from './format.js';
 
 /**
@@ -132,7 +136,18 @@ export function __setMissionEngineForTest(engine: MissionEngine | undefined): vo
  * `assignmentReason` is conditionally spread: the contract is an absent key on
  * absence, never `null` and never `undefined`.
  */
-export function toWireMission(projected: ProjectedMission, provenance?: MissionProvenance): Mission {
+export function toWireMission(
+  projected: ProjectedMission,
+  provenance?: MissionProvenance,
+  /**
+   * DERIVED, and only the LIST path can derive it: see `decorate`. Every
+   * single-row caller leaves it out, because one row has not seen its
+   * siblings and the artifact does not carry the count (REFUTED on the list
+   * row, the compact row, the detail and both create responses by the P1-1
+   * live run, staging Paperclip v2026.722.0, 2026-09-06).
+   */
+  childCount?: number,
+): WireMission {
   const assignmentReason = provenance?.assignmentReason;
   return {
     id: projected.id,
@@ -149,12 +164,76 @@ export function toWireMission(projected: ProjectedMission, provenance?: MissionP
     ...(assignmentReason ? { assignmentReason } : {}),
     createdAt: projected.createdAt,
     updatedAt: projected.updatedAt,
+    // ── P1-2, AND EVERY ONE OF THESE IS ADDITIVE AND LAST ────────────────
+    // Appended after the ten legacy keys so a row that carries none of them
+    // serialises to the recorded legacy bytes, key order included — the same
+    // constraint that makes `identifier` and `bodyTruncated` get dropped
+    // above. Each is spread on PRESENCE, never assigned: an assigned
+    // `undefined` is an absent key to `JSON.stringify` but a PRESENT key to
+    // `in` and to `Object.keys`, and this envelope is asserted with all three
+    // (`mission-acl.test.ts` reads key ORDER off `Object.keys`).
+    //
+    // WHAT IS NOT HERE AND WHY (A1-15). The P1-2 plan asked for `blockedBy`
+    // on the board row. The 2026-09-06 P1-1 run measured the live list row
+    // (56 keys; 38 under `view=compact`) and `blockedBy` IS NOT ON IT — it
+    // exists only on `GET /api/issues/{id}` (70 keys), and as an array of
+    // OBJECTS carrying ids, not the array of ids the plan assumed. Shipping
+    // it from here would mean either inventing the field or a per-row detail
+    // fetch, so it is deliberately not shipped; the list-row signal for
+    // dependency state is `blockerAttention`, which that run DID observe on
+    // the list row. `blockedBy` can be added later on a detail path.
+    ...(projected.parentId === undefined ? {} : { parentId: projected.parentId }),
+    ...(projected.paperclipStatus === undefined
+      ? {}
+      : { paperclipStatus: projected.paperclipStatus }),
+    ...(projected.blockerAttention ? { blockerAttention: projected.blockerAttention } : {}),
+    ...(childCount === undefined ? {} : { childCount }),
   };
 }
 
-async function decorate(projected: readonly ProjectedMission[]): Promise<Mission[]> {
+/**
+ * The wire row: the legacy `Mission` plus P1-2's optional, additive fields.
+ *
+ * It is an intersection rather than four new keys on `Mission` itself,
+ * because `Mission` is the DYNAMODB row type and the legacy substrate has no
+ * source for any of these. Every field being optional keeps `Mission` and
+ * `WireMission` mutually assignable, so no caller signature has to change.
+ */
+export type WireMission = Mission & MissionHierarchyFields & { childCount?: number };
+
+/**
+ * `childCount` MEANS "CHILDREN PRESENT IN THE SAME FETCHED BOARD LIST", and
+ * that is the whole claim.
+ *
+ * The artifact does not carry it. The P1-1 live run (staging Paperclip
+ * v2026.722.0, 2026-09-06) looked for `children` and `childCount` on the
+ * 56-key list row, the 38-key `view=compact` row, the 70-key detail and both
+ * create responses, and found neither anywhere. The only PROVEN way to learn
+ * a row's real children is `GET /api/companies/{cid}/issues?parentId=<uuid>`
+ * — one extra read per parent, on the same list surface whose measured
+ * concurrency ceiling is 8 distinct reads per actor, which is precisely the
+ * amplification `listBoardMissions` removed its page walk to avoid. So this
+ * grouping reads NOTHING: it counts the rows this one read already returned.
+ *
+ * The consequences are real and are the reason the key is ABSENT rather than
+ * `0` when a row has no counted children: a child outside the owner scope,
+ * past the `limit`, or dropped by `projectOrSkip` is not counted, so a `0`
+ * would assert "this row is a leaf" — a claim this read cannot support.
+ * Absent says only that this read saw none.
+ */
+function childCountsByParent(projected: readonly ProjectedMission[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of projected) {
+    if (!row.parentId) continue;
+    counts.set(row.parentId, (counts.get(row.parentId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+async function decorate(projected: readonly ProjectedMission[]): Promise<WireMission[]> {
   const provenance = await getMissionProvenance(projected.map((p) => p.id));
-  return projected.map((p) => toWireMission(p, provenance.get(p.id)));
+  const children = childCountsByParent(projected);
+  return projected.map((p) => toWireMission(p, provenance.get(p.id), children.get(p.id)));
 }
 
 /**
@@ -216,7 +295,7 @@ async function decorate(projected: readonly ProjectedMission[]): Promise<Mission
  * here at all: `projectOrSkip` rethrows only `PaperclipError`, so it logs and
  * drops that one inside the engine.
  */
-export async function listBoardMissions(ownerAgent: string, limit = 100): Promise<Mission[]> {
+export async function listBoardMissions(ownerAgent: string, limit = 100): Promise<WireMission[]> {
   if (!paperclipRoutingEnabled()) return repoListMissionsForAgent(ownerAgent, limit);
   const engine = await missionEngine();
   // Always scoped by owner. Unassigned rows and rows assigned outside the agent
