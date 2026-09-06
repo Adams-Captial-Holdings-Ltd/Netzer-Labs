@@ -21,8 +21,8 @@ supersedes: none
 | AWS environment that branch reaches | none — per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `17f0456b670296b3877c0b782708ebcbe0d35b31` |
 | Commit at session end | `f8863b0b56fa67e5e5db3c7254690814412c4c81` (code) plus the docs commit that follows it |
-| Pushed | no |
-| PR | none |
+| Pushed | yes |
+| PR | [#151](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/151) into `development` |
 | Deployed | no |
 
 ## 2. Current state summary
