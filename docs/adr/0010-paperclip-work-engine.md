@@ -1,6 +1,6 @@
 # ADR 0010 — Paperclip is the missions work engine
 
-**Status:** Accepted (2026-08-18, Paperclip integration plan §34; amended 2026-08-18 and 2026-09-01, see "Amendment" sections below)
+**Status:** Accepted (2026-08-18, Paperclip integration plan §34; amended 2026-08-18, 2026-09-01 and 2026-09-06, see "Amendment" sections below)
 
 ## Context
 
@@ -313,12 +313,22 @@ rather than rejected, a reconciler cannot tell a filtered poll from an unfiltere
 `src/lib/paperclip/reconciler.ts` therefore runs both signals above as a BOOT PROBE before its first
 sweep and REFUSES TO SWEEP — permanently, loudly, for the life of the process — if either fails.
 
-**The push payload — UNVERIFIED.** The `http` adapter push carries
-`{...payloadTemplate, agentId, runId, context}`, where `context.issueId` comes from the issue-assignment
-wakeup's context snapshot. *The two Paperclip source-line citations that carried these claims were
-removed on 2026-08-21 under A1-16: no probe drives an outbound push, so this shape is a source reading
-and not a measurement. It is recorded because DL-3 depends on the push being a run-id carrier, and it is
-marked because nothing proves it.*
+**The push payload — measured 2026-09-06.** The `http` adapter push carries exactly
+`{...payloadTemplate, agentId, runId, context}` (pinned image `/app/server/src/adapters/http/execute.ts:13`,
+digest pinned at `vendor/paperclip/Dockerfile:20`), with `context` the run's enriched `contextSnapshot`
+carrying `context.issueId`, not a top-level `issueId`. Netzar's dispatch parser expected the field
+top-level and rejected every push 400 `invalid_body` until fixed on `fix/paperclip-p0-2-dispatch-push`
+(`dispatch-worker.ts` now reads `context.issueId` as a fallback, top-level winning when both are
+present; `tests/contract/paperclip-push.json` pins the shape). Provenance: a source reading plus the live
+400s, not a captured log line — the body itself is never logged.
+
+**Amendment 2026-09-06.** Two upstream facts affect this contract's reliability: Paperclip 2026.722.0
+stores `idempotencyKey` on a wakeup but never looks it up, so it does not dedupe wakeups by that key —
+Netzar's own `(runId, issueId)` claim in `paperclip-dispatch.ts` is the only de-dupe guard, not upstream
+idempotency. Separately, the bootstrap's agent-reuse path (`ensureAgents`) previously never patched an
+existing agent's adapter config, so an agent created without a `url` (Research, since the default armed
+set was `['main']`) could never be armed by a later run; it now reconciles adapter-config drift on a
+reused agent, driven by `PAPERCLIP_DISPATCH_SLUGS`.
 
 **Alternatives considered.** (a) Classical event-driven integration (Option F) — webhooks or an outbox.
 (b) A Paperclip plugin publishing to SQS. (c) The company live-events WebSocket as the primary feed.

@@ -67,8 +67,15 @@
  * code rather than a probe — `agentSpecs()` in
  * `scripts/lib/paperclip/bootstrap-core.ts` writes the adapter row that
  * produces the push, so the method, the bearer and `netzarAgentId` are ours by
- * construction. Everything beyond that is marked UNVERIFIED on the shape
- * itself, because NO PROBE DRIVES THE ADAPTER PUSH.
+ * construction. The REST OF THE PUSH IS NOW MEASURED TOO, which the Phase 6
+ * text below used to mark UNVERIFIED: 15 live 400 `invalid_body` rejections on
+ * 2026-09-06 (staging dd16ca4, Paperclip v2026.722.0) plus the pinned image
+ * source at `/app/server/src/adapters/http/execute.ts:13` establish that the
+ * body is `{ ...payloadTemplate, agentId, runId, context }` and that the issue
+ * id rides INSIDE `context`. The bytes were never captured from a log line —
+ * the rejection log carries only `{reason}` — so the shape is a source read
+ * corroborated by the 400s, pinned in `tests/contract/paperclip-push.json` and
+ * spelled out in full in `dispatch-worker.ts`'s header.
  *
  * `ReconcileAction` IS STILL DEFERRED after Phase 6, and this is the second
  * phase that has had to say so. Phase 6 ships the DISPATCHER, not the
@@ -1012,7 +1019,14 @@ export interface SweepResult {
 export interface PaperclipDispatchBody {
   /** Ours by construction: `payloadTemplate: { netzarAgentId: <slug> }`. */
   netzarAgentId?: string;
-  /** The Paperclip issue uuid. Never an 8-char prefix, never `NZR-42` (C-16). */
+  /**
+   * The Paperclip issue uuid. Never an 8-char prefix, never `NZR-42` (C-16).
+   *
+   * OPTIONAL AT THIS LEVEL BECAUSE THE REAL PUSH DOES NOT SEND IT HERE: it
+   * arrives as `context.issueId` (`heartbeat.ts:4219` in the pinned image).
+   * `parseDispatchBody` accepts either spelling and prefers this one; it is
+   * still REQUIRED to appear at one of the two, and neither is a 200.
+   */
   issueId?: string;
   /**
    * The run Paperclip already holds. A1-3 / ADR 0010 hard constraint 2: this is
