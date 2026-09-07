@@ -53,6 +53,7 @@ interface SynthOpts {
   bootstrapWithoutTasks?: boolean;
   withListener?: boolean;
   imageDigest?: string;
+  publicHostname?: string;
 }
 
 /**
@@ -119,6 +120,7 @@ function synth(opts: SynthOpts = {}): {
     logGroup: filesystem.paperclipLogGroup,
     paperclipSecret: secrets.paperclipSecret,
     imageDigest: opts.imageDigest,
+    publicHostname: opts.publicHostname,
     bootstrapWithoutTasks: opts.bootstrapWithoutTasks,
   });
 
@@ -377,6 +379,22 @@ describe('UI serving and deployment mode', () => {
     // wrong value 403s EVERY board mutation with "Board mutation requires
     // trusted browser origin", so absent beats guessed.
     expect(envOf(serviceContainer).PAPERCLIP_PUBLIC_URL).toBeUndefined();
+  });
+
+  it('carries the missions board hostname into both public-origin variables', () => {
+    // B-2. Phase 4.5 acceptance 2: boardMutationGuard builds its trusted-origin
+    // set from PAPERCLIP_PUBLIC_URL, so it must equal the ops hostname EXACTLY.
+    // M56: PAPERCLIP_ALLOWED_HOSTNAMES REPLACES config.json's list and the guard
+    // 403s any Host that is neither loopback nor listed, so the Cloud Map name
+    // must survive beside the public one. A20: literals on both sides, never
+    // RESOURCE_NAMES, which would compare a constant with itself.
+    const board = synth({ publicHostname: 'missions.staging.pgnos.ai' });
+    const container = byFamily(board.paperclip, 'claudeclaw-paperclip')
+      .ContainerDefinitions.find((c) => c.Name === 'paperclip-server')!;
+    expect(envOf(container).PAPERCLIP_PUBLIC_URL).toBe('https://missions.staging.pgnos.ai');
+    expect(envOf(container).PAPERCLIP_ALLOWED_HOSTNAMES).toBe(
+      'paperclip.claudeclaw.internal,missions.staging.pgnos.ai',
+    );
   });
 
   it('does not expose open self-registration through an existing public listener', () => {
