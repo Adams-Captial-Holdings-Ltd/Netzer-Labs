@@ -2,19 +2,19 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-09-06
-as_of_commit: 68db92f8f6a4da9d556c50ff3cbb256cd0250f56
+observed_at: 2026-09-07
+as_of_commit: f0c26fbd2824862399d8357d26050662e7644870
 ---
 
 # Paperclip integration handoff
 
-- **Branch:** `fix/paperclip-p0-2-dispatch-push` (from `development` `0a59063`); PR pending.
+- **Branch:** `feat/paperclip-p1-hierarchy` (from `development` `277095e`); Phase 1 close-out; PR pending.
 - **Source state:** Phase 0 merged (#156 -> `development` `0a59063`, #157 -> `qa` `ec65ca5`, #158 -> `staging` `dd16ca4`).
 - **Deployment:** staging Deploy run [34021795520](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/34021795520) is green. Live verdicts from the Phase 0 live critic (2026-09-06 13:15-13:50Z, staging `dd16ca4`): **P0-1 PASS** (board read live over the tunnel, `CCE_PAPERCLIP_ENABLED=1` confirmed on task definition `:19`); **P0-2 FAIL then fixed on this branch** (every adapter push rejected 400 `invalid_body` -- the pinned image sends `context.issueId`, not top-level `issueId`; Research's adapter had no `url` -- both fixed, critic PASS, live re-check pending this branch's deploy plus the bootstrap repair); **P0-3 refusal/list PASS, update confounded** by the P0-2 dispatch defect cascading into a heartbeat re-block (re-check after P0-2 deploys). Production is untouched.
 
 ## Current objective and required order
 
-**Now (2026-09-06 18:15Z):** read [the P0/P1 state and 8.5 + bridge handoff](handoffs/2026-09-06-p0-p1-state-and-8-5-bridge-handoff.md); its section 4 is the ordered next-action list and section 6 the brief for the next phases.
+**Now (2026-09-07):** read [the Phase 1 hierarchy close-out handoff](handoffs/2026-09-07-p1-hierarchy-closeout.md); its section 6 is the ordered next-action list (Piece E, then Piece F) and section 5 the campaign ledger.
 
 Superseding order (owner, 2026-09-05): the campaign now follows [missions-engine-plan.md](missions-engine-plan.md): P0-0 image-build timeout (own PR), Phase 0 arm and collaborate, Phase 1 hierarchy, 8.5, the board bridge on missions.staging.pgnos.ai, then 10, 11, 12. The numbered list below is the 2026-09-03 state and stays as history.
 
@@ -83,6 +83,7 @@ This session (2026-09-06), branch `fix/paperclip-p0-2-dispatch-push`, HEAD `68db
 - `npm --prefix web run build` -- exit 0 (vite build, 1760 modules, 4.61 s).
 - `docker info` -- exit 0 (Docker Desktop reachable; recorded as a precondition check only).
 - `npm run local:test:integration` -- NOT RUN: no `.env` in the worktree.
+- **2026-09-07 (this session, `feat/paperclip-p1-hierarchy` `f0c26fb`):** `npm run local:test:integration` RAN and FAILED, exit 9, `node: .env: not found` (still no `.env` in the worktree). Docker Desktop, reachable at the start of this session, later reported "Docker Desktop is unable to start" -- a separate, later fact that does not change the recorded cause above, since the missing `.env` is checked before any Docker/Floci call.
 - `node scripts/ci/docs-links.mjs` -- exit 0; 131 markdown files, 1547 internal links checked, 71 external skipped; OK (validation ran at `68db92f`, before this docs pass).
 - `node scripts/ci/feature-knowledge.mjs` -- exit 0; OK.
 - `node scripts/ci/docs-links.mjs` (docs-pass re-run) -- exit 0; 132 markdown files, 1576 internal links checked, 70 external skipped; OK.
@@ -118,6 +119,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Phase 1 hierarchy close-out](handoffs/2026-09-07-p1-hierarchy-closeout.md) | 2026-09-07 | Confirmed the rebase reconcile was a no-op; closed the one coverage gap (`missions-hierarchy.test.ts`, 31 tests); ran the full step-7 validation in both flag states on `f0c26fb` (typecheck/build/both docs gates/`git diff --check` exit 0; both suites exit 1 on exactly the five A52 Windows-baseline files and nothing else, in both states; integration RAN, exit 9: no `.env`); nothing pushed or deployed |
 | [P0/P1 state and the 8.5 + bridge brief](handoffs/2026-09-06-p0-p1-state-and-8-5-bridge-handoff.md) | 2026-09-06 | Phase 0 live results (dispatch turns run; disposition loop and cross-board provenance open), Phase 1 code-complete on feat/paperclip-p1-hierarchy, P0-0b built; paste-ready brief for Phase 8.5 and the bridge |
 | [P0-2 dispatch-push fix](handoffs/2026-09-06-p0-2-dispatch-push-fix.md) | 2026-09-06 | Phase 0 live critic found the dispatch push 400ing and Research's adapter missing a url; both fixed on this branch; also characterized the issue-hierarchy/blocking wire shapes (P1-1) |
 | [Goal-first missions engine](handoffs/2026-09-05-goal-first-missions-engine.md) | 2026-09-05 | Runs the approved missions-engine plan as a per-piece gauntlet: P0-0 image-build timeout first, then arm staging, the collaboration predicate, hierarchy, 8.5, the board bridge, 10-12 |
