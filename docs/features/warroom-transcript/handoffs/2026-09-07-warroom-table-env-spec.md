@@ -83,15 +83,21 @@ source.
 
 - [x] WI-0 — live production baseline recorded (section 4.5). Blocking gate for
       every later edit; satisfied before any file was written.
-- [ ] WI-1 — specification only. The failing test is written and proven red;
-      the implementation is deliberately **not** done here. See section 6.
+- [x] WI-1 — the three `TABLE_WARROOM_*` exports plus the infra test, proven red
+      then green at both the production and staging suffixes (`af432e5`).
+- [x] WI-2 — production synth invariance proved (section 4.6). 17 of 18
+      templates byte-identical; the eighteenth differs by exactly the three
+      added environment entries.
+- [ ] WI-3 … WI-6 — promotion, staging verification, production re-probe and
+      the ledger close. Not started. See section 6.
 
 ### 4.2 Files modified
 
 | File | Change | Rationale |
 |---|---|---|
 | `docs/features/warroom-transcript/handoffs/2026-09-07-warroom-table-env-spec.md` | This file | One handoff per session |
-| `infra/lib/compute-stack.test.ts` | New file — one failing test | Freezes the WRT-9 contract before implementation |
+| `infra/lib/compute-stack.test.ts` | New file — two cases, production and staging suffix | Freezes the WRT-9 contract; written red before the fix |
+| `infra/lib/compute-stack.ts` | +3 environment entries after `TABLE_JARVIS_CANARY` at `:421`, with a comment naming M12 | The fix. Nothing else in the file changed |
 
 ### 4.3 Decisions made
 
@@ -169,6 +175,50 @@ which is the first direct confirmation that M12's diagnosis holds at the
 Production is healthy on these probes only because its `${app}` prefix is
 `claudeclaw`, which equals the code's hard-coded fallbacks. The coupling is
 real and fragile; that is what WRT-9 removes.
+
+### 4.6 WI-2 — production synth invariance
+
+Both templates synthesized hermetically from this worktree with
+`CCE_NAME_SUFFIX` and `DOMAIN_NAME` empty and `CCE_IMAGE_TAG=invariance-probe`
+pinned identically across the pair, so the image tag could not drift through
+`gitSha()`. "Before" is the same tree with `compute-stack.ts` restored to its
+pre-fix content; "after" is the fix.
+
+```text
+templates before: 18   after: 18
+TEMPLATES BYTE-IDENTICAL: 17 of 18
+TEMPLATES THAT DIFFER:    CCE-Compute.template.json
+
+TOTAL DIFFERENCES: 3
+ADDED .Resources.TaskDef54694570.Properties.ContainerDefinitions[0].Environment
+  {"Name":"TABLE_WARROOM_MEETINGS","Value":"claudeclaw-warroom-meetings"}
+ADDED .Resources.TaskDef54694570.Properties.ContainerDefinitions[0].Environment
+  {"Name":"TABLE_WARROOM_TURNS","Value":"claudeclaw-warroom-turns"}
+ADDED .Resources.TaskDef54694570.Properties.ContainerDefinitions[0].Environment
+  {"Name":"TABLE_WARROOM_CONNECTIONS","Value":"claudeclaw-warroom-connections"}
+```
+
+Three differences, all additions, all on the orchestrator container. No IAM
+drift, no DynamoDB resource drift, no image drift, no logical-ID drift, no
+unrelated environment change, and nothing removed. `TABLE_*` on the production
+orchestrator goes from 25 to 28.
+
+The two values that have application fallbacks were compared byte-for-byte
+against the source literals rather than by eye:
+
+| Synthesized value | Literal present in |
+|---|---|
+| `claudeclaw-warroom-meetings` | `src/lib/warroom/meetings-repo.ts`, `src/lib/warroom/publisher.ts` |
+| `claudeclaw-warroom-turns` | `src/lib/warroom/meetings-repo.ts`, `src/lib/warroom/publisher.ts` |
+
+`claudeclaw-warroom-connections` has no application fallback (A11), so its bar
+is the literal itself, which it matches.
+
+**What this proves and what it does not.** It isolates this commit exactly: at
+the production suffix the orchestrator now *states* the table names it was
+already resolving by fallback, so production behaviour is unchanged by
+construction. It says nothing about the eventual PR #61 merge, which carries 218
+commits of unrelated work.
 
 ## 5. Carried-forward mistakes, assumptions and precautions
 
@@ -249,27 +299,21 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ### 6.1 Smallest next action
 
-In `infra/lib/compute-stack.ts`, immediately after `TABLE_JARVIS_CANARY` at
-`:421`, add the three entries
-`TABLE_WARROOM_MEETINGS: RESOURCE_NAMES.ddb.warroomMeetings`,
-`TABLE_WARROOM_TURNS: RESOURCE_NAMES.ddb.warroomTurns`,
-`TABLE_WARROOM_CONNECTIONS: RESOURCE_NAMES.ddb.warroomConnections`, then run
-`npx vitest run infra/lib/compute-stack.test.ts --maxWorkers=1`.
+Confirm the staging deploy rolled, then read the new staging orchestrator task
+definition and check the three `TABLE_WARROOM_*` values carry the
+`claudeclaw-staging-` prefix.
 
 ### 6.2 Immediate next steps
 
-1. Make the red test in `infra/lib/compute-stack.test.ts` green with that
-   three-line edit and nothing else.
-2. Production synth invariance: hermetic `cdk synth` with `CCE_NAME_SUFFIX`
-   and `DOMAIN_NAME` unset and `CCE_IMAGE_TAG` pinned identically before and
-   after; the only template delta may be the three added environment entries.
-3. Full `npm test` and `npm run typecheck` against the recorded baseline.
-4. Promote `fix/warroom-table-env-vars → development → qa → staging`, one PR
+1. Promote `fix/warroom-table-env-vars → development → qa → staging`, one PR
    per rung, with `gh run list --workflow=deploy.yml` idle before the
    `qa → staging` merge.
-5. On staging, against a real room with real agent replies, run the six checks
+2. On staging, against a real room with real agent replies, run the six checks
    in §6.5.
-6. Re-probe production; all four status codes must equal §4.5 exactly.
+3. Re-probe production; all four status codes must equal §4.5 exactly.
+4. Close the ledger: mark M12 `RESOLVED (af432e5)` once staging verification is
+   green, promote the "adding a table needs three files" lesson into
+   `development.md`, and preserve the evidence on PR #61.
 
 ### 6.3 Blockers and open questions
 
@@ -317,9 +361,10 @@ real room with real agent replies, with polling live, in a real browser.
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
 | `npx vitest run infra/ --no-file-parallelism` | **12 files, 182 tests, all passed** | not re-run — no product code changed |
-| `npx vitest run infra/lib/compute-stack.test.ts --no-file-parallelism` | file did not exist | **1 failed, intentionally** — see 7.1 |
-| `npm run typecheck` | not captured separately | **clean** (`tsc --noEmit`, with the new test file present) |
-| `npm test` | not run this session | not run this session |
+| `npx vitest run infra/lib/compute-stack.test.ts --no-file-parallelism` | red — `expected undefined to be 'claudeclaw-warroom-meetings'` | **2 passed** (production and staging suffix) |
+| `npx cdk synth` before vs after, production env, image tag pinned | — | **17 of 18 templates byte-identical; 3 additions in the eighteenth** (§4.6) |
+| `npm run typecheck` | clean | **clean** (`tsc --noEmit`) |
+| `npm test` | see 7.1 | see 7.1 |
 | `npm run build` | not run this session | not run this session |
 | `npm --prefix web run typecheck` | not run this session | not run this session |
 | `npm --prefix web run build` | not run this session | not run this session |
@@ -391,6 +436,34 @@ ruled out by evidence rather than by assertion: not a syntax or import failure
 (the synth completed), not a bad fixture (88 keys), not `HostedZone.fromLookup`
 (`DOMAIN_NAME` pinned empty; no AWS call), not missing credentials, not an
 unrelated baseline failure (baseline green), and not the wrong container.
+
+**Green after the fix**, both suffixes:
+
+```text
+✓ ComputeStack — orchestrator War Room table names
+  ✓ exports the three War Room table names to the orchestrator container
+  ✓ carries the suffix through, so a staging deploy reads its own tables
+Test Files 1 passed (1) · Tests 2 passed (2)
+```
+
+The staging case is the one that matters operationally: it asserts
+`claudeclaw-staging-warroom-meetings` / `-turns` / `-connections`, the tables
+that already exist and were being ignored (A12).
+
+**Full `npm test`, matched against the recorded baseline:**
+
+```text
+Test Files  5 failed | 238 passed | 1 skipped (244)
+     Tests  1 failed | 3108 passed | 6 skipped (3115)
+```
+
+Every failure is pre-existing and matches the baseline this feature has carried
+since 2026-09-05: four `scripts/**` files that fail to *parse* on Windows
+(`docs-links`, `feature-knowledge`, `runnable-blocks`, `sync-deprecations` —
+`SyntaxError: Invalid or unexpected token`), plus the one real assertion in
+`scripts/lib/lifecycle/rollback-classes.test.ts:576`, a Windows path separator
+difference (`\tmp\fake\cdk.out` received where `/tmp/fake/cdk.out` is expected).
+None is related to this change, and the two new infra cases are inside the 3108.
 
 | Command | Result |
 |---|---|
