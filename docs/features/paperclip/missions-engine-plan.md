@@ -444,6 +444,14 @@ performance reviews.
    otherwise UNVERIFIED-live citing the four `runCommand` call sites, never a claim.
 8. `boardMutationGuard` and Better Auth trusted origins through the proxy: characterized in
    B-1/B-3 with a real browser `Origin`, not from the source read.
+9. P1-2's text asks for `blockedBy:[id]` unconditionally; P1-1 MEASURED `blockedBy` as an array
+   of OBJECTS present only on the 201 create response and the detail read, never on a list row,
+   so carrying it on the list wire would violate A1-15. The shipped code carries parentId,
+   paperclipStatus, blockerAttention{state,reason} and childCount, not blockedBy; reason at
+   `mission-acl.ts:176-184`. The bar's own precedence rule settles it: a green contract probe
+   against the pinned artifact beats all four documents. `childCount` is Netzar-derived
+   (`childCountsByParent`, grouping the fetched board by parentId), not a Paperclip field, and is
+   absent rather than 0 for a childless row.
 
 ## Verification (end to end)
 
