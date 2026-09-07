@@ -83,7 +83,11 @@ import {
 import { paperclipClientFromEnvironment } from '../paperclip/client.js';
 import { createPaperclipMissionEngine } from '../paperclip/paperclip-mission-engine.js';
 import type { MissionEngine } from '../paperclip/mission-engine.js';
-import { UnknownAgentError, type ProjectedMission } from '../paperclip/mission-projection.js';
+import {
+  UnknownAgentError,
+  type MissionHierarchyFields,
+  type ProjectedMission,
+} from '../paperclip/mission-projection.js';
 import { MISSION_RESOLVE_WINDOW, formatAmbiguousRef, resolveMissionRef } from './format.js';
 
 /**
@@ -132,7 +136,18 @@ export function __setMissionEngineForTest(engine: MissionEngine | undefined): vo
  * `assignmentReason` is conditionally spread: the contract is an absent key on
  * absence, never `null` and never `undefined`.
  */
-export function toWireMission(projected: ProjectedMission, provenance?: MissionProvenance): Mission {
+export function toWireMission(
+  projected: ProjectedMission,
+  provenance?: MissionProvenance,
+  /**
+   * DERIVED, and only the LIST path can derive it: see `decorate`. Every
+   * single-row caller leaves it out, because one row has not seen its
+   * siblings and the artifact does not carry the count (REFUTED on the list
+   * row, the compact row, the detail and both create responses by the P1-1
+   * live run, staging Paperclip v2026.722.0, 2026-09-06).
+   */
+  childCount?: number,
+): WireMission {
   const assignmentReason = provenance?.assignmentReason;
   return {
     id: projected.id,
@@ -149,12 +164,83 @@ export function toWireMission(projected: ProjectedMission, provenance?: MissionP
     ...(assignmentReason ? { assignmentReason } : {}),
     createdAt: projected.createdAt,
     updatedAt: projected.updatedAt,
+    // ── P1-2, AND EVERY ONE OF THESE IS ADDITIVE AND LAST ────────────────
+    // Appended after the ten legacy keys so a row that carries none of them
+    // serialises to the recorded legacy bytes, key order included — the same
+    // constraint that makes `identifier` and `bodyTruncated` get dropped
+    // above. Each is spread on PRESENCE, never assigned: an assigned
+    // `undefined` is an absent key to `JSON.stringify` but a PRESENT key to
+    // `in` and to `Object.keys`, and this envelope is asserted with all three
+    // (`mission-acl.test.ts` reads key ORDER off `Object.keys`).
+    //
+    // WHAT IS NOT HERE AND WHY (A1-15). The P1-2 plan asked for `blockedBy`
+    // on the board row. The 2026-09-06 P1-1 run measured the live list row
+    // (56 keys; 38 under `view=compact`) and `blockedBy` IS NOT ON IT — it
+    // exists only on `GET /api/issues/{id}` (70 keys), and as an array of
+    // OBJECTS carrying ids, not the array of ids the plan assumed. Shipping
+    // it from here would mean either inventing the field or a per-row detail
+    // fetch, so it is deliberately not shipped; the list-row signal for
+    // dependency state is `blockerAttention`, which that run DID observe on
+    // the list row. `blockedBy` can be added later on a detail path.
+    ...(projected.parentId === undefined ? {} : { parentId: projected.parentId }),
+    ...(projected.paperclipStatus === undefined
+      ? {}
+      : { paperclipStatus: projected.paperclipStatus }),
+    ...(projected.blockerAttention ? { blockerAttention: projected.blockerAttention } : {}),
+    ...(childCount === undefined ? {} : { childCount }),
   };
 }
 
-async function decorate(projected: readonly ProjectedMission[]): Promise<Mission[]> {
+/**
+ * The wire row: the legacy `Mission` plus P1-2's optional, additive fields.
+ *
+ * It is an intersection rather than four new keys on `Mission` itself,
+ * because `Mission` is the DYNAMODB row type and the legacy substrate has no
+ * source for any of these. Every field being optional keeps `Mission` and
+ * `WireMission` mutually assignable, so no caller signature has to change.
+ *
+ * THE DASHBOARD CARRIES A COPY OF THIS SHAPE (A3-8). `interface Mission` in
+ * `web/src/pages/Missions.tsx` redeclares these same four keys as optional
+ * fields (the SPA has no generated client for this route), and
+ * `web/src/lib/missions-hierarchy.ts` derives parent / children / blocked
+ * from them across the boards the page has loaded. Both cite this type by
+ * name. Change the shape here and change it there in the same commit.
+ */
+export type WireMission = Mission & MissionHierarchyFields & { childCount?: number };
+
+/**
+ * `childCount` MEANS "CHILDREN PRESENT IN THE SAME FETCHED BOARD LIST", and
+ * that is the whole claim.
+ *
+ * The artifact does not carry it. The P1-1 live run (staging Paperclip
+ * v2026.722.0, 2026-09-06) looked for `children` and `childCount` on the
+ * 56-key list row, the 38-key `view=compact` row, the 70-key detail and both
+ * create responses, and found neither anywhere. The only PROVEN way to learn
+ * a row's real children is `GET /api/companies/{cid}/issues?parentId=<uuid>`
+ * — one extra read per parent, on the same list surface whose measured
+ * concurrency ceiling is 8 distinct reads per actor, which is precisely the
+ * amplification `listBoardMissions` removed its page walk to avoid. So this
+ * grouping reads NOTHING: it counts the rows this one read already returned.
+ *
+ * The consequences are real and are the reason the key is ABSENT rather than
+ * `0` when a row has no counted children: a child outside the owner scope,
+ * past the `limit`, or dropped by `projectOrSkip` is not counted, so a `0`
+ * would assert "this row is a leaf" — a claim this read cannot support.
+ * Absent says only that this read saw none.
+ */
+function childCountsByParent(projected: readonly ProjectedMission[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of projected) {
+    if (!row.parentId) continue;
+    counts.set(row.parentId, (counts.get(row.parentId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+async function decorate(projected: readonly ProjectedMission[]): Promise<WireMission[]> {
   const provenance = await getMissionProvenance(projected.map((p) => p.id));
-  return projected.map((p) => toWireMission(p, provenance.get(p.id)));
+  const children = childCountsByParent(projected);
+  return projected.map((p) => toWireMission(p, provenance.get(p.id), children.get(p.id)));
 }
 
 /**
@@ -216,7 +302,7 @@ async function decorate(projected: readonly ProjectedMission[]): Promise<Mission
  * here at all: `projectOrSkip` rethrows only `PaperclipError`, so it logs and
  * drops that one inside the engine.
  */
-export async function listBoardMissions(ownerAgent: string, limit = 100): Promise<Mission[]> {
+export async function listBoardMissions(ownerAgent: string, limit = 100): Promise<WireMission[]> {
   if (!paperclipRoutingEnabled()) return repoListMissionsForAgent(ownerAgent, limit);
   const engine = await missionEngine();
   // Always scoped by owner. Unassigned rows and rows assigned outside the agent
@@ -483,10 +569,17 @@ export class AmbiguousMissionPrefixError extends Error {
   }
 }
 
+/**
+ * Returns a `WireMission`, not a `Mission`, since P1-3a: the row it hands back
+ * is one of the rows `listBoardMissions` just built, so it carries `parentId`
+ * whenever the substrate supplied one — and `mission-tools.ts` needs that field
+ * to know whether a parent lookup is even possible. The widening is type-only;
+ * `WireMission` extends `Mission`, so no caller signature changes.
+ */
 export async function resolveBoardMission(
   owner: string,
   missionId: string,
-): Promise<Mission | undefined> {
+): Promise<WireMission | undefined> {
   const rows = await listBoardMissions(owner, RESOLVE_WINDOW);
   // The matching itself is `resolveMissionRef` in the shared module — the same
   // function the chat router and `paperclip_comment` call, so a ref means one
@@ -499,7 +592,12 @@ export async function resolveBoardMission(
   if (match.kind === 'ambiguous') {
     throw new AmbiguousMissionPrefixError(owner, missionId, match.matches.map((m) => m.id));
   }
-  return match.kind === 'found' ? match.mission : undefined;
+  // The cast is sound by construction and not a widening: `resolveMissionRef`
+  // returns ONE OF THE ELEMENTS it was handed, and what it was handed is
+  // `rows` — `WireMission[]`. Its parameter is `readonly Mission[]` only
+  // because it is the shared pure module, called from surfaces that hold plain
+  // legacy rows too.
+  return match.kind === 'found' ? (match.mission as WireMission) : undefined;
 }
 
 /**
@@ -507,11 +605,27 @@ export async function resolveBoardMission(
  *
  * The ADR: "it may write a task iff that task is assigned to it, or it is the
  * coordinator." The owner's 2026-09-05 decision instantiates that for Netzar as
- * OWNER-OR-CREATOR — otherwise `main` can open a mission for `research` and then
- * be unable to cancel the delegation it just made. It is deliberately narrower
- * than the ADR's end state: "or whose parent it owns" needs `parentId` on the
- * wire and lands in P1-3, and THIS FUNCTION is the only place that widening has
- * to happen.
+ * OWNER-OR-CREATOR-OR-PARENT-OWNER — otherwise `main` can open a mission for
+ * `research` and then be unable to cancel the delegation it just made, and an
+ * agent that owns a piece of work cannot touch the subtasks hanging off it.
+ *
+ * THE THIRD ARM ARRIVED IN P1-3a, and the widening happened HERE, exactly as
+ * the P0-3 version of this comment said it would have to.
+ *
+ * WHY THE PARENT IS AN ARGUMENT AND NOT A FIELD. `parentId` is on the wire
+ * (P1-2) but it is a UUID: the row says which mission its parent is and
+ * nothing at all about who owns it. Worse, the parent may sit on ANOTHER
+ * agent's board, which is precisely the case this arm exists to authorize —
+ * so the owner-scoped `resolveBoardMission` below cannot be the thing that
+ * fetches it. Fetching is `resolveParentMission`; JUDGING is here. This
+ * function stays pure, synchronous and I/O-free, so its truth table can be
+ * read off `mission-acl.test.ts` without a substrate.
+ *
+ * `parent` ABSENT MEANS REFUSE. The caller hands in `undefined` for a 404, an
+ * unknown assignee, an engine error, and for a row with no `parentId` at all —
+ * four different unknowns that must all fail closed. `?.` rather than a
+ * truthiness check is what keeps `{ownerAgent: ''}` from matching an empty
+ * actor, the same hole the guard on the first line closes.
  *
  * READS are not scoped by it. The same ADR line scopes reads by PARTICIPATION,
  * which for a single-company deployment is every board; that half is
@@ -527,9 +641,66 @@ export async function resolveBoardMission(
 export function canMutateMission(
   actor: string,
   mission: { ownerAgent?: string; createdByAgent?: string },
+  parent?: Pick<Mission, 'ownerAgent'> | null,
 ): boolean {
   if (!actor) return false;
-  return mission.ownerAgent === actor || mission.createdByAgent === actor;
+  return (
+    mission.ownerAgent === actor ||
+    mission.createdByAgent === actor ||
+    parent?.ownerAgent === actor
+  );
+}
+
+/**
+ * THE FETCH the third arm needs, kept apart from the JUDGING above.
+ *
+ * `resolveBoardMission` CANNOT do this job. It lists ONE owner's board and
+ * matches within it, and the parent of a delegated mission may sit on any
+ * board in the company — which is exactly the case the arm exists to
+ * authorize. Pointing an owner-scoped read at a parent would answer "not
+ * found" for every parent that mattered, and the widening would look shipped
+ * while authorizing nothing.
+ *
+ * NO NEW ENGINE METHOD. `MissionEngine.getMission` already reads one row by
+ * uuid — `paperclip-mission-engine.ts:84-87` does `client.getIssue` and
+ * projects it through `issueToMission` with the AgentIdMap — which is exactly
+ * the read this needs. P1-3a adds nothing to that interface.
+ *
+ * ONLY `ownerAgent` CROSSES (A1-15). The projection is NOT provenance-joined
+ * on this path, so its `createdByAgent` is the literal `'paperclip'`. Handing
+ * a whole Mission back would put an unrepaired row in front of the next rule
+ * someone writes against it; the predicate reads one field, so one field is
+ * returned.
+ *
+ * IT NEVER THROWS, DELIBERATELY. This runs only after owner and creator have
+ * both already answered false — the answer is refusal unless the parent
+ * widens it — so every failure mode collapses to `undefined`: a 404, an
+ * assignee outside the agent map (`UnknownAgentError` out of the projection),
+ * a transport fault. The alternative is a tool that refuses with a Paperclip
+ * stack trace instead of its own sentence, changing the error shape of a
+ * decision that was already made. The swallowed error is logged.
+ *
+ * LEGACY ANSWERS `undefined` WITHOUT AN ENGINE. `Mission` is the DynamoDB row
+ * type and carries no `parentId` at all, so with the flag off the arm is
+ * unreachable; reaching across to the Paperclip engine anyway would be the
+ * per-request stack hop C-8 forbids.
+ */
+export async function resolveParentMission(
+  parentId: string,
+): Promise<Pick<Mission, 'ownerAgent'> | undefined> {
+  if (typeof parentId !== 'string' || !parentId.trim()) return undefined;
+  if (!paperclipRoutingEnabled()) return undefined;
+  try {
+    const engine = await missionEngine();
+    const parent = await engine.getMission(parentId);
+    return { ownerAgent: parent.ownerAgent };
+  } catch (err) {
+    logger.info(
+      { parentId, err: err instanceof Error ? err.message : String(err) },
+      'parent mission unreadable; the mutation stays refused on the owner-or-creator answer',
+    );
+    return undefined;
+  }
 }
 
 /**

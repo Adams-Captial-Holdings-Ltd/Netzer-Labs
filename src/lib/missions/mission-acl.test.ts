@@ -66,6 +66,7 @@ import {
   listBoardMissionsByStatus,
   paperclipRoutingEnabled,
   reassignBoardMission,
+  resolveParentMission,
   setBoardMissionStatus,
   toWireMission,
 } from './mission-acl.js';
@@ -97,6 +98,13 @@ interface EngineSpies {
   createMission: ReturnType<typeof vi.fn>;
   setStatus: ReturnType<typeof vi.fn>;
   reassign: ReturnType<typeof vi.fn>;
+  /**
+   * P1-3a reads a SINGLE row by uuid, so this one stopped being an unused
+   * stub and became a spy the parent-lookup cases drive and assert on. It is
+   * returned so a case can prove the lookup did NOT happen — the assertion
+   * that keeps the widening off the happy path.
+   */
+  getMission: ReturnType<typeof vi.fn>;
 }
 
 function fakeEngine(rows: ProjectedMission[] = [projected()]): EngineSpies {
@@ -104,16 +112,17 @@ function fakeEngine(rows: ProjectedMission[] = [projected()]): EngineSpies {
   const createMission = vi.fn(() => Promise.resolve(rows[0]));
   const setStatus = vi.fn(() => Promise.resolve(rows[0]));
   const reassign = vi.fn(() => Promise.resolve(rows[0]));
+  const getMission = vi.fn(() => Promise.resolve(rows[0]));
   const engine = {
     listMissions,
     createMission,
     setStatus,
     reassign,
-    getMission: vi.fn(() => Promise.resolve(rows[0])),
+    getMission,
     comment: vi.fn(() => Promise.resolve()),
   } as unknown as MissionEngine;
   __setMissionEngineForTest(engine);
-  return { engine, listMissions, createMission, setStatus, reassign };
+  return { engine, listMissions, createMission, setStatus, reassign, getMission };
 }
 
 beforeEach(() => {
@@ -516,6 +525,182 @@ describe('canMutateMission — owner or creator (ADR 0009 :93-96)', () => {
     expect(canMutateMission('', { ownerAgent: '', createdByAgent: '' })).toBe(false);
     expect(canMutateMission('', {})).toBe(false);
   });
+
+  // ── P1-3a: THE THIRD ARM, "OR WHOSE PARENT IT OWNS" ────────────────────
+  //
+  // ADR 0009 :93-96's end state in full. P0-3 shipped the two arms that
+  // needed nothing new on the wire and left this one explicitly to P1-3;
+  // P1-2 put `parentId` on the wire, so it lands here — in THIS function,
+  // which its own comment already named as the only place it could.
+  //
+  // THE PARENT IS A SEPARATE ARGUMENT, not a field read off `mission`, and
+  // that is forced by a measured fact rather than chosen for style: the row
+  // carries `parentId` (a uuid) and NOTHING about who owns the parent, and
+  // the parent may sit on another agent's board entirely — which is exactly
+  // why the owner-scoped `resolveBoardMission` cannot be the thing that
+  // finds it. The caller fetches it and hands it in; this predicate still
+  // reads only what it was given and still performs no I/O.
+  it('an agent that neither owns nor created the row may mutate when it owns the PARENT', () => {
+    expect(
+      canMutateMission(
+        'research',
+        { ownerAgent: 'ops', createdByAgent: 'ops' },
+        { ownerAgent: 'research' },
+      ),
+    ).toBe(true);
+  });
+
+  it('a parent owned by a THIRD agent authorizes nothing', () => {
+    expect(
+      canMutateMission(
+        'research',
+        { ownerAgent: 'ops', createdByAgent: 'ops' },
+        { ownerAgent: 'main' },
+      ),
+    ).toBe(false);
+  });
+
+  it('an UNREADABLE parent is a refusal — never a throw, never a pass', () => {
+    // A 404, an unknown assignee and an engine error all reach this function
+    // the same way: the caller catches and hands in nothing. Absence must
+    // never widen the rule, so both spellings of absence are pinned.
+    expect(
+      canMutateMission('research', { ownerAgent: 'ops', createdByAgent: 'ops' }, undefined),
+    ).toBe(false);
+    expect(canMutateMission('research', { ownerAgent: 'ops', createdByAgent: 'ops' }, null)).toBe(
+      false,
+    );
+  });
+
+  it('the parent arm FAILS CLOSED on an empty actor and on an empty parent owner', () => {
+    // The same hole the empty-actor guard above closes, one argument further
+    // out. A legacy-shaped row coerces a missing owner to `''`, and `''` is a
+    // string by type just like an actor is.
+    expect(canMutateMission('', { ownerAgent: 'ops' }, { ownerAgent: '' })).toBe(false);
+    expect(canMutateMission('research', { ownerAgent: 'ops' }, { ownerAgent: '' })).toBe(false);
+  });
+
+  it('the parent is a third OR-arm and never a conjunction: it cannot REVOKE', () => {
+    // A widening that also narrowed would silently break P0-3's delegation
+    // for every child row, and no refusal test would have caught it.
+    expect(canMutateMission('main', { ownerAgent: 'main' }, { ownerAgent: 'ops' })).toBe(true);
+    expect(
+      canMutateMission('main', { ownerAgent: 'ops', createdByAgent: 'main' }, { ownerAgent: 'ops' }),
+    ).toBe(true);
+  });
+
+  it('omitting the third argument answers EXACTLY as P0-3 did', () => {
+    // Three of the four callers pass two arguments and keep doing so. The
+    // widening has to be invisible to them.
+    expect(canMutateMission('research', { ownerAgent: 'ops', createdByAgent: 'ops' })).toBe(false);
+    expect(canMutateMission('research', { ownerAgent: 'research', createdByAgent: 'ops' })).toBe(
+      true,
+    );
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * `resolveParentMission` — the FETCH half of the third arm, kept apart from
+ * the JUDGING half so the predicate above stays pure.
+ *
+ * It exists because no owner-scoped read can find this row. `parentId` names
+ * a mission that may sit on any board in the company, and the case the arm
+ * exists to authorize is precisely the cross-board one; `resolveBoardMission`
+ * lists ONE owner's board, so pointing it at a parent would answer "not
+ * found" for every parent that mattered. This asks the engine for the row BY
+ * ID instead — the engine's `getMission`, which already existed and already
+ * projects through `issueToMission` with the AgentIdMap, so P1-3a adds no
+ * method to the `MissionEngine` interface.
+ *
+ * IT NEVER THROWS. A parent lookup happens only on a path that has already
+ * decided to refuse, and its answer can only ever widen that refusal to an
+ * allow. So every failure — a 404, an assignee outside the agent map, a
+ * transport error — is `undefined`, and the tool prints its refusal sentence
+ * with its own error shape intact instead of surfacing a second, unrelated
+ * fault. That is a deliberate swallow, not an oversight, and the cases below
+ * pin it.
+ */
+describe('resolveParentMission — the cross-board read the third arm needs', () => {
+  const PARENT_ID = ISSUE_B;
+
+  it('reads the parent BY ID and reports its owner', async () => {
+    flag.value = '1';
+    const spies = fakeEngine([projected({ id: PARENT_ID, ownerAgent: 'research' })]);
+    const parent = await resolveParentMission(PARENT_ID);
+    expect(parent).toEqual({ ownerAgent: 'research' });
+    // P31: the ARRANGE is asserted — the engine was asked for THIS uuid, by
+    // the by-id method, and never by listing somebody's board. A resolver
+    // that listed a board would answer `undefined` for every cross-board
+    // parent, which is the whole case this function exists for.
+    expect(spies.getMission).toHaveBeenCalledTimes(1);
+    expect(spies.getMission.mock.calls[0][0]).toBe(PARENT_ID);
+    expect(spies.listMissions).not.toHaveBeenCalled();
+  });
+
+  it('reports ONLY the owner — the rule reads one field, so one field crosses', async () => {
+    // A1-15. The projection carries fifteen keys, and the provenance join
+    // that repairs two of them does NOT run on this path — `createdByAgent`
+    // off a raw projection is the literal `'paperclip'`. Returning a whole
+    // Mission would put that unrepaired row in front of the next rule someone
+    // writes. `ownerAgent` is the only field the predicate reads, so it is the
+    // only field that crosses.
+    flag.value = '1';
+    fakeEngine([projected({ id: PARENT_ID, ownerAgent: 'research' })]);
+    const parent = await resolveParentMission(PARENT_ID);
+    expect(Object.keys(parent ?? {})).toEqual(['ownerAgent']);
+  });
+
+  it('a parent the artifact does not have is a refusal, not a rejection', async () => {
+    flag.value = '1';
+    const spies = fakeEngine();
+    // There is no `not_found` rung in the taxonomy: `typeForResponse`
+    // (`error.ts:398`) puts 400 and 404 on `invalid_input` together. Built
+    // with the type the transport really produces for a missing issue, so this
+    // case proves the swallow against the shape that actually arrives rather
+    // than an invented one.
+    spies.getMission.mockRejectedValue(new PaperclipError({ type: 'invalid_input', status: 404 }));
+    await expect(resolveParentMission(PARENT_ID)).resolves.toBeUndefined();
+  });
+
+  it('a parent whose assignee is outside the agent map is a refusal', async () => {
+    flag.value = '1';
+    const spies = fakeEngine();
+    // `issueToMission` throws this from inside the engine, so it reaches this
+    // function exactly as a transport error does.
+    spies.getMission.mockRejectedValue(
+      new UnknownAgentError({ uuid: 'a0000000-0000-4000-8000-0000000000ff' }, ['main', 'research']),
+    );
+    await expect(resolveParentMission(PARENT_ID)).resolves.toBeUndefined();
+  });
+
+  it('an engine that throws a plain Error is a refusal too', async () => {
+    flag.value = '1';
+    const spies = fakeEngine();
+    spies.getMission.mockRejectedValue(new Error('socket hang up'));
+    await expect(resolveParentMission(PARENT_ID)).resolves.toBeUndefined();
+  });
+
+  it('an empty or blank parentId never reaches the engine', async () => {
+    flag.value = '1';
+    const spies = fakeEngine();
+    await expect(resolveParentMission('')).resolves.toBeUndefined();
+    await expect(resolveParentMission('   ')).resolves.toBeUndefined();
+    expect(spies.getMission).not.toHaveBeenCalled();
+  });
+
+  it('the LEGACY stack answers undefined and never builds an engine (C-8)', async () => {
+    // Legacy DynamoDB rows have no `parentId` at all — `Mission` is the
+    // DynamoDB row type and carries no hierarchy field — so the third arm is
+    // unreachable with the flag off. It answers `undefined` rather than
+    // reaching across to the Paperclip engine, because the flag picks ONE
+    // WHOLE STACK and a per-request hop to the other one is forbidden.
+    flag.value = undefined;
+    const spies = fakeEngine();
+    await expect(resolveParentMission(PARENT_ID)).resolves.toBeUndefined();
+    expect(spies.getMission).not.toHaveBeenCalled();
+    expect(spies.listMissions).not.toHaveBeenCalled();
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -719,5 +904,114 @@ describe('a failed provenance write UNWINDS the create rather than orphaning it'
         body: 'b',
       }),
     ).rejects.toBe(boom);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// P1-2 SLICE 2 — the additive crossing, and the grouping the artifact does not
+// do for us.
+//
+// The P1-1 live run (staging Paperclip v2026.722.0, 2026-09-06) REFUTED
+// `children` and `childCount` on every route it read: the 56-key list row, the
+// `view=compact` row, the 70-key detail and both create responses. The only
+// proven way to learn a row's children is `?parentId=<uuid>`, an extra read
+// per parent. So `childCount` here is DERIVED — grouped from the rows this
+// board read already holds — and it means exactly that.
+// ───────────────────────────────────────────────────────────────────────────
+describe('P1-2: the hierarchy fields cross the envelope ADDITIVELY', () => {
+  /**
+   * The recorded legacy bytes for `projected()`, captured from the shipped
+   * `toWireMission` BEFORE the P1-2 fields existed. Every assertion below that
+   * claims byte-identity compares against this literal, not against a second
+   * call of the function under test.
+   */
+  const LEGACY_WIRE =
+    '{"id":"aaaaaaaa-1111-4111-8111-111111111111","ownerAgent":"main",' +
+    '"createdByAgent":"paperclip","createdByChat":"paperclip",' +
+    '"title":"Ship the ACL","body":"Byte for byte.","priority":"medium",' +
+    '"status":"open","createdAt":"2026-08-20T10:00:00.000Z",' +
+    '"updatedAt":"2026-08-20T10:00:00.000Z"}';
+
+  /** PARENT + one child of it, the shape `?parentId=` proved on the artifact. */
+  const board = (): ProjectedMission[] => [
+    projected({ id: ISSUE_A, parentId: null, paperclipStatus: 'in_progress' }),
+    projected({
+      id: ISSUE_B,
+      parentId: ISSUE_A,
+      paperclipStatus: 'blocked',
+      blockerAttention: { state: 'needs_attention', reason: 'attention_required' },
+    }),
+  ];
+
+  it('ARRANGE: the legacy literal above IS what the crossing emits for a row with no P1-2 fields', () => {
+    expect(JSON.stringify(toWireMission(projected()))).toBe(LEGACY_WIRE);
+  });
+
+  it('groups the FETCHED board by parentId — parent childCount 1, child NO key (absent, not 0)', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const rows = await listBoardMissions('main', 100);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ id: ISSUE_A, childCount: 1 });
+    // ABSENT, not zero. A `0` would read as a measured fact about the board;
+    // the absence of the key reads as "no child of this row was in the rows
+    // this read fetched", which is all the grouping can honestly claim.
+    expect('childCount' in rows[1]).toBe(false);
+  });
+
+  it('appends the new keys AFTER the ten legacy keys, in one fixed order', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const rows = await listBoardMissions('main', 100);
+    const LEGACY_KEYS = [
+      'id',
+      'ownerAgent',
+      'createdByAgent',
+      'createdByChat',
+      'title',
+      'body',
+      'priority',
+      'status',
+      'createdAt',
+      'updatedAt',
+    ];
+    expect(Object.keys(rows[0])).toEqual([...LEGACY_KEYS, 'parentId', 'paperclipStatus', 'childCount']);
+    expect(Object.keys(rows[1])).toEqual([...LEGACY_KEYS, 'parentId', 'paperclipStatus', 'blockerAttention']);
+  });
+
+  it('carries a null parentId, the raw status and a two-key blockerAttention', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const rows = await listBoardMissions('main', 100);
+    expect(rows[0].parentId).toBe(null);
+    expect(rows[0].paperclipStatus).toBe('in_progress');
+    expect(rows[0]).not.toHaveProperty('blockerAttention');
+    expect(rows[1].parentId).toBe(ISSUE_A);
+    // The RAW status and the domain status are two different facts: Paperclip
+    // writes `blocked` after a FAILED RUN, not from the dependency graph
+    // (measured 2026-09-06). The domain lane is untouched by P1-2.
+    expect(rows[1].paperclipStatus).toBe('blocked');
+    expect(rows[1].status).toBe('open');
+    expect(rows[1].blockerAttention).toEqual({
+      state: 'needs_attention',
+      reason: 'attention_required',
+    });
+  });
+
+  it('leaves a LEGACY board byte-identical through the list path, grouping included', async () => {
+    flag.value = '1';
+    fakeEngine([projected()]);
+    const rows = await listBoardMissions('main', 100);
+    expect(JSON.stringify(rows[0])).toBe(LEGACY_WIRE);
+  });
+
+  it('a SINGLE-ROW path never claims a childCount, even when the board has children', async () => {
+    flag.value = '1';
+    fakeEngine(board());
+    const wire = await reassignBoardMission('main', ISSUE_A, 'research');
+    // `reassign` answers off ONE projected row; nothing there has seen the
+    // siblings, so the count is not knowable and is not invented.
+    expect(wire).not.toHaveProperty('childCount');
+    expect(wire).toMatchObject({ parentId: null, paperclipStatus: 'in_progress' });
   });
 });

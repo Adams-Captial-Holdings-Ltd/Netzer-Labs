@@ -294,6 +294,20 @@ export interface PaperclipValidationIssue {
  * The full row is much wider - the list route spreads the whole service row and
  * appends run-handoff and recovery fields - but nothing here may read a field no
  * probe asserts, so the extra fields are deliberately untyped.
+ *
+ * P1-2 WIDENS IT BY EXACTLY TWO KEYS, both measured on a LIVE LIST ROW by the
+ * P1-1 characterization run (staging Paperclip v2026.722.0, 2026-09-06):
+ * `parentId` (a uuid or an explicit null, present on the 56-key full row AND
+ * on the 38-key `view=compact` row) and `blockerAttention`. Both are declared
+ * on `PaperclipIssueView` in `mission-projection.ts`, which this alias points
+ * at, so there is still ONE declaration. `listIssues` needed no change to
+ * carry them: it narrows the parsed body to this type and reads no field of
+ * it, and it does not send `view=compact`.
+ *
+ * STILL ABSENT FROM A LIST ROW, and REFUTED by that run rather than merely
+ * unobserved: `blockedBy`, `blocks`, `children`, `childCount`. The first two
+ * exist on `GET /api/issues/{id}` only, as arrays of OBJECTS; the last two
+ * exist on no route it read, which is why a child count has to be derived.
  */
 export type PaperclipIssue = PaperclipIssueView;
 
