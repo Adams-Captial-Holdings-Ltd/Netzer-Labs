@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: index
 status: current
-observed_at: 2026-09-06
-as_of_commit: 68db92f
+observed_at: 2026-09-07
+as_of_commit: f0c26fbd2824862399d8357d26050662e7644870
 implemented_by:
   - src/lib/paperclip/mission-projection.ts
   - src/lib/paperclip/client.ts
@@ -47,6 +47,7 @@ implemented_by:
   - scripts/lib/lifecycle/deploy-phases.ts
   - web/src/pages/Missions.tsx
   - web/src/lib/glossary.ts
+  - web/src/lib/missions-hierarchy.ts
 tested_by:
   - src/lib/paperclip/mission-projection.test.ts
   - src/lib/paperclip/client.test.ts
@@ -68,6 +69,7 @@ tested_by:
   - scripts/lib/lifecycle/paperclip-image-pipeline.test.ts
   - scripts/lib/paperclip/bootstrap-secret.test.ts
   - src/ops/paperclip-phase-probe.test.ts
+  - src/adapters/dashboard/missions-hierarchy.test.ts
 decisions:
   - docs/adr/0010-paperclip-work-engine.md
   - docs/adr/0009-mission-container-model.md
@@ -117,7 +119,7 @@ maintained since. Two things have already overtaken it:
 
 Present in the current source and working tree:
 
-Paperclip is live in staging as the missions system of record; the 2026-09-06 live critic found the inbound dispatch push being rejected and one agent's adapter missing a working push URL, and both are being repaired on `fix/paperclip-p0-2-dispatch-push` (see [HANDOFF.md](HANDOFF.md)).
+Paperclip is live in staging as the missions system of record; the 2026-09-06 live critic found the inbound dispatch push being rejected and one agent's adapter missing a working push URL, and both were fixed and merged to `development` (`#159`, `277095e`). Phase 1 (hierarchy on the wire, parent-owned delegation, the detail modal) is code-complete, validated by the full suite in both flag states on `feat/paperclip-p1-hierarchy` `f0c26fb`, and pending promotion (see [HANDOFF.md](HANDOFF.md)).
 
 - **A patched, pinned artifact and disposable live harness.**
   `vendor/paperclip/` builds `netzer-paperclip:2026.722.0-netzar.1` from an
@@ -178,7 +180,7 @@ markers (section 3).
 
 ## 3. Current status and current source commit
 
-Source: `development` `0a59063` (Phase 0 `#156` merged); staging `dd16ca4` (Deploy run `34021795520`); `fix/paperclip-p0-2-dispatch-push` pending.
+Source: `development` `277095e` (Phase 0 `#156` merged, P0-2 dispatch-push fix `#159` merged); staging `dd16ca4` (Deploy run `34021795520`, pre-dates both); Phase 1 (hierarchy, delegation, detail modal) validated by the full suite in both flag states on `feat/paperclip-p1-hierarchy` `f0c26fb`, not yet pushed or promoted — see [the close-out handoff](handoffs/2026-09-07-p1-hierarchy-closeout.md).
 
 P0-0 (the Dockerfile build-stage npm fetch timeout) shipped and deployed:
 staging run `33989570600` at `9873f28` is green and equal to the bar. The
@@ -350,7 +352,8 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
 - Any agent may list any board in the company; an agent may mutate a mission it
   owns or created (ADR 0009 :93-96, instantiated 2026-09-05); the identity that
   acts on a board is the board scope (`boardAgentId`, else the session agent)
-  for creation and for judgment alike; parent-owner delegation lands in P1-3.
+  for creation and for judgment alike; parent-owner delegation shipped in P1-3a
+  (`mission-acl.ts` `canMutateMission`, third OR-arm).
   Dashboard routes keep their capability gates.
 - Flipping `CCE_PAPERCLIP_ENABLED` hides legacy DynamoDB missions from the board
   (DL-7, no migration); staging had 2, both cancelled, before the flip.
@@ -391,7 +394,7 @@ Measured by the Phase 0 live critic (staging `dd16ca4`, run 34021795520) over th
 
 ### Issue hierarchy and blocking (staging, 2026-09-06)
 
-Measured by the Phase 0 live critic (P1-1) creating a small parent/child/blocked-by fixture over the tunnel and reading it back through every route that could plausibly carry hierarchy or dependency state.
+Measured by the Phase 0 live critic (P1-1) creating a small parent/child/blocked-by fixture over the tunnel and reading it back through every route that could plausibly carry hierarchy or dependency state, on staging `dd16ca4` — before the Phase 1 code existed. To be re-confirmed live in Piece F, after Phase 1 deploys (see [the close-out handoff](handoffs/2026-09-07-p1-hierarchy-closeout.md)).
 
 | field | route | observed type | list row? | detail? | note |
 |---|---|---|---|---|---|

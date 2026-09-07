@@ -19,7 +19,6 @@ import type { ToolContext } from './registry.js';
 import {
   MISSION_PRIORITIES,
   MISSION_STATUSES,
-  type Mission,
   type MissionPriority,
   type MissionStatus,
 } from '../state/mission-tasks-repo.js';
@@ -27,7 +26,9 @@ import {
 // repointed three SUBSTRATE call sites here — create, list, set-status. P0-3
 // adds three more: `resolveBoardMission`, which reads the board to fetch the
 // row an authorization decision needs, and the two pure predicates that make
-// the decision, `canReadBoard` and `canMutateMission`. The rules are
+// the decision, `canReadBoard` and `canMutateMission`. P1-3a adds a fourth,
+// `resolveParentMission`, for the one row an owner-scoped board read cannot
+// reach. The rules are
 // STATED there and only ASKED here, so a second caller cannot restate them
 // (A3-1). Phase 9 deliberately widens the status schemas,
 // changes priority to the exact four bands, and removes the retired due date.
@@ -42,7 +43,9 @@ import {
   listBoardMissions,
   listBoardMissionsByStatus,
   resolveBoardMission,
+  resolveParentMission,
   setBoardMissionStatus,
+  type WireMission,
 } from '../missions/mission-acl.js';
 import { sendInterAgent } from '../state/inter-agent-tasks-repo.js';
 import {
@@ -452,7 +455,13 @@ tools.register('update_mission', {
         owner: {
           type: 'string',
           description:
-            "Owner agent id — whose board the mission is on. Defaults to your own. You may transition a mission on another agent's board only if you opened it.",
+            // Kept in step with the predicate ON PURPOSE. This sentence is the
+            // only description of the rule the MODEL ever reads; while it said
+            // "only if you opened it" the third arm was reachable by the API
+            // and invisible to the agent, which ships a capability nothing
+            // would ever use. `mission-toolspec.test.ts` pins this tool's
+            // status enum and its name, not this string.
+            "Owner agent id — whose board the mission is on. Defaults to your own. You may transition a mission on another agent's board if you own it, opened it, or own its parent.",
         },
         status: {
           type: 'string',
@@ -498,15 +507,39 @@ tools.register('update_mission', {
       // mutation, not two. The legacy branch ignores it and re-scans inside the
       // repo (`mission-tasks-repo.ts:184`), so a cross-board update costs it
       // two reads; that branch is reproduced byte for byte, not optimized.
-      let resolved: Mission | undefined;
+      let resolved: WireMission | undefined;
       if (owner !== self) {
         resolved = await resolveBoardMission(owner, id);
         if (!resolved) return { text: formatNoMatch({ owner, ref: id }), isError: true };
         if (!canMutateMission(self, resolved)) {
-          return {
-            text: `You can only update missions you own or created (owner '${self}').`,
-            isError: true,
-          };
+          // P1-3a, AND ONLY HERE. Owner and creator have both already answered
+          // false, so the decision is a refusal unless the third arm widens
+          // it — which is why the extra read hangs off THIS branch and not off
+          // the resolve above. An authorized cross-board update still costs
+          // one board read, exactly as it did in P0-3; the authz cases assert
+          // that by proving no by-id read happened on the happy path.
+          //
+          // GUARDED ON THE FIELD, not just on the refusal: a legacy row has no
+          // `parentId` at all (`Mission` is the DynamoDB row type), and a
+          // Paperclip root row carries `null`. Neither can name a parent, so
+          // neither pays for a lookup.
+          //
+          // The rule is re-ASKED with the parent rather than re-implemented
+          // here (A3-1). `resolveParentMission` answers `undefined` for every
+          // failure — 404, unknown assignee, transport fault — so this branch
+          // has no error path of its own and the refusal below keeps the
+          // tool's own error shape.
+          const parentId = resolved.parentId;
+          const parent =
+            typeof parentId === 'string' && parentId
+              ? await resolveParentMission(parentId)
+              : undefined;
+          if (!canMutateMission(self, resolved, parent)) {
+            return {
+              text: `You can only update missions you own, created, or whose parent you own (owner '${self}').`,
+              isError: true,
+            };
+          }
         }
       }
       const ok = await setBoardMissionStatus(owner, id, status, resolved);
