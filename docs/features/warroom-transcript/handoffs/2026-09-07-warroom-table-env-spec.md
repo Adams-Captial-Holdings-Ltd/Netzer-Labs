@@ -315,8 +315,9 @@ real room with real agent replies, with polling live, in a real browser.
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
-| `npx vitest run infra/lib/compute-stack.test.ts --maxWorkers=1` | file did not exist | see section 7.1 |
-| `npm run typecheck` | not run this session | not run this session |
+| `npx vitest run infra/ --no-file-parallelism` | **12 files, 182 tests, all passed** | not re-run — no product code changed |
+| `npx vitest run infra/lib/compute-stack.test.ts --no-file-parallelism` | file did not exist | **1 failed, intentionally** — see 7.1 |
+| `npm run typecheck` | not captured separately | **clean** (`tsc --noEmit`, with the new test file present) |
 | `npm test` | not run this session | not run this session |
 | `npm run build` | not run this session | not run this session |
 | `npm --prefix web run typecheck` | not run this session | not run this session |
@@ -335,7 +336,66 @@ baseline itself before editing.
 
 ### 7.1 Results
 
-Filled in at the end of this session; see the session's final commit.
+**Baseline, on `fix/warroom-table-env-vars` at `9ab0a0d` (base `15922df`), tree clean:**
+the existing infra suite is **12 files / 182 tests, all passing**. There is no
+pre-existing failure that could be mistaken for this work. Vitest does collect
+and run in this linked worktree, confirming the 2026-09-05 note on **M6**.
+
+**The proof command in the incoming brief does not work in this repository.**
+`--maxWorkers=1` aborts the whole run before any test executes:
+
+```text
+RangeError: options.minThreads and options.maxThreads must not conflict
+ Test Files  no tests
+```
+
+Vitest here is 2.1.9; the working serial flag is `--no-file-parallelism`. The
+proof command is therefore:
+
+```text
+npx vitest run infra/lib/compute-stack.test.ts --no-file-parallelism
+```
+
+**Red, for the intended reason:**
+
+```text
+FAIL  infra/lib/compute-stack.test.ts > ComputeStack — orchestrator War Room table names
+AssertionError: expected undefined to be 'claudeclaw-warroom-meetings'
+❯ infra/lib/compute-stack.test.ts:144:40
+```
+
+The first attempt was red for the *wrong* reason — `Test timed out in 5000ms`.
+The seven-stack synth takes ~9 s and this test is async (it must load the stack
+modules after `CCE_NAME_SUFFIX` is stubbed), so Vitest's timer is live where the
+other, synchronous infra suites block the event loop and never trip it. Fixed by
+stating a 60 s budget on the test rather than by weakening the assertion.
+
+**The `undefined` is the missing export, not an empty fixture.** A temporary probe
+(written, run once, deleted — it is not part of the commit) reported the
+synthesized orchestrator container as:
+
+```text
+CONTAINER NAMES: orchestrator, worker
+TOTAL ENV KEYS: 88
+TABLE_* COUNT: 25
+SESSIONS VALUE: claudeclaw-sessions
+WARROOM KEYS PRESENT: 0
+```
+
+So the harness selects the right container out of two, reads a fully populated
+environment, resolves the **production** (unsuffixed) name set, and carries the
+same 25 `TABLE_*` keys as the live production task definition in §4.5 — with
+exactly the three War Room keys absent. Each disqualifying cause is therefore
+ruled out by evidence rather than by assertion: not a syntax or import failure
+(the synth completed), not a bad fixture (88 keys), not `HostedZone.fromLookup`
+(`DOMAIN_NAME` pinned empty; no AWS call), not missing credentials, not an
+unrelated baseline failure (baseline green), and not the wrong container.
+
+| Command | Result |
+|---|---|
+| `node scripts/ci/docs-links.mjs` | OK — 1647 internal links |
+| `node scripts/ci/feature-knowledge.mjs` | OK |
+| `git diff --check` | clean |
 
 ## 8. Environment state
 
