@@ -47,12 +47,7 @@ interface TaskDefProps {
 
 describe('ComputeStack — orchestrator War Room table names', () => {
   beforeEach(() => {
-    // `APP_NAME_SUFFIX` is read from process.env when constants.ts is first
-    // evaluated (constants.ts:16) and `RESOURCE_NAMES` is frozen from it
-    // (constants.ts:236), so the stubs must precede the dynamic imports below.
     vi.resetModules();
-    vi.stubEnv('CCE_NAME_SUFFIX', '');
-    vi.stubEnv('DOMAIN_NAME', '');
   });
 
   afterEach(() => {
@@ -60,7 +55,17 @@ describe('ComputeStack — orchestrator War Room table names', () => {
     vi.resetModules();
   });
 
-  async function orchestratorEnv(): Promise<Record<string, string>> {
+  /**
+   * `suffix` is what `CCE_NAME_SUFFIX` would be for the target environment:
+   * empty for production, `staging` for staging. `APP_NAME_SUFFIX` is read when
+   * constants.ts is first evaluated (constants.ts:16) and `RESOURCE_NAMES` is
+   * frozen from it (constants.ts:236), so it is stubbed here — before the
+   * dynamic imports — rather than in a hook that runs after a static import.
+   */
+  async function orchestratorEnv(suffix: string): Promise<Record<string, string>> {
+    vi.stubEnv('CCE_NAME_SUFFIX', suffix);
+    vi.stubEnv('DOMAIN_NAME', '');
+
     const [
       { NetworkStack },
       { StorageStack },
@@ -133,16 +138,41 @@ describe('ComputeStack — orchestrator War Room table names', () => {
     return Object.fromEntries((orchestrator.Environment ?? []).map((e) => [e.Name, e.Value]));
   }
 
-  // Seven stacks are synthesized here, which takes longer than Vitest's 5 s
-  // default. The other infra suites never needed a timeout because they are
-  // synchronous: a blocked event loop never lets the timer fire. This one must
-  // be async to load the stack modules *after* the suffix is stubbed, so the
-  // timer is live and the budget has to be stated.
-  it('exports the three War Room table names to the orchestrator container', async () => {
-    const env = await orchestratorEnv();
+  // Seven stacks are synthesized per case, which takes far longer than Vitest's
+  // 5 s default. The other infra suites never needed a timeout because they are
+  // synchronous: a blocked event loop never lets the timer fire. These must be
+  // async to load the stack modules *after* the suffix is stubbed, so the timer
+  // is live and the budget has to be stated. Observed 9-62 s depending on
+  // whether the transform cache is warm, hence the generous ceiling.
+  const BUDGET = 180_000;
 
-    expect(env.TABLE_WARROOM_MEETINGS).toBe('claudeclaw-warroom-meetings');
-    expect(env.TABLE_WARROOM_TURNS).toBe('claudeclaw-warroom-turns');
-    expect(env.TABLE_WARROOM_CONNECTIONS).toBe('claudeclaw-warroom-connections');
-  }, 60_000);
+  it(
+    'exports the three War Room table names to the orchestrator container',
+    async () => {
+      const env = await orchestratorEnv('');
+
+      expect(env.TABLE_WARROOM_MEETINGS).toBe('claudeclaw-warroom-meetings');
+      expect(env.TABLE_WARROOM_TURNS).toBe('claudeclaw-warroom-turns');
+      expect(env.TABLE_WARROOM_CONNECTIONS).toBe('claudeclaw-warroom-connections');
+    },
+    BUDGET,
+  );
+
+  /**
+   * The reason the fix exists. A suffixed environment has its own War Room
+   * tables (`claudeclaw-staging-warroom-*` exist alongside production's), but
+   * before this export the orchestrator asked for the unsuffixed production
+   * names and the staging task role was denied, so every War Room read 500'd.
+   */
+  it(
+    'carries the suffix through, so a staging deploy reads its own tables',
+    async () => {
+      const env = await orchestratorEnv('staging');
+
+      expect(env.TABLE_WARROOM_MEETINGS).toBe('claudeclaw-staging-warroom-meetings');
+      expect(env.TABLE_WARROOM_TURNS).toBe('claudeclaw-staging-warroom-turns');
+      expect(env.TABLE_WARROOM_CONNECTIONS).toBe('claudeclaw-staging-warroom-connections');
+    },
+    BUDGET,
+  );
 });
