@@ -198,3 +198,90 @@ describe('prompt neutralization', () => {
     expect(missionToIssueCreate(mission({ body: '<div>legitimate</div>' }), agentMap, () => 'id').description).toBe('<div>legitimate</div>');
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// P1-2 SLICE 1 — the hierarchy / blocking keys a LIVE issue LIST ROW actually
+// carries. Source: the P1-1 live characterization run against staging
+// Paperclip v2026.722.0 on 2026-09-06 (56-key list row; `view=compact` 38
+// keys), which observed `parentId`, `status` and `blockerAttention` on the
+// list row and REFUTED `children` / `childCount` on every route it read.
+// `blockedBy` / `blocks` were observed on the DETAIL only, so nothing here
+// projects them.
+// ───────────────────────────────────────────────────────────────────────────
+describe('P1-2: issueToMission carries the measured list-row hierarchy fields', () => {
+  const PARENT = 'aaaaaaaa-1111-4111-8111-111111111111';
+
+  /**
+   * The measured `blockerAttention` object in full: eight keys, of which the
+   * two SAMPLE keys carry issue identifiers. The projection must take the two
+   * it was told to take and drop the other six.
+   */
+  const attention = {
+    state: 'needs_attention',
+    reason: 'attention_required',
+    unresolvedBlockerCount: 3,
+    coveredBlockerCount: 0,
+    stalledBlockerCount: 1,
+    attentionBlockerCount: 2,
+    sampleBlockerIdentifier: 'NZR-77',
+    sampleStalledBlockerIdentifier: 'NZR-78',
+  };
+
+  it('projects parentId, the raw paperclipStatus and a two-key blockerAttention', () => {
+    const projected = issueToMission(
+      issue({ parentId: PARENT, status: 'blocked', blockerAttention: attention }),
+      agentMap,
+    );
+    expect(projected.parentId).toBe(PARENT);
+    expect(projected.paperclipStatus).toBe('blocked');
+    expect(projected.blockerAttention).toEqual({
+      state: 'needs_attention',
+      reason: 'attention_required',
+    });
+    // The four counts and BOTH sample identifiers are dropped, by key.
+    expect(Object.keys(projected.blockerAttention ?? {})).toEqual(['state', 'reason']);
+  });
+
+  it('keeps the domain `status` mapping independent of the raw one', () => {
+    // On this artifact `status: blocked` is written when a RUN fails
+    // (`adapter_failed`), not by the dependency graph — measured 2026-09-06.
+    // The domain lane and the raw value are therefore two different facts and
+    // both are carried.
+    const projected = issueToMission(issue({ status: 'in_review' }), agentMap);
+    expect(projected.status).toBe('in_review');
+    expect(projected.paperclipStatus).toBe('in_review');
+  });
+
+  it('keeps a null parentId as a PRESENT null — a root row, not an absent key', () => {
+    const projected = issueToMission(issue({ parentId: null }), agentMap);
+    expect('parentId' in projected).toBe(true);
+    expect(projected.parentId).toBe(null);
+  });
+
+  it('keeps a null blockerAttention.reason as null', () => {
+    const projected = issueToMission(
+      issue({ blockerAttention: { ...attention, state: 'none', reason: null } }),
+      agentMap,
+    );
+    expect(projected.blockerAttention).toEqual({ state: 'none', reason: null });
+  });
+
+  it('adds NO key for a row that carries neither parentId nor blockerAttention', () => {
+    // The legacy/substrate row. `paperclipStatus` is the one field a Paperclip
+    // row always has, because `status` is always on the wire.
+    const projected = issueToMission(issue(), agentMap);
+    expect('parentId' in projected).toBe(false);
+    expect('blockerAttention' in projected).toBe(false);
+    expect(projected.paperclipStatus).toBe('todo');
+  });
+
+  it('never invents childCount — REFUTED on every route the P1-1 run read', () => {
+    const projected = issueToMission(issue({ parentId: PARENT }), agentMap);
+    expect(projected).not.toHaveProperty('childCount');
+    expect(projected).not.toHaveProperty('children');
+    // `blockedBy` / `blocks` are DETAIL-only fields; the list projection has no
+    // source for them and must not fabricate one.
+    expect(projected).not.toHaveProperty('blockedBy');
+    expect(projected).not.toHaveProperty('blocks');
+  });
+});

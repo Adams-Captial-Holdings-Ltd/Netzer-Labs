@@ -91,6 +91,12 @@ const ctx = { agentId: 'research', chatId: 'owner:emmanuel' };
 /** A full issue uuid whose 8-char prefix is what `list_missions` would print. */
 const MISSION_ID = 'abc12345-1111-4111-8111-111111111111';
 const PREFIX = MISSION_ID.slice(0, 8);
+/**
+ * The parent of the delegated mission, and it is a FULL uuid on purpose: the
+ * artifact's `parentId` is a uuid, the engine's by-id read takes a uuid, and
+ * neither resolves an 8-character prefix (C-16).
+ */
+const PARENT_ID = 'def67890-2222-4222-8222-222222222222';
 
 const WIRE_ROW: Mission = {
   id: MISSION_ID,
@@ -118,11 +124,22 @@ interface EngineSpies {
   listMissions: ReturnType<typeof vi.fn>;
   setStatus: ReturnType<typeof vi.fn>;
   createMission: ReturnType<typeof vi.fn>;
+  /**
+   * P1-3a's by-id parent read. It is a spy on BOTH stacks — on the legacy one
+   * it is never wired in, so `parentReads()` answering `[]` there is a real
+   * C-8 assertion and not a vacuous one.
+   */
+  getMission: ReturnType<typeof vi.fn>;
 }
 
 function injectEngine(rows: ProjectedMission[]): EngineSpies {
   const listMissions = vi.fn(() => Promise.resolve(rows));
   const setStatus = vi.fn(() => Promise.resolve(rows[0]));
+  // UNARMED IS UNREADABLE. A case that arms a child without arming its parent
+  // is describing a mission whose parent the artifact will not serve, and the
+  // rule for that is refusal. Rejecting by default means no case can pass by
+  // accident on a parent nobody set up.
+  const getMission = vi.fn(() => Promise.reject(new Error('no parent armed')));
   // The engine echoes the seed back as a projected row, which is what the real
   // one does. The ACL then joins the provenance it just wrote over that row, so
   // `createdByAgent` reaches the caller by the same two-step route as in
@@ -133,12 +150,12 @@ function injectEngine(rows: ProjectedMission[]): EngineSpies {
   __setMissionEngineForTest({
     listMissions,
     setStatus,
-    getMission: vi.fn(),
+    getMission,
     createMission,
     reassign: vi.fn(),
     comment: vi.fn(),
   } as unknown as MissionEngine);
-  return { listMissions, setStatus, createMission };
+  return { listMissions, setStatus, createMission, getMission };
 }
 
 /** One mutation the substrate accepted: `{owner?, id, status}`, however it got there. */
@@ -152,8 +169,24 @@ interface Stack {
   flagValue: string | undefined;
   /** Arm the substrate with one open mission owned by `research`. */
   arm(): void;
-  /** Arm the substrate with one mission that reads back as exactly `row`. */
-  armRow(row: Mission): void;
+  /**
+   * Arm the substrate with one mission that reads back as exactly `row`.
+   *
+   * `parentId` is P1-3a's, and it is MEASURED-ONLY: the Paperclip projection
+   * carries it, `Mission` — the DynamoDB row type — has no such field, so the
+   * legacy arm drops it. That asymmetry is not a fixture shortcut, it is the
+   * substrate difference `carriesHierarchy` below names and the delegation
+   * cases assert.
+   */
+  armRow(row: Mission, parentId?: string): void;
+  /** Make the by-id parent read answer with a parent owned by `ownerAgent`. */
+  armParent(ownerAgent: string): void;
+  /** Make the by-id parent read fail, however the artifact fails. */
+  breakParentRead(err: unknown): void;
+  /** The mission ids the substrate was asked for BY ID — the parent lookups. */
+  parentReads(): string[];
+  /** Whether this substrate carries `parentId` at all. Legacy does not. */
+  carriesHierarchy: boolean;
   /** The owner each scoped list read was made for, on the substrate that served it. */
   listedOwners(): string[];
   /** Status mutations that actually reached the substrate. */
@@ -174,10 +207,27 @@ const STACKS: Stack[] = [
       this.armRow(WIRE_ROW);
     },
     armRow(row: Mission) {
+      // `parentId` is DELIBERATELY DROPPED here. `Mission` is the DynamoDB row
+      // type and has no hierarchy field, so a legacy row cannot carry one; a
+      // fixture that smuggled it in would let the third arm look shipped on a
+      // substrate that can never reach it.
       listByStatusMock.mockResolvedValue([row]);
       listForAgentMock.mockResolvedValue([row]);
       updateStatusMock.mockResolvedValue(true);
     },
+    armParent() {
+      /* No parent to arm: nothing on this stack can name one. */
+    },
+    breakParentRead() {
+      /* Unreachable here, for the same reason. */
+    },
+    parentReads() {
+      // Read off the ENGINE spy on purpose. The engine is injected in
+      // `beforeEach` and then unwired, so an empty answer here is the C-8
+      // proof that the flag-off path did not hop stacks to read a parent.
+      return engine.getMission.mock.calls.map((call) => call[0] as string);
+    },
+    carriesHierarchy: false,
     listedOwners() {
       return [...listByStatusMock.mock.calls, ...listForAgentMock.mock.calls].map(
         (call) => call[0] as string,
@@ -196,6 +246,9 @@ const STACKS: Stack[] = [
       expect(engine.listMissions).not.toHaveBeenCalled();
       expect(engine.setStatus).not.toHaveBeenCalled();
       expect(engine.createMission).not.toHaveBeenCalled();
+      // P1-3a's by-id read is a Paperclip call like any other, and the flag-off
+      // path must not make it either.
+      expect(engine.getMission).not.toHaveBeenCalled();
     },
   },
   {
@@ -204,11 +257,21 @@ const STACKS: Stack[] = [
     arm() {
       this.armRow(WIRE_ROW);
     },
-    armRow(row: Mission) {
+    armRow(row: Mission, parentId?: string) {
       // Owner comes off the projection, creator off the provenance join — the
       // same split the real stack has, so both stacks still hand the tools the
       // SAME wire mission.
-      engine = injectEngine([{ ...PROJECTED_ROW, id: row.id, ownerAgent: row.ownerAgent }]);
+      engine = injectEngine([
+        {
+          ...PROJECTED_ROW,
+          id: row.id,
+          ownerAgent: row.ownerAgent,
+          // Spread on PRESENCE, the way `toWireMission` does it: a row with no
+          // parent must have NO key, not a key holding `undefined`, because
+          // the tool's guard is `typeof parentId === 'string'`.
+          ...(parentId === undefined ? {} : { parentId }),
+        },
+      ]);
       getProvenanceMock.mockResolvedValue(
         new Map([
           [
@@ -222,6 +285,16 @@ const STACKS: Stack[] = [
         ]),
       );
     },
+    armParent(ownerAgent: string) {
+      engine.getMission.mockResolvedValue({ ...PROJECTED_ROW, id: PARENT_ID, ownerAgent });
+    },
+    breakParentRead(err: unknown) {
+      engine.getMission.mockRejectedValue(err);
+    },
+    parentReads() {
+      return engine.getMission.mock.calls.map((call) => call[0] as string);
+    },
+    carriesHierarchy: true,
     listedOwners() {
       return engine.listMissions.mock.calls.map(
         (call) => (call[0] as { ownerAgent: string }).ownerAgent,
@@ -328,13 +401,18 @@ describe.each(STACKS)('mission tool authorization — $name', (stack: Stack) => 
       ctx,
     );
     expect(out.isError).toBe(true);
-    expect(out.text).toBe("You can only update missions you own or created (owner 'research').");
+    expect(out.text).toBe(
+      "You can only update missions you own, created, or whose parent you own (owner 'research').",
+    );
     // The refusal lands AFTER resolution and BEFORE the write: the creator is
     // knowable only from the row, so the board is read once and nothing is
     // written. Asserting the read (P31) is what makes this a proof that the
     // PREDICATE refused, rather than that the tool never got that far.
     expect(stack.listedOwners()).toEqual(['ops']);
     expect(stack.statusWrites()).toEqual([]);
+    // This row has no `parentId`, so P1-3a's third arm is not even attempted —
+    // the lookup is guarded on the field, not just on the refusal.
+    expect(stack.parentReads()).toEqual([]);
     stack.expectOtherStackUntouched();
   });
 
@@ -374,6 +452,12 @@ describe.each(STACKS)('mission tool authorization — $name', (stack: Stack) => 
     // was refused before the ACL; the extra read is the price of knowing who
     // created the row, and it is charged only on the cross-board branch.
     expect(stack.listedOwners()).toEqual(['ops']);
+    // NEVER ON THE HAPPY PATH. `research` created this row, so owner-or-creator
+    // already answered true and P1-3a's extra read must not have happened. An
+    // implementation that fetched the parent first and asked afterwards would
+    // pass every refusal case above and still charge a second round trip to
+    // every authorized cross-board update.
+    expect(stack.parentReads()).toEqual([]);
     stack.expectOtherStackUntouched();
   });
 
@@ -398,6 +482,127 @@ describe.each(STACKS)('mission tool authorization — $name', (stack: Stack) => 
       expect(stack.listedOwners()).toEqual(['research']);
     }
     stack.expectOtherStackUntouched();
+  });
+
+  // ── P1-3a: "OR WHOSE PARENT IT OWNS" ───────────────────────────────────────
+  //
+  // The third arm of ADR 0009 :93-96, and the one P0-3 could not ship because
+  // it needs `parentId` on the wire (P1-2 put it there). The scenario is the
+  // one hierarchy exists for: `research` owns a piece of work, `ops` owns a
+  // subtask hanging off it that `ops` also opened, and `research` has to be
+  // able to cancel or re-lane its own subtree.
+  //
+  // THE PARENT IS READ BY ID, NOT OFF A BOARD, and that is the whole reason a
+  // second read exists. `resolveBoardMission` is owner-scoped; the parent here
+  // sits on `research`'s board while the row sits on `ops`'s, so an
+  // owner-scoped lookup would answer "not found" for exactly the case being
+  // authorized. `parentReads()` asserts the by-id call, so a regression to a
+  // board scan fails here rather than silently refusing in production.
+
+  it('update_mission lets an agent that owns the PARENT transition the child', async () => {
+    stack.armRow({ ...WIRE_ROW, ownerAgent: 'ops', createdByAgent: 'ops' }, PARENT_ID);
+    stack.armParent('research');
+    const out = await tools.invoke(
+      'update_mission',
+      { mission_id: PREFIX, owner: 'ops', status: 'done' },
+      ctx,
+    );
+
+    if (!stack.carriesHierarchy) {
+      // LEGACY CANNOT REACH THIS ARM, and that is a measured fact rather than a
+      // gap in the fixture: `Mission` is the DynamoDB row type and has no
+      // `parentId`, so `armRow` above dropped it. The tool therefore never
+      // looks for a parent and the refusal is P0-3's, unchanged. Asserted
+      // rather than skipped, so the day legacy grows a hierarchy field this
+      // case says so instead of quietly passing.
+      expect(out.isError).toBe(true);
+      expect(out.text).toBe(
+        "You can only update missions you own, created, or whose parent you own (owner 'research').",
+      );
+      expect(stack.parentReads()).toEqual([]);
+      expect(stack.statusWrites()).toEqual([]);
+      stack.expectOtherStackUntouched();
+      return;
+    }
+
+    expect(out.isError).toBeFalsy();
+    expect(out.text).toBe(`Mission ${PREFIX} → Done.`);
+    // P31: the write REACHED the substrate. A widening that returned the happy
+    // sentence and wrote nothing would satisfy an `isError`-only assertion.
+    const writes = stack.statusWrites();
+    expect(writes.length).toBe(1);
+    expect(writes[0].status).toBe('done');
+    expect(writes[0].id).toBe(MISSION_ID);
+    // And the arrangement itself: the board that was NAMED was listed once,
+    // and the PARENT was fetched by its uuid — not by scanning anyone's board.
+    expect(stack.listedOwners()).toEqual(['ops']);
+    expect(stack.parentReads()).toEqual([PARENT_ID]);
+    stack.expectOtherStackUntouched();
+  });
+
+  it('update_mission refuses when the parent belongs to a THIRD agent', async () => {
+    // The row is `ops`'s and so is its creator; the parent is `main`'s. The
+    // lookup happens and answers, and the answer does not help — which is the
+    // case that separates "the arm was added" from "the arm authorizes anyone
+    // who asks".
+    stack.armRow({ ...WIRE_ROW, ownerAgent: 'ops', createdByAgent: 'ops' }, PARENT_ID);
+    stack.armParent('main');
+    const out = await tools.invoke(
+      'update_mission',
+      { mission_id: PREFIX, owner: 'ops', status: 'cancelled' },
+      ctx,
+    );
+    expect(out.isError).toBe(true);
+    expect(out.text).toBe(
+      "You can only update missions you own, created, or whose parent you own (owner 'research').",
+    );
+    expect(stack.statusWrites()).toEqual([]);
+    expect(stack.parentReads()).toEqual(stack.carriesHierarchy ? [PARENT_ID] : []);
+    stack.expectOtherStackUntouched();
+  });
+
+  it('update_mission refuses a PARENTLESS row without ever looking for a parent', async () => {
+    // The guard is on the FIELD, not on the refusal. A row with no `parentId`
+    // costs exactly what it cost before P1-3a: one board read, no by-id read.
+    stack.armRow({ ...WIRE_ROW, ownerAgent: 'ops', createdByAgent: 'ops' });
+    stack.armParent('research'); // armed, and must go unused
+    const out = await tools.invoke(
+      'update_mission',
+      { mission_id: PREFIX, owner: 'ops', status: 'cancelled' },
+      ctx,
+    );
+    expect(out.isError).toBe(true);
+    expect(out.text).toBe(
+      "You can only update missions you own, created, or whose parent you own (owner 'research').",
+    );
+    expect(stack.parentReads()).toEqual([]);
+    expect(stack.statusWrites()).toEqual([]);
+    stack.expectOtherStackUntouched();
+  });
+
+  it('a parent lookup that THROWS refuses in the tool\u2019s own words, not the transport\u2019s', async () => {
+    if (!stack.carriesHierarchy) {
+      // Nothing on this stack can make the call that fails.
+      expect(stack.parentReads()).toEqual([]);
+      return;
+    }
+    stack.armRow({ ...WIRE_ROW, ownerAgent: 'ops', createdByAgent: 'ops' }, PARENT_ID);
+    stack.breakParentRead(new Error('socket hang up'));
+    // `tools.invoke` wraps a THROWN error as "Tool 'update_mission' failed:
+    // …". Asserting the exact refusal sentence is therefore also the assertion
+    // that nothing escaped: a rejected parent read must not change the error
+    // shape of a decision that was already going to be a refusal.
+    const out = await tools.invoke(
+      'update_mission',
+      { mission_id: PREFIX, owner: 'ops', status: 'cancelled' },
+      ctx,
+    );
+    expect(out.isError).toBe(true);
+    expect(out.text).toBe(
+      "You can only update missions you own, created, or whose parent you own (owner 'research').",
+    );
+    expect(stack.parentReads()).toEqual([PARENT_ID]);
+    expect(stack.statusWrites()).toEqual([]);
   });
 
   // ── ONE IDENTITY STAMPS THE CREATOR AND JUDGES IT ──────────────────────────
@@ -476,7 +681,9 @@ describe.each(STACKS)('mission tool authorization — $name', (stack: Stack) => 
       { agentId: 'main', chatId: 'owner:emmanuel' },
     );
     expect(out.isError).toBe(true);
-    expect(out.text).toBe("You can only update missions you own or created (owner 'main').");
+    expect(out.text).toBe(
+      "You can only update missions you own, created, or whose parent you own (owner 'main').",
+    );
     expect(stack.statusWrites()).toEqual([]);
   });
 });

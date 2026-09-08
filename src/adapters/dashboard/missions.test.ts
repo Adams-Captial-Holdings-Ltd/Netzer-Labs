@@ -662,3 +662,52 @@ describe('ACL-only rungs: gate order and transport-error mapping', () => {
     expect(await res.json()).toEqual({ error: 'internal_error' });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// P1-2 — the hierarchy fields reach the ENVELOPE, and only additively.
+//
+// R1 re-maps nothing: it answers `{owner, count, missions: rows}` with the
+// rows the ACL handed it. That is exactly what this pair pins — that the four
+// additive keys survive the route untouched AND that a row without them is
+// still byte-identical to the legacy stack's answer.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('P1-2: R1 carries the additive hierarchy fields for a Paperclip-backed row', () => {
+  const PARENT = 'bbbbbbbb-2222-4222-8222-222222222222';
+
+  /** A wire row as `toWireMission` builds it: the ten legacy keys, then P1-2's. */
+  const HIERARCHY_ROW = {
+    ...ROW,
+    parentId: PARENT,
+    paperclipStatus: 'blocked',
+    blockerAttention: { state: 'needs_attention', reason: 'attention_required' },
+    childCount: 2,
+  };
+
+  it('passes all four keys through in the ACL\'s order, byte for byte', async () => {
+    acl.listBoardMissions.mockResolvedValue([HIERARCHY_ROW]);
+    const res = await req(build(true), '/missions?owner=main');
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(
+      JSON.stringify({ owner: 'main', count: 1, missions: [HIERARCHY_ROW] }),
+    );
+  });
+
+  it('carries only the two identifier-free blockerAttention keys — no counts, no samples', async () => {
+    // The measured wire object has eight keys and two of them
+    // (`sampleBlockerIdentifier`, `sampleStalledBlockerIdentifier`) are
+    // Paperclip issue identifiers, which this envelope has never exposed.
+    acl.listBoardMissions.mockResolvedValue([HIERARCHY_ROW]);
+    const res = await req(build(true), '/missions?owner=main');
+    const body = (await res.json()) as { missions: Array<Record<string, unknown>> };
+    expect(Object.keys(body.missions[0].blockerAttention as object)).toEqual(['state', 'reason']);
+    expect(await (await req(build(true), '/missions?owner=main')).text()).not.toContain('sampleBlockerIdentifier');
+  });
+
+  it('and a row WITHOUT them is still byte-identical to the legacy stack', async () => {
+    const { legacy, aclRes } = await both('/missions?owner=main');
+    expect(aclRes.text).toBe(legacy.text);
+    for (const key of ['parentId', 'paperclipStatus', 'blockerAttention', 'childCount']) {
+      expect(aclRes.text).not.toContain(key);
+    }
+  });
+});

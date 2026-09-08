@@ -8,6 +8,7 @@ import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { statusLabel } from '../lib/glossary';
+import { parentOf, childrenOf, isBlocked, rawStatusLabel } from '../lib/missions-hierarchy';
 import { useAgentNames } from '../lib/useAgentNames';
 
 // Mirrors the Mission row the missions repo returns (see
@@ -30,6 +31,26 @@ interface Mission {
   assignmentReason?: string;
   createdAt?: string;
   updatedAt?: string;
+  // -- P1-2 hierarchy / blocking fields (OPTIONAL, ADDITIVE) --------------
+  // Server copy: `WireMission` in `src/lib/missions/mission-acl.ts`, whose
+  // shape is declared once in `src/lib/paperclip/mission-projection.ts`
+  // (`MissionHierarchyFields`). `mission-acl.ts` points back at this
+  // interface by name; keep the two in step. A legacy DynamoDB-substrate row carries NONE of
+  // these, which is why every one is optional and why the detail modal
+  // renders no block for such a row.
+  /** A uuid, or an explicit `null` on a root row. */
+  parentId?: string | null;
+  /** Paperclip's RAW status, beside the narrowed public `status` above. */
+  paperclipStatus?: string;
+  /**
+   * The list-row dependency signal, and the ONLY one: the 2026-09-06 P1-1
+   * run measured Paperclip writing `status: 'blocked'` when an issue's RUNS
+   * fail, not when a dependency is unmet, so `status` cannot be read as
+   * dependency state on this artifact.
+   */
+  blockerAttention?: { state: string; reason: string | null };
+  /** Children the server's ONE board read saw. Absent means it saw none. */
+  childCount?: number;
 }
 
 type Column = 'open' | 'in_progress' | 'blocked' | 'in_review' | 'done' | 'cancelled';
@@ -244,6 +265,16 @@ export function Missions() {
 
   const agentOptions = agents.map((a) => ({ value: a.id, label: a.displayName }));
 
+  // Hierarchy for the open mission, derived from the rows this page ALREADY
+  // holds (see `../lib/missions-hierarchy`). In the "All agents" view that is
+  // every loaded agent's board flattened together, so a child owned by another
+  // agent is found here; in a single-owner view it is that one board. Nothing
+  // is fetched: there is no cross-agent list route, and the per-parent children
+  // route is the read amplification the server-side board read avoids.
+  const detailParent = detail ? parentOf(missions, detail) : undefined;
+  const detailChildren = detail ? childrenOf(missions, detail) : [];
+  const detailRawStatus = detail ? rawStatusLabel(detail) : undefined;
+
   return (
     <div>
       <div class="flex items-center justify-between mb-6">
@@ -384,6 +415,14 @@ export function Missions() {
                 <Badge variant={statusBadgeVariant(detail.status)}>{statusLabel(detail.status)}</Badge>
               </span>
               {detail.priority != null && <Badge variant="warning">{statusLabel(detail.priority)}</Badge>}
+              {detailRawStatus && (
+                <span
+                  class="text-caption text-secondary"
+                  title="Paperclip's raw status for this issue. Measured 2026-09-06: `blocked` here means the issue's runs are failing, not that a dependency is unmet."
+                >
+                  Paperclip: {detailRawStatus}
+                </span>
+              )}
             </div>
 
             {detail.body && (
@@ -411,6 +450,81 @@ export function Missions() {
                 </div>
               )}
             </div>
+
+            {detail.parentId && (
+              <div>
+                <p class="text-caption text-secondary font-medium mb-1">Parent</p>
+                {detailParent ? (
+                  <button
+                    type="button"
+                    class="text-body-sm text-primary text-left underline decoration-dotted hover:decoration-solid"
+                    onClick={() => openDetail(detailParent)}
+                  >
+                    {detailParent.title ?? detailParent.id}
+                  </button>
+                ) : (
+                  // Not loaded: its board failed, it belongs to an agent outside
+                  // this view, or it fell past the 100-row server cap. Show the
+                  // id prefix rather than a link that could not open anything.
+                  <p class="text-body-sm text-secondary" title={detail.parentId}>
+                    {detail.parentId.slice(0, 8)}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {(detailChildren.length > 0 || detail.childCount !== undefined) && (
+              <div>
+                <p class="text-caption text-secondary font-medium mb-1">
+                  Children
+                  {detail.childCount !== undefined && detail.childCount !== detailChildren.length && (
+                    <span class="font-normal text-muted">
+                      {' '}
+                      ({detailChildren.length} loaded, {detail.childCount} counted server-side)
+                    </span>
+                  )}
+                </p>
+                {detailChildren.length === 0 ? (
+                  // `childCount` counts only the children the server saw in the
+                  // one owner-scoped read; this view can hold none of them.
+                  <p class="text-body-sm text-secondary">None loaded in this view.</p>
+                ) : (
+                  <div class="space-y-1">
+                    {detailChildren.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        class="flex items-center gap-2 text-left w-full"
+                        onClick={() => openDetail(c)}
+                      >
+                        <span title={c.status}>
+                          <Badge variant={statusBadgeVariant(c.status)}>{statusLabel(c.status)}</Badge>
+                        </span>
+                        <span class="text-body-sm text-primary">{c.title ?? c.id}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {detail.blockerAttention && (
+              <div>
+                <p class="text-caption text-secondary font-medium mb-1">Blockers</p>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span title={detail.blockerAttention.state}>
+                    <Badge variant={isBlocked(detail) ? 'danger' : 'muted'}>
+                      {statusLabel(detail.blockerAttention.state)}
+                    </Badge>
+                  </span>
+                  {detail.blockerAttention.reason && (
+                    <span class="text-body-sm text-secondary" title={detail.blockerAttention.reason}>
+                      {statusLabel(detail.blockerAttention.reason)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {detail.assignmentReason && (
               <div>
