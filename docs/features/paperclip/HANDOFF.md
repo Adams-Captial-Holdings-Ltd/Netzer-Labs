@@ -2,19 +2,25 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-09-07
-as_of_commit: f0c26fbd2824862399d8357d26050662e7644870
+observed_at: 2026-09-08
+as_of_commit: 85737b506998e990f69a411c5b1892714a4f0eef
 ---
 
 # Paperclip integration handoff
 
-- **Branch:** `feat/paperclip-p1-hierarchy` (from `development` `277095e`); Phase 1 close-out; PR pending.
-- **Source state:** Phase 0 merged (#156 -> `development` `0a59063`, #157 -> `qa` `ec65ca5`, #158 -> `staging` `dd16ca4`).
+- **Branch:** `fix/paperclip-p0-0b-image-build` (from `development`, merged up to `271339b`); P0-0b image-build repair; PR pending.
+- **Source state:** Phase 0 merged (#156 -> `development` `0a59063`, #157 -> `qa` `ec65ca5`, #158 -> `staging` `dd16ca4`). **Phase 1 also merged and deployed** (#162 -> `development`, #163 -> `qa`, #164 -> `staging` `4442d86`); `origin/development` is now `271339b` after the War Room table fix (#165).
 - **Deployment:** staging Deploy run [34021795520](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/34021795520) is green. Live verdicts from the Phase 0 live critic (2026-09-06 13:15-13:50Z, staging `dd16ca4`): **P0-1 PASS** (board read live over the tunnel, `CCE_PAPERCLIP_ENABLED=1` confirmed on task definition `:19`); **P0-2 FAIL then fixed on this branch** (every adapter push rejected 400 `invalid_body` -- the pinned image sends `context.issueId`, not top-level `issueId`; Research's adapter had no `url` -- both fixed, critic PASS, live re-check pending this branch's deploy plus the bootstrap repair); **P0-3 refusal/list PASS, update confounded** by the P0-2 dispatch defect cascading into a heartbeat re-block (re-check after P0-2 deploys). Production is untouched.
 
 ## Current objective and required order
 
-**Now (2026-09-07):** read [the Phase 1 hierarchy close-out handoff](handoffs/2026-09-07-p1-hierarchy-closeout.md); its section 6 is the ordered next-action list (Piece E, then Piece F) and section 5 the campaign ledger.
+**Now (2026-09-08):** read [the Phase 0 completion handoff](handoffs/2026-09-08-p0-completion-and-workflows-direction.md). Phase 1 is shipped; what remains is Phase 0's three open items, and two of the three were mis-recorded until this session measured them. Its section 6 is the ordered next-action list and section 5 the campaign ledger.
+
+**Three corrections that change what the next session should do:**
+
+1. **P0-0b's committed fix could not work, and the image proved it.** All three compile packages are `devDependencies`, so under `--omit=dev` npm inferred a dev edge for each and reified none: the install reported `up to date in 3s` having added none of the three packages named on its own command line, and `npx tsc` then fetched the unrelated registry stub `tsc@2.0.4`. Repaired on this branch (isolated install prefix + `node node_modules/typescript/bin/tsc`), with a real image gate.
+2. **A61's "report a run disposition" fix is struck.** Measured against the live service: `disposition`, `complete`, `completion`, `succeed` and `result` match **no** path. The only run-lifecycle writes are `POST /api/heartbeat-runs/{runId}/cancel` and `/watchdog-decisions`, and the latter is a watchdog control (`snooze` / `continue` / `dismissed_false_positive`). There is no channel to report a run's outcome; the issue-level claim must carry A61 alone.
+3. **A62 is struck: the recorded cause is false.** `createdByAgentId` is null on 0 of 18 live rows, all three research-board rows read `createdByAgent=main` through our own ACL, and `slugForUuid` throws rather than returning `'paperclip'`. The real P0-3 failure is that **Paperclip refuses the write**: our ACL authorises a cross-board update, then `PATCH /api/issues/{id}` returns 403 because every write goes out with the acting agent's key and Paperclip scopes writes to the assignee.
 
 Superseding order (owner, 2026-09-05): the campaign now follows [missions-engine-plan.md](missions-engine-plan.md): P0-0 image-build timeout (own PR), Phase 0 arm and collaborate, Phase 1 hierarchy, 8.5, the board bridge on missions.staging.pgnos.ai, then 10, 11, 12. The numbered list below is the 2026-09-03 state and stays as history.
 
@@ -25,7 +31,21 @@ Superseding order (owner, 2026-09-05): the campaign now follows [missions-engine
 3. P0-2 -- the same live critic found the dispatch defect (every push 400 `invalid_body`: the pinned image nests the issue id under `context.issueId`, not top-level) and the Research-adapter defect (no `url`, so Paperclip escalated Research issues to Main within ~1 s). Both are **fixed on this branch** (`fix/paperclip-p0-2-dispatch-push`): critic PASS for the dispatch-parser fix (round 2) and the bootstrap-reconcile fix (round 1); live proof waits for this branch's deploy plus an operator bootstrap run with `PAPERCLIP_DISPATCH_SLUGS=main,research`.
 4. P0-3 -- **live PASS** for refusal and list (byte-identical refusal message; correct empty-board read); the update case was **confounded** by the P0-2 dispatch defect cascading into a heartbeat re-block -- re-check once P0-2 deploys.
 
-This branch, `fix/paperclip-p0-2-dispatch-push`, lands the P0-2 dispatch-parser and bootstrap-reconcile fixes on top of the already-deployed Phase 0 work. Phase 0 is now deployed to staging (run 34021795520) and the live critic has run once end to end; the remaining work is: deploy this branch, run the bootstrap repair over the tunnel, then re-run the live critic for P0-2 and P0-3's update case. Phase 8.5, the same-origin UI/session bridge and Phases 10-12 follow Phase 0 and Phase 1 in missions-engine-plan.md. Production needs its own go-ahead.
+#### What is actually left (measured 2026-09-07/08)
+
+| item | state |
+|---|---|
+| **P0-0b** image build | **code done** on this branch; image gate 3/3 green. Owes: full-image build, arm64/QEMU lane, full suite in both flag states, ladder. |
+| **P0-2c / A61** dispatch disposition loop | characterisation **done**; fix 3 **struck** (no disposition route exists). The issue-level in-flight claim is unwritten and is now the whole fix. |
+| **P0-3b / A62** | **struck.** Provenance is correct; the real refusal is Paperclip's own authorisation boundary. Owner ruled: execute as the owner. **May become unnecessary** under the Workflows direction -- ask before building. |
+
+**P0-3's live acceptance is unachievable as written.** `client.ts` sends every write with the acting agent's key and `config.ts` records `reconcilerKey`/`dispatchSecret` as deliberately absent, while Paperclip scopes issue writes to the assignee. Owner ruling (2026-09-07): Netzar's ACL stays the authority on *who may act*; once it authorises, the write is sent with the **assignee's** key so Paperclip accepts it, and the audit row must then record actor-vs-executor.
+
+**Production is untouched and Paperclip has never run there.** `claudeclaw-orchestrator:13` is both running and latest ACTIVE and carries no `CCE_PAPERCLIP_ENABLED`; `claudeclaw-mission-tasks` holds 8 rows, all legacy `MISSION#`, zero `PROVENANCE#`. Query ECS container env **by name** -- index 0 is `cloudflared`, 1 is `xray-daemon`, so an index-based query returns a false empty.
+
+**Direction (owner, 2026-09-07): "Workflows".** Keep all of Paperclip's features and surface them in Netzar under a tab named **Workflows**, restyled to our palette, rather than reimplementing them. Paperclip serves a full SPA and ships white-labelling (`/api/companies/{cid}/branding`, `/logo`, and a `PAPERCLIP_RUNTIME_BRANDING_START` slot in the app shell), so restyling is configuration, not code. `workflow*` appears zero times in Paperclip's 475 routes and nowhere in the Netzar SPA, so the name is free on both sides; Paperclip's own `project` (a dated milestone and a credential/billing boundary) stays internal and never becomes our noun. The repeatable-run primitive is Paperclip's **routine**. Ownership split: Paperclip owns the surface and the work model, Netzar owns the agents, Bedrock spend, kill switches, audit and seats. **Do not rename the agent tools** -- `tool-policy.ts` blocks `create_mission` by raw string with zero test coverage, so renaming fails open silently.
+
+Phase 8.5, the same-origin UI/session bridge and Phases 10-12 follow Phase 0 in missions-engine-plan.md. Production needs its own go-ahead.
 
 ### History (2026-09-03)
 
