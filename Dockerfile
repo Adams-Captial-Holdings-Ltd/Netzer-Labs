@@ -34,26 +34,64 @@ RUN npx vite build
 
 # ─────────────────────────────────────────────────────────────────────
 # Stage 2b · build
-# Install full deps (including TypeScript), compile src/ to dist/.
+# Inherit the deps stage tree, add just the compiler, compile src/ to dist/.
 # ─────────────────────────────────────────────────────────────────────
-FROM public.ecr.aws/docker/library/node:20-alpine AS build
+FROM deps AS build
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-
-# The build-stage npm install ran 259 s in green run 33783021194; two attempts
-# in the 2026-09-03 session died here with `read ETIMEDOUT` at ~266-274 s. npm's
-# default fetch-timeout is 300000 ms (proved with `npm config get fetch-timeout`
-# on npm 11.17.0 locally; the image runs npm 10.x, same option name).
-# 600000 doubles that bound - slack for a slow arm64/QEMU read, still finite.
+# This stage used to `npm install` the full dev tree, and that install is where
+# the image build dies: run 34045747255 attempt 1 failed here with
+# `npm error code ETIMEDOUT` at 268.6 s (the install runs 182-274 s; the ledger
+# records two more deaths, and every attempt 2 passed). The ENV below was
+# already set for that run and did NOT prevent it: the kernel socket timeout
+# fires before npm's own fetch-timeout, and npm already retries ETIMEDOUT
+# (make-fetch-happen RETRY_ERRORS, fetch-retries 2). The knob is not the fix; it
+# stays only because a longer, still-finite bound costs nothing.
 ENV npm_config_fetch_timeout=600000
+
+# The fix is to stop downloading what the compile never reads. `FROM deps`
+# inherits /app with the 265-package runtime tree and the manifests, so neither
+# is re-fetched here. tsconfig.build.json compiles src/ only (it excludes infra,
+# scripts, web and tests), and nothing under src imports aws-cdk-lib (117 MB,
+# 7,847 files), constructs, vitest, tsx or pino-pretty. Beyond deps the compile
+# needs exactly these three - @types/node is already a non-dev dependency.
+# Versions come from package-lock.json and are asserted against it by
+# scripts/lib/lifecycle/orchestrator-dockerfile.test.ts, so a lockfile bump
+# fails that test instead of drifting here.
+#
+# THE THREE INSTALL IN AN EMPTY DIRECTORY, NOT IN /app. That isolation is the
+# whole fix, and it is why `--omit=dev` is gone from this line. Installed against
+# /app's manifest the three reified NOTHING, because all three are
+# devDependencies: npm infers a dev edge for any name already in
+# devDependencies, `--no-save` only suppresses the manifest write, and a node
+# marked dev under `--omit=dev` is treated as undefined for diffing. Measured in
+# the image rather than argued: the install reported `up to date in 3s` having
+# added none of the three packages named on its own command line, and the `npx
+# tsc` below then fetched the unrelated registry stub `tsc@2.0.4` ("This is not
+# the tsc command you are looking for"), killing the stage.
+# /opt/compiler carries no package.json, so npm has no dev edge to infer and the
+# three install as ordinary dependencies. They are then placed beside the runtime
+# tree so `tsc` and `@types` resolution find them where they expect to.
+# The dev tree is still never downloaded: only these three names are named here.
+# Proof: scripts/lib/lifecycle/orchestrator-dockerfile.build.integration.test.ts
 RUN --mount=type=cache,target=/root/.npm \
-    npm install --ignore-scripts --no-audit --no-fund
+    mkdir -p /opt/compiler && cd /opt/compiler && \
+    npm install --no-save --ignore-scripts --no-audit --no-fund \
+      typescript@5.9.3 @types/pdfkit@0.17.6 @types/ws@8.18.1 && \
+    mkdir -p /app/node_modules/@types && \
+    cp -r /opt/compiler/node_modules/typescript /app/node_modules/ && \
+    cp -r /opt/compiler/node_modules/@types/pdfkit /app/node_modules/@types/ && \
+    cp -r /opt/compiler/node_modules/@types/ws /app/node_modules/@types/
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 
-RUN npx tsc -p tsconfig.build.json
+# Invoked through node against the package's own bin, NOT through `npx`. `npx`
+# resolves a missing binary by FETCHING one from the registry: when the compiler
+# was absent it silently installed the unrelated package `tsc@2.0.4`, whose bin
+# prints "This is not the tsc command you are looking for" and exits 1. A build
+# stage must never reach the network to find its compiler, and this form cannot.
+RUN node node_modules/typescript/bin/tsc -p tsconfig.build.json
 # TypeScript doesn't emit non-TS files. Copy the static SPA assets next
 # to the compiled dashboard/spa.js so the runtime fs.readFile finds them.
 RUN cp -r src/adapters/dashboard/public dist/adapters/dashboard/public
