@@ -47,9 +47,13 @@ import {
   verifyAgainstRoots,
   type RotationDoc,
 } from '../lib/release/signing.js';
+import {
+  parsePromotionAttestation,
+  verifyPromotionAttestation,
+} from '../lib/release/promotion.js';
 
 /** Upstream repo the real fetcher composes GitHub releases URLs from. */
-export const RELEASE_REPO = 'emmanuelmadams4-lgtm/Netzer-Labs';
+export const RELEASE_REPO = 'Adams-Captial-Holdings-Ltd/Netzer-Labs';
 
 /** Managed directory for worktrees + verified artifacts, relative to primary. */
 export const UPDATE_DIR = '.cce-update';
@@ -59,6 +63,14 @@ export interface ShimFetcher {
   fetchMetadata(tag: string): Promise<string>;
   fetchArtifactManifest(tag: string): Promise<string>;
   fetchSignature(tag: string): Promise<string>;
+  /**
+   * promotion-attestation.json for a FINAL v* tag. MUST reject when the asset
+   * is absent: a v* tag without one is an unpromoted artifact wearing a final
+   * name, and "missing" must never read as "fine". Deliberately NOT
+   * `string | null` — RetentionFetcher's same-named method is nullable because
+   * it REPORTS; this one GATES.
+   */
+  fetchPromotionAttestation(tag: string): Promise<string>;
   /** The published rotation chain; empty when no key has ever rotated. */
   fetchRotationDocs(): Promise<RotationDoc[]>;
 }
@@ -145,6 +157,44 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * Version part of a release tag: rc/v1.2.3 and v1.2.3 both -> "1.2.3".
+ *
+ * compareVersions maps every non-numeric segment to 0, so comparing a raw
+ * "rc/v1.2.0" against "v1.1.0" yields [0,2,0] vs [1,1,0] — NEGATIVE, which
+ * would refuse every forward release candidate. Normalize the input; never
+ * the comparator (it is pinned by shim.test.ts and used by the Node/npm gates).
+ */
+function tagVersion(tag: string): string {
+  return tag.replace(/^rc\//, '');
+}
+
+/**
+ * Path of any `tag`/`channel` key ANYWHERE inside a parsed value, else null.
+ *
+ * signing.ts strips CHANNEL_KEYS at the TOP LEVEL only (defined at :64,
+ * filtered at :87-90) and then sortKeysDeep recurses without filtering, so a
+ * nested one — imageDigests.tag — DOES reach the signed bytes. That would make
+ * an rc and its promoted final different artifacts and break promotion by
+ * construction. Top-level keys are already gone by the time this runs, so a
+ * plain "anywhere" walk can only fire on the nested case.
+ */
+function findChannelKey(value: unknown, path = 'payload'): string | null {
+  if (Array.isArray(value)) {
+    for (const [i, v] of value.entries()) {
+      const hit = findChannelKey(v, `${path}[${i}]`);
+      if (hit) return hit;
+    }
+  } else if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (k === 'tag' || k === 'channel') return `${path}.${k}`;
+      const hit = findChannelKey(v, `${path}.${k}`);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /** Filesystem-safe directory segment for a tag (rc/v1.2.3 -> rc-v1.2.3). */
 export function tagDirSegment(tag: string): string {
   return tag.replace(/\//g, '-');
@@ -162,7 +212,7 @@ export function verifyReleaseArtifacts(input: {
   signatureJson: string;
   rotationDocs: readonly RotationDoc[];
   pinnedRoots: readonly string[];
-}): { metadata: ReleaseMetadata; warnings: string[] } {
+}): { metadata: ReleaseMetadata; warnings: string[]; roots: string[] } {
   if (input.pinnedRoots.length === 0) {
     throw new Error(
       'no trust roots are pinned (scripts/update/trust-roots.ts is empty). This build ' +
@@ -175,6 +225,16 @@ export function verifyReleaseArtifacts(input: {
   const roots = applyRotations(input.pinnedRoots, input.rotationDocs);
 
   const sigArtifact = parseSignatureArtifact(input.signatureJson);
+
+  const smuggled = findChannelKey(sigArtifact.payload);
+  if (smuggled) {
+    throw new Error(
+      'release verification FAILED: the signed payload carries channel identity at ' +
+        `${smuggled}. The release signature must be tag-free so an rc and its promoted ` +
+        'final are the same artifact; a nested tag/channel key defeats that.',
+    );
+  }
+
   const { metadata, warnings } = parseReleaseMetadata(input.metadataJson);
 
   // The signed payload binds the metadata via the IMMUTABLE hash (tag
@@ -225,7 +285,10 @@ export function verifyReleaseArtifacts(input: {
     );
   }
 
-  return { metadata, warnings };
+  // `roots` is returned so callers gate the promotion attestation against the
+  // ROTATED set, not the pinned one — otherwise the first key rotation bricks
+  // updates during exactly the incident a rotation responds to.
+  return { metadata, warnings, roots };
 }
 
 /** The shim itself. Throws on any abort; the entry maps that to exit 1. */
@@ -257,6 +320,17 @@ export async function runShim(opts: ShimOptions): Promise<ShimResult> {
         BUILD_LOCAL_GUIDANCE,
     );
   }
+  // Refuse a replay BEFORE a byte is fetched. Equal versions are allowed: an
+  // rc and its final of the same version are the same commit and the same
+  // digests by construction, so re-installing one is not a downgrade.
+  if (compareVersions(tagVersion(targetTag), tagVersion(installedTag)) < 0) {
+    throw new Error(
+      `"${targetTag}" is OLDER than the installed release "${installedTag}"; the updater ` +
+        'only moves forward. Rolling back is a separate, deliberate operation ' +
+        '(npm run deploy:rollback) — a replayed older release is how a downgrade attack ' +
+        'reintroduces a vulnerability you already patched. Nothing was changed.',
+    );
+  }
   log(`installed: ${installedTag} -> target: ${targetTag}`);
 
   // (c) fetch the release artifacts (network behind the injected fetcher).
@@ -268,7 +342,7 @@ export async function runShim(opts: ShimOptions): Promise<ShimResult> {
   ]);
 
   // (d) verify-then-exec: any failure here happens BEFORE a worktree exists.
-  const { metadata, warnings } = verifyReleaseArtifacts({
+  const { metadata, warnings, roots } = verifyReleaseArtifacts({
     metadataJson,
     artifactManifestJson,
     signatureJson,
@@ -277,6 +351,37 @@ export async function runShim(opts: ShimOptions): Promise<ShimResult> {
   });
   for (const w of warnings) log(`warning: ${w}`);
   log(`signature verified for commit ${metadata.commit}`);
+
+  // (d2) A FINAL tag must carry a promotion attestation binding THESE artifacts
+  // to THIS tag. The release signature is deliberately tag-free (signing.ts
+  // strips tag/channel before signing, which is what lets an rc and its final
+  // share one signature), so without this an rc's signature is a valid
+  // signature for any tag an attacker chooses to serve it under.
+  if (TRUSTED_INSTALLED_TAG_RE.test(targetTag)) {
+    const att = parsePromotionAttestation(
+      await opts.fetcher.fetchPromotionAttestation(targetTag),
+    );
+    // verifyPromotionAttestation NEVER throws — it returns {ok, problems}.
+    // Ignoring the return value here would be an invisible fail-open.
+    const { ok, problems } = verifyPromotionAttestation(roots, att, {
+      finalTag: targetTag,
+      commit: metadata.commit,
+      // The metadata digests, not the signed payload map: the loop above has
+      // already proven each equals the signed one, and the payload map may
+      // legitimately be a superset (which would read as a platform mismatch).
+      imageDigests: Object.fromEntries(metadata.images.map((i) => [i.platform, i.digest])),
+    });
+    if (!ok) {
+      throw new Error(
+        `release verification FAILED: the promotion attestation for ${targetTag} does not ` +
+          `bind these artifacts to that tag:\n  - ${problems.join('\n  - ')}\n` +
+          'The release signature is deliberately tag-free, so the attestation is the ONLY ' +
+          'thing asserting this artifact was promoted to this tag. Refusing to execute any ' +
+          'target-release code (verify-then-exec).',
+      );
+    }
+    log(`promotion attestation verified: ${targetTag} is the promoted rc artifact`);
+  }
 
   // (e) bootstrap prerequisites BEFORE any target code executes.
   const { minNode, minNpm } = metadata.bootstrapPrerequisites;

@@ -1,0 +1,212 @@
+name: Release
+
+# Builds and publishes the signed release artifact set for a release tag.
+#
+#   rc/v*  -> metadata.json, artifact-manifest.json, signature.json
+#   v*     -> those three PLUS a signed promotion-attestation.json
+#
+# The final tag is a RE-TAG of the rc commit, never a rebuild: the signed
+# payload is tag-free by construction (scripts/lib/release/signing.ts), so both
+# tags carry byte-identical signatures. What binds an artifact set to a final
+# tag is the promotion attestation, signed here — see ADR 0011.
+#
+# NOT YET EXERCISED. No release has been cut, RELEASE_SIGNING_KEY does not
+# exist, and the orchestrator image-digest step this depends on lives in
+# deploy.yml and has not been written. Treat every step below as unproven.
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'rc/v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build (v1.0.0 or rc/v1.0.0)'
+        required: true
+        type: string
+      images:
+        description: 'JSON array of {platform, digest, publicRepo} for this release'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build + sign release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # build-release resolves <tag>^{commit}
+
+      - name: Setup Node 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve the release tag
+        id: tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${DISPATCH_TAG:-${GITHUB_REF#refs/tags/}}"
+          case "$TAG" in
+            v[0-9]*)     KIND=final ;;
+            rc/v[0-9]*)  KIND=rc ;;
+            *) echo "::error::'$TAG' is not a release tag (expected v1.2.3 or rc/v1.2.3)"; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          echo "dir=${TAG//\//-}" >> "$GITHUB_OUTPUT"
+          echo "Release $TAG ($KIND)"
+
+      # Fail closed rather than invent a digest. A placeholder here would be
+      # baked into signed, immutable metadata and could never be corrected.
+      # The producing step belongs in deploy.yml (filed, not yet written); a
+      # tag-triggered run cannot fall back to ECR because the OIDC trust is
+      # pinned to refs/heads/production|staging.
+      - name: Resolve image digests
+        id: images
+        env:
+          DISPATCH_IMAGES: ${{ inputs.images }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISPATCH_IMAGES:-}" ]; then
+            echo "::error::no image digests available for this release."
+            echo "::error::The orchestrator digest step (deploy.yml) does not exist yet, so a"
+            echo "::error::tag push cannot resolve one. Re-run via workflow_dispatch and pass"
+            echo "::error::the 'images' input: [{\"platform\":\"linux/arm64\",\"digest\":\"sha256:...\",\"publicRepo\":\"\"}]"
+            exit 1
+          fi
+          printf '%s' "$DISPATCH_IMAGES" > images.json
+          node -e '
+            const i = JSON.parse(require("fs").readFileSync("images.json","utf8"));
+            if (!Array.isArray(i) || i.length === 0) throw new Error("images must be a non-empty array");
+            for (const x of i) {
+              if (typeof x.platform !== "string" || !x.platform) throw new Error("each image needs a platform");
+              if (typeof x.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(x.digest)) {
+                throw new Error(`bad digest for ${x.platform}: ${x.digest}`);
+              }
+            }
+            console.log(`${i.length} image digest(s) accepted`);
+          '
+
+      - name: Write the signing key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is not set. It is created once, by the key"
+            echo "::error::ceremony in scripts/release/generate-keys.sh. Until then no release"
+            echo "::error::can be signed and this workflow cannot run."
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$RELEASE_SIGNING_KEY" > signing.pem
+          openssl pkey -in signing.pem -pubout -out signing.pub.pem
+
+      - name: Build the release artifacts
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          node scripts/release/build-release.mjs \
+            --tag "$TAG" \
+            --key signing.pem \
+            --pub signing.pub.pem \
+            --images images.json \
+            --out dist-release
+
+      # Final tags only. sign-promotion refuses unless rcTag === "rc/" + finalTag,
+      # which is the check that keeps a self-promotion from being signed —
+      # verifyPromotionAttestation never looks at rcTag.
+      - name: Sign the promotion attestation
+        if: steps.tag.outputs.kind == 'final'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          COMMIT="$(git rev-parse "${TAG}^{commit}")"
+          npx tsx scripts/release/sign-promotion-entry.ts \
+            --final-tag "$TAG" \
+            --rc-tag "rc/$TAG" \
+            --commit "$COMMIT" \
+            --images images.json \
+            --key signing.pem \
+            --out dist-release
+
+      - name: Check what the release publishes
+        env:
+          DIR: ${{ steps.tag.outputs.dir }}
+          KIND: ${{ steps.tag.outputs.kind }}
+        run: |
+          set -euo pipefail
+          ls -l "dist-release/$DIR"
+          for f in metadata.json artifact-manifest.json signature.json; do
+            test -s "dist-release/$DIR/$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          if [ "$KIND" = "final" ]; then
+            test -s "dist-release/$DIR/promotion-attestation.json" \
+              || { echo "::error::a final tag must publish a signed promotion-attestation.json"; exit 1; }
+          fi
+
+      - name: Publish the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          DIR: ${{ steps.tag.outputs.dir }}
+          KIND: ${{ steps.tag.outputs.kind }}
+        run: |
+          set -euo pipefail
+          ASSETS="dist-release/$DIR/metadata.json dist-release/$DIR/artifact-manifest.json dist-release/$DIR/signature.json"
+          if [ "$KIND" = "final" ]; then
+            ASSETS="$ASSETS dist-release/$DIR/promotion-attestation.json"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            gh release upload "$TAG" $ASSETS --clobber
+          else
+            # shellcheck disable=SC2086
+            gh release create "$TAG" $ASSETS \
+              --title "$TAG" \
+              --notes "Signed release artifacts for $TAG." \
+              $([ "$KIND" = "rc" ] && echo --prerelease)
+          fi
+
+      # Retention: every in-window predecessor must still be fully fetchable.
+      # A pruned stepping-stone strands every adopter behind it, permanently.
+      - name: Verify retention of in-window releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          WINDOW="$(node -e '
+            const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            process.stdout.write(m.supportWindow?.directFrom ?? "");
+          ' "dist-release/${{ steps.tag.outputs.dir }}/metadata.json")"
+          if [ -z "$WINDOW" ]; then
+            echo "no supportWindow.directFrom on this release — nothing to retain yet"
+            exit 0
+          fi
+          npx tsx scripts/lib/release/retention-fetcher.ts --tags "$WINDOW,$TAG"
+
+      - name: Shred the signing key
+        if: always()
+        run: rm -f signing.pem signing.pub.pem

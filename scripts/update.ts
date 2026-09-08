@@ -33,6 +33,8 @@ const primaryDir = dirname(dirname(__filename));
 export const ASSET_METADATA = 'metadata.json';
 export const ASSET_ARTIFACT_MANIFEST = 'artifact-manifest.json';
 export const ASSET_SIGNATURE = 'signature.json';
+/** Final v* tags only; its absence is an abort, never a shrug. */
+export const ASSET_PROMOTION_ATTESTATION = 'promotion-attestation.json';
 /** Rotation chain lives at a stable raw URL on the default branch. */
 export const ROTATION_DOCS_PATH = 'release-keys/rotations.json';
 
@@ -54,8 +56,15 @@ const fetcher: ShimFetcher = {
   fetchMetadata: (tag) => fetchText(assetUrl(tag, ASSET_METADATA)),
   fetchArtifactManifest: (tag) => fetchText(assetUrl(tag, ASSET_ARTIFACT_MANIFEST)),
   fetchSignature: (tag) => fetchText(assetUrl(tag, ASSET_SIGNATURE)),
+  // fetchText throws on !res.ok, so a 404 aborts the update. Do NOT add a
+  // `404 -> ''` branch here: that is correct for the rotation feed below
+  // (no key has ever rotated) and a silent fail-open for this one.
+  fetchPromotionAttestation: (tag) => fetchText(assetUrl(tag, ASSET_PROMOTION_ATTESTATION)),
   fetchRotationDocs: async (): Promise<RotationDoc[]> => {
-    const url = `https://raw.githubusercontent.com/${RELEASE_REPO}/main/${ROTATION_DOCS_PATH}`;
+    // HEAD, not a branch name: there is no `main` here (the default branch is
+    // `development`), and a 404 is swallowed into [] below — so a hardcoded
+    // branch silently disables the whole rotation chain.
+    const url = `https://raw.githubusercontent.com/${RELEASE_REPO}/HEAD/${ROTATION_DOCS_PATH}`;
     const res = await fetch(url, { redirect: 'follow' });
     if (res.status === 404) return []; // no key has ever rotated
     if (!res.ok) throw new Error(`fetch rotation docs failed: HTTP ${res.status}`);

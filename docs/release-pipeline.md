@@ -6,7 +6,7 @@ This page is the end-to-end story of how releases are cut, signed, promoted, ret
 
 ## The artifact set
 
-Each release tag publishes four files as GitHub release assets, assembled by [`scripts/release/build-release.mjs`](../scripts/release/build-release.mjs):
+Each **final** release tag publishes four files as GitHub release assets, assembled by [`scripts/release/build-release.mjs`](../scripts/release/build-release.mjs). An `rc/v*` tag publishes the first three; the promotion attestation is a final-tag artifact and is signed at promotion by [`scripts/release/sign-promotion.ts`](../scripts/release/sign-promotion.ts):
 
 | Asset | Contract | Purpose |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ Neither `v*` nor `rc/v*` ever triggers a customer deploy. Deploy triggers live i
 
 Direct upgrades are supported from N-1 only; older installs upgrade as a chain of sequential N-1 hops (plan item 49). Every hop needs its release fully intact upstream: a pruned stepping-stone strands every adopter behind it, permanently. So the retention contract says: **every release inside the support window keeps its tag, signed metadata, artifact manifest, signature, images, promotion attestation, and verification keys fetchable upstream**.
 
-This is verified, not promised: release CI runs [`verifyRetention()`](../scripts/lib/release/artifact-retention.ts) over the in-window release list on every release and fails the release if any artifact of any in-window predecessor has gone missing. The check reports the full damage at once rather than stopping at the first hole.
+The check that enforces this is [`verifyRetention()`](../scripts/lib/release/artifact-retention.ts), driven by the concrete [`RetentionFetcher`](../scripts/lib/release/retention-fetcher.ts) and wired into [`release.yml`](../.github/workflows/release.yml), which runs it over the in-window release list and fails the release if any artifact of any in-window predecessor has gone missing. It reports the full damage at once rather than stopping at the first hole. **That workflow has never run** — no release has been cut and the signing key ceremony has not happened, so treat this as wired-but-unproven rather than as a control with a track record.
 
 ## Distribution: ECR Public is distribution only
 
@@ -97,7 +97,7 @@ Everything in this page's tooling exists and is unit-tested against fakes **toda
 | --- | --- | --- |
 | Release signing keypair | the KEY CEREMONY: run [`scripts/release/generate-keys.sh`](../scripts/release/generate-keys.sh) once | private key → release-signing environment only (CI secret or offline); public key → `TRUST_ROOTS` in [`trust-roots.ts`](../scripts/update/trust-roots.ts) and the published `release-keys/` location |
 | Public ECR gallery | `aws ecr-public create-repository --region us-east-1` in the distribution account (the ECR Public control plane is served only from us-east-1, regardless of the account's default region) | `publicRepo` values in each release's metadata |
-| First release artifacts | release CI calls `build-release.mjs` at tag time, uploads the four assets | GitHub release assets for the tag |
+| First release artifacts | [`release.yml`](../.github/workflows/release.yml) calls `build-release.mjs` at tag time and uploads three assets for an `rc/v*` tag, four for a final `v*` | GitHub release assets for the tag |
 | The shim itself, shipped | the trust-roots commit + this tooling are IN the first release | every adopter's checkout, so the SECOND release's upgrade canary has an updater to test (plan item 50) |
 
 Until the ceremony happens, `TRUST_ROOTS` is empty and the shim refuses to update. That refusal is correct pre-release behavior, not a bug: an updater with nothing pinned has nothing to verify against, and verify-then-exec means it must not run.

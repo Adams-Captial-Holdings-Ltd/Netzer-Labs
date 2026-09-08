@@ -2,6 +2,10 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { assembleRelease } from '../release/build-release.js';
 import {
+  createPromotionAttestation,
+  serializePromotionAttestation,
+} from '../lib/release/promotion.js';
+import {
   BUILD_LOCAL_GUIDANCE,
   compareVersions,
   runShim,
@@ -26,7 +30,7 @@ const COMMIT = 'c'.repeat(40);
 const DIGEST = `sha256:${'d'.repeat(64)}`;
 
 function releaseFiles(priv: string, pub: string, tag = 'v1.1.0', minNode = '20.0.0') {
-  return assembleRelease({
+  const files = assembleRelease({
     tag,
     commit: COMMIT,
     privKeyPem: priv,
@@ -35,6 +39,19 @@ function releaseFiles(priv: string, pub: string, tag = 'v1.1.0', minNode = '20.0
     provenance: 'test-build',
     minNode,
   }).files;
+  // assembleRelease emits only the UNSIGNED skeleton (sig: '<signed at
+  // promotion>'), so a final tag needs a genuinely signed one to get past the
+  // shim's promotion gate.
+  const finalTag = tag.replace(/^rc\//, '');
+  files['promotion-attestation.json'] = serializePromotionAttestation(
+    createPromotionAttestation(priv, {
+      finalTag,
+      rcTag: `rc/${finalTag}`,
+      commit: COMMIT,
+      imageDigests: { 'linux/arm64': DIGEST },
+    }),
+  );
+  return files;
 }
 
 interface Recorded {
@@ -67,6 +84,13 @@ function fakes(opts: {
       fetchSignature: async () => {
         calls.push('fetchSignature');
         return sigJson;
+      },
+      fetchPromotionAttestation: async () => {
+        calls.push('fetchPromotionAttestation');
+        const json = opts.files['promotion-attestation.json'];
+        // The real fetcher throws on a 404; model an absent asset the same way.
+        if (json === undefined) throw new Error('fetch attestation failed: HTTP 404 Not Found');
+        return json;
       },
       fetchRotationDocs: async () => [],
     },
@@ -151,6 +175,7 @@ describe('runShim — happy path', () => {
       'fetchMetadata',
       'fetchArtifactManifest',
       'fetchSignature',
+      'fetchPromotionAttestation',
       'worktreeAdd',
       'npmCi',
       'execRunner',
