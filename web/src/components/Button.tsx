@@ -1,9 +1,21 @@
-import { ComponentChildren } from 'preact';
+import { ComponentChildren, JSX } from 'preact';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type Size = 'sm' | 'md' | 'lg';
 
-interface ButtonProps {
+/**
+ * Anything a native <button> accepts, minus the names this component gives its
+ * own meaning to. Added so callers can pass `aria-label`, `title`, `id`,
+ * `tabIndex`, `style` and `data-*` — none of which had a route through here
+ * before, which is why an icon-only Button could not be given an accessible
+ * name at all. Nothing about the existing props changes.
+ */
+type PassThrough = Omit<
+  JSX.HTMLAttributes<HTMLButtonElement>,
+  'children' | 'class' | 'className' | 'size' | 'icon' | 'loading' | 'type' | 'disabled' | 'onClick'
+>;
+
+interface ButtonProps extends PassThrough {
   children?: ComponentChildren;
   variant?: Variant;
   size?: Size;
@@ -38,9 +50,13 @@ export function Button({
   class: className = '',
   type = 'button',
   onClick,
+  ...rest
 }: ButtonProps) {
   return (
     <button
+      // Spread FIRST so the explicit props below always win a name collision;
+      // a caller cannot accidentally re-enable a disabled button.
+      {...rest}
       type={type}
       disabled={disabled || loading}
       onClick={onClick}

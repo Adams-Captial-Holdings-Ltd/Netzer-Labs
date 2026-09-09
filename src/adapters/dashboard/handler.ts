@@ -128,6 +128,9 @@ import {
 import { autoAssign } from '../../lib/tools/mission-tools.js';
 import { addonConfigured, listAddons } from '../../lib/addons/registry.js';
 import { exportChatData, purgeChatData } from '../../lib/tools/privacy-tools.js';
+import { getMeeting } from '../../lib/warroom/meetings-repo.js';
+import { getHistory } from '../../lib/warroom/publisher.js';
+import { buildPdf, toPdfSafeText } from '../../lib/documents/pdf.js';
 import {
   saveAgentFile,
   listRevisions,
@@ -3002,6 +3005,76 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
     const session = await getSession(agentId, chatId);
     return c.json({ turns: session?.turns ?? [] });
+  });
+
+  // War Room transcript PDF. Deliberately NOT under /api/warroom/* (that's
+  // buildWarroomRouter in warroom.ts) so this router's own middleware — bearer
+  // auth, dashboard_read_disabled, requiredRole (GET -> viewer) — is the only
+  // one that runs; it then mirrors warroom.ts's own read gate (warroom:read
+  // capability + the warroom_disabled kill switch) by hand.
+  router.get('/warroom-transcripts/:id', async (c) => {
+    if (!(await hasCapability(c, 'warroom:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'warroom:read' }, 403);
+    }
+    const disabled = await isKillSwitchActive('warroom_disabled').catch(() => ({ active: false }));
+    if (disabled.active) return c.json({ error: 'war room disabled' }, 503);
+
+    const meetingId = c.req.param('id');
+    const meeting = await getMeeting(meetingId);
+    if (!meeting) return c.json({ error: 'not_found' }, 404);
+
+    // Page through the FULL history — getHistory returns one DDB page (default
+    // limit 100) — so a room with >100 turns isn't silently truncated.
+    const turns: Awaited<ReturnType<typeof getHistory>> = [];
+    let sinceSeq = 0;
+    for (;;) {
+      const page = await getHistory(meetingId, sinceSeq, 100);
+      turns.push(...page);
+      if (page.length < 100) break;
+      sinceSeq = page[page.length - 1]!.seq;
+    }
+
+    // pdfkit's built-in Helvetica is WinAnsi, so `buildPdf` REFUSES anything
+    // outside it rather than emit a garbled file. That refusal is right for a
+    // document the caller authored and wrong here: nobody controls what an
+    // agent puts in a reply, and a single emoji would otherwise fail the whole
+    // export. Substitute instead, so the transcript always downloads.
+    const title = toPdfSafeText(meeting.title || 'War Room');
+    let buf: Buffer;
+    try {
+      buf = await buildPdf({
+        title,
+        sections: [
+          {
+            body: toPdfSafeText(
+              `Participants: ${(meeting.participants ?? []).join(', ')} · Created ${meeting.createdAt ?? ''}`,
+            ),
+          },
+          ...turns.map((t) => ({
+            heading: toPdfSafeText(t.type === 'agent' ? t.agentId || t.speaker : t.speaker),
+            body: toPdfSafeText(t.content),
+          })),
+        ],
+      });
+    } catch (err) {
+      // Backstop for anything substitution missed. A 500 here reads as "the
+      // server is broken"; this says what actually happened.
+      logger.warn({ meetingId, err }, 'war room transcript PDF failed to render');
+      return c.json(
+        { error: 'pdf_render_failed', detail: err instanceof Error ? err.message : String(err) },
+        422,
+      );
+    }
+    const slug =
+      title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'war-room';
+    return c.body(new Uint8Array(buf), 200, {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="war-room-${slug}.pdf"`,
+    });
   });
 
   // Delete ONE conversation. Narrower than DELETE /export below, which is the

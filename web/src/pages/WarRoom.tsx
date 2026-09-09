@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { getToken, api } from '../lib/api';
+import { getToken, api, downloadFile } from '../lib/api';
 import { hasCapability } from '../lib/auth';
 import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
@@ -198,11 +198,25 @@ export function WarRoom() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [exporting, setExporting] = useState(false);
   // Which agents we're waiting on for the current turn, so we can show a
   // per-agent "typing…" placeholder until each replies (or is blocked, or the
   // timeout fires). sinceSeq pins this to the current round.
   const [pending, setPending] = useState<{ agents: string[]; sinceSeq: number; startedAt: number } | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Autoscroll: pinnedRef is the truth (read by the post-render effect without
+  // re-subscribing); `unpinned` only exists so the "Jump to latest" button can
+  // render. The 2.5s history poll hands us a fresh array every tick, so pinning
+  // must never depend on the array identity — only on where the user is.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true);
+  // Last scroll position we know about (whoever moved it). A scroll event is
+  // dispatched at the next rendering opportunity, which can be AFTER the next
+  // turn has been appended — by then the measured distance-from-bottom is the
+  // height of the new bubbles, not where the user is. Comparing against this
+  // tells the two apart: only a scroll that actually moved the view UP is the
+  // user leaving the bottom.
+  const lastTopRef = useRef(0);
+  const [unpinned, setUnpinned] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   // The room whose transcript is currently on screen. Async work started for
   // an earlier room (history fetch, straggler SSE events) checks this before
@@ -246,9 +260,43 @@ export function WarRoom() {
     return () => { eventSourceRef.current?.close(); };
   }, []);
 
+  // Instant, not smooth: a smooth animation emits intermediate scroll events
+  // that would trip onScroll and un-pin mid-animation. When already at the
+  // bottom this assignment is a no-op, so a poll tick that adds nothing moves
+  // nothing; when the user has scrolled up it does nothing at all.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const el = scrollRef.current;
+    if (el && pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+      lastTopRef.current = el.scrollTop;
+    }
+  }, [messages, typingAgents.length]);
+
+  function onTranscriptScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const prevTop = lastTopRef.current;
+    lastTopRef.current = el.scrollTop;
+    // While pinned, a scroll event that didn't move the view up is our own
+    // autoscroll settling (or the browser's) arriving late, after more turns
+    // grew the transcript. Measuring the distance now would un-pin a user who
+    // never touched the scrollbar, and the transcript would stop following.
+    if (pinnedRef.current && el.scrollTop >= prevTop) return;
+    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight <= 32;
+    if (pinned === pinnedRef.current) return;
+    pinnedRef.current = pinned;
+    setUnpinned(!pinned);
+  }
+
+  function jumpToLatest() {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      lastTopRef.current = el.scrollTop;
+    }
+    pinnedRef.current = true;
+    setUnpinned(false);
+  }
 
   // Clear the typing indicator once every expected agent has answered (or been
   // blocked), or after a hard timeout so it can never get stuck. Polling
@@ -324,6 +372,9 @@ export function WarRoom() {
     setMessages([]);
     setConfirmDelete(null);
     setPending(null);
+    pinnedRef.current = true;
+    lastTopRef.current = 0;
+    setUnpinned(false);
     const token = getToken();
 
     // SSE is opened as a best-effort streaming layer. Everything it delivers is
@@ -539,6 +590,23 @@ export function WarRoom() {
     setEnding(false);
   }
 
+  async function exportPdf() {
+    if (!selectedRoom) return;
+    setExporting(true);
+    try {
+      const slug = (selectedRoomObj ? roomTitle(selectedRoomObj) : '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'war-room';
+      await downloadFile(`/warroom-transcripts/${selectedRoom}`, `war-room-${slug}.pdf`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not export the transcript', 'error');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // Permanently delete a room. DELETE /:id is gated agents:write server-side and
   // is idempotent, so we drop the row optimistically on success.
   async function deleteRoom(roomId: string) {
@@ -687,20 +755,32 @@ export function WarRoom() {
                 {selectedStatus === 'ended' && (
                   <span class="text-overline text-muted uppercase tracking-wide">ended</span>
                 )}
-                {canWrite && selectedStatus === 'live' && (
+                <div class="ml-auto flex items-center gap-1">
                   <Button
                     variant="ghost"
                     size="sm"
-                    class="ml-auto"
-                    loading={ending}
-                    onClick={endRoom}
+                    loading={exporting}
+                    onClick={exportPdf}
+                    data-testid="warroom-export-pdf"
+                    aria-label="Export transcript as PDF"
                   >
-                    End Session
+                    Export PDF
                   </Button>
-                )}
+                  {canWrite && selectedStatus === 'live' && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={ending}
+                      onClick={endRoom}
+                    >
+                      End Session
+                    </Button>
+                  )}
+                </div>
               </div>
 
-              <div class="flex-1 overflow-y-auto p-4 space-y-3">
+              <div class="relative flex-1 flex flex-col min-h-0">
+              <div ref={scrollRef} onScroll={onTranscriptScroll} class="flex-1 overflow-y-auto p-4 space-y-3">
                 {messages.length === 0 && (
                   <div class="h-full flex items-center justify-center">
                     <p class="text-caption text-muted text-center">
@@ -733,7 +813,19 @@ export function WarRoom() {
                     </div>
                   </div>
                 ))}
-                <div ref={messagesEndRef} />
+              </div>
+              {unpinned && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Jump to latest messages"
+                  data-testid="warroom-jump-latest"
+                  class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-surface border border-border shadow-md"
+                  onClick={jumpToLatest}
+                >
+                  Jump to latest ↓
+                </Button>
+              )}
               </div>
 
               {/* Composer: tag helper + input in one bordered block with clean
