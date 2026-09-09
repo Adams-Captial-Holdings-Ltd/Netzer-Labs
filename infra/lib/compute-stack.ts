@@ -381,6 +381,13 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         TABLE_JARVIS_LEASES: RESOURCE_NAMES.ddb.jarvisLeases,
         TABLE_JARVIS_LEDGER: RESOURCE_NAMES.ddb.jarvisLedger,
         TABLE_JARVIS_CANARY: RESOURCE_NAMES.ddb.jarvisCanary,
+        // War Room (M12). Without these the repos fall back to the unsuffixed
+        // literals in src/lib/warroom/*, so a suffixed environment asks for
+        // production's tables and is denied. Production is unaffected: its
+        // ${app} prefix IS that fallback.
+        TABLE_WARROOM_MEETINGS: RESOURCE_NAMES.ddb.warroomMeetings,
+        TABLE_WARROOM_TURNS: RESOURCE_NAMES.ddb.warroomTurns,
+        TABLE_WARROOM_CONNECTIONS: RESOURCE_NAMES.ddb.warroomConnections,
         // Launch gate (H7). Jarvis is GA in prod, so the default is now 'true' —
         // baked into the CDK so an infra deploy can never silently disable it
         // (a previous `cdk deploy` reset this to false and 503'd the manifest).
