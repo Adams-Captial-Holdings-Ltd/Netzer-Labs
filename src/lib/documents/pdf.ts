@@ -26,16 +26,37 @@ const WINANSI_EXTRA = new Set([
   0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x017e, 0x0178,
 ]);
 
+function renderable(cp: number): boolean {
+  if (cp === 0x09 || cp === 0x0a || cp === 0x0d) return true;
+  if (cp >= 0x20 && cp <= 0xff) return true;
+  return WINANSI_EXTRA.has(cp);
+}
+
 function unrenderable(text: string): string[] {
   const bad = new Set<string>();
   for (const ch of text) {
-    const cp = ch.codePointAt(0)!;
-    if (cp === 0x09 || cp === 0x0a || cp === 0x0d) continue;
-    if (cp >= 0x20 && cp <= 0xff) continue;
-    if (WINANSI_EXTRA.has(cp)) continue;
-    bad.add(ch);
+    if (!renderable(ch.codePointAt(0)!)) bad.add(ch);
   }
   return [...bad];
+}
+
+/**
+ * Substitute the characters `assertPdfRenderable` would refuse, so text the
+ * user did not author — a chat transcript, an agent reply — can still become a
+ * PDF instead of failing the whole export over one emoji.
+ *
+ * This is NOT a way around the guard: the guard still runs, and still refuses
+ * anything that slips past. It exists because refusing is the right answer when
+ * someone asked for *this document* as a PDF, and the wrong answer when they
+ * asked for a transcript of a conversation they do not control. Callers that
+ * own their content should keep letting the guard throw.
+ *
+ * Shares `renderable` with the guard so the two allow-lists cannot drift.
+ */
+export function toPdfSafeText(text: string): string {
+  let out = '';
+  for (const ch of text) out += renderable(ch.codePointAt(0)!) ? ch : '?';
+  return out;
 }
 
 /** Throws a clean, actionable error rather than emitting a garbled PDF. */
