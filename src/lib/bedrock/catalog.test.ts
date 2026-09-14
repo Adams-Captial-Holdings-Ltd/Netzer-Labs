@@ -654,6 +654,21 @@ describe('getModelCatalog: discovery bounds (F1)', () => {
     }
   });
 
+  it('waits the full deadline before giving up, and leaves no timer behind after a success', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-14T00:00:00Z') });
+    await getModelCatalog(baseOpts({ controlPlane: fakeControlPlane(FM_ROWS, PROFILE_PAGES) }));
+    expect(vi.getTimerCount()).toBe(0);
+
+    resetModelCatalogCache();
+    const hung = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    hung.listFoundationModels.mockImplementation(() => new Promise<never>(() => {}));
+    const call = track(getModelCatalog(baseOpts({ controlPlane: hung })));
+    await vi.advanceTimersByTimeAsync(CATALOG_DISCOVERY_TIMEOUT_MS - 1);
+    expect(call.catalog).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(call.catalog?.source).toBe('env-fallback');
+  });
+
   it('stops listing profiles when the next token repeats, and treats the discovery as failed', async () => {
     const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
     let calls = 0;
@@ -724,6 +739,20 @@ describe('getModelCatalog: failure backoff (F2)', () => {
     }
     expect(cp.listFoundationModels).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps the retry window at 60 s after repeated failures, with no growth', async () => {
+    let t = T0;
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    cp.listFoundationModels.mockRejectedValue(new Error('still down'));
+    const opts = baseOpts({ controlPlane: cp, now: () => t });
+
+    await getModelCatalog(opts); // attempt 1 fails at T0
+    t = T0 + CATALOG_RETRY_AFTER_MS;
+    await getModelCatalog(opts); // attempt 2 fails at T0 + 60 s
+    t = T0 + 2 * CATALOG_RETRY_AFTER_MS;
+    await getModelCatalog(opts); // attempt 3: the window is still 60 s
+    expect(cp.listFoundationModels).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('getModelCatalog: default control plane (F1, F2, F4)', () => {
@@ -770,6 +799,51 @@ describe('getModelCatalog: default control plane (F1, F2, F4)', () => {
     await expect(call).resolves.toMatchObject({ source: 'env-fallback' });
     expect(ids(await call)).toEqual([SONNET, SONNET_1M]);
   });
+
+  it('retries after the window when the BedrockClient could not be constructed', async () => {
+    let t = T0;
+    sdk.failConstruct = true;
+    expect((await getModelCatalog(defaultOpts(() => t))).source).toBe('env-fallback');
+
+    sdk.failConstruct = false;
+    sdk.send.mockImplementation(async (command) =>
+      'typeEquals' in command.input
+        ? { inferenceProfileSummaries: PROFILE_PAGES.flat() }
+        : { modelSummaries: FM_ROWS },
+    );
+    t += 10_000; // inside the window: no new attempt
+    expect((await getModelCatalog(defaultOpts(() => t))).source).toBe('env-fallback');
+    expect(sdk.configs).toHaveLength(0);
+
+    t = T0 + CATALOG_RETRY_AFTER_MS;
+    const recovered = await getModelCatalog(defaultOpts(() => t));
+    expect(recovered.source).toBe('discovered');
+    expect(sdk.configs).toHaveLength(1);
+  });
+
+  it('keeps one client per region across refreshes, and reset drops them', async () => {
+    let t = T0;
+    sdk.send.mockImplementation(async (command) =>
+      'typeEquals' in command.input
+        ? { inferenceProfileSummaries: PROFILE_PAGES.flat() }
+        : { modelSummaries: FM_ROWS },
+    );
+    const inRegion = (region: string): GetModelCatalogOptions => ({
+      ...defaultOpts(() => t),
+      env: { ...ENV, AWS_REGION: region },
+    });
+
+    await getModelCatalog(inRegion('us-east-1'));
+    t += CATALOG_TTL_MS;
+    await getModelCatalog(inRegion('eu-west-1'));
+    t += CATALOG_TTL_MS;
+    await getModelCatalog(inRegion('us-east-1'));
+    expect(sdk.configs.map((config) => config.region)).toEqual(['us-east-1', 'eu-west-1']);
+
+    resetModelCatalogCache();
+    await getModelCatalog(inRegion('us-east-1'));
+    expect(sdk.configs.map((config) => config.region)).toEqual(['us-east-1', 'eu-west-1', 'us-east-1']);
+  });
 });
 
 describe('getModelCatalog: a failing runtime-config reader fails closed (F4)', () => {
@@ -791,6 +865,31 @@ describe('getModelCatalog: a failing runtime-config reader fails closed (F4)', (
       expect(ids(cat), label).toContain('us.anthropic.claude-haiku-4-5');
       expect(reasonOf(cat, 'openai.gpt-oss-120b-1:0'), label).toBe('provider-not-approved');
     }
+  });
+});
+
+describe('getModelCatalog: a failure value that cannot be stringified still never rejects', () => {
+  it('a control plane or reader failing with a value String() cannot convert still resolves', async () => {
+    const unprintable: unknown = Object.create(null); // String(unprintable) throws
+    const hostile = {
+      toString(): string {
+        throw new Error('fixture: toString threw');
+      },
+    };
+
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    cp.listFoundationModels.mockRejectedValueOnce(unprintable);
+    await expect(getModelCatalog(baseOpts({ controlPlane: cp }))).resolves.toMatchObject({
+      source: 'env-fallback',
+    });
+
+    resetModelCatalogCache();
+    const readConfig = vi.fn(async (): Promise<string | undefined> => {
+      throw hostile;
+    });
+    const call = getModelCatalog(baseOpts({ readConfig }));
+    await expect(call).resolves.toMatchObject({ source: 'discovered' });
+    expect((await call).models.every((m) => m.canonicalId.startsWith('anthropic.'))).toBe(true);
   });
 });
 
