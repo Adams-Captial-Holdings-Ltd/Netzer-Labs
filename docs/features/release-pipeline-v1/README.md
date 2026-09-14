@@ -107,11 +107,13 @@ not by a published release.
 Carried out of scope deliberately, or found in passing and not acted on:
 
 1. **P5 — pin the orchestrator by digest.** Built on
-   `feature/release-pipeline-p4-p5` as `b27ac38` (2026-09-14; local, not
-   pushed, not yet verified). Every driver forwards `CCE_IMAGE_DIGEST`, and a
-   malformed one fails synth. **Rollout gate:** before promoting `qa → staging`,
-   re-apply both orchestrator repos' ECR lifecycle policies without the
-   untagged-expiry rule. This needs `aws login`.
+   `feature/release-pipeline-p4-p5` as `b27ac38` and cleaned up in `4d36c24`
+   (2026-09-14; local, not pushed, not yet verified). Every driver forwards
+   `CCE_IMAGE_DIGEST`, and a malformed one fails synth. **Rollout gate:** both
+   orchestrator repos' ECR lifecycle policies were re-applied without the
+   untagged-expiry rule on 2026-09-14. A local `npm run deploy` from pre-P5
+   code puts that rule back, so re-read both policies before promoting
+   `qa → staging`.
 2. **The orchestrator image-digest step** (`deploy.yml`, `id: orchimg`) — the
    other half of P2, built in the same commit. `release.yml`'s "digest step
    does not exist yet" text goes stale once it merges.

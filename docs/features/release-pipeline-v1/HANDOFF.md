@@ -31,7 +31,10 @@ as_of_commit: 4d36c247ad9bbfb3284b8587c660cac2d7935285
   - `C:\Users\EmmanuelAdams\.claude\plans\release-p4-p5-codex-workorder.md`
   - `C:\Users\EmmanuelAdams\.claude\plans\release-p4-p5-verification-handoff.md`
 - **Blockers:**
-  - P5's rollout gate needs `aws login` before `qa → staging`.
+  - P5's ECR rollout gate was applied on 2026-09-14, so both orchestrator repos
+    now carry the one-rule policy. A local `npm run deploy` from pre-P5 code
+    puts the untagged rule back, so re-read both policies right before
+    `qa → staging`.
   - The drift disarm only takes effect once it merges into `development`.
     Until then the schedule keeps failing daily.
   - `release.yml` still needs `RELEASE_SIGNING_KEY`. Its `images` input takes
