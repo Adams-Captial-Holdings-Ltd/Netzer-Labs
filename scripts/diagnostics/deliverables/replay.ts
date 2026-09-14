@@ -41,7 +41,7 @@
  */
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, parse } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   BedrockRuntimeClient,
@@ -63,7 +63,7 @@ import { buildDocx } from '../../../src/lib/documents/docx.js';
 import { buildPdf } from '../../../src/lib/documents/pdf.js';
 import { validateDocumentSpec, validateSpreadsheetSpec } from '../../../src/lib/documents/types.js';
 import { buildXlsx } from '../../../src/lib/documents/xlsx.js';
-import { buildPrompts, refuseInsideRepo } from './prompts.js';
+import { REPO_ROOT, buildPrompts, refuseInsideRepo } from './prompts.js';
 
 export const REPLAY_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 export const CAMPAIGN_CAP_USD = 30;
@@ -155,7 +155,7 @@ export interface RunRecord {
   agentPromptSource: string;
 }
 
-/** Sends one SDK command. Production passes `(c) => client.send(c)`. */
+/** Sends one SDK command. `main()` passes the real client's `send`; the contract passes a fake. */
 export type Send = (command: { input: unknown }) => Promise<unknown>;
 
 export interface Budget {
@@ -231,7 +231,7 @@ export function profileBudget(profile: ProfileId): { first: number; loop: number
   return { ...BUDGETS[profile] };
 }
 
-/** Interleaved rep -> prompt -> profile, so a budget stop leaves every cell sampled. */
+/** Interleaved rep -> prompt -> profile, so a budget stop leaves the cells evenly sampled. */
 export function planRuns(promptIds: string[], reps = RUNS_PER_CELL): PlannedRun[] {
   const plan: PlannedRun[] = [];
   for (let rep = 1; rep <= reps; rep++) {
@@ -653,9 +653,8 @@ async function main(): Promise<void> {
       'no-guardrail': { type: 'boolean' },
     },
   });
-  const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
   if (!values.capture) throw new Error('--capture <capture-<sha>.json> is required');
-  if (values.out) refuseInsideRepo(values.out, repoRoot);
+  if (values.out) refuseInsideRepo(values.out, REPO_ROOT);
   const capture = JSON.parse(readFileSync(values.capture, 'utf8')) as CaptureFile;
   assertCapture(capture);
   const reps = Number(values.reps ?? RUNS_PER_CELL);
@@ -716,7 +715,7 @@ async function main(): Promise<void> {
     guardrail,
     send: (command) => client.send(command as ConverseCommand),
     outFile: values.out,
-    repoRoot,
+    repoRoot: REPO_ROOT,
     reps,
   });
   const count = (status: RunRecord['status']) => summary.records.filter((r) => r.status === status).length;

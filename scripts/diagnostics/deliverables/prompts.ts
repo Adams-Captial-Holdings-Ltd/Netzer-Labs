@@ -44,8 +44,9 @@ export const PROMPT_IDS = [
 /** p4's source: development.md at this commit, cut at a paragraph boundary. */
 export const SOURCE_TEXT_COMMIT = '271339bc8b2feea85e6c31b115fdd34e757a72e2';
 export const CSV_HEADER = 'date,region,product,channel,units,unit_price,revenue';
+/** The repository root: `sourceText()` runs git there, and both files refuse to write inside it. */
+export const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
-const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const SOURCE_MIN_WORDS = 6000;
 const ASSUME = 'Make reasonable assumptions instead of asking me questions.';
 const REGIONS = ['North', 'South', 'East', 'West'];
