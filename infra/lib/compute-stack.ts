@@ -157,7 +157,8 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     // than running a stale image.
     const imageDigest = process.env.CCE_IMAGE_DIGEST?.trim();
     if (imageDigest && !/^sha256:[0-9a-f]{64}$/.test(imageDigest)) {
-      throw new Error('CCE_IMAGE_DIGEST must be sha256:<64 lowercase hex characters>');
+      const got = JSON.stringify(imageDigest.slice(0, 80));
+      throw new Error(`CCE_IMAGE_DIGEST must be sha256:<64 lowercase hex characters>, got ${got}`);
     }
     const imageRef =
       imageDigest ||

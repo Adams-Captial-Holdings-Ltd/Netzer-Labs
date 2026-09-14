@@ -14,8 +14,8 @@
  *            rollback is reproducible from a fresh clone. Fallback, gated
  *            behind --rebuild-from-git: the OPERATOR checks out the recorded
  *            sha; the tool reconstructs the synth env from the manifest's
- *            allowlisted synthInputs + CCE_IMAGE_DIGEST + CCE_IMAGE_TAG and deploys from the
- *            current tree, warning loudly on a sha mismatch.
+ *            allowlisted synthInputs + CCE_IMAGE_DIGEST + CCE_IMAGE_TAG and
+ *            deploys from the current tree, warning loudly on a sha mismatch.
  *   config — move AWSCURRENT on every secret to the VersionId recorded in
  *            the target manifest (durable thanks to per-deploy staging
  *            labels, item 10), record the displaced version for
@@ -873,9 +873,9 @@ async function infraDiffAndMaybeDeploy(
       log('!!! ─────────────────────────────────────────────────────────────');
     }
     // Reconstruct the synth env: allowlisted inputs + the recorded image
-    // digest and tag, so the Compute task def pins the rolled-back image, plus the
-    // short-sha deploy marker compute-stack stamps (kept in sync so a
-    // post-rollback `cdk diff` reads clean).
+    // digest and tag, so the Compute task def pins the rolled-back image,
+    // plus the short-sha deploy marker compute-stack stamps (kept in sync so
+    // a post-rollback `cdk diff` reads clean).
     // THE TIER IS NOT OPTIONAL, and it is not defaultable. Since Phase 9 it
     // decides what EXISTS — the whole Paperclip substrate is provisioned at
     // Tier 1+ and empty at Tier 0 — and this env is built from synthInputs

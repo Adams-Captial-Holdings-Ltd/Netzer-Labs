@@ -1556,11 +1556,6 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // Only forward the greeting when set: compute-stack has a non-empty
     // default and forwarding '' would override it with a blank greeting.
     ...(env.JARVIS_GREETING ? { JARVIS_GREETING: env.JARVIS_GREETING } : {}),
-    // CI enablement is two independent opt-in paths, both default OFF:
-    // GitHub Actions OIDC (CCE_CICD_ENABLED) and CodeBuild tag deploys
-    // (CCE_CODEBUILD_ENABLED). Either one requires an EXPLICIT GitHub
-    // owner/repo in .env — synth fails closed with no default, so a
-    // fork can never inherit the upstream repo's deploy authority.
     // The pushed orchestrator image's digest, set by phase a and never by the
     // operator's env file: compute-stack.ts pins both task definitions to it.
     // It is not in SYNTH_INPUT_ALLOWLIST because a rollback replays the
@@ -1592,6 +1587,11 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // and the SNS topic still had zero subscribers, because the value never
     // crossed into the cdk child process.
     CCE_OPS_ALERT_EMAIL: env.CCE_OPS_ALERT_EMAIL ?? '',
+    // CI enablement is two independent opt-in paths, both default OFF:
+    // GitHub Actions OIDC (CCE_CICD_ENABLED) and CodeBuild tag deploys
+    // (CCE_CODEBUILD_ENABLED). Either one requires an EXPLICIT GitHub
+    // owner/repo in .env — synth fails closed with no default, so a
+    // fork can never inherit the upstream repo's deploy authority.
     CCE_CICD_ENABLED: env.CCE_CICD_ENABLED ?? '',
     CCE_CODEBUILD_ENABLED: env.CCE_CODEBUILD_ENABLED ?? '',
     // Opt-in IAM-copilot write grant (default off). Set CCE_IAM_COPILOT_WRITE=1

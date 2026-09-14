@@ -42,7 +42,7 @@ aws ecs update-service --cluster claudeclaw-cluster --service claudeclaw-service
 aws ecs wait services-stable --cluster claudeclaw-cluster --services claudeclaw-service
 ```
 
-To roll to a specific older image instead, register a new revision pointing at that image's immutable digest (or per-deploy tag for a pre-P5 revision) — `npm run deploy:rollback -- --class=image --to=<deployId>` does exactly that for you.
+To roll to a specific older image instead, register a new revision pointing at that image's immutable digest — `npm run deploy:rollback -- --class=image --to=<deployId>` does exactly that for you.
 
 ## Fix path 3 — auto-rollback already happened
 
@@ -54,7 +54,7 @@ If you see `circuit breaker triggered` events: ECS already rolled the service ba
 #     definition, and re-pushing a commit moves the tag off the digest the
 #     live revision pins. Ship the fix as a normal deploy of a new commit.
 
-# (b) Investigate the original failure offline — see "Why this happened" below.
+# (b) Investigate the original failure offline — see "Why these bugs slip past CI" below.
 ```
 
 ## After recovery — verify fully
@@ -71,6 +71,6 @@ Both ARM64 mismatch and empty-Bedrock-env are class of bugs where the orchestrat
 
 ## What NOT to do
 
-- Don't `git revert` and re-deploy — that ships a NEW image with revert-bytes, which is slower than retagging an existing known-good image
+- Don't `git revert` and re-deploy to recover — that ships a NEW image with revert-bytes, which is slower than `npm run deploy:rollback` re-pointing the task definition at a known-good image
 - Don't `git reset --hard` — destructive; loses any unmerged work
 - Don't bypass the kill switch by `force-new-deployment` without first identifying the bad image; you'll just roll the broken image again

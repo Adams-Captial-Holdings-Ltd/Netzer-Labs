@@ -90,8 +90,7 @@ jobs:
           esac
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "digest=$LIVE_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "deployed image tag: ${TAG:-<unresolved>}"
-          echo "deployed image digest: ${LIVE_DIGEST:-<unresolved>}"
+          echo "deployed image: ${LIVE_DIGEST:-${TAG:-<unresolved>}}"
           SHA=$(aws ecs describe-task-definition \
             --task-definition claudeclaw-orchestrator \
             --region us-east-1 \

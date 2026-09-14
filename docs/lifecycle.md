@@ -71,8 +71,7 @@ What it does (mirrors the proven `buildspec.yml` image-swap flow):
 1. **Preflight, before touching anything**: verifies the target manifest's
    `imageDigest` and every `images[]` digest still exist in ECR
    (`DescribeImages` by digest). The ECR lifecycle policy keeps the newest
-   50 images — per-deploy tags are the only tags we push, so count-based
-   retention IS deploy-tag retention — which means a very old target may be
+   50 images, tagged or untagged, which means a very old target may be
    pruned. A pruned digest fails HERE, named, not midway through a roll.
 2. Clones the LIVE task definition (preserving every other container and all
    env vars — launch flags, voice, cost cap), swaps ONLY the orchestrator
