@@ -58,6 +58,8 @@ const read = (rel: string): string =>
 const DEPLOY_TS = read('scripts/deploy.ts');
 const TEARDOWN_TS = read('scripts/teardown.ts');
 const WORKFLOW = read('.github/workflows/deploy.yml');
+const DRIFT = read('.github/workflows/cdk-drift.yml');
+const BUILDSPEC = read('buildspec.yml');
 
 /**
  * The `{ ... }` block that starts at `head`, brace-matched.
@@ -83,13 +85,13 @@ function blockAfter(source: string, head: string): string {
 }
 
 /** One workflow step, from its `- name:` line up to the next one. */
-function workflowStep(name: string): string {
+function workflowStep(name: string, source: string = WORKFLOW): string {
   const head = `      - name: ${name}`;
-  const start = WORKFLOW.indexOf(head);
+  const start = source.indexOf(head);
   expect(start, `expected a workflow step named ${name}`).toBeGreaterThanOrEqual(0);
-  expect(WORKFLOW.indexOf(head, start + 1), `expected ONE step named ${name}`).toBe(-1);
-  const next = WORKFLOW.indexOf('\n      - name: ', start + 1);
-  return WORKFLOW.slice(start, next === -1 ? undefined : next);
+  expect(source.indexOf(head, start + 1), `expected ONE step named ${name}`).toBe(-1);
+  const next = source.indexOf('\n      - name: ', start + 1);
+  return source.slice(start, next === -1 ? undefined : next);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1193,5 +1195,84 @@ describe('Paperclip environment-scoped provisioning override (.github/workflows/
     // itself, which is how the four hand-copied `CCE_TIER != '0'` gates the
     // tier-gate step replaced got out of step with the table in the first place.
     expect(WORKFLOW.split(`${OVERRIDE}: `).length - 1).toBe(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Release plan P5: the orchestrator image DIGEST reaches every driver.
+//
+// compute-stack.ts pins the orchestrator task definition to CCE_IMAGE_DIGEST
+// when one is supplied and falls back to the tag otherwise, so a driver that
+// forgets to forward the digest does not fail - it silently deploys the
+// mutable tag. cdkEnvBag is an ALLOWLIST and CI hand-mirrors every step, so
+// each forward is pinned where it lives: the same shape as the Paperclip
+// digest checks above and warp-private-access.test.ts's cdkEnvBag test.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('orchestrator image digest reaches every driver (P5)', () => {
+  it('forwards CCE_IMAGE_DIGEST through the cdkEnvBag allowlist, beside the tag', () => {
+    const bag = blockAfter(DEPLOY_TS, 'function cdkEnvBag(');
+    expect(bag).toContain("CCE_IMAGE_DIGEST: env.CCE_IMAGE_DIGEST ?? ''");
+    // The tag stays: it is the fallback for a synth that has no digest.
+    expect(bag).toContain('CCE_IMAGE_TAG: imageTag');
+  });
+
+  it('hands the digest it resolved to synth before phase a deploys anything', () => {
+    const resolved = DEPLOY_TS.indexOf('const imageDigest = await resolveImageDigest(env, imageTag);');
+    const assigned = DEPLOY_TS.indexOf('env.CCE_IMAGE_DIGEST = imageDigest');
+    expect(resolved).toBeGreaterThan(-1);
+    expect(assigned, 'scripts/deploy.ts never assigns env.CCE_IMAGE_DIGEST').toBeGreaterThan(resolved);
+    expect(assigned).toBeLessThan(DEPLOY_TS.indexOf('cdkDeployStacks(env, imageTag'));
+    // One assignment: a second would be a later phase re-pinning synth to another image.
+    expect(DEPLOY_TS.split('env.CCE_IMAGE_DIGEST = ').length - 1).toBe(1);
+  });
+
+  it('resolves the pushed orchestrator digest in CI and refuses to emit anything else', () => {
+    const step = workflowStep('Build + Push (linux/arm64)');
+    expect(step).toContain('id: orchimg');
+    expect(step).toContain('aws ecr describe-images');
+    // The tag this step just pushed, never :latest.
+    expect(step).toContain('imageTag="$SHA"');
+    const guard = step.indexOf('::error::');
+    expect(guard).toBeGreaterThan(-1);
+    expect(step.indexOf('echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"')).toBeGreaterThan(guard);
+  });
+
+  it('pins both CDK deploy paths in CI to that digest and keeps the tag as the fallback', () => {
+    const pin = 'CCE_IMAGE_DIGEST: ${{ steps.orchimg.outputs.digest }}';
+    expect(WORKFLOW.split(pin).length - 1).toBe(2);
+    for (const name of ['CDK deploy', 'Complete fresh Paperclip bootstrap']) {
+      const step = workflowStep(name);
+      expect(step, `${name} does not pin the orchestrator digest`).toContain(pin);
+      expect(step).toContain('CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}');
+    }
+  });
+
+  it('lets the drift check synthesize the digest the live service runs', () => {
+    const resolve = workflowStep('Resolve deployed image tag + DEPLOY_SHA', DRIFT);
+    expect(resolve).toContain('case "$IMAGE" in');
+    // The Paperclip parse in the same step already has one `*@sha256:*)`, so
+    // only a second proves the orchestrator image is parsed as a digest.
+    expect(resolve.split('*@sha256:*)').length - 1).toBe(2);
+    expect(resolve).toContain('echo "digest=');
+    const synth = workflowStep('Synthesize the drift assembly', DRIFT);
+    expect(synth).toContain('CCE_IMAGE_DIGEST: ${{ steps.live.outputs.digest }}');
+    expect(synth).toContain('CCE_IMAGE_TAG: ${{ steps.live.outputs.tag }}');
+  });
+
+  it('pins the CodeBuild deploys to the pushed digest, unified and image-only', () => {
+    const pushed = BUILDSPEC.indexOf('docker push $IMAGE_URI:$COMMIT_SHA');
+    expect(pushed).toBeGreaterThan(-1);
+    // RepoDigests is populated by the push, so it can only be read after it.
+    expect(BUILDSPEC.indexOf('RepoDigests'), 'buildspec.yml never reads the pushed digest').toBeGreaterThan(
+      pushed,
+    );
+    expect(BUILDSPEC.indexOf('sha256:*')).toBeGreaterThan(pushed);
+    expect(BUILDSPEC).toContain('export CCE_IMAGE_DIGEST=');
+    expect(BUILDSPEC).toContain('export CCE_IMAGE_TAG="$COMMIT_SHA"');
+    // `npm run deploy:cloud` runs the image-only branch, which must not swap
+    // the live task definition back to a tag.
+    expect(BUILDSPEC).toContain('NEW_IMAGE="$IMAGE_URI@$DIGEST"');
+    expect(BUILDSPEC).not.toContain('NEW_IMAGE="$IMAGE_URI:$COMMIT_SHA"');
   });
 });

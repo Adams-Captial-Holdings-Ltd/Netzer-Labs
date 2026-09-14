@@ -664,6 +664,61 @@ describe('infra class', () => {
     expect(synth?.env?.CCE_TIER).toBe('2');
     expect(synth?.env?.DEPLOY_TIER).toBe('2');
   });
+
+  // ── The image, on the rebuild-from-git path (release plan P5) ─────
+  //
+  // The rebuilt task definition must pin the image the target deploy ran, and
+  // since P5 that is its DIGEST: compute-stack.ts reads CCE_IMAGE_DIGEST ahead
+  // of the tag. The real shell merges this env OVER process.env
+  // (scripts/rollback.ts:150), so leaving the key out does not leave it unset —
+  // a digest exported in the operator's shell would pin the rollback to THAT
+  // image. A manifest written before digests were recorded therefore gets an
+  // EMPTY digest, which compute-stack treats as unset, falling back to the
+  // recorded tag exactly as before.
+  function digestTarget(): DeployManifest {
+    const target = mkManifest({
+      deployId: ID_MID,
+      gitSha: 'b'.repeat(40),
+      imageTag: 'bbbbbbbbbbbb',
+      imageDigest: DIGEST_B,
+    });
+    delete (target as Partial<DeployManifest>).cdkOutArchiveKey;
+    return target;
+  }
+
+  /** The synth env of the `cdk diff` preview and of the `cdk deploy`. Both must agree. */
+  function cdkChildEnvs(
+    shellCalls: Array<{ cmd: string; args: string[]; env?: Record<string, string> }>,
+  ): Array<Record<string, string>> {
+    const diff = shellCalls.find((c) => c.cmd === 'npx' && c.args[1] === 'diff');
+    const deploy = shellCalls.find((c) => c.cmd === 'npx' && c.args[1] === 'deploy');
+    expect(diff?.env, 'the cdk diff preview received no synth env').toBeDefined();
+    expect(deploy?.env, 'the cdk deploy received no synth env').toBeDefined();
+    return [diff!.env!, deploy!.env!];
+  }
+
+  it('replays the recorded image digest, and still the tag, into the rebuilt synth env', async () => {
+    const { deps, shellCalls } = setup({ target: digestTarget() });
+    await runRollback(deps, opts({ rollbackClass: 'infra', rebuildFromGit: true }));
+    for (const env of cdkChildEnvs(shellCalls)) {
+      expect(env.CCE_IMAGE_DIGEST).toBe(DIGEST_B);
+      expect(env.CCE_IMAGE_TAG).toBe('bbbbbbbbbbbb');
+    }
+  });
+
+  it('blanks the digest for a manifest that predates it, so an exported one cannot leak in', async () => {
+    const target = digestTarget();
+    delete (target as Partial<DeployManifest>).imageDigest;
+    const { deps, shellCalls } = setup({ target });
+    await runRollback(deps, opts({ rollbackClass: 'infra', rebuildFromGit: true }));
+    const STALE = 'sha256:' + 'e'.repeat(64);
+    for (const env of cdkChildEnvs(shellCalls)) {
+      // What the child process actually receives: the operator's shell, overlaid by this env.
+      const effective = { CCE_IMAGE_DIGEST: STALE, ...env };
+      expect(effective.CCE_IMAGE_DIGEST).toBe('');
+      expect(env.CCE_IMAGE_TAG).toBe('bbbbbbbbbbbb');
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -720,25 +775,20 @@ describe('collectPrivateEcrDigests', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('ECR lifecycle policy', () => {
-  it('has exactly the two retention rules with the right shape', () => {
-    expect(ECR_LIFECYCLE_POLICY.rules).toHaveLength(2);
-    expect(ECR_LIFECYCLE_POLICY.rules[0]).toEqual({
-      rulePriority: 1,
-      description: 'expire untagged images after 7 days',
-      selection: {
-        tagStatus: 'untagged',
-        countType: 'sinceImagePushed',
-        countUnit: 'days',
-        countNumber: 7,
+  it('keeps exactly one rule: the newest 50 images, of any tag status', () => {
+    // The untagged-expiry rule is gone since release plan P5. It assumed an
+    // untagged image is never a rollback target, and a digest-pinned task
+    // definition ends that: a same-commit re-push moves the tag, so the digest a
+    // live or rollback revision pins loses every tag, and the rule would expire
+    // an image ECS still has to pull. The count rule alone bounds the repo.
+    expect(ECR_LIFECYCLE_POLICY.rules).toEqual([
+      {
+        rulePriority: 2,
+        description: 'keep only the newest 50 images (deploy tags are the only tags we push)',
+        selection: { tagStatus: 'any', countType: 'imageCountMoreThan', countNumber: 50 },
+        action: { type: 'expire' },
       },
-      action: { type: 'expire' },
-    });
-    expect(ECR_LIFECYCLE_POLICY.rules[1]).toEqual({
-      rulePriority: 2,
-      description: 'keep only the newest 50 images (deploy tags are the only tags we push)',
-      selection: { tagStatus: 'any', countType: 'imageCountMoreThan', countNumber: 50 },
-      action: { type: 'expire' },
-    });
+    ]);
   });
 
   it('ensureEcrLifecyclePolicy puts valid JSON and is a no-op for clients without support', async () => {
