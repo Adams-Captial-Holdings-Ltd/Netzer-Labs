@@ -8,9 +8,10 @@
  * DeepSeek, Qwen, Kimi, Llama, Mistral, Nova).
  *
  * Why a curated static list (vs the live catalog used elsewhere):
- *   - The ECS task role can list foundation models and inference profiles.
+ *   - The ECS task role holds bedrock:ListFoundationModels and
+ *     bedrock:ListInferenceProfiles (infra/lib/iam-stack.ts:207-208).
  *   - The raw catalog is ~120 entries including image/embedding/audio models;
- *     curating keeps the picker to the chat-capable models worth comparing.
+ *     this list is curated for scope: chat-capable models worth comparing.
  *   - Every id below was verified present + ON_DEMAND + streaming in us-east-1.
  * A model the account lacks access to still LISTS here; the run endpoint just
  * surfaces that model's AccessDenied in its own result column (one prompt,
@@ -110,10 +111,6 @@ export function playgroundCost(
   );
 }
 
-// Conservative per-1M fallback for models with no verified price. Used ONLY for
-// cost-cap accounting (never shown as a real price in the UI). Set above the
-// priciest known tier so an unpriced paid call is OVER-counted toward the daily
-// cap rather than left invisible, which is the safe direction for a spend limit.
 /**
  * USD for one Playground turn for CAP METERING. Returns the verified price when
  * known, otherwise a conservative fallback so an unpriced model still counts
@@ -128,6 +125,8 @@ export function playgroundMeteredCost(
 ): number {
   const verified = playgroundCost(model, inputTokens, outputTokens);
   if (verified !== null) return verified;
+  // Conservative per-1M fallback used only for cap metering. It is above the
+  // priciest known tier, so an unpriced call is over-counted rather than invisible.
   return (
     (inputTokens / 1_000_000) * FALLBACK_PRICE.inputPer1M +
     (outputTokens / 1_000_000) * FALLBACK_PRICE.outputPer1M

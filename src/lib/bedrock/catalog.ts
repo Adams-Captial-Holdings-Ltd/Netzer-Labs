@@ -107,6 +107,9 @@ export const NON_CONVERSE_MODELS: readonly string[] = [
 ];
 
 export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+export const CATALOG_DISCOVERY_TIMEOUT_MS = 15_000;
+export const CATALOG_RETRY_AFTER_MS = 60_000;
+export const CATALOG_MAX_PROFILE_PAGES = 50;
 
 interface RawDiscovery {
   models: FoundationModelSummaryLike[];
@@ -116,6 +119,8 @@ interface RawDiscovery {
 let cachedDiscovery: RawDiscovery | undefined;
 let cachedAt = 0;
 let inFlightDiscovery: Promise<RawDiscovery | undefined> | undefined;
+let failedAt: number | undefined;
+const defaultControlPlanes = new Map<string, CatalogControlPlane>();
 let cacheGeneration = 0;
 
 export function geoPrefixForRegion(region: string): 'us' | 'eu' | 'apac' | null {
@@ -130,7 +135,10 @@ function providerOf(canonicalId: string): string {
 }
 
 function createControlPlane(region: string): CatalogControlPlane {
-  const client = new BedrockClient({ region });
+  const client = new BedrockClient({
+    region,
+    requestHandler: { requestTimeout: 5_000, throwOnRequestTimeout: true },
+  });
   return {
     async listFoundationModels(input) {
       const output = await client.send(
@@ -152,19 +160,75 @@ function createControlPlane(region: string): CatalogControlPlane {
   };
 }
 
+function defaultControlPlane(region: string): CatalogControlPlane {
+  const existing = defaultControlPlanes.get(region);
+  if (existing) return existing;
+  const created = createControlPlane(region);
+  defaultControlPlanes.set(region, created);
+  return created;
+}
+
 async function discover(controlPlane: CatalogControlPlane): Promise<RawDiscovery> {
   const foundations = await controlPlane.listFoundationModels({ byOutputModality: 'TEXT' });
   const profiles: InferenceProfileSummaryLike[] = [];
   let nextToken: string | undefined;
-  do {
+  const seenTokens = new Set<string>();
+  for (let pageNumber = 0; pageNumber < CATALOG_MAX_PROFILE_PAGES; pageNumber += 1) {
     const page = await controlPlane.listInferenceProfiles({
       typeEquals: 'SYSTEM_DEFINED',
       ...(nextToken === undefined ? {} : { nextToken }),
     });
     profiles.push(...(page.inferenceProfileSummaries ?? []));
-    nextToken = page.nextToken;
-  } while (nextToken !== undefined);
-  return { models: foundations.modelSummaries ?? [], profiles };
+    const returnedToken = page.nextToken;
+    if (returnedToken === undefined) {
+      return { models: foundations.modelSummaries ?? [], profiles };
+    }
+    if (seenTokens.has(returnedToken)) {
+      throw new Error(`Bedrock inference-profile pagination repeated token: ${returnedToken}`);
+    }
+    seenTokens.add(returnedToken);
+    if (pageNumber + 1 === CATALOG_MAX_PROFILE_PAGES) {
+      throw new Error(`Bedrock inference-profile pagination exceeded ${CATALOG_MAX_PROFILE_PAGES} pages`);
+    }
+    nextToken = returnedToken;
+  }
+  throw new Error(`Bedrock inference-profile pagination exceeded ${CATALOG_MAX_PROFILE_PAGES} pages`);
+}
+
+function discoverWithDeadline(controlPlane: CatalogControlPlane): Promise<RawDiscovery> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      const error = new Error(
+        `Bedrock model discovery exceeded ${CATALOG_DISCOVERY_TIMEOUT_MS} ms`,
+      );
+      error.name = 'TimeoutError';
+      reject(error);
+    }, CATALOG_DISCOVERY_TIMEOUT_MS);
+    timer.unref();
+
+    void discover(controlPlane).then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function errorLogFields(err: unknown): { errName: string; errMessage: string } {
+  return err instanceof Error
+    ? { errName: err.name, errMessage: err.message }
+    : { errName: typeof err, errMessage: String(err) };
 }
 
 async function rawDiscovery(
@@ -175,23 +239,31 @@ async function rawDiscovery(
   const currentTime = now();
   if (cachedDiscovery && currentTime - cachedAt < CATALOG_TTL_MS) return cachedDiscovery;
   if (inFlightDiscovery) return inFlightDiscovery;
+  if (failedAt !== undefined && currentTime - failedAt < CATALOG_RETRY_AFTER_MS) {
+    return cachedDiscovery;
+  }
 
   const previous = cachedDiscovery;
   const generation = cacheGeneration;
-  const controlPlane = suppliedControlPlane ?? createControlPlane(region);
   let pending: Promise<RawDiscovery | undefined> | undefined;
   pending = (async (): Promise<RawDiscovery | undefined> => {
     try {
-      const result = await discover(controlPlane);
+      const controlPlane = suppliedControlPlane ?? defaultControlPlane(region);
+      const result = await discoverWithDeadline(controlPlane);
       if (generation === cacheGeneration) {
         cachedDiscovery = result;
         cachedAt = now();
+        failedAt = undefined;
       }
       return result;
     } catch (err) {
+      const fallback = previous ? 'last-good' : 'env';
+      if (generation === cacheGeneration) failedAt = now();
       logger.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'Bedrock model discovery failed; using the last available catalog',
+        { ...errorLogFields(err), fallback },
+        previous
+          ? 'Bedrock model discovery failed; serving the last good catalog'
+          : 'Bedrock model discovery failed; serving the env model list',
       );
       return previous;
     } finally {
@@ -240,11 +312,20 @@ export async function getModelCatalog(opts: GetModelCatalogOptions = {}): Promis
   if (!raw) return { source: 'env-fallback', models: envEntries, excluded: [] };
 
   const readConfig = opts.readConfig ?? getConfig;
-  const [approvedValue, nonAnthropicEnabled] = await Promise.all([
-    readConfig('models', 'approved_providers'),
-    readConfig('models', 'non_anthropic_enabled'),
-  ]);
-  const approved = nonAnthropicEnabled === '0' ? ['anthropic.'] : approvedProviders(approvedValue);
+  let approved: readonly string[];
+  try {
+    const [approvedValue, nonAnthropicEnabled] = await Promise.all([
+      Promise.resolve().then(() => readConfig('models', 'approved_providers')),
+      Promise.resolve().then(() => readConfig('models', 'non_anthropic_enabled')),
+    ]);
+    approved = nonAnthropicEnabled === '0' ? ['anthropic.'] : approvedProviders(approvedValue);
+  } catch (err) {
+    logger.warn(
+      errorLogFields(err),
+      'Bedrock model runtime config read failed; applying the Claude-only kill switch',
+    );
+    approved = ['anthropic.'];
+  }
   const guardrailConfigured = opts.guardrailConfigured ?? Boolean(env.BEDROCK_GUARDRAIL_ID);
   const geo = geoPrefixForRegion(region);
   const profileIds = new Set(
@@ -265,7 +346,10 @@ export async function getModelCatalog(opts: GetModelCatalogOptions = {}): Promis
     const modelId = row.modelId;
     if (!modelId) continue;
     const canonicalId = canonicalModelId(modelId);
-    if (envCanonicals.has(canonicalId)) continue;
+    const undatedAnthropicId = canonicalId.startsWith('anthropic.')
+      ? canonicalId.replace(/-\d{8}-v\d+:\d+$/, '')
+      : canonicalId;
+    if (envCanonicals.has(canonicalId) || envCanonicals.has(undatedAnthropicId)) continue;
     if (row.modelLifecycle?.status !== 'ACTIVE') {
       exclude(modelId, 'not-active');
       continue;
@@ -320,5 +404,7 @@ export function resetModelCatalogCache(): void {
   cachedDiscovery = undefined;
   cachedAt = 0;
   inFlightDiscovery = undefined;
+  failedAt = undefined;
+  defaultControlPlanes.clear();
   cacheGeneration += 1;
 }
