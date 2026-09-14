@@ -19,11 +19,15 @@ as_of_commit: 271339bc8b2feea85e6c31b115fdd34e757a72e2
 - Phases/tasks: **WI-0 is complete.** Its documentation half (this folder,
   ADR 0011, the plan copy) landed in `d90af11`; its environment half is done:
   root `npm ci --ignore-scripts` (332 packages; `web/` dependencies are
-  deferred until WI-4 needs them) and the baseline below. **WI-1
-  SPECIFICATION is in progress**: it writes
-  `src/lib/bedrock/capabilities.test.ts`, `catalog.test.ts` and
-  `models-pricing.test.ts` red for the intended reason, and freezes the Codex
-  work order outside the checkout. The coordinator commits them after review.
+  deferred until WI-4 needs them) and the baseline below.
+  **WI-1 is built; independent inspection returned REVISE:**
+  - Specification `82d8473`: 63 failing tests plus `model-seeds.ts` (87 generated seeds).
+  - Build `10dc36c`, written by Codex gpt-5.6-sol. The coordinator's rerun passes: `src/lib/bedrock` 84
+    tests, typecheck clean. The full suite shows no regressions.
+  - A fresh read-only Opus inspection returned REVISE with two medium findings in
+    `catalog.ts`: no discovery deadline or page cap, and no backoff after a failed refresh. It also made
+    six low findings. One targeted correction, re-inspection, cleanup and verification come next.
+
   Work items are defined in the [plan](plan.md#work-items-dependency-order).
 - Blockers:
   - **Back-merge.** Production-only hotfixes `1abba67`, `d828124`, `1124118`,
@@ -65,9 +69,11 @@ as_of_commit: 271339bc8b2feea85e6c31b115fdd34e757a72e2
     - `CredentialsProviderError: Your session has expired` is logged by some
       tests but fails none. Full logs are kept outside the repo, under
       `C:\Users\EmmanuelAdams\.claude\gauntlet\bedrock-all-models\baseline\`.
-- Smallest next action: review and commit WI-1's failing tests, generate
-  `src/lib/bedrock/model-seeds.ts` from the AWS model-card inventory, freeze
-  the Codex work order, then run the WI-1 Codex build.
+- Smallest next action: write failing tests for the inspection's accepted
+  findings (discovery deadline, page cap, failure backoff, frozen defaults,
+  fail-closed config reads, dated/undated dedupe), then run the one targeted
+  correction. The Gauntlet handoff is kept outside
+  the repo, at `C:\Users\EmmanuelAdams\.claude\plans\bedrock-all-models-handoff.md`.
 
 Session index (newest first):
 
