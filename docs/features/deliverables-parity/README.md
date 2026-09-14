@@ -2,7 +2,7 @@
 feature: deliverables-parity
 document_role: index
 status: current
-observed_at: 2026-09-13
+observed_at: 2026-09-14
 as_of_commit: de244e6387efdba177d550d1fb82a6d60291309e
 implemented_by:
   - src/agent/agent-loop.ts
@@ -11,6 +11,7 @@ implemented_by:
   - src/lib/documents/types.ts
 tested_by:
   - scripts/diagnostics/deliverables/capture.diag.ts
+  - scripts/diagnostics/deliverables/replay.diag.ts
 ---
 
 # Deliverables parity
@@ -60,8 +61,9 @@ against Bedrock at three output budgets. The harness lives in
   added it measured such PDFs rendering as garbled symbols.
 
 **What it is not yet.** No runtime evidence exists: Step 0 needs an AWS sign-in
-and approval. The replay is specified but not implemented, and has never run.
-There is no judge result, and nothing has been fixed.
+and approval. The replay is implemented and passes its hermetic contract, but
+has never run against Bedrock. There is no judge result, and nothing has been
+fixed.
 
 ## 3. Current status and current source commit
 
@@ -99,7 +101,7 @@ re-verified here. The harness state is in the [HANDOFF](HANDOFF.md).
 | Builders | `src/lib/documents/types.ts` (`validateDocumentSpec`, `validateSpreadsheetSpec`), `pdf.ts`, `docx.ts`, `xlsx.ts` | Production `pdf.ts:63` rejects non-WinAnsi text; development has no such check |
 | Agent prompt | `src/lib/config/agent-loader.ts:34` | `agents/<id>/CLAUDE.md` from the config bucket when present, otherwise a built-in prompt defaulting to "one or two short paragraphs" |
 | Request size, measured | `scripts/diagnostics/deliverables/capture.diag.ts` on production's tree | First call 23,715 JSON characters: system prompt 5,310 (built-in prompt, empty memory), 26 tool specs 17,929, user message 52, two cache points. Production's own agent prompts are not in this number |
-| Replay (E1) | `scripts/diagnostics/deliverables/replay.ts`, `prompts.ts`; contract `replay.diag.ts` | Specified only: the exports are stubs that throw `not implemented` |
+| Replay (E1) | `scripts/diagnostics/deliverables/replay.ts`, `prompts.ts`; contract `replay.diag.ts` | Implemented; never run against Bedrock. A dry run unless `--spend` comes with `--out` outside the repository and `--guardrail <id:version>` or `--no-guardrail`. Every call is admitted at its worst case against a $30 cap. A live run writes one JSONL record per run, plus each built document and the final reply under `<out name>-artifacts/` for the judge |
 
 ## 6. Current business/state rules
 
@@ -111,6 +113,8 @@ re-verified here. The harness state is in the [HANDOFF](HANDOFF.md).
   again without streaming.
 - The tool loop stops after 8 rounds (`TOOL_TURN_LIMIT`); if the model produced
   no text by then, one final call without tools asks it to answer in words.
+  That call omits `toolConfig` while its messages still hold the turn's tool
+  calls; whether Bedrock accepts such a request is unmeasured.
 - Only `pdf`, `docx` and `xlsx` are accepted formats.
 
 ## 7. Known runtime risks and approved next work
@@ -138,6 +142,13 @@ Captures go to `DIAG_OUT_DIR`, by default `netzer-deliverables-diag` under the
 operating system's temp directory; the harness refuses a directory inside the
 repository. Run it on production's tree for production numbers; the HANDOFF
 names the local branch that carries that tree.
+
+The replay prints its plan and worst-case estimate and sends nothing, unless it
+is given `--spend`, which needs the user's go:
+
+```bash
+npx tsx scripts/diagnostics/deliverables/replay.ts --capture <capture file>
+```
 
 Documentation gates and the full suite:
 
