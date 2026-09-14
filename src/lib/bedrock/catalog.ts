@@ -226,9 +226,14 @@ function discoverWithDeadline(controlPlane: CatalogControlPlane): Promise<RawDis
 }
 
 function errorLogFields(err: unknown): { errName: string; errMessage: string } {
-  return err instanceof Error
-    ? { errName: err.name, errMessage: err.message }
-    : { errName: typeof err, errMessage: String(err) };
+  if (err instanceof Error) return { errName: err.name, errMessage: err.message };
+  let errMessage: string;
+  try {
+    errMessage = String(err);
+  } catch {
+    errMessage = Object.prototype.toString.call(err);
+  }
+  return { errName: typeof err, errMessage };
 }
 
 async function rawDiscovery(
@@ -248,6 +253,7 @@ async function rawDiscovery(
   let pending: Promise<RawDiscovery | undefined> | undefined;
   pending = (async (): Promise<RawDiscovery | undefined> => {
     try {
+      await Promise.resolve();
       const controlPlane = suppliedControlPlane ?? defaultControlPlane(region);
       const result = await discoverWithDeadline(controlPlane);
       if (generation === cacheGeneration) {

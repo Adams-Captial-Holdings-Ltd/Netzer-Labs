@@ -8,10 +8,11 @@
  * DeepSeek, Qwen, Kimi, Llama, Mistral, Nova).
  *
  * Why a curated static list (vs the live catalog used elsewhere):
- *   - The ECS task role holds bedrock:ListFoundationModels and
- *     bedrock:ListInferenceProfiles (infra/lib/iam-stack.ts:207-208).
- *   - The raw catalog is ~120 entries including image/embedding/audio models;
- *     this list is curated for scope: chat-capable models worth comparing.
+ *   - Scope, not permissions. The ECS task role holds
+ *     bedrock:ListFoundationModels and bedrock:ListInferenceProfiles
+ *     (infra/lib/iam-stack.ts:207-208), but the raw catalog is ~120 entries
+ *     including image/embedding/audio models; curating keeps the picker to the
+ *     chat-capable models worth comparing.
  *   - Every id below was verified present + ON_DEMAND + streaming in us-east-1.
  * A model the account lacks access to still LISTS here; the run endpoint just
  * surfaces that model's AccessDenied in its own result column (one prompt,
