@@ -9,6 +9,8 @@ implemented_by:
   - src/lib/bedrock/client.ts
   - src/lib/tools/document-generation-tools.ts
   - src/lib/documents/types.ts
+tested_by:
+  - scripts/diagnostics/deliverables/capture.diag.ts
 ---
 
 # Deliverables parity
