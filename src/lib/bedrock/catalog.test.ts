@@ -609,6 +609,51 @@ describe('getModelCatalog: discovery bounds (F1)', () => {
     expect(call.catalog?.models.map((m) => m.id)).toEqual(ids(first));
   });
 
+  it('ignores an attempt that settles after the deadline: nothing is cached and no rejection goes unhandled', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-14T00:00:00Z') });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      // A late success must not be cached.
+      let resolveLate!: (value: { modelSummaries: FmRow[] }) => void;
+      const late = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+      late.listFoundationModels.mockImplementation(
+        () =>
+          new Promise<{ modelSummaries: FmRow[] }>((resolve) => {
+            resolveLate = resolve;
+          }),
+      );
+      const first = track(getModelCatalog(baseOpts({ controlPlane: late })));
+      await vi.advanceTimersByTimeAsync(CATALOG_DISCOVERY_TIMEOUT_MS);
+      expect(first.catalog?.source).toBe('env-fallback');
+      resolveLate({ modelSummaries: FM_ROWS });
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await getModelCatalog(baseOpts({ controlPlane: late }))).source).toBe('env-fallback');
+
+      // A late failure must not surface as an unhandled rejection.
+      resetModelCatalogCache();
+      let rejectLate!: (reason: Error) => void;
+      const failing = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+      failing.listFoundationModels.mockImplementation(
+        () =>
+          new Promise<never>((_resolve, reject) => {
+            rejectLate = reject;
+          }),
+      );
+      const second = track(getModelCatalog(baseOpts({ controlPlane: failing })));
+      await vi.advanceTimersByTimeAsync(CATALOG_DISCOVERY_TIMEOUT_MS);
+      expect(second.catalog?.source).toBe('env-fallback');
+      rejectLate(Object.assign(new Error('socket hang up'), { name: 'TimeoutError' }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('stops listing profiles when the next token repeats, and treats the discovery as failed', async () => {
     const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
     let calls = 0;
