@@ -236,3 +236,56 @@ describe('registry and models.ts agree (AM-13)', () => {
     }
   });
 });
+
+// ── Immutable registry data (WI-1 correction 1, F3) ─────────────────
+// Kept last in this file: until the registry hands out immutable data, the
+// tampering below really does change shared module state, and that must not
+// leak into the tests above.
+
+describe('registry data cannot be changed through a resolved entry (F3)', () => {
+  it('FALLBACK_PRICE and UNKNOWN_MODEL_DEFAULTS are frozen, nested objects included', () => {
+    expect(Object.isFrozen(FALLBACK_PRICE)).toBe(true);
+    expect(Object.isFrozen(UNKNOWN_MODEL_DEFAULTS)).toBe(true);
+    expect(Object.isFrozen(UNKNOWN_MODEL_DEFAULTS.promptCache)).toBe(true);
+    expect(Object.isFrozen(UNKNOWN_MODEL_DEFAULTS.price)).toBe(true);
+  });
+
+  it('tampering with one resolved entry cannot reprice or reshape another id', () => {
+    const tamper = (caps: ModelCapabilities): void => {
+      const writes = [
+        () => {
+          caps.price.inputPer1M = 0;
+        },
+        () => {
+          caps.price.outputPer1M = 0;
+        },
+        () => {
+          caps.promptCache.system = !caps.promptCache.system;
+        },
+        () => {
+          caps.contextWindow = 1;
+        },
+      ];
+      for (const write of writes) {
+        try {
+          write();
+        } catch {
+          // A frozen object rejects the write in strict mode; that is the goal.
+        }
+      }
+    };
+    tamper(resolveCapabilities('vendor.tampered-model-v1:0'));
+    tamper(resolveCapabilities('us.anthropic.claude-sonnet-4-6'));
+
+    const unknown = resolveCapabilities('vendor.untouched-model-v1:0');
+    expect(unknown.price).toEqual({ inputPer1M: 25, outputPer1M: 80, source: 'fallback' });
+    expect(unknown.promptCache.system).toBe(false);
+    expect(unknown.contextWindow).toBe(128_000);
+    expect(resolveModel('vendor.untouched-model-v1:0')).toMatchObject({ inputPricePer1M: 25, outputPricePer1M: 80 });
+
+    const sonnet = resolveCapabilities('eu.anthropic.claude-sonnet-4-6');
+    expect(sonnet.price).toMatchObject({ inputPer1M: 3, outputPer1M: 15 });
+    expect(sonnet.promptCache.system).toBe(true);
+    expect(sonnet.contextWindow).toBe(200_000);
+  });
+});

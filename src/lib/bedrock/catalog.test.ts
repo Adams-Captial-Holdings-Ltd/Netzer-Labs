@@ -4,7 +4,11 @@
  * Covers AM-01 (catalog contents and invocation ids), AM-02 (failure modes and
  * the Claude-only flag), the catalog half of AM-30 (provider approval) and the
  * catalog half of AM-37 (geo derivation). No AWS, no network: the control plane
- * is injected, the runtime-config reader is injected, and the clock is faked.
+ * and the runtime-config reader are injected, the SDK client is faked where the
+ * default control plane is under test, and the clock is faked.
+ *
+ * The blocks at the end (WI-1 correction 1) pin the discovery deadline and page
+ * cap, the failure backoff, fail-closed config reads and dated-id folding.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -15,8 +19,34 @@ vi.mock('../state/runtime-config-repo.js', () => ({
   getConfig: vi.fn(async () => undefined),
 }));
 
+// The default control plane runs against a fake BedrockClient that records each
+// client config and routes send() to a per-test mock. The real command classes
+// stay, so the catalog still builds genuine commands.
+const sdk = vi.hoisted(() => ({
+  configs: [] as Array<Record<string, unknown>>,
+  failConstruct: false,
+  send: vi.fn(async (_command: { input: Record<string, unknown> }): Promise<unknown> => ({})),
+}));
+vi.mock('@aws-sdk/client-bedrock', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-bedrock')>();
+  class BedrockClient {
+    constructor(config: Record<string, unknown>) {
+      if (sdk.failConstruct) throw new Error('fixture: client construction failed');
+      sdk.configs.push(config);
+    }
+    send(command: { input: Record<string, unknown> }): Promise<unknown> {
+      return sdk.send(command);
+    }
+  }
+  return { ...actual, BedrockClient };
+});
+
 import { UNKNOWN_MODEL_DEFAULTS, canonicalModelId, type ModelCapabilities } from './capabilities.js';
 import {
+  CATALOG_DISCOVERY_TIMEOUT_MS,
+  CATALOG_MAX_PROFILE_PAGES,
+  CATALOG_RETRY_AFTER_MS,
+  CATALOG_TTL_MS,
   DEFAULT_APPROVED_PROVIDERS,
   NON_CONVERSE_MODELS,
   geoPrefixForRegion,
@@ -523,5 +553,229 @@ describe('getModelCatalog: cache', () => {
     resetModelCatalogCache();
     await getModelCatalog(baseOpts({ controlPlane: cp }));
     expect(cp.listFoundationModels).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Discovery bounds, backoff and fail-closed reads (WI-1 correction 1) ──
+
+const T0 = 1_700_000_000_000;
+
+/** Starts a catalog call without awaiting it, so a hung discovery cannot hang the test. */
+function track(pending: Promise<ModelCatalog>): { catalog?: ModelCatalog; error?: unknown } {
+  const state: { catalog?: ModelCatalog; error?: unknown } = {};
+  pending.then(
+    (catalog) => {
+      state.catalog = catalog;
+    },
+    (error: unknown) => {
+      state.error = error;
+    },
+  );
+  return state;
+}
+
+describe('getModelCatalog: discovery bounds (F1)', () => {
+  it('bounds discovery with a 15 s deadline, a 60 s retry window and a 50-page profile cap', () => {
+    expect(CATALOG_DISCOVERY_TIMEOUT_MS).toBe(15_000);
+    expect(CATALOG_RETRY_AFTER_MS).toBe(60_000);
+    expect(CATALOG_MAX_PROFILE_PAGES).toBe(50);
+  });
+
+  it('a discovery call that never settles yields env-fallback at the deadline', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-14T00:00:00Z') });
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    cp.listFoundationModels.mockImplementation(() => new Promise<never>(() => {}));
+    const call = track(getModelCatalog(baseOpts({ controlPlane: cp })));
+
+    await vi.advanceTimersByTimeAsync(CATALOG_DISCOVERY_TIMEOUT_MS);
+    expect(call.error).toBeUndefined();
+    expect(call.catalog?.source).toBe('env-fallback');
+    expect(call.catalog?.models.map((m) => m.id)).toEqual([SONNET, SONNET_1M]);
+  });
+
+  it('a refresh that never settles yields the last good discovery at the deadline', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-14T00:00:00Z') });
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    const first = await getModelCatalog(baseOpts({ controlPlane: cp }));
+    expect(first.source).toBe('discovered');
+
+    vi.setSystemTime(Date.now() + CATALOG_TTL_MS);
+    cp.listInferenceProfiles.mockImplementation(() => new Promise<never>(() => {}));
+    const call = track(getModelCatalog(baseOpts({ controlPlane: cp })));
+
+    await vi.advanceTimersByTimeAsync(CATALOG_DISCOVERY_TIMEOUT_MS);
+    expect(call.error).toBeUndefined();
+    expect(call.catalog?.source).toBe('discovered');
+    expect(call.catalog?.models.map((m) => m.id)).toEqual(ids(first));
+  });
+
+  it('stops listing profiles when the next token repeats, and treats the discovery as failed', async () => {
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    let calls = 0;
+    // The fixture ends on its own after 1000 pages, so a missing guard fails instead of hanging.
+    cp.listInferenceProfiles.mockImplementation(async () => ({
+      inferenceProfileSummaries: [],
+      ...(++calls < 1000 ? { nextToken: 'same-token' } : {}),
+    }));
+    const cat = await getModelCatalog(baseOpts({ controlPlane: cp }));
+    expect(cp.listInferenceProfiles).toHaveBeenCalledTimes(2);
+    expect(cat.source).toBe('env-fallback');
+  });
+
+  it('stops at CATALOG_MAX_PROFILE_PAGES when tokens never end, and treats the discovery as failed', async () => {
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    let calls = 0;
+    cp.listInferenceProfiles.mockImplementation(async () => ({
+      inferenceProfileSummaries: [],
+      ...(++calls < 1000 ? { nextToken: `page-${calls}` } : {}),
+    }));
+    const cat = await getModelCatalog(baseOpts({ controlPlane: cp }));
+    expect(cp.listInferenceProfiles).toHaveBeenCalledTimes(CATALOG_MAX_PROFILE_PAGES);
+    expect(cat.source).toBe('env-fallback');
+  });
+});
+
+describe('getModelCatalog: failure backoff (F2)', () => {
+  it('after a failed discovery, calls inside the retry window make no control-plane call; the next one retries', async () => {
+    let t = T0;
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    cp.listFoundationModels.mockRejectedValueOnce(
+      Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' }),
+    );
+    const opts = baseOpts({ controlPlane: cp, now: () => t });
+    expect((await getModelCatalog(opts)).source).toBe('env-fallback');
+
+    for (let i = 0; i < 5; i += 1) {
+      t += 10_000; // at most 50 s after the failure: inside the window
+      const cat = await getModelCatalog(opts);
+      expect(cat.source).toBe('env-fallback');
+      expect(ids(cat)).toEqual([SONNET, SONNET_1M]);
+    }
+    expect(cp.listFoundationModels).toHaveBeenCalledTimes(1);
+    expect(cp.listInferenceProfiles).not.toHaveBeenCalled();
+
+    t = T0 + CATALOG_RETRY_AFTER_MS;
+    const recovered = await getModelCatalog(opts);
+    expect(cp.listFoundationModels).toHaveBeenCalledTimes(2);
+    expect(recovered.source).toBe('discovered');
+  });
+
+  it('after a failed refresh, calls inside the retry window serve the last good discovery without a control-plane call', async () => {
+    let t = T0;
+    const cp = fakeControlPlane(FM_ROWS, PROFILE_PAGES);
+    const opts = baseOpts({ controlPlane: cp, now: () => t });
+    const first = await getModelCatalog(opts);
+
+    t += CATALOG_TTL_MS;
+    cp.listFoundationModels.mockRejectedValueOnce(new Error('boom'));
+    expect((await getModelCatalog(opts)).source).toBe('discovered');
+    expect(cp.listFoundationModels).toHaveBeenCalledTimes(2);
+
+    for (let i = 0; i < 5; i += 1) {
+      t += 10_000;
+      const cat = await getModelCatalog(opts);
+      expect(cat.source).toBe('discovered');
+      expect(ids(cat)).toEqual(ids(first));
+    }
+    expect(cp.listFoundationModels).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('getModelCatalog: default control plane (F1, F2, F4)', () => {
+  beforeEach(() => {
+    sdk.configs.length = 0;
+    sdk.failConstruct = false;
+    sdk.send.mockReset();
+  });
+
+  const defaultOpts = (now: () => number): GetModelCatalogOptions => ({
+    env: ENV,
+    readConfig: configReader(),
+    guardrailConfigured: false,
+    now,
+  });
+
+  it('builds one BedrockClient per region with a throwing request timeout, and reuses it for the retry', async () => {
+    let t = T0;
+    sdk.send.mockRejectedValueOnce(Object.assign(new Error('socket hang up'), { name: 'TimeoutError' }));
+    sdk.send.mockImplementation(async (command) =>
+      'typeEquals' in command.input
+        ? { inferenceProfileSummaries: PROFILE_PAGES.flat() }
+        : { modelSummaries: FM_ROWS },
+    );
+
+    expect((await getModelCatalog(defaultOpts(() => t))).source).toBe('env-fallback');
+    t += CATALOG_RETRY_AFTER_MS;
+    expect((await getModelCatalog(defaultOpts(() => t))).source).toBe('discovered');
+
+    expect(sdk.configs).toHaveLength(1);
+    expect(sdk.configs[0]).toMatchObject({
+      region: 'us-east-1',
+      requestHandler: { throwOnRequestTimeout: true },
+    });
+    const handler = (sdk.configs[0]?.requestHandler ?? {}) as { requestTimeout?: unknown };
+    expect(handler.requestTimeout).toEqual(expect.any(Number));
+    expect(handler.requestTimeout as number).toBeGreaterThan(0);
+    expect(handler.requestTimeout as number).toBeLessThanOrEqual(CATALOG_DISCOVERY_TIMEOUT_MS);
+  });
+
+  it('a BedrockClient that cannot be constructed yields env-fallback and never rejects', async () => {
+    sdk.failConstruct = true;
+    const call = getModelCatalog(defaultOpts(() => T0));
+    await expect(call).resolves.toMatchObject({ source: 'env-fallback' });
+    expect(ids(await call)).toEqual([SONNET, SONNET_1M]);
+  });
+});
+
+describe('getModelCatalog: a failing runtime-config reader fails closed (F4)', () => {
+  it('a reader that rejects or throws keeps only Anthropic models and never rejects', async () => {
+    const readers = {
+      rejects: vi.fn(async (): Promise<string | undefined> => {
+        throw new Error('fixture: runtime-config table unreachable');
+      }),
+      throws: vi.fn((): Promise<string | undefined> => {
+        throw new Error('fixture: reader threw synchronously');
+      }),
+    };
+    for (const [label, readConfig] of Object.entries(readers)) {
+      resetModelCatalogCache();
+      const call = getModelCatalog(baseOpts({ readConfig }));
+      await expect(call, label).resolves.toMatchObject({ source: 'discovered' });
+      const cat = await call;
+      expect(cat.models.every((m) => m.canonicalId.startsWith('anthropic.')), label).toBe(true);
+      expect(ids(cat), label).toContain('us.anthropic.claude-haiku-4-5');
+      expect(reasonOf(cat, 'openai.gpt-oss-120b-1:0'), label).toBe('provider-not-approved');
+    }
+  });
+});
+
+describe('getModelCatalog: dated Anthropic ids fold into undated env ids (F6)', () => {
+  it('lists Haiku 4.5 once when env holds the undated id and discovery returns the dated one', async () => {
+    const env: NodeJS.ProcessEnv = { AWS_REGION: 'us-east-1', BEDROCK_HAIKU_MODEL: 'us.anthropic.claude-haiku-4-5' };
+    const dated = 'anthropic.claude-haiku-4-5-20251001-v1:0';
+    const cat = await getModelCatalog(
+      baseOpts({ env, controlPlane: fakeControlPlane([fm(dated)], [[profile(`us.${dated}`)]]) }),
+    );
+    expect(cat.source).toBe('discovered');
+    expect(ids(cat)).toEqual(['us.anthropic.claude-haiku-4-5']);
+    expect(cat.models[0]?.source).toBe('env');
+    expect(cat.excluded).toEqual([]);
+  });
+
+  it('folds only the exact dated form of an env id, never a longer model name', async () => {
+    const env: NodeJS.ProcessEnv = { AWS_REGION: 'us-east-1', BEDROCK_SONNET_MODEL: 'us.anthropic.claude-sonnet-4' };
+    const sonnet4 = 'anthropic.claude-sonnet-4-20250514-v1:0';
+    const sonnet45 = 'anthropic.claude-sonnet-4-5-20250929-v1:0';
+    const cat = await getModelCatalog(
+      baseOpts({
+        env,
+        controlPlane: fakeControlPlane(
+          [fm(sonnet4), fm(sonnet45)],
+          [[profile(`us.${sonnet4}`), profile(`us.${sonnet45}`)]],
+        ),
+      }),
+    );
+    expect(ids(cat)).toEqual(['us.anthropic.claude-sonnet-4', `us.${sonnet45}`]);
+    expect(cat.excluded).toEqual([]);
   });
 });
