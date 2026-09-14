@@ -16,15 +16,15 @@ as_of_commit: 271339bc8b2feea85e6c31b115fdd34e757a72e2
   a `feature/*` branch reaches no AWS environment.
 - Pushed: **no**, local commits only. PR: none. Deployment: none; nothing from
   this campaign runs anywhere, and production is still Claude-only.
-- Phases/tasks: **WI-0** is the active task. Its documentation half (this
-  folder, ADR 0011, the plan copy) completes with the commit that adds this
-  file; its environment half (`npm ci --ignore-scripts` for the root and `web/`,
-  then the `npm test` / `npm run typecheck` baseline) is the coordinator's and
-  is pending. Next: **WI-1 SPECIFICATION**, which writes
+- Phases/tasks: **WI-0 is complete.** Its documentation half (this folder,
+  ADR 0011, the plan copy) landed in `d90af11`; its environment half is done:
+  root `npm ci --ignore-scripts` (332 packages; `web/` dependencies are
+  deferred until WI-4 needs them) and the baseline below. **WI-1
+  SPECIFICATION is in progress**: it writes
   `src/lib/bedrock/capabilities.test.ts`, `catalog.test.ts` and
-  `models-pricing.test.ts` red for the intended reason, commits them locally
-  and freezes the Codex work order outside the checkout. Work items are defined
-  in the [plan](plan.md#work-items-dependency-order).
+  `models-pricing.test.ts` red for the intended reason, and freezes the Codex
+  work order outside the checkout. The coordinator commits them after review.
+  Work items are defined in the [plan](plan.md#work-items-dependency-order).
 - Blockers:
   - **Back-merge.** Production-only hotfixes `1abba67`, `d828124`, `1124118`,
     `8c14b3f` and the branch `hotfix/empty-turn-poisoning` (`3bffea6`) are on
@@ -50,18 +50,24 @@ as_of_commit: 271339bc8b2feea85e6c31b115fdd34e757a72e2
   - `node scripts/ci/feature-knowledge.mjs` — `feature-knowledge: OK`.
   - `node scripts/ci/docs-links.mjs` — `docs-links: 140 markdown files · 1758 internal links checked · 74 external links skipped`, then `docs-links: OK`.
   - `git diff --check` — clean (exit 0), for the working tree and with `--cached` for the staged files.
-  - Baseline `npm test` / `npm run typecheck`: **pending, run by the
-    coordinator.** `npm ci` was still installing while WI-0's documentation was
-    written, so no Vitest, `tsc` or build command ran in that session. Record
-    the baseline's red files in the WI-1 session handoff before any source
-    change. Earlier Windows baselines on other branches carried five known-red
-    files (four `scripts/**` shebang parse failures and one path-separator
-    assertion in `scripts/lib/lifecycle/rollback-classes.test.ts`); verify
-    rather than assume.
-- Smallest next action: once `npm ci` has finished in
-  `C:\dev\_netzer-allmodels`, run `npm test` and `npm run typecheck` on the
-  untouched tree and write the known-red files into the WI-1 session handoff;
-  then write `src/lib/bedrock/capabilities.test.ts` red for the intended reason.
+  - Baseline, run by the coordinator on 2026-09-13 in this clone on the
+    untouched code (base `271339b`; the WI-0 commit `d90af11` touches no code):
+    - `npm run typecheck` — exit 0 (23 s).
+    - `npm test` — exit 1 (155 s). `Test Files 5 failed | 238 passed | 1 skipped (244)`;
+      `Tests 1 failed | 3108 passed | 6 skipped (3115)`. The five red files, all
+      pre-existing:
+      - `scripts/release/sync-deprecations.test.ts`, `scripts/ci/runnable-blocks.test.ts`,
+        `scripts/ci/feature-knowledge.test.ts` and `scripts/ci/docs-links.test.ts`
+        fail at collection with `SyntaxError: Invalid or unexpected token` (the
+        known `#!` shebang parse failure).
+      - `scripts/lib/lifecycle/rollback-classes.test.ts > infra class > deploys the archived assembly with --app and diffs first`
+        fails a deep-equal on the `cdk diff --app` arguments.
+    - `CredentialsProviderError: Your session has expired` is logged by some
+      tests but fails none. Full logs are kept outside the repo, under
+      `C:\Users\EmmanuelAdams\.claude\gauntlet\bedrock-all-models\baseline\`.
+- Smallest next action: review and commit WI-1's failing tests, generate
+  `src/lib/bedrock/model-seeds.ts` from the AWS model-card inventory, freeze
+  the Codex work order, then run the WI-1 Codex build.
 
 Session index (newest first):
 

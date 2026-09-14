@@ -1,6 +1,6 @@
 # ADR 0011 — Every Converse-capable Bedrock model for agents
 
-**Status:** Proposed (2026-09-13). Extends [ADR 0003](0003-bedrock-inference-profiles.md); becomes Accepted in the campaign's WI-7, after the staging roll-call passes.
+**Status:** Proposed (2026-09-13). Extends [ADR 0003](0003-bedrock-inference-profiles.md); becomes Accepted in the campaign's WI-7, once the implementation and the full validation are in. The staging roll-call (WI-8) and the production roll-call (WI-9) are its live proof.
 
 ## Context
 
