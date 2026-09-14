@@ -7,8 +7,8 @@ name: CDK drift check
 #
 # Requires (set once in the repo's GitHub settings):
 #   - Secret  CDK_DIFF_ROLE_ARN  — an IAM role this workflow assumes via OIDC
-#       (created by scripts: trusts token.actions.githubusercontent.com for this
-#        repo; allowed to assume the cdk-hnb659fds-* bootstrap roles + read CFN).
+#       (must trust token.actions.githubusercontent.com for this repo; allowed
+#        to assume the cdk-hnb659fds-* bootstrap roles + read CFN).
 #   - Variables (Settings > Variables): DOMAIN_NAME, BEDROCK_OPUS_MODEL,
 #       BEDROCK_SONNET_MODEL, BEDROCK_HAIKU_MODEL, BEDROCK_DEFAULT_MODEL,
 #       BEDROCK_EMBED_MODEL, CCE_COST_ALERT_EMAIL, CCE_MONTHLY_BUDGET_USD,
@@ -24,13 +24,30 @@ name: CDK drift check
 
 # No pull_request trigger: CDK_DIFF_ROLE_ARN is unset, so the job can only fail
 # with "Could not load credentials" and reds every PR, which teaches reviewers to
-# ignore CI. It still runs daily and on demand. Restore the trigger once the
-# secret and variables above exist:
+# ignore CI. It now runs on demand only. Restore the trigger under the same two
+# conditions as the schedule below:
 #   pull_request:
 #     paths: ['infra/**', 'package.json', 'package-lock.json']
+#
+# DATED DISARM (added 2026-09-14). The daily schedule below is commented out:
+# every scheduled run failed at configure-aws-credentials because
+# CDK_DIFF_ROLE_ARN is unset, 39 of 39 from 2026-08-06 to 2026-09-13.
+#
+# RESTORE THE SCHEDULE only after BOTH of these:
+#   1. The read-only diff role exists and CDK_DIFF_ROLE_ARN names it. The
+#      deploy role cannot stand in: its OIDC trust is pinned to
+#      refs/heads/production and refs/heads/staging, and a scheduled run
+#      executes from the default branch.
+#   2. This job's synth env is re-derived from deploy.yml's CDK deploy step.
+#      Today this job's synth pins tier 3 and sets none of CCE_DEPLOY_MODE,
+#      CCE_CICD_ENABLED / CCE_GITHUB_*, CCE_PUBLIC_*, CCE_OPS_ALERT_EMAIL or
+#      the CCE_PAPERCLIP_* flags the CI deploy sets, and deploy.yml's own
+#      comments say those values change the templates. The secret alone would
+#      only move the failure from the credentials step to the diff.
+# If that has not happened by 2026-10-01, escalate rather than extend.
 on:
-  schedule:
-    - cron: '0 13 * * *' # daily 13:00 UTC
+  # schedule:
+  #   - cron: '0 13 * * *' # daily 13:00 UTC
   workflow_dispatch: {}
 
 permissions:
