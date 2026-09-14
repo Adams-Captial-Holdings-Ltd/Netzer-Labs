@@ -3,7 +3,7 @@ feature: deliverables-parity
 document_role: session-handoff
 status: current
 observed_at: 2026-09-13
-as_of_commit: 271339bc8b2feea85e6c31b115fdd34e757a72e2
+as_of_commit: bc462df16f9e06f0d9f7233515c974d13f27610b
 session_slug: w1-harness-specification
 supersedes: 2026-09-10-deliverables-gap-diagnosis.md
 ---
@@ -16,20 +16,27 @@ supersedes: 2026-09-10-deliverables-gap-diagnosis.md
 |---|---|
 | Session started | 2026-09-11 (planning); the work ran on 2026-09-13 |
 | Feature folder | `docs/features/deliverables-parity/` |
-| Branch worked on | `chore/deliverables-parity`, in the normal clone `C:\dev\_netzer-diag` |
+| Branch worked on | `chore/deliverables-parity` in the normal clone `C:\dev\_netzer-diag`; also the local-only `diag/prod-capture` (`de244e6` → `f7194c1` → `51e85cb`) |
 | Branch it merges into next | `development`, and only with the user's approval |
 | AWS environment that branch reaches | none, per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `271339bc8b2feea85e6c31b115fdd34e757a72e2` |
-| Commit at session end | in progress |
+| Commit at session end | `bc462df16f9e06f0d9f7233515c974d13f27610b`; this log and the HANDOFF are committed on top of it |
 | Pushed | no |
 | PR | none |
 | Deployed | no |
 
 ## 2. Current state summary
 
-Gauntlet phase SPECIFICATION for W1, in progress. The normal clone exists, the
-baseline is recorded, and this feature folder is written. The capture gate and
-the replay specification come next. Nothing has touched AWS.
+W1's Gauntlet SPECIFICATION phase is complete. In the normal clone
+`C:\dev\_netzer-diag`, `chore/deliverables-parity` carries this feature folder,
+the capture gate and the replay contract. The capture runs the real agent loop
+without reaching AWS and is green on both trees: production's first call asks
+for 8192 output tokens, development's for 1024, and every tool-loop round asks
+for 8192. It was also shown red for the intended reason. The replay and the
+prompts are frozen as a 13-case contract, all red on production's tree because
+`replay.ts` and `prompts.ts` are stubs. Nothing was pushed and nothing touched
+AWS. Step 0 did not run: no sign-in or go was given. The next phase is
+IMPLEMENTATION, which makes the contract green without running the replay.
 
 ## 3. Codebase understanding
 
@@ -38,15 +45,35 @@ the replay specification come next. Nothing has touched AWS.
 - The first call is `ConverseStreamCommand(buildParams(input))` in
   `src/lib/bedrock/client.ts`. When it stops on `tool_use`, the agent loop sends
   the same messages again as a non-streaming `ConverseCommand`, so the first
-  call's output is paid for and discarded.
+  call's output is paid for and then generated a second time.
 - Tools register through side-effect imports in `src/server.ts`: 14 modules on
   production, 15 on development (adds `paperclip-tools`). Four add-ons register
   only when their environment is set: document generation (`RAW_BUCKET`), email,
   Nova Canvas and web search.
 - Production source reads `AWS_ENDPOINT_URL` in one place only: the emulator-501
-  replay in `client.ts`.
+  replay in `client.ts`. A dead endpoint therefore does not change the captured
+  path.
 - `src/lib/bedrock/guard.test.ts` scans `src/` only, and `vitest.config.ts`
   collects only `*.test.ts`, while `tsconfig.json` includes `scripts/**`.
+
+**Measured requests.** Captured with the built-in agent prompt, empty memory, a
+placeholder guardrail, `RAW_BUCKET` set, and the email, Nova Canvas and web
+search gates unset. Sizes are JSON characters; tokens are not estimated here,
+because the replay's first call returns exact `inputTokens`.
+
+| Tree | Call | `maxTokens` | Request | System | Tool specs | Last message |
+|---|---|---:|---:|---:|---:|---:|
+| production (`f7194c1` = `de244e6` + harness) | first, ConverseStream | 8192 | 23,715 | 5,310 | 17,929 (26 tools) | 52 |
+| production | tool round 1, Converse | 8192 | 23,715 | 5,310 | 17,929 | 52 |
+| production | tool round 2, Converse | 8192 | 24,061 | 5,310 | 17,929 | 118 (tool result) |
+| development (`1a29a40`) | first, ConverseStream | 1024 | 25,173 | 5,310 | 19,387 (28 tools) | 52 |
+| development | tool rounds 1 and 2 | 8192 | 25,173 and 25,519 | 5,310 | 19,387 | 52 and 118 |
+
+The largest production tool specs are `schedule_task` (1,840), `dynamodb_query`
+(1,630), `ingest_document` (1,184), `s3_vectors_search` (1,131) and
+`generate_document` (915). Development adds `paperclip_add_comment` and
+`paperclip_create_subtask`. Production's real agent prompts are not in these
+numbers; see A8.
 
 ### 3.2 Critical files
 
@@ -54,44 +81,78 @@ the replay specification come next. Nothing has touched AWS.
 |---|---|---|
 | `src/agent/agent-loop.board-scope.test.ts` | Store-only mocks around the real `runAgentTurn` | The pattern the capture follows |
 | `src/agent/agent-loop.max-tokens.test.ts` (production only) | Pins the first-call ceiling | The assertion the capture generalises to both trees |
-| `src/server.ts` | Tool registration | The capture registers tools the same way |
+| `src/server.ts` | Tool registration | The capture registers tools exactly the same way |
+| `scripts/diagnostics/deliverables/capture.diag.ts` | The first executable gate and the request capture | Green on both trees; writes `capture-<sha>.json` outside the repository |
+| `scripts/diagnostics/deliverables/replay.diag.ts` | The replay and prompts contract | 13 cases; IMPLEMENTATION's failing evidence |
+| `scripts/diagnostics/deliverables/replay.ts`, `prompts.ts` | Frozen API, stubs | Their header comments carry the frozen design |
 
 ### 3.3 Patterns and conventions to follow
 
 - Mock stores only; keep the Bedrock client, tool registry and agent loader real.
+- Where the expected value differs by tree, key the gate on commit ancestry
+  (`git merge-base --is-ancestor 1abba67 HEAD`, or `d828124`) instead of
+  hard-coding one tree's answer.
+- To run the harness on production's code, overlay it onto the local branch
+  `diag/prod-capture`: `git switch diag/prod-capture`, then
+  `git checkout chore/deliverables-parity -- scripts/diagnostics/deliverables`,
+  then commit. Never push that branch.
 - In Git Bash, `MSYS_NO_PATHCONV=1` is needed for `git show <rev>:<nested path>`,
   but it also stops `git -C /c/dev/...` from being converted, and git then says
   it cannot change directory. Use `git -C C:/dev/...`.
 - Git Bash can fail with `fork: Permission denied` when many shells start at
   once. Run heavy commands one after another.
+- In a Vitest file, a template-literal dynamic import of a `.js` path fails with
+  `Unknown variable dynamic import`: Vite's dynamic-import-vars helper globs
+  `*.js`, which matches no TypeScript source. A `@vite-ignore` comment inside the
+  `import()` call makes it resolve at run time like a static import.
+- Registering every tool module the way `src/server.ts` does took 15 to 35 s on
+  this machine, longer than Vitest's default 10 s `hookTimeout`. The diag config
+  sets 120 s.
 
 ## 4. Work completed
 
 ### 4.1 Tasks finished
 
-- [x] Normal clone, `origin` pointed at GitHub, refs re-verified, `npm ci`.
+- [x] Normal clone with `origin` pointed at GitHub; refs re-verified; `npm ci`.
 - [x] Baseline recorded before any change (section 7).
-- [x] Feature folder: README, HANDOFF, the back-filled 2026-09-10 log, this log.
-- [ ] Capture gate.
-- [ ] Replay and prompts specification.
+- [x] Feature folder: README, HANDOFF, the back-filled 2026-09-10 log, this log (`1a29a40`).
+- [x] Capture gate: green on development and production, red for the intended reason (`b1e2a19`).
+- [x] Replay and prompts contract: 13 cases, red on production's tree (`bc462df`).
+- [ ] Step 0: not run, because no AWS sign-in or go was given.
+- [ ] IMPLEMENTATION: the next phase.
 
 ### 4.2 Files modified
 
 | File | Change | Rationale |
 |---|---|---|
-| `docs/features/deliverables-parity/*` | New | The feature folder, written before any harness code |
+| `docs/features/deliverables-parity/README.md`, `HANDOFF.md` | New | The feature folder, written before any harness code |
+| `docs/features/deliverables-parity/handoffs/2026-09-10-deliverables-gap-diagnosis.md` | New, back-filled | The diagnosis session wrote no repo handoff |
+| `docs/features/deliverables-parity/handoffs/2026-09-11-w1-harness-specification.md` | New | This log |
+| `scripts/diagnostics/deliverables/vitest.diag.config.ts` | New | Collects `*.diag.ts` only; dead endpoint, placeholder credentials, 120 s hook timeout |
+| `scripts/diagnostics/deliverables/capture.diag.ts` | New | The first executable gate and the request capture |
+| `scripts/diagnostics/deliverables/replay.ts`, `prompts.ts` | New, stubs | The frozen API; every export throws `not implemented` |
+| `scripts/diagnostics/deliverables/replay.diag.ts` | New | The replay and prompts contract |
 
 ### 4.3 Decisions made
 
 | Decision | Options considered | Why this one |
 |---|---|---|
-| Record the baseline with every AWS credential source stripped | Run with the ambient credentials | No AWS access is approved for this phase, and some suite tests have reached AWS when credentials were present |
+| Record the baseline with every AWS credential source stripped | Run with ambient credentials | No AWS access is approved for this phase, and some suite tests have reached AWS when credentials were present |
+| The capture keeps the loader's real S3 path and answers it with a spy; `DIAG_AGENT_PROMPT_FILE` supplies a real `CLAUDE.md` | `CONFIG_BUCKET=''`, the phase plan's first design | Production agents carry their own prompts (A8), so that design could only ever capture the built-in prompt |
+| Key the first-call expectation on `1abba67` ancestry | Separate files per tree; an environment variable | One harness characterises both trees and stays right after the back-merge |
+| Register tools by reading the tree's own `src/server.ts` | A fixed import list | Production imports 14 modules and development 15; a fixed list breaks one tree |
+| Run against production on the local overlay branch `diag/prod-capture` | A second clone; a linked worktree | One `node_modules` serves both trees, since the package files differ only by Paperclip scripts; worktrees hit M6 |
+| Captures go to `DIAG_OUT_DIR`, default `%TEMP%\netzer-deliverables-diag`, refused inside the repository | A git-ignored folder | P11 |
+| Specify the replay as stubs plus 13 hermetic cases | A prose specification | Executable failing evidence for IMPLEMENTATION |
+| Prompt 4's source text is `development.md` at `271339b` (8,385 words), cut at 6,000 words or more | A downloaded public text; synthetic prose | Real prose, reproducible from git, no download |
+| The live replay needs an explicit guardrail choice and a spend flag | Defaults | The capture only holds a placeholder guardrail, and spending needs the user's go |
 
 ### 4.4 Durable facts promoted out of this log
 
 | Fact learned | Promoted into | Done |
 |---|---|---|
 | Output ceilings per tree, request shape, tool registration, builder differences | `docs/features/deliverables-parity/README.md` | yes |
+| Production's measured first-request size | `docs/features/deliverables-parity/README.md`, section 5 | yes |
 
 ## 5. Carried-forward mistakes, assumptions and precautions
 
@@ -161,60 +222,119 @@ Short pointers only. The owning document has the detail; do not copy it here.
 | `npm run doctor`, `status` and `verify` fail rather than skip against an empty emulator. They give no useful local signal. | [Known local limitations](../../../../development.md#known-local-limitations) |
 | In Git Bash, `MSYS_NO_PATHCONV=1` is needed for `git show <rev>:<nested path>`, but it also stops `git -C /c/dev/...` from being converted. Use `git -C C:/dev/...`. | This log, section 3.3 |
 | Git Bash can fail with `fork: Permission denied` when many shells start at once. Run heavy commands one after another. | This log, section 3.3 |
+| In a Vitest file, a template-literal dynamic import of a `.js` path fails with `Unknown variable dynamic import`, because Vite globs `*.js` and matches no TypeScript source. Put a `@vite-ignore` comment inside the `import()` call. | This log, section 3.3 |
+| Registering every tool module the way `src/server.ts` does took 15 to 35 s here, longer than Vitest's default 10 s `hookTimeout`. | This log, section 3.3 |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Add `scripts/diagnostics/deliverables/capture.diag.ts` and its config, and run it
-on `chore/deliverables-parity`.
+In a fresh session, start Gauntlet IMPLEMENTATION from
+`~/.claude/plans/claude-bedrock-deliverables-handoff.md`.
 
 ### 6.2 Immediate next steps
 
-1. Capture gate green on this branch; show a red for the intended reason.
-2. Run it on production's tree.
-3. Specify the replay and the prompts as a red contract.
+1. IMPLEMENTATION: make `replay.diag.ts` green on `diag/prod-capture` without
+   changing the contract, then add `main()` with a dry run as the default.
+2. CLEANUP, then a fresh VERIFICATION of the harness.
+3. Step 0 once the user signs in and says go. Fetch the incident agent's
+   `CLAUDE.md` and production's guardrail id, then re-capture with
+   `DIAG_AGENT_PROMPT_FILE`.
+4. Export the prompts for System A.
+5. Step 2 only on the user's go, within $30; Step 3 only with its own approval.
 
 ### 6.3 Blockers and open questions
 
-- [ ] Blocker: Step 0 — needs: an AWS sign-in and the user's go.
-- [ ] Blocker: production failure examples, System A's files, $30 replay approval, judge approval — needs: the user.
+- [ ] Blocker: Step 0 — needs: an AWS sign-in (the root `default` profile; sessions last about 2 hours) and the user's go.
+- [ ] Blocker: 3–5 production failures from before and after 2026-08-24 — needs: the user.
+- [ ] Blocker: System A's files for the exported prompts — needs: the user, after IMPLEMENTATION exports them.
+- [ ] Blocker: Step 2 spend of up to $30, and the Step 3 judge — needs: two separate approvals.
+- [ ] Question: the incident's exact prompt wording — suggested resolution: the user supplies it, or Step 0 reads the `'agent turn started'` log line, which carries the first 80 characters of the prompt.
+- [ ] Gap report 1, not applied. **Situation:** this session specified a script that calls Bedrock with real credentials. **Location:** `development.md`, "Dangerous commands, never run locally", **Spends money**. **Why it matters:** the list is how the next person knows a command costs money. **Recommendation:** list the replay. **Proposed edit:**
+
+  ```diff
+   - **Spends money**: `npm run early-win`, `npm run validate:tier1`,
+     `npm run status -- --strict`, `npm run verify`, `npm run battle`,
+  -  `npm run loadtest`, the `scripts/jarvis-*-probe.ts` files.
+  +  `npm run loadtest`, the `scripts/jarvis-*-probe.ts` files,
+  +  `npx tsx scripts/diagnostics/deliverables/replay.ts` (replays a captured
+  +  agent request against real Bedrock; one campaign is capped at $30).
+  ```
+
+  **The ask:** approval to apply it.
+- [ ] Gap report 2, not applied. **Situation:** the baseline ran with every AWS credential source stripped. **Location:** `development.md`, "AWS safety", the paragraph on `npm test`. **Why it matters:** it tells readers a red suite may be an expired login because `durability.repro.test.ts` writes to staging, and on `271339b` that file passed 7/7 without credentials. **Recommendation:** stop naming that file as the AWS dependency. **Proposed edit:**
+
+  ```diff
+  -`npm test` is **not** fully hermetic, despite previously being listed here as
+  -safe. `src/lib/vectors/durability.repro.test.ts` writes to the real staging
+  -vectors bucket, so the suite reaches AWS and fails when the session lapses —
+  -which means a red run cannot be distinguished from an expired login. Verified
+  -2026-08-26: the same two files that fail without credentials pass in isolation
+  -with them. Treat a red `npm test` as inconclusive until you have checked
+  -`aws sts get-caller-identity`.
+  +`npm test` is **not** guaranteed hermetic: on 2026-08-26 some tests reached AWS
+  +when credentials were present. `src/lib/vectors/durability.repro.test.ts` is
+  +not one of them; on 2026-09-13, at `271339b`, it passed 7/7 with every AWS
+  +credential source stripped. For a result AWS cannot influence, run the suite
+  +with `AWS_PROFILE`, the key variables, `AWS_CONFIG_FILE`,
+  +`AWS_SHARED_CREDENTIALS_FILE` and the metadata endpoint stripped.
+  ```
+
+  **The ask:** approval to apply it.
 
 ### 6.4 Deferred, and why
 
-- Everything past W1 SPECIFICATION: this session builds only this phase.
+- Re-capturing with production's own `CLAUDE.md` and guardrail: needs Step 0.
+- E2, E3 and every fix: outside W1.
+- Deleting `diag/prod-capture`: when W1 closes.
 
 ## 7. Verification actually performed
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
-| `npm run typecheck` | clean | pending |
-| `npm test` | 5 files failed, 238 passed, 1 skipped; 1 test failed, 3108 passed, 6 skipped (238.59 s) | pending |
-| `npm run build` | not run | pending |
-| `npm --prefix web run typecheck` | not run | pending |
-| `npm --prefix web run build` | not run | pending |
-| `npm run local:test:integration` | not run | pending |
-| `node scripts/ci/docs-links.mjs` | OK: 135 files, 1647 internal links | pending |
-| `node scripts/ci/feature-knowledge.mjs` | OK | pending |
-| `git diff --check` | clean | pending |
+| `npm run typecheck` | clean | clean at `bc462df` |
+| `npm test` | 5 files failed, 238 passed, 1 skipped; 1 test failed, 3108 passed, 6 skipped (238.59 s) | 5 files failed, 238 passed, 1 skipped; 1 test failed, 3108 passed, 6 skipped (100.99 s), the same five files as the baseline |
+| `npm run build` | not run | not run |
+| `npm --prefix web run typecheck` | not run | not run |
+| `npm --prefix web run build` | not run | not run |
+| `npm run local:test:integration` | not run | not run |
+| `node scripts/ci/docs-links.mjs` | OK: 135 files, 1647 internal links | OK: 139 files, 1719 internal links |
+| `node scripts/ci/feature-knowledge.mjs` | OK | OK |
+| `git diff --check` | clean | clean |
+| `capture.diag.ts` on development (`1a29a40`) | not applicable | 2/2 pass; first call 1024, tool rounds 8192 |
+| `capture.diag.ts` on development, expectation forced to 8192 | not applicable | fails as intended: `AssertionError: expected 1024 to be 8192`; restored |
+| `capture.diag.ts` on production (`f7194c1`) | not applicable | 2/2 pass; first call 8192, tool rounds 8192 |
+| `replay.diag.ts` on production (`51e85cb`) | not applicable | 13/13 fail as intended: 12 on `not implemented: <fn>`, and R10 on `not implemented: runCampaign` surfacing through `rejects.toThrow` |
 
-The baseline ran on `271339b` with `AWS_PROFILE`, the key variables,
-`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE` and the metadata endpoint
-stripped. The five failing files are the known set: four fail to collect on a
-`.mjs` shebang (`scripts/ci/docs-links.test.ts`,
-`scripts/ci/feature-knowledge.test.ts`, `scripts/ci/runnable-blocks.test.ts`,
-`scripts/release/sync-deprecations.test.ts`), and
-`scripts/lib/lifecycle/rollback-classes.test.ts` has one assertion failure.
+Both `npm test` runs stripped `AWS_PROFILE`, the key variables,
+`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE` and the metadata endpoint. The
+five baseline failures are the known set: four fail to collect on a `.mjs`
+shebang (`scripts/ci/docs-links.test.ts`, `scripts/ci/feature-knowledge.test.ts`,
+`scripts/ci/runnable-blocks.test.ts`, `scripts/release/sync-deprecations.test.ts`),
+and `scripts/lib/lifecycle/rollback-classes.test.ts` has one assertion failure.
 `src/lib/vectors/durability.repro.test.ts` passed 7/7.
 
-Anything not run, and why: pending the end of the session.
+Anything not run, and why: `npm run build`, both web commands and
+`npm run local:test:integration` did not run. They are pre-push gates
+(development.md step 7), and no push is planned; they must run before anyone
+pushes this branch. Step 0 did not run: no AWS sign-in or go was given. The live
+replay and the judge did not run, by design.
 
 ## 8. Environment state
 
-- **Tools and services**: Node 24.19.0, npm 11.17.0.
+- **Tools and services**: Node 24.19.0, npm 11.17.0, Vitest 2.1.9.
+- **Branches in the clone**: `chore/deliverables-parity` (`bc462df` plus this
+  commit); `diag/prod-capture` (`51e85cb`, local only); `fix/knowledge-scope-fanout`,
+  created by cloning from the main checkout and untouched.
+- **Outputs outside the repository**: `%TEMP%\netzer-deliverables-diag\capture-1a29a40d8a05.json`
+  (development) and `capture-f7194c157503.json` (production). Both hold the
+  built-in agent prompt.
 - **Active processes**: none.
-- **Environment variables**: none of `AWS_*` were inherited by the shell.
-- **Uncommitted work left in the tree**: none in the clone.
+- **Environment variables**: the shell inherited no `AWS_*` variables. The diag
+  config sets a dead `AWS_ENDPOINT_URL` and placeholder `AWS_*` values inside its
+  own test process only.
+- **Uncommitted work left in the tree**: none in the clone after this commit. The
+  main checkout `C:\dev\Netzer-Labs` was read, never modified.
 
 ## 9. Related documents
 

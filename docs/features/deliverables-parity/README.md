@@ -98,6 +98,8 @@ re-verified here. The harness state is in the [HANDOFF](HANDOFF.md).
 | Document tool | Production `src/lib/tools/document-generation-tools.ts:129-143` | pdf, docx or xlsx; validates, builds, stores under `generations/` in `RAW_BUCKET`, returns a 24-hour presigned URL |
 | Builders | `src/lib/documents/types.ts` (`validateDocumentSpec`, `validateSpreadsheetSpec`), `pdf.ts`, `docx.ts`, `xlsx.ts` | Production `pdf.ts:63` rejects non-WinAnsi text; development has no such check |
 | Agent prompt | `src/lib/config/agent-loader.ts:34` | `agents/<id>/CLAUDE.md` from the config bucket when present, otherwise a built-in prompt defaulting to "one or two short paragraphs" |
+| Request size, measured | `scripts/diagnostics/deliverables/capture.diag.ts` on production's tree | First call 23,715 JSON characters: system prompt 5,310 (built-in prompt, empty memory), 26 tool specs 17,929, user message 52, two cache points. Production's own agent prompts are not in this number |
+| Replay (E1) | `scripts/diagnostics/deliverables/replay.ts`, `prompts.ts`; contract `replay.diag.ts` | Specified only: the exports are stubs that throw `not implemented` |
 
 ## 6. Current business/state rules
 
