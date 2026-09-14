@@ -9,9 +9,13 @@
  * Manager or env directly and roll the Fargate service.
  */
 
+import { canonicalModelId, resolveCapabilities } from './capabilities.js';
+
 export interface ModelSpec {
   id: string;
-  family: 'opus' | 'sonnet' | 'haiku';
+  family: string;
+  provider: string;
+  priceSource: string;
   inputPricePer1M: number; // USD — uncached input
   outputPricePer1M: number; // USD
   /** Cache write (5-min TTL): 1.25x input on Anthropic / Bedrock. */
@@ -21,7 +25,7 @@ export interface ModelSpec {
   contextWindow: number; // tokens
 }
 
-export const KNOWN_PRICING: Record<string, Omit<ModelSpec, 'id'>> = {
+export const KNOWN_PRICING: Record<string, Omit<ModelSpec, 'id' | 'provider' | 'priceSource'>> = {
   opus: {
     family: 'opus',
     inputPricePer1M: 15,
@@ -64,16 +68,41 @@ export const KNOWN_PRICING: Record<string, Omit<ModelSpec, 'id'>> = {
   },
 };
 
-function pricingKeyFromId(modelId: string): string {
+function pricingKeyFromId(modelId: string): string | undefined {
   const is1m = /1m/i.test(modelId) || /1000k/i.test(modelId);
   if (/opus/i.test(modelId)) return is1m ? 'opus-1m' : 'opus';
   if (/sonnet/i.test(modelId)) return is1m ? 'sonnet-1m' : 'sonnet';
-  return 'haiku';
+  if (/haiku/i.test(modelId)) return 'haiku';
+  return undefined;
 }
 
 export function resolveModel(modelId: string): ModelSpec {
   const key = pricingKeyFromId(modelId);
-  return { id: modelId, ...KNOWN_PRICING[key] };
+  if (key) {
+    const pricing = KNOWN_PRICING[key];
+    return {
+      id: modelId,
+      ...pricing,
+      provider: 'anthropic',
+      priceSource: 'https://aws.amazon.com/bedrock/pricing/',
+    };
+  }
+
+  const canonicalId = canonicalModelId(modelId);
+  const capabilities = resolveCapabilities(canonicalId);
+  const { price } = capabilities;
+  const provider = canonicalId.split('.', 1)[0] ?? canonicalId;
+  return {
+    id: modelId,
+    family: provider,
+    provider,
+    priceSource: price.source,
+    inputPricePer1M: price.inputPer1M,
+    outputPricePer1M: price.outputPer1M,
+    cacheReadPricePer1M: price.cacheReadPer1M ?? price.inputPer1M,
+    cacheWritePricePer1M: price.cacheWritePer1M ?? price.inputPer1M,
+    contextWindow: capabilities.contextWindow,
+  };
 }
 
 // ── 1M context ─────────────────────────────────────────────────────

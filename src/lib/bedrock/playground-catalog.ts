@@ -7,9 +7,8 @@
  * non-Anthropic families AWS now serves on-demand in us-east-1 (OpenAI gpt-oss,
  * DeepSeek, Qwen, Kimi, Llama, Mistral, Nova).
  *
- * Why a curated static list (vs a live ListFoundationModels call):
- *   - The ECS task role is scoped to bedrock:InvokeModel, not
- *     bedrock:ListFoundationModels, so a live catalog call could 403.
+ * Why a curated static list (vs the live catalog used elsewhere):
+ *   - The ECS task role can list foundation models and inference profiles.
  *   - The raw catalog is ~120 entries including image/embedding/audio models;
  *     curating keeps the picker to the chat-capable models worth comparing.
  *   - Every id below was verified present + ON_DEMAND + streaming in us-east-1.
@@ -24,6 +23,7 @@
  * behind the number. Add a price below to light up USD for that model.
  */
 
+import { FALLBACK_PRICE } from './capabilities.js';
 import { listAvailableModels, resolveModel } from './models.js';
 
 export interface PlaygroundModel {
@@ -114,9 +114,6 @@ export function playgroundCost(
 // cost-cap accounting (never shown as a real price in the UI). Set above the
 // priciest known tier so an unpriced paid call is OVER-counted toward the daily
 // cap rather than left invisible, which is the safe direction for a spend limit.
-const FALLBACK_INPUT_PRICE_PER_1M = 25;
-const FALLBACK_OUTPUT_PRICE_PER_1M = 80;
-
 /**
  * USD for one Playground turn for CAP METERING. Returns the verified price when
  * known, otherwise a conservative fallback so an unpriced model still counts
@@ -132,7 +129,7 @@ export function playgroundMeteredCost(
   const verified = playgroundCost(model, inputTokens, outputTokens);
   if (verified !== null) return verified;
   return (
-    (inputTokens / 1_000_000) * FALLBACK_INPUT_PRICE_PER_1M +
-    (outputTokens / 1_000_000) * FALLBACK_OUTPUT_PRICE_PER_1M
+    (inputTokens / 1_000_000) * FALLBACK_PRICE.inputPer1M +
+    (outputTokens / 1_000_000) * FALLBACK_PRICE.outputPer1M
   );
 }
