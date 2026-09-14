@@ -28,7 +28,7 @@ npm run deploy:rollback -- --class=image --to=previous
 
 ## Fix path 2 — manual task-definition rollback
 
-When the rollback script is unavailable or didn't help. Task definitions pin an **immutable per-deploy image tag**, never `:latest`, so retagging `:latest` and forcing a new deployment rolls nothing back — the task def still references the same pinned tag. Instead, roll the service to the previous task-definition revision, which already points at the previous good image:
+When the rollback script is unavailable or didn't help. Task definitions pin the image **by digest** (a pre-P5 revision pins an immutable per-deploy tag), never `:latest`, so retagging `:latest` and forcing a new deployment rolls nothing back — the task def still references the same pinned image. Instead, roll the service to the previous task-definition revision, which already points at the previous good image:
 
 ```bash
 # 1. List recent ACTIVE revisions; the second-newest is usually the last good deploy
@@ -42,20 +42,17 @@ aws ecs update-service --cluster claudeclaw-cluster --service claudeclaw-service
 aws ecs wait services-stable --cluster claudeclaw-cluster --services claudeclaw-service
 ```
 
-To roll to a specific older image instead, register a new revision pointing at that image's immutable tag — `npm run deploy:rollback -- --class=image --to=<deployId>` does exactly that for you.
+To roll to a specific older image instead, register a new revision pointing at that image's immutable digest (or per-deploy tag for a pre-P5 revision) — `npm run deploy:rollback -- --class=image --to=<deployId>` does exactly that for you.
 
 ## Fix path 3 — auto-rollback already happened
 
-If you see `circuit breaker triggered` events: ECS already rolled the service back to the previous task definition. The bad `:latest` image is still in ECR, but running tasks have the cached previous image. Two follow-ups:
+If you see `circuit breaker triggered` events: ECS already rolled the service back to the previous task definition, which pins the previous good image, so new launches pull that image; nothing needs rebuilding. Two follow-ups:
 
 ```bash
-# (a) Rebuild and redeploy the last known-good commit so new task launches
-#     (autoscale event, spot replacement, future deploy) get a good image.
-#     This pushes a NEW immutable per-deploy tag and points the task def at
-#     it — there is no floating :latest to re-push.
-git checkout <last-good-sha>
-npm run deploy -- --image-only --yes
-git checkout main
+# (a) Do not re-run `npm run deploy -- --image-only` on an old commit. It
+#     force-redeploys the current revision rather than re-pointing the task
+#     definition, and re-pushing a commit moves the tag off the digest the
+#     live revision pins. Ship the fix as a normal deploy of a new commit.
 
 # (b) Investigate the original failure offline — see "Why this happened" below.
 ```

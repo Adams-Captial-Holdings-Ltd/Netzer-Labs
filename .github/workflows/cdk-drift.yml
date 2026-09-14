@@ -70,7 +70,8 @@ jobs:
           aws-region: us-east-1
       # This is an INFRA-drift check, not an app-version check. The task def
       # pins two per-deploy stamps that legitimately differ from the local
-      # checkout — the image tag and DEPLOY_SHA — so we resolve BOTH read-only
+      # checkout — the image (by digest, or by tag on a revision deployed
+      # before digest pinning) and DEPLOY_SHA — so we resolve BOTH read-only
       # from the live service and feed them to synth. Otherwise the diff flags
       # them on every commit that isn't redeployed (the historical red). Needs
       # ecs:DescribeTaskDefinition on the role; if it can't read ECS, both fall
@@ -83,10 +84,14 @@ jobs:
             --region us-east-1 \
             --query 'taskDefinition.containerDefinitions[?name==`orchestrator`]|[0].image' \
             --output text 2>/dev/null || true)
-          TAG="${IMAGE##*:}"
-          if [ "$TAG" = "$IMAGE" ] || [ -z "$TAG" ]; then TAG=""; fi
+          case "$IMAGE" in
+            *@sha256:*) LIVE_DIGEST="${IMAGE##*@}"; TAG="" ;;
+            *) LIVE_DIGEST=""; TAG="${IMAGE##*:}"; if [ "$TAG" = "$IMAGE" ] || [ -z "$TAG" ]; then TAG=""; fi ;;
+          esac
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "digest=$LIVE_DIGEST" >> "$GITHUB_OUTPUT"
           echo "deployed image tag: ${TAG:-<unresolved>}"
+          echo "deployed image digest: ${LIVE_DIGEST:-<unresolved>}"
           SHA=$(aws ecs describe-task-definition \
             --task-definition claudeclaw-orchestrator \
             --region us-east-1 \
@@ -120,6 +125,7 @@ jobs:
       - name: Synthesize the drift assembly
         env:
           CCE_IMAGE_TAG: ${{ steps.live.outputs.tag }}
+          CCE_IMAGE_DIGEST: ${{ steps.live.outputs.digest }}
           CDK_STACK_NAME: CCE
           DEPLOY_TIER: '3'
           CCE_TIER: '3'

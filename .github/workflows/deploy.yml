@@ -308,6 +308,7 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build + Push (linux/arm64)
+        id: orchimg
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           SHA: ${{ steps.tag.outputs.sha }}
@@ -322,6 +323,13 @@ jobs:
             --push \
             -f Dockerfile \
             .
+          DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPO" --image-ids imageTag="$SHA" --region "$AWS_REGION" --query 'imageDetails[0].imageDigest' --output text)
+          case "$DIGEST" in
+            sha256:*) ;;
+            *) echo "::error::Expected sha256 digest for orchestrator image, got: $DIGEST"; exit 1 ;;
+          esac
+          echo "orchestrator image digest: $DIGEST (copy into release.yml images input)"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       # Mirrors the Paperclip image build in scripts/deploy.ts phase a (Phase
       # 1.5, ADR 0010) by running THE SAME CODE, not a hand-mirrored copy of
@@ -930,8 +938,9 @@ jobs:
           # constants.ts so every named resource lives under
           # `claudeclaw[-suffix]-*`.
           CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}
-          # Pin the task definition to the image we just pushed (never `latest`).
+          # Pin the task definition to the digest of the image we just pushed (never `latest`).
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
+          CCE_IMAGE_DIGEST: ${{ steps.orchimg.outputs.digest }}
           CCE_CICD_ENABLED: '1'
           # Paperclip ROUTER flag, and only that since Phase 9: the substrate
           # itself is provisioned by CCE_TIER above. This variable reaches the
@@ -1049,6 +1058,7 @@ jobs:
           CCE_TIER: ${{ env.CCE_TIER }}
           CCE_NAME_SUFFIX: ${{ env.TARGET_ENV == 'staging' && 'staging' || '' }}
           CCE_IMAGE_TAG: ${{ steps.tag.outputs.sha }}
+          CCE_IMAGE_DIGEST: ${{ steps.orchimg.outputs.digest }}
           CCE_CICD_ENABLED: '1'
           CCE_PAPERCLIP_ENABLED: ${{ vars.CCE_PAPERCLIP_ENABLED }}
           CCE_PAPERCLIP_IMAGE_DIGEST: ${{ steps.paperclipimg.outputs.digest }}

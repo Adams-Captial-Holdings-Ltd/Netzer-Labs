@@ -183,6 +183,14 @@ phases:
       - echo "Pushing to ECR..."
       - docker push $IMAGE_URI:$COMMIT_SHA
       - docker push $IMAGE_URI:latest
+      - |
+        DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE_URI:$COMMIT_SHA" | sed 's/.*@//')
+        case "$DIGEST" in
+          sha256:*) ;;
+          *) echo "ABORT: expected sha256 digest after push, got: $DIGEST"; exit 1 ;;
+        esac
+        export CCE_IMAGE_DIGEST="$DIGEST"
+        echo "Pushed orchestrator image digest: $CCE_IMAGE_DIGEST"
       # UNIFIED DEPLOY (opt-in): when CCE_DEPLOY_INFRA=1, reconcile ALL infra +
       # image via CDK so the image path can never let infra drift again. Hard
       # guard: refuse if DOMAIN_NAME is empty — a cdk deploy without it would
@@ -202,14 +210,15 @@ phases:
           # so `cdk diff` and the drift-check workflow read CLEAN after a unified deploy.
           # (COMMIT_SHA is the 12-char ECR image tag; this short SHA is the deploy marker.)
           export DEPLOY_SHA="$(git rev-parse --short HEAD)"
-          # Pin the task definition to the image pushed above (never `latest`).
+          # CCE_IMAGE_DIGEST, exported after the push above, pins the task
+          # definition; this tag is only the fallback (never `latest`).
           export CCE_IMAGE_TAG="$COMMIT_SHA"
           npm ci
           npx cdk deploy --all --require-approval never
           echo "Unified deploy complete (infra + image $COMMIT_SHA)."
         else
           echo "Image-only deploy: swapping image into the live task def..."
-          NEW_IMAGE="$IMAGE_URI:$COMMIT_SHA"
+          NEW_IMAGE="$IMAGE_URI@$DIGEST"
           # Clone the LIVE task def and swap ONLY the orchestrator image, preserving
           # every other container + all env (launch flag, voice, cost cap, etc.).
           # Use jq, NOT an inline `python3 -c` heredoc — the YAML block indentation

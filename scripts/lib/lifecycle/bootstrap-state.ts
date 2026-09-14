@@ -371,15 +371,16 @@ export async function ensureEcrRepo(ecr: EcrClientLike, name: string): Promise<v
 /**
  * ECR retention (IaC readiness plan, item 18).
  *
- * Two rules:
- *   1. untagged images expire after 7 days — these are layers orphaned by
- *      tag moves, never rollback targets;
- *   2. keep the newest 50 images of ANY tag status (imageCountMoreThan 50
- *      expires the oldest beyond that).
+ * One rule: keep the newest 50 images of ANY tag status (imageCountMoreThan 50
+ * expires the oldest beyond that).
  *
- * The tradeoff, stated plainly: per-deploy tags are the ONLY tags we push,
- * so count-based retention IS deploy-tag retention — the last ~50 deploys
- * stay rollback-able and anything older is intentionally pruned. That makes
+ * There is deliberately no untagged-image expiry rule. It rested on untagged
+ * images never being rollback targets, and digest pinning breaks that: a
+ * same-commit re-push moves the tag, so the digest a live or rollback revision
+ * pins goes untagged and would be expired.
+ *
+ * The tradeoff, stated plainly: count-based retention keeps the last ~50
+ * deploys rollback-able and intentionally prunes anything older. That makes
  * "manifest references a pruned digest" a real (if remote) state, which is
  * exactly why rollback preflight double-checks digest existence in ECR
  * (DescribeImages per digest) BEFORE touching anything: a pruned target
@@ -387,17 +388,6 @@ export async function ensureEcrRepo(ecr: EcrClientLike, name: string): Promise<v
  */
 export const ECR_LIFECYCLE_POLICY = {
   rules: [
-    {
-      rulePriority: 1,
-      description: 'expire untagged images after 7 days',
-      selection: {
-        tagStatus: 'untagged',
-        countType: 'sinceImagePushed',
-        countUnit: 'days',
-        countNumber: 7,
-      },
-      action: { type: 'expire' },
-    },
     {
       rulePriority: 2,
       description: 'keep only the newest 50 images (deploy tags are the only tags we push)',

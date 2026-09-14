@@ -145,15 +145,26 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     );
 
     // ── Per-deploy image pin (IaC readiness item 9) ─────────────
-    // Task definitions never reference the mutable `latest` tag: rollback
-    // re-deploying an archived template must reproduce the rolled-back
-    // image, not whatever `latest` points at. The deploy pipeline passes
-    // the immutable per-deploy tag via CCE_IMAGE_TAG (deploy.ts and the
-    // CI workflow both set it to the git short sha they pushed);
-    // DEPLOY_SHA / local git are the fallback so a bare `cdk synth`
-    // still resolves to a deterministic, commit-addressed tag.
-    const imageTag =
-      process.env.CCE_IMAGE_TAG?.trim() || process.env.DEPLOY_SHA?.trim() || gitSha() || 'dev';
+    // Task definitions prefer the immutable image digest, then the immutable
+    // per-deploy tag: rollback re-deploying an archived template must reproduce
+    // the rolled-back image, not whatever `latest` points at. deploy.ts and
+    // every CI driver pass the digest via CCE_IMAGE_DIGEST and the tag via
+    // CCE_IMAGE_TAG. A malformed digest must fail synth, because CDK would
+    // otherwise render it as a tag. DEPLOY_SHA / local git are the fallback so
+    // a bare `cdk synth` still resolves to a deterministic, commit-addressed
+    // tag. The last resort, 'orchestrator-digest-unset', is deliberately
+    // unpullable, so a synth with no image source fails at pull time rather
+    // than running a stale image.
+    const imageDigest = process.env.CCE_IMAGE_DIGEST?.trim();
+    if (imageDigest && !/^sha256:[0-9a-f]{64}$/.test(imageDigest)) {
+      throw new Error('CCE_IMAGE_DIGEST must be sha256:<64 lowercase hex characters>');
+    }
+    const imageRef =
+      imageDigest ||
+      process.env.CCE_IMAGE_TAG?.trim() ||
+      process.env.DEPLOY_SHA?.trim() ||
+      gitSha() ||
+      'orchestrator-digest-unset';
 
     // ── ECS cluster ─────────────────────────────────────────────
     this.cluster = new Cluster(this, 'Cluster', {
@@ -312,7 +323,7 @@ export class ComputeStack extends Stack implements ComputeOutputs {
 
     // ── Container ───────────────────────────────────────────────
     taskDef.addContainer('orchestrator', {
-      image: ContainerImage.fromEcrRepository(ecrRepo, imageTag),
+      image: ContainerImage.fromEcrRepository(ecrRepo, imageRef),
       containerName: 'orchestrator',
       portMappings: [{ containerPort: 3000 }],
       essential: true,
@@ -801,7 +812,7 @@ export class ComputeStack extends Stack implements ComputeOutputs {
       executionRole: taskExecutionRole,
     });
     consolidationTaskDef.addContainer('worker', {
-      image: ContainerImage.fromEcrRepository(ecrRepo, imageTag),
+      image: ContainerImage.fromEcrRepository(ecrRepo, imageRef),
       containerName: 'worker',
       // Run the worker entrypoint instead of the orchestrator server. The
       // spawner targets the container named 'worker' for its env overrides.

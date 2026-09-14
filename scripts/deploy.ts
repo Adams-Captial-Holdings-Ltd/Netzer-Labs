@@ -355,6 +355,11 @@ async function main(): Promise<void> {
       await ecrLoginAndPush(env, imageTag);
     }
     const imageDigest = await resolveImageDigest(env, imageTag);
+    // Forward the resolved digest into synth. infra/lib/compute-stack.ts pins
+    // BOTH orchestrator task definitions to it (never a mutable tag), and
+    // cdkEnvBag is an ALLOWLIST, so without its entry the value would never
+    // reach the cdk child process and synth would silently pin the tag.
+    env.CCE_IMAGE_DIGEST = imageDigest;
     if (buildMode === 'cloud') {
       // The arm64 gate ran INSIDE the build (native ARM host + explicit
       // architecture self-check that fails the build), so there is no
@@ -1556,8 +1561,13 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // (CCE_CODEBUILD_ENABLED). Either one requires an EXPLICIT GitHub
     // owner/repo in .env — synth fails closed with no default, so a
     // fork can never inherit the upstream repo's deploy authority.
-    // Immutable per-deploy image tag (IaC readiness item 9): the task
-    // definition pins THIS tag, never `latest`.
+    // The pushed orchestrator image's digest, set by phase a and never by the
+    // operator's env file: compute-stack.ts pins both task definitions to it.
+    // It is not in SYNTH_INPUT_ALLOWLIST because a rollback replays the
+    // manifest's imageDigest instead. Not a secret: a sha256 digest.
+    CCE_IMAGE_DIGEST: env.CCE_IMAGE_DIGEST ?? '',
+    // Immutable per-deploy image tag (IaC readiness item 9): the fallback the
+    // task definition pins when no digest is supplied, never `latest`.
     CCE_IMAGE_TAG: imageTag,
     // Deployment mode reaches synth (deploy-mode.ts drives the
     // internal-ALB/infra-only branches in compute-stack).

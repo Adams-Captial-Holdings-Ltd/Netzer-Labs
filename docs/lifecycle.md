@@ -108,8 +108,11 @@ npm run deploy:rollback -- --class=infra --to=<deployId> --rebuild-from-git
 ```
 
 The tool reconstructs the synth env from the manifest's allowlisted
-`synthInputs` plus `CCE_IMAGE_TAG=<target imageTag>` (so the task definition
-pins the rolled-back image) and deploys from the current tree. If
+`synthInputs` plus `CCE_IMAGE_DIGEST=<target imageDigest>` and
+`CCE_IMAGE_TAG=<target imageTag>`, so the task definition pins the
+rolled-back image, and deploys from the current tree. The digest is empty for
+a manifest recorded before digests, and that empty value overrides one
+exported in the shell. If
 `git rev-parse HEAD` doesn't match the recorded sha it WARNS loudly and
 proceeds — you asked for a rebuild; the templates may not match the target.
 

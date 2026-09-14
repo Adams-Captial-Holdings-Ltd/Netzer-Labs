@@ -14,7 +14,7 @@
  *            rollback is reproducible from a fresh clone. Fallback, gated
  *            behind --rebuild-from-git: the OPERATOR checks out the recorded
  *            sha; the tool reconstructs the synth env from the manifest's
- *            allowlisted synthInputs + CCE_IMAGE_TAG and deploys from the
+ *            allowlisted synthInputs + CCE_IMAGE_DIGEST + CCE_IMAGE_TAG and deploys from the
  *            current tree, warning loudly on a sha mismatch.
  *   config — move AWSCURRENT on every secret to the VersionId recorded in
  *            the target manifest (durable thanks to per-deploy staging
@@ -857,7 +857,7 @@ async function infraDiffAndMaybeDeploy(
           `the recorded commit. That checkout is YOUR move:\n` +
           `  git checkout ${target.gitSha}\n` +
           'then re-run with --rebuild-from-git. The tool reconstructs the synth env from the ' +
-          'manifest (allowlisted synthInputs + CCE_IMAGE_TAG) but never moves your git tree.',
+          'manifest (allowlisted synthInputs + CCE_IMAGE_DIGEST + CCE_IMAGE_TAG) but never moves your git tree.',
       );
     }
     const head = await deps.shell.capture('git', ['rev-parse', 'HEAD'], { cwd: opts.repoRoot });
@@ -873,7 +873,7 @@ async function infraDiffAndMaybeDeploy(
       log('!!! ─────────────────────────────────────────────────────────────');
     }
     // Reconstruct the synth env: allowlisted inputs + the recorded image
-    // tag, so the Compute task def pins the rolled-back image, plus the
+    // digest and tag, so the Compute task def pins the rolled-back image, plus the
     // short-sha deploy marker compute-stack stamps (kept in sync so a
     // post-rollback `cdk diff` reads clean).
     // THE TIER IS NOT OPTIONAL, and it is not defaultable. Since Phase 9 it
@@ -910,9 +910,10 @@ async function infraDiffAndMaybeDeploy(
       // both: app.ts reads `CCE_TIER ?? DEPLOY_TIER`.
       CCE_TIER: tier,
       DEPLOY_TIER: tier,
-      // Forwarded, because this env REPLACES the child's environment: without
-      // it a Tier 0 rollback would hit app.ts's teardown guard with no way to
-      // answer it. Only ever passed through, never invented here.
+      // Passed through explicitly, never invented here. The real shell merges
+      // this env over process.env (scripts/rollback.ts), so an exported
+      // CCE_PAPERCLIP_TEARDOWN=1 reaches app.ts's Tier 0 teardown guard either
+      // way; naming it keeps it in the synth-env keys logged below.
       ...(process.env.CCE_PAPERCLIP_TEARDOWN === '1'
         ? { CCE_PAPERCLIP_TEARDOWN: '1' }
         : {}),
@@ -925,6 +926,7 @@ async function infraDiffAndMaybeDeploy(
         ? { CCE_PAPERCLIP_PROVISION_ENV_OVERRIDE: '1' }
         : {}),
       CCE_IMAGE_TAG: target.imageTag,
+      CCE_IMAGE_DIGEST: target.imageDigest ?? '',
       DEPLOY_SHA: target.gitSha.slice(0, 7),
     };
     log(`rebuilding from git with synth env: ${Object.keys(synthEnv).join(', ')}`);
