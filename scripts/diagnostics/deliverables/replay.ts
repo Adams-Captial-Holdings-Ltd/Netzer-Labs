@@ -28,11 +28,15 @@
  * - generate_document is evaluated with production's own validate*Spec and
  *   build* functions, and the file must reopen. Every other tool gets a canned
  *   result; no product tool handler runs.
- * - Budget: before every call, spent + worst case must stay within the cap, or
- *   the campaign stops and the remaining runs are recorded `budget_exhausted`.
+ * - Budget: admission runs before every attempt, retries included. A failed attempt
+ *   that is not a request rejection, a response without usage, and a stream that
+ *   fails while being read are each charged their worst case. A chosen guardrail adds
+ *   $0.00025 per text unit to the worst case and to the charge. A budget refusal
+ *   records the remaining runs `budget_exhausted`; a credential error stops the
+ *   campaign without recording the runs after it.
  * - Environment: never loads `.env`, and deletes AWS_ENDPOINT_URL before any
  *   client exists, like `scripts/e2e-three-corpus.ts`.
- * - Output: one JSONL record per run, refused inside the repository. A live run
+ * - Output: one JSONL record per run until a credential stop, refused inside the repository. A live run
  *   also keeps what the judge needs in `<out name>-artifacts/<runId>/`: each
  *   built document as `doc-<n>.<format>`, and the final reply as `reply.txt`.
  *
@@ -192,6 +196,7 @@ export interface CampaignSummary {
   records: RunRecord[];
   spentUsd: number;
   stoppedForBudget: boolean;
+  stoppedForCredentials: boolean;
 }
 
 const PROFILES: readonly ProfileId[] = ['S', 'P', 'U'];
@@ -208,6 +213,28 @@ const RETRYABLE = new Set([
   'ModelTimeoutException',
 ]);
 const MAX_ATTEMPTS = 3;
+const REQUEST_REJECTIONS = new Set([
+  'ThrottlingException',
+  'ServiceUnavailableException',
+  'ModelNotReadyException',
+  'ValidationException',
+  'AccessDeniedException',
+  'ResourceNotFoundException',
+  'ServiceQuotaExceededException',
+  'CredentialsProviderError',
+  'TokenProviderError',
+  'ExpiredTokenException',
+  'UnrecognizedClientException',
+  'InvalidSignatureException',
+]);
+const CREDENTIAL_ERRORS = new Set([
+  'CredentialsProviderError',
+  'TokenProviderError',
+  'ExpiredTokenException',
+  'UnrecognizedClientException',
+  'InvalidSignatureException',
+  'AccessDeniedException',
+]);
 /** Production's forced-synthesis instruction, verbatim. */
 const SYNTHESIS_INSTRUCTION =
   'Answer my last request now, in words, using what you found above. Do not call any more tools.';
@@ -291,6 +318,11 @@ export function buildLoopRequest(
  */
 export function worstCaseCallUsd(requestChars: number, maxTokens: number): number {
   return turnCost(REPLAY_MODEL_ID, 0, maxTokens, 0, Math.ceil(requestChars / 3));
+}
+
+/** Content filters ($0.15) plus sensitive-information filters ($0.10) per 1,000 text units. */
+function guardrailUsd(requestChars: number, outputTokens: number): number {
+  return (Math.ceil(requestChars / 1000) + Math.ceil((outputTokens * 4) / 1000)) * 0.00025;
 }
 
 export function createBudget(capUsd = CAMPAIGN_CAP_USD): Budget {
@@ -425,20 +457,33 @@ function newRecord(run: PlannedRun, capture: CaptureFile, status: RunRecord['sta
   };
 }
 
-async function sendWithRetry(deps: RunDeps, command: () => { input: unknown }): Promise<unknown> {
+async function sendWithRetry(
+  deps: RunDeps,
+  record: RunRecord,
+  command: () => { input: unknown },
+  worstUsd: number,
+): Promise<unknown> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   for (let attempt = 0; ; attempt++) {
+    if (!deps.budget.admit(worstUsd)) throw new BudgetRefused('budget exhausted');
     try {
       return await deps.send(command());
     } catch (err) {
       const name = (err as { name?: string }).name ?? '';
+      if (!REQUEST_REJECTIONS.has(name)) {
+        deps.budget.record(worstUsd);
+        record.costUsd += worstUsd;
+      }
       if (!RETRYABLE.has(name) || attempt === MAX_ATTEMPTS - 1) throw err;
       await sleep(500 * 2 ** attempt);
     }
   }
 }
 
-/** One admitted, metered model call. The first call streams, like production's. */
+/**
+ * One model call, admitted before each attempt and charged its metered cost or its worst case.
+ * The first call streams, like production's.
+ */
 async function exchange(
   deps: RunDeps,
   record: RunRecord,
@@ -446,14 +491,20 @@ async function exchange(
   request: ConverseCommandInput,
 ): Promise<Exchange> {
   const maxTokens = request.inferenceConfig?.maxTokens ?? 0;
-  const worstUsd = worstCaseCallUsd(JSON.stringify(request).length, maxTokens);
-  if (!deps.budget.admit(worstUsd)) throw new BudgetRefused('budget exhausted');
+  const requestChars = JSON.stringify(request).length;
+  const modelWorstUsd = worstCaseCallUsd(requestChars, maxTokens);
+  const worstUsd = modelWorstUsd + (deps.guardrail ? guardrailUsd(requestChars, maxTokens) : 0);
   const t0 = Date.now();
   let stopReason = 'unknown';
   let content: ContentBlock[] = [];
   let usage: TokenUsage | undefined;
   if (kind === 'first') {
-    const res = (await sendWithRetry(deps, () => new ConverseStreamCommand(request))) as ConverseStreamCommandOutput;
+    const res = (await sendWithRetry(
+      deps,
+      record,
+      () => new ConverseStreamCommand(request),
+      worstUsd,
+    )) as ConverseStreamCommandOutput;
     let streamed = '';
     try {
       for await (const event of res.stream ?? []) {
@@ -469,7 +520,12 @@ async function exchange(
     }
     content = streamed ? [{ text: streamed }] : [];
   } else {
-    const res = (await sendWithRetry(deps, () => new ConverseCommand(request))) as ConverseCommandOutput;
+    const res = (await sendWithRetry(
+      deps,
+      record,
+      () => new ConverseCommand(request),
+      worstUsd,
+    )) as ConverseCommandOutput;
     stopReason = res.stopReason ?? 'unknown';
     content = res.output?.message?.content ?? [];
     usage = res.usage;
@@ -477,9 +533,13 @@ async function exchange(
   const text = content.map((block) => block.text ?? '').join('').trim();
   const inputTokens = usage?.inputTokens ?? 0;
   const outputTokens = usage?.outputTokens ?? 0;
+  const chargedOutputTokens = usage?.outputTokens ?? maxTokens;
   const cacheReadInputTokens = usage?.cacheReadInputTokens ?? 0;
   const cacheWriteInputTokens = usage?.cacheWriteInputTokens ?? 0;
-  const cost = turnCost(REPLAY_MODEL_ID, inputTokens, outputTokens, cacheReadInputTokens, cacheWriteInputTokens);
+  const cost = usage
+    ? turnCost(REPLAY_MODEL_ID, inputTokens, chargedOutputTokens, cacheReadInputTokens, cacheWriteInputTokens) +
+      (deps.guardrail ? guardrailUsd(requestChars, chargedOutputTokens) : 0)
+    : worstUsd;
   deps.budget.record(cost);
   record.costUsd += cost;
   record.stopReasons.push(stopReason);
@@ -609,7 +669,13 @@ export async function runCampaign(opts: CampaignOptions): Promise<CampaignSummar
     opts.prompts.map((p) => p.id),
     opts.reps,
   );
-  const summary: CampaignSummary = { planned, records: [], spentUsd: 0, stoppedForBudget: false };
+  const summary: CampaignSummary = {
+    planned,
+    records: [],
+    spentUsd: 0,
+    stoppedForBudget: false,
+    stoppedForCredentials: false,
+  };
   if (opts.dryRun) return summary;
 
   mkdirSync(dirname(opts.outFile), { recursive: true });
@@ -637,6 +703,10 @@ export async function runCampaign(opts: CampaignOptions): Promise<CampaignSummar
     }
     summary.records.push(record);
     appendFileSync(opts.outFile, `${JSON.stringify(record)}\n`);
+    if (record.status === 'error' && CREDENTIAL_ERRORS.has(record.error?.split(':', 1)[0] ?? '')) {
+      summary.stoppedForCredentials = true;
+      break;
+    }
   }
   summary.spentUsd = budget.spentUsd();
   return summary;
@@ -686,7 +756,10 @@ async function main(): Promise<void> {
     for (const profile of PROFILES) {
       const { first, loop } = BUDGETS[profile];
       const chars = JSON.stringify(buildFirstRequest(capture, prompt.text, profile, guardrail)).length;
-      const perRun = worstCaseCallUsd(chars, first) + (TOOL_ROUND_LIMIT + 1) * worstCaseCallUsd(chars, loop);
+      const perRun =
+        worstCaseCallUsd(chars, first) +
+        (guardrail ? guardrailUsd(chars, first) : 0) +
+        (TOOL_ROUND_LIMIT + 1) * (worstCaseCallUsd(chars, loop) + (guardrail ? guardrailUsd(chars, loop) : 0));
       worstUsd += perRun * reps;
       console.log(
         `  ${prompt.id.padEnd(22)} ${profile}  maxTokens ${String(first).padStart(5)}/${String(loop).padStart(5)}` +
@@ -723,6 +796,15 @@ async function main(): Promise<void> {
     `Spent $${summary.spentUsd.toFixed(2)} of $${CAMPAIGN_CAP_USD}. ok ${count('ok')}, error ${count('error')}, ` +
       `budget_exhausted ${count('budget_exhausted')}. Records: ${values.out}`,
   );
+  if (summary.stoppedForCredentials) {
+    const last = summary.records.at(-1) as RunRecord;
+    const error = (last.error ?? '').replace(/\s+/g, ' ');
+    console.log(
+      `Campaign stopped after a credential error on ${last.runId}: ${error}. ` +
+        `${summary.planned.length - summary.records.length} planned runs were not attempted.`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
