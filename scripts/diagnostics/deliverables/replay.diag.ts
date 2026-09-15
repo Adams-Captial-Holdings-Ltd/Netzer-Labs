@@ -16,7 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { turnCost } from '../../../src/lib/bedrock/models.js';
 import {
   CAMPAIGN_CAP_USD,
@@ -34,6 +34,7 @@ import {
   runOne,
   worstCaseCallUsd,
   type Budget,
+  type CallRecord,
   type CaptureFile,
   type Guardrail,
   type PlannedRun,
@@ -476,24 +477,25 @@ describe('replay contract (E1)', () => {
     expect(unmeteredDocumentRecord.status).toBe('ok');
     expect(unmeteredDocumentRecord.documents).toHaveLength(1);
 
-    // A stream that fails while being read keeps its worst-case charge.
-    const broken = fakeBedrock(() => ({
-      stopReason: 'end_turn',
-      text: 'partial',
-      streamError: 'ModelStreamErrorException',
-    }));
-    const brokenBudget = createBudget();
-    const brokenRecord = await runOne(run('U'), depsFor(broken.send, null, brokenBudget));
-    expect(brokenRecord.status).toBe('error');
-    expect(broken.sent).toHaveLength(1);
-    expect(brokenRecord.costUsd).toBeCloseTo(worstOf(broken.sent[0].input), 10);
-    expect(brokenBudget.spentUsd()).toBeCloseTo(brokenRecord.costUsd, 10);
+    // A stream that fails while being read keeps its worst-case charge, whatever the error's name:
+    // Bedrock can end an accepted stream with a throttling or validation exception.
+    for (const name of ['ModelStreamErrorException', 'ThrottlingException', 'ValidationException']) {
+      const broken = fakeBedrock(() => ({ stopReason: 'end_turn', text: 'partial', streamError: name }));
+      const brokenBudget = createBudget();
+      const brokenRecord = await runOne(run('U'), depsFor(broken.send, null, brokenBudget));
+      expect(brokenRecord.status, name).toBe('error');
+      expect(broken.sent, name).toHaveLength(1);
+      expect(brokenRecord.costUsd, name).toBeCloseTo(worstOf(broken.sent[0].input), 10);
+      expect(brokenBudget.spentUsd(), name).toBeCloseTo(brokenRecord.costUsd, 10);
+    }
 
     // A charged failure that is retried: the failure costs its worst case, the retry what it used.
+    // Like the SDK's ModelTimeoutException, the fake carries `$fault: 'client'`; charging goes by name.
+    const timeout = (): Error => Object.assign(named('ModelTimeoutException'), { $fault: 'client' });
     let attempts = 0;
     const flaky = fakeBedrock(() => {
       attempts++;
-      if (attempts === 1) throw named('ModelTimeoutException');
+      if (attempts === 1) throw timeout();
       return { stopReason: 'end_turn', text: 'done', usage: { inputTokens: 10, outputTokens: 5 } };
     });
     const flakyBudget = createBudget();
@@ -506,11 +508,29 @@ describe('replay contract (E1)', () => {
     expect(flakyRecord.costUsd).toBeCloseTo(flakyUsd, 10);
     expect(flakyBudget.spentUsd()).toBeCloseTo(flakyUsd, 10);
 
-    // Admission runs again before the retry, so a charged failure can stop the run within the cap.
+    // A charged failure on every attempt is charged on each of them.
+    const failing = fakeBedrock(() => {
+      throw timeout();
+    });
+    const failingBudget = createBudget();
+    const failingSleep = vi.fn(async (_ms: number) => {});
+    const failingRecord = await runOne(run('S'), {
+      ...depsFor(failing.send, null, failingBudget),
+      sleep: failingSleep,
+    });
+    expect(failingRecord.status).toBe('error');
+    expect(failing.sent).toHaveLength(3);
+    expect(failingSleep.mock.calls).toEqual([[500], [1000]]);
+    const failingUsd = 3 * worstOf(failing.sent[0].input);
+    expect(failingRecord.costUsd).toBeCloseTo(failingUsd, 10);
+    expect(failingBudget.spentUsd()).toBeCloseTo(failingUsd, 10);
+
+    // Admission runs again before the retry and counts the charged failure: a cap just short of two
+    // worst cases stops the run after one attempt.
     const firstWorst = worstCaseCallUsd(JSON.stringify(buildFirstRequest(CAPTURE, PROMPT.text, 'S', null)).length, 1024);
-    const tight = createBudget(firstWorst * 1.5);
+    const tight = createBudget(firstWorst * 2 - 1e-9);
     const timeouts = fakeBedrock(() => {
-      throw named('ModelTimeoutException');
+      throw timeout();
     });
     const tightRecord = await runOne(run('S'), depsFor(timeouts.send, null, tight));
     expect(tightRecord.status).toBe('budget_exhausted');
@@ -549,9 +569,10 @@ describe('replay contract (E1)', () => {
     }
 
     // Unmetered is not measured: the records keep the tokens Bedrock reported, which was none.
-    expect(unmeteredRecord.calls.map((c) => [c.inputTokens, c.outputTokens])).toEqual([
-      [0, 0],
-      [0, 0],
+    const tokens = (c: CallRecord) => [c.inputTokens, c.outputTokens, c.cacheReadInputTokens, c.cacheWriteInputTokens];
+    expect(unmeteredRecord.calls.map(tokens)).toEqual([
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
     ]);
     expect(unmeteredDocumentRecord.calls.map((c) => c.outputTokens)).toEqual([0, 0, 0]);
     expect(unmeteredDocumentRecord.documents[0].specOutputTokens).toBe(0);
@@ -582,34 +603,70 @@ describe('replay contract (E1)', () => {
       }
       throw named('TimeoutError', 'socket hang up');
     });
-    const lostRecord = await runOne(run('P'), { ...depsFor(lost.send, GUARDRAIL), capture: LONG_CAPTURE });
+    const lostBudget = createBudget();
+    const lostRecord = await runOne(run('P'), { ...depsFor(lost.send, GUARDRAIL, lostBudget), capture: LONG_CAPTURE });
     const [firstSent, loopSent] = lost.sent;
-    expect(lostRecord.costUsd).toBeCloseTo(
+    const lostUsd =
       turnCost(REPLAY_MODEL_ID, 0, 10, 0, 0) +
-        guardrailUsd(charsOf(firstSent.input), 10) +
-        worstOf(loopSent.input) +
-        guardrailUsd(charsOf(loopSent.input), 8192),
-      10,
-    );
+      guardrailUsd(charsOf(firstSent.input), 10) +
+      worstOf(loopSent.input) +
+      guardrailUsd(charsOf(loopSent.input), 8192);
+    expect(lostRecord.costUsd).toBeCloseTo(lostUsd, 10);
+    expect(lostBudget.spentUsd()).toBeCloseTo(lostUsd, 10);
     const silent = fakeBedrock(() => ({ stopReason: 'end_turn', text: 'done', usage: null }));
-    const silentRecord = await runOne(run('S'), { ...depsFor(silent.send, GUARDRAIL), capture: LONG_CAPTURE });
+    const silentBudget = createBudget();
+    const silentRecord = await runOne(run('S'), {
+      ...depsFor(silent.send, GUARDRAIL, silentBudget),
+      capture: LONG_CAPTURE,
+    });
     const silentInput = silent.sent[0].input;
-    expect(silentRecord.costUsd).toBeCloseTo(worstOf(silentInput) + guardrailUsd(charsOf(silentInput), 1024), 10);
+    const silentUsd = worstOf(silentInput) + guardrailUsd(charsOf(silentInput), 1024);
+    expect(silentRecord.costUsd).toBeCloseTo(silentUsd, 10);
+    expect(silentBudget.spentUsd()).toBeCloseTo(silentUsd, 10);
     const broken = fakeBedrock(() => ({
       stopReason: 'end_turn',
       text: 'partial',
       streamError: 'ModelStreamErrorException',
     }));
-    const brokenRecord = await runOne(run('U'), { ...depsFor(broken.send, GUARDRAIL), capture: LONG_CAPTURE });
+    const brokenBudget = createBudget();
+    const brokenRecord = await runOne(run('U'), {
+      ...depsFor(broken.send, GUARDRAIL, brokenBudget),
+      capture: LONG_CAPTURE,
+    });
     const brokenInput = broken.sent[0].input;
-    expect(brokenRecord.costUsd).toBeCloseTo(worstOf(brokenInput) + guardrailUsd(charsOf(brokenInput), 32_000), 10);
+    const brokenUsd = worstOf(brokenInput) + guardrailUsd(charsOf(brokenInput), 32_000);
+    expect(brokenRecord.costUsd).toBeCloseTo(brokenUsd, 10);
+    expect(brokenBudget.spentUsd()).toBeCloseTo(brokenUsd, 10);
 
-    // Admission reserves the guardrail's worst case too, before the first attempt and before a retry.
+    // A metered non-streamed round after a streamed tool call: each call carries units for its own size.
+    const rounds = fakeBedrock((command) =>
+      command === 'ConverseStreamCommand'
+        ? { stopReason: 'tool_use', usage: { inputTokens: 50, outputTokens: 30 } }
+        : { stopReason: 'end_turn', text: 'Here you go.', usage: { inputTokens: 70, outputTokens: 1500 } },
+    );
+    const roundsBudget = createBudget();
+    const roundsRecord = await runOne(run('P'), {
+      ...depsFor(rounds.send, GUARDRAIL, roundsBudget),
+      capture: LONG_CAPTURE,
+    });
+    const [streamedSent, roundSent] = rounds.sent;
+    const roundsUsd =
+      turnCost(REPLAY_MODEL_ID, 50, 30, 0, 0) +
+      guardrailUsd(charsOf(streamedSent.input), 30) +
+      turnCost(REPLAY_MODEL_ID, 70, 1500, 0, 0) +
+      guardrailUsd(charsOf(roundSent.input), 1500);
+    expect(roundsRecord.status).toBe('ok');
+    expect(rounds.sent.map((s) => s.command)).toEqual(['ConverseStreamCommand', 'ConverseCommand']);
+    expect(roundsRecord.costUsd).toBeCloseTo(roundsUsd, 10);
+    expect(roundsBudget.spentUsd()).toBeCloseTo(roundsUsd, 10);
+
+    // Admission reserves the whole guardrail worst case, before the first attempt and before a retry:
+    // a cap a hair short of it refuses.
     const chars = JSON.stringify(buildFirstRequest(LONG_CAPTURE, PROMPT.text, 'U', GUARDRAIL)).length;
     const modelWorst = worstCaseCallUsd(chars, 32_000);
     const refused = fakeBedrock(() => ({ stopReason: 'end_turn', text: 'x' }));
     const refusedRecord = await runOne(run('U'), {
-      ...depsFor(refused.send, GUARDRAIL, createBudget(modelWorst)),
+      ...depsFor(refused.send, GUARDRAIL, createBudget(modelWorst + guardrailUsd(chars, 32_000) - 1e-9)),
       capture: LONG_CAPTURE,
     });
     expect(refusedRecord.status).toBe('budget_exhausted');
@@ -620,7 +677,7 @@ describe('replay contract (E1)', () => {
     expect(admittedRecord.status).toBe('ok');
     const retryChars = JSON.stringify(buildFirstRequest(LONG_CAPTURE, PROMPT.text, 'S', GUARDRAIL)).length;
     const retryWorst = worstCaseCallUsd(retryChars, 1024) + guardrailUsd(retryChars, 1024);
-    const tight = createBudget(retryWorst * 1.5);
+    const tight = createBudget(retryWorst * 2 - 1e-9);
     const timeouts = fakeBedrock(() => {
       throw named('ModelTimeoutException');
     });
@@ -631,11 +688,12 @@ describe('replay contract (E1)', () => {
   });
 
   it('R13 a credential error stops the campaign, and any other error does not', async () => {
-    const failSecondCall = (name: string) => {
+    // Detection goes by the error's name, never its text: the other errors below mention tokens and credentials.
+    const failCalls = (name: string, failing: number[], message = `${name} from the fake`) => {
       let calls = 0;
       return fakeBedrock(() => {
         calls++;
-        if (calls === 2) throw named(name);
+        if (failing.includes(calls)) throw named(name, message);
         return { stopReason: 'end_turn', text: 'done' };
       });
     };
@@ -647,7 +705,7 @@ describe('replay contract (E1)', () => {
       'InvalidSignatureException',
       'AccessDeniedException',
     ]) {
-      const { send } = failSecondCall(name);
+      const { send } = failCalls(name, [2]);
       const outFile = tmpFile('credentials.jsonl');
       const summary = await runCampaign({
         capture: CAPTURE,
@@ -663,17 +721,25 @@ describe('replay contract (E1)', () => {
       expect(summary.records[1].error, name).toMatch(new RegExp(`^${name}:`));
       expect(summary, name).toMatchObject({ stoppedForCredentials: true, stoppedForBudget: false });
       expect(send, name).toHaveBeenCalledTimes(2);
-      expect(readFileSync(outFile, 'utf8').trim().split('\n'), name).toHaveLength(2);
+      const lines = readFileSync(outFile, 'utf8').trim().split('\n');
+      expect(lines, name).toHaveLength(2);
+      // The stopping run is written in full before the stop: its JSONL line and its artifacts.
+      expect(JSON.parse(lines[1]), name).toEqual(JSON.parse(JSON.stringify(summary.records[1])));
+      const reply = join(dirname(outFile), 'credentials-artifacts', summary.records[1].runId, 'reply.txt');
+      expect(existsSync(reply), name).toBe(true);
     }
 
-    // Other failures, rejections and charged failures alike, leave the campaign running.
-    for (const name of [
-      'ValidationException',
-      'ResourceNotFoundException',
-      'ServiceQuotaExceededException',
-      'InternalServerException',
-    ]) {
-      const { send } = failSecondCall(name);
+    // Other failures leave the campaign running: rejections, charged failures, and a throttle that
+    // outlasts its retries, even when their messages mention tokens or credentials.
+    const credentialSounding = 'The security token or credentials included in the request are invalid.';
+    for (const [name, failing] of [
+      ['ValidationException', [2]],
+      ['ResourceNotFoundException', [2]],
+      ['ServiceQuotaExceededException', [2]],
+      ['InternalServerException', [2]],
+      ['ThrottlingException', [2, 3, 4]],
+    ] as const) {
+      const { send } = failCalls(name, [...failing], credentialSounding);
       const summary = await runCampaign({
         capture: CAPTURE,
         prompts: [PROMPT],
