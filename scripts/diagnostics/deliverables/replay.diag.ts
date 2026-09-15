@@ -33,9 +33,13 @@ import {
   runCampaign,
   runOne,
   worstCaseCallUsd,
+  type Budget,
   type CaptureFile,
+  type Guardrail,
   type PlannedRun,
   type ProfileId,
+  type RunDeps,
+  type Send,
 } from './replay.js';
 import {
   CSV_HEADER,
@@ -96,13 +100,26 @@ const run = (profile: ProfileId): PlannedRun => ({
   promptId: PROMPT.id,
   profile,
 });
+/** An error carrying an SDK-style name, which is all the replay reads from it. */
+const named = (name: string, message = `${name} from the fake`): Error => Object.assign(new Error(message), { name });
+const depsFor = (send: Send, guardrail: Guardrail | null = null, budget: Budget = createBudget()): RunDeps => ({
+  send,
+  capture: CAPTURE,
+  prompt: PROMPT,
+  guardrail,
+  budget,
+  sleep: noSleep,
+});
 const tmpFile = (name: string): string => join(mkdtempSync(join(tmpdir(), 'replay-diag-')), name);
 
 interface Step {
   stopReason: string;
   text?: string;
   toolUses?: { name: string; input: unknown }[];
-  usage?: { inputTokens: number; outputTokens: number };
+  /** `null` answers without usage. */
+  usage?: { inputTokens: number; outputTokens: number } | null;
+  /** A streamed answer throws an error with this name after its text, before it stops. */
+  streamError?: string;
 }
 interface Sent {
   command: string;
@@ -118,13 +135,14 @@ function fakeBedrock(next: (command: string, input: Record<string, unknown>) => 
     const input = JSON.parse(JSON.stringify(command.input)) as Record<string, unknown>;
     sent.push({ command: name, input });
     const step = next(name, input);
-    const usage = step.usage ?? { inputTokens: 0, outputTokens: 50 };
+    const usage = step.usage === null ? undefined : (step.usage ?? { inputTokens: 0, outputTokens: 50 });
     if (name === 'ConverseStreamCommand') {
       return {
         stream: (async function* () {
           if (step.text) yield { contentBlockDelta: { contentBlockIndex: 0, delta: { text: step.text } } };
+          if (step.streamError) throw named(step.streamError);
           yield { messageStop: { stopReason: step.stopReason } };
-          yield { metadata: { usage } };
+          if (usage) yield { metadata: { usage } };
         })(),
       };
     }
@@ -134,7 +152,7 @@ function fakeBedrock(next: (command: string, input: Record<string, unknown>) => 
         toolUse: { toolUseId: `tu-${i + 1}`, name: t.name, input: t.input },
       })),
     ];
-    return { stopReason: step.stopReason, usage, output: { message: { role: 'assistant', content } } };
+    return { stopReason: step.stopReason, ...(usage ? { usage } : {}), output: { message: { role: 'assistant', content } } };
   });
   return { send, sent };
 }
@@ -144,6 +162,12 @@ const maxTokensOf = (input: Record<string, unknown>): number =>
   (input.inferenceConfig as { maxTokens: number }).maxTokens;
 const endsWithToolResult = (input: Record<string, unknown>): boolean =>
   Boolean((input.messages as Msg[]).at(-1)?.content.some((b) => 'toolResult' in b));
+const charsOf = (input: Record<string, unknown>): number => JSON.stringify(input).length;
+/** What admission reserves for one call, and what an unmetered call is charged. */
+const worstOf = (input: Record<string, unknown>): number => worstCaseCallUsd(charsOf(input), maxTokensOf(input));
+/** R12: production's two priced guardrail policies, $0.25 per 1,000 text units of up to 1,000 characters. */
+const guardrailUsd = (requestChars: number, outputTokens: number): number =>
+  (Math.ceil(requestChars / 1000) + Math.ceil((outputTokens * 4) / 1000)) * 0.00025;
 
 describe('replay contract (E1)', () => {
   it('R1 profiles: S 1024/8192, P 8192/8192, U 32000/32000', () => {
@@ -399,6 +423,194 @@ describe('replay contract (E1)', () => {
       expect(line.costUsd).toBeGreaterThan(0);
       expect(line.latencyMs).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it('R11 an unmetered call is charged its worst case, and admission runs before every attempt', async () => {
+    // A non-streaming round lost after it was sent: charged its worst case.
+    const lost = fakeBedrock((command) => {
+      if (command === 'ConverseStreamCommand') {
+        return { stopReason: 'tool_use', usage: { inputTokens: 100, outputTokens: 20 } };
+      }
+      throw named('TimeoutError', 'socket hang up');
+    });
+    const lostBudget = createBudget();
+    const lostRecord = await runOne(run('P'), depsFor(lost.send, null, lostBudget));
+    expect(lostRecord.status).toBe('error');
+    expect(lost.sent).toHaveLength(2);
+    const lostUsd = turnCost(REPLAY_MODEL_ID, 100, 20, 0, 0) + worstOf(lost.sent[1].input);
+    expect(lostRecord.costUsd).toBeCloseTo(lostUsd, 10);
+    expect(lostBudget.spentUsd()).toBeCloseTo(lostUsd, 10);
+
+    // Answers without usage, streamed and not: each charged its worst case.
+    const unmetered = fakeBedrock((command) =>
+      command === 'ConverseStreamCommand'
+        ? { stopReason: 'tool_use', usage: null }
+        : { stopReason: 'end_turn', text: 'Here you go.', usage: null },
+    );
+    const unmeteredRecord = await runOne(run('S'), depsFor(unmetered.send));
+    expect(unmeteredRecord.status).toBe('ok');
+    expect(unmetered.sent).toHaveLength(2);
+    expect(unmeteredRecord.costUsd).toBeCloseTo(
+      worstOf(unmetered.sent[0].input) + worstOf(unmetered.sent[1].input),
+      10,
+    );
+
+    // A stream that fails while being read keeps its worst-case charge.
+    const broken = fakeBedrock(() => ({
+      stopReason: 'end_turn',
+      text: 'partial',
+      streamError: 'ModelStreamErrorException',
+    }));
+    const brokenRecord = await runOne(run('U'), depsFor(broken.send));
+    expect(brokenRecord.status).toBe('error');
+    expect(broken.sent).toHaveLength(1);
+    expect(brokenRecord.costUsd).toBeCloseTo(worstOf(broken.sent[0].input), 10);
+
+    // A charged failure that is retried: the failure costs its worst case, the retry what it used.
+    let attempts = 0;
+    const flaky = fakeBedrock(() => {
+      attempts++;
+      if (attempts === 1) throw named('ModelTimeoutException');
+      return { stopReason: 'end_turn', text: 'done', usage: { inputTokens: 10, outputTokens: 5 } };
+    });
+    const flakyRecord = await runOne(run('S'), depsFor(flaky.send));
+    expect(flakyRecord.status).toBe('ok');
+    expect(flaky.sent).toHaveLength(2);
+    expect(flakyRecord.costUsd).toBeCloseTo(worstOf(flaky.sent[0].input) + turnCost(REPLAY_MODEL_ID, 10, 5, 0, 0), 10);
+
+    // Admission runs again before the retry, so a charged failure can stop the run within the cap.
+    const firstWorst = worstCaseCallUsd(JSON.stringify(buildFirstRequest(CAPTURE, PROMPT.text, 'S', null)).length, 1024);
+    const tight = createBudget(firstWorst * 1.5);
+    const timeouts = fakeBedrock(() => {
+      throw named('ModelTimeoutException');
+    });
+    const tightRecord = await runOne(run('S'), depsFor(timeouts.send, null, tight));
+    expect(tightRecord.status).toBe('budget_exhausted');
+    expect(timeouts.sent).toHaveLength(1);
+    expect(tight.spentUsd()).toBeCloseTo(firstWorst, 10);
+
+    // A rejection is never charged, even after every retry and with a guardrail chosen.
+    for (const name of [
+      'ThrottlingException',
+      'ServiceUnavailableException',
+      'ModelNotReadyException',
+      'ValidationException',
+      'AccessDeniedException',
+      'ResourceNotFoundException',
+      'ServiceQuotaExceededException',
+      'CredentialsProviderError',
+      'TokenProviderError',
+      'ExpiredTokenException',
+      'UnrecognizedClientException',
+      'InvalidSignatureException',
+    ]) {
+      const rejected = fakeBedrock(() => {
+        throw named(name);
+      });
+      const budget = createBudget();
+      const record = await runOne(run('U'), depsFor(rejected.send, GUARDRAIL, budget));
+      expect(record.status, name).toBe('error');
+      expect(record.error, name).toMatch(new RegExp(`^${name}:`));
+      expect(record.costUsd, name).toBe(0);
+      expect(budget.spentUsd(), name).toBe(0);
+    }
+  });
+
+  it('R12 a chosen guardrail adds its text units to admission and to the charge', async () => {
+    // A metered call: its tokens, plus guardrail units for the whole request and its output tokens.
+    const answer = { stopReason: 'end_turn', text: 'done', usage: { inputTokens: 120, outputTokens: 2600 } };
+    const metered = fakeBedrock(() => answer);
+    const meteredRecord = await runOne(run('P'), depsFor(metered.send, GUARDRAIL));
+    expect(meteredRecord.status).toBe('ok');
+    const tokensUsd = turnCost(REPLAY_MODEL_ID, 120, 2600, 0, 0);
+    expect(meteredRecord.costUsd).toBeCloseTo(tokensUsd + guardrailUsd(charsOf(metered.sent[0].input), 2600), 10);
+
+    // No guardrail, no allowance.
+    const plain = fakeBedrock(() => answer);
+    expect((await runOne(run('P'), depsFor(plain.send))).costUsd).toBeCloseTo(tokensUsd, 10);
+
+    // Unmetered calls are charged both worst cases: a lost round, and an answer without usage.
+    const lost = fakeBedrock((command) => {
+      if (command === 'ConverseStreamCommand') {
+        return { stopReason: 'tool_use', usage: { inputTokens: 0, outputTokens: 10 } };
+      }
+      throw named('TimeoutError', 'socket hang up');
+    });
+    const lostRecord = await runOne(run('P'), depsFor(lost.send, GUARDRAIL));
+    const [firstSent, loopSent] = lost.sent;
+    expect(lostRecord.costUsd).toBeCloseTo(
+      turnCost(REPLAY_MODEL_ID, 0, 10, 0, 0) +
+        guardrailUsd(charsOf(firstSent.input), 10) +
+        worstOf(loopSent.input) +
+        guardrailUsd(charsOf(loopSent.input), 8192),
+      10,
+    );
+    const silent = fakeBedrock(() => ({ stopReason: 'end_turn', text: 'done', usage: null }));
+    const silentRecord = await runOne(run('S'), depsFor(silent.send, GUARDRAIL));
+    const silentInput = silent.sent[0].input;
+    expect(silentRecord.costUsd).toBeCloseTo(worstOf(silentInput) + guardrailUsd(charsOf(silentInput), 1024), 10);
+
+    // Admission reserves the guardrail's worst case too: room for the model's alone is refused.
+    const chars = JSON.stringify(buildFirstRequest(CAPTURE, PROMPT.text, 'U', GUARDRAIL)).length;
+    const modelWorst = worstCaseCallUsd(chars, 32_000);
+    const refused = fakeBedrock(() => ({ stopReason: 'end_turn', text: 'x' }));
+    const refusedRecord = await runOne(run('U'), depsFor(refused.send, GUARDRAIL, createBudget(modelWorst)));
+    expect(refusedRecord.status).toBe('budget_exhausted');
+    expect(refused.send).not.toHaveBeenCalled();
+    const admitted = fakeBedrock(() => ({ stopReason: 'end_turn', text: 'x' }));
+    const room = createBudget(modelWorst + guardrailUsd(chars, 32_000) + 1e-9);
+    expect((await runOne(run('U'), depsFor(admitted.send, GUARDRAIL, room))).status).toBe('ok');
+  });
+
+  it('R13 a credential error stops the campaign, and any other error does not', async () => {
+    const failSecondCall = (name: string) => {
+      let calls = 0;
+      return fakeBedrock(() => {
+        calls++;
+        if (calls === 2) throw named(name);
+        return { stopReason: 'end_turn', text: 'done' };
+      });
+    };
+    for (const name of [
+      'CredentialsProviderError',
+      'TokenProviderError',
+      'ExpiredTokenException',
+      'UnrecognizedClientException',
+      'InvalidSignatureException',
+      'AccessDeniedException',
+    ]) {
+      const { send } = failSecondCall(name);
+      const outFile = tmpFile('credentials.jsonl');
+      const summary = await runCampaign({
+        capture: CAPTURE,
+        prompts: FIVE_PROMPTS,
+        guardrail: null,
+        send,
+        outFile,
+        repoRoot: REPO_ROOT,
+        sleep: noSleep,
+      });
+      expect(summary.records, name).toHaveLength(2);
+      expect(summary.records.map((r) => r.status), name).toEqual(['ok', 'error']);
+      expect(summary.records[1].error, name).toMatch(new RegExp(`^${name}:`));
+      expect(summary, name).toMatchObject({ stoppedForCredentials: true, stoppedForBudget: false });
+      expect(send, name).toHaveBeenCalledTimes(2);
+      expect(readFileSync(outFile, 'utf8').trim().split('\n'), name).toHaveLength(2);
+    }
+
+    const { send } = failSecondCall('ValidationException');
+    const summary = await runCampaign({
+      capture: CAPTURE,
+      prompts: [PROMPT],
+      guardrail: null,
+      send,
+      outFile: tmpFile('validation.jsonl'),
+      repoRoot: REPO_ROOT,
+      reps: 1,
+      sleep: noSleep,
+    });
+    expect(summary.records.map((r) => r.status)).toEqual(['ok', 'error', 'ok']);
+    expect(summary).toMatchObject({ stoppedForCredentials: false, stoppedForBudget: false });
   });
 });
 
