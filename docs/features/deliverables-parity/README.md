@@ -100,8 +100,8 @@ re-verified here. The harness state is in the [HANDOFF](HANDOFF.md).
 | Document tool | Production `src/lib/tools/document-generation-tools.ts:129-143` | pdf, docx or xlsx; validates, builds, stores under `generations/` in `RAW_BUCKET`, returns a 24-hour presigned URL |
 | Builders | `src/lib/documents/types.ts` (`validateDocumentSpec`, `validateSpreadsheetSpec`), `pdf.ts`, `docx.ts`, `xlsx.ts` | Production `pdf.ts:63` rejects non-WinAnsi text; development has no such check |
 | Agent prompt | `src/lib/config/agent-loader.ts:34` | `agents/<id>/CLAUDE.md` from the config bucket when present, otherwise a built-in prompt defaulting to "one or two short paragraphs" |
-| Request size, measured | `scripts/diagnostics/deliverables/capture.diag.ts` on production's tree | First call 23,715 JSON characters: system prompt 5,310 (built-in prompt, empty memory), 26 tool specs 17,929, user message 52, two cache points. Production's own agent prompts are not in this number |
-| Replay (E1) | `scripts/diagnostics/deliverables/replay.ts`, `prompts.ts`; contract `replay.diag.ts` | Implemented; never run against Bedrock. A dry run unless `--spend` comes with `--out` outside the repository and `--guardrail <id:version>` or `--no-guardrail`. Every call is admitted at its worst case against a $30 cap. A live run writes one JSONL record per run, plus each built document and the final reply under `<out name>-artifacts/` for the judge |
+| Request size, measured | `scripts/diagnostics/deliverables/capture.diag.ts` on production's tree | First call 23,715 JSON characters: system prompt 5,310 (built-in prompt, empty memory), 26 tool specs 17,929, user message 52, two cache points. Production's own agent prompts are not in this number. Captures are request-deterministic: two captures of one tree, or of overlays carrying the same harness, have identical `firstCall.input` and `toolLoopCalls`, and differ only in `capturedAt` and `headSha` |
+| Replay (E1) | `scripts/diagnostics/deliverables/replay.ts`, `prompts.ts`; contract `replay.diag.ts` | Implemented (spend cap hardened at `5512279`); never run against Bedrock. A dry run unless `--spend` comes with `--out` outside the repository and `--guardrail <id:version>` or `--no-guardrail`. Admission runs before every attempt, retries included, against a $30 cap. A call is charged its metered tokens, or its worst case when it cannot be metered: a failed attempt that is not a request rejection, a response without usage, or a stream that fails while being read. Records keep the tokens Bedrock reported. A chosen guardrail adds $0.00025 per text unit (production's content and sensitive-information filters) to the worst case and the charge. A credential error stops the campaign. A live run writes one JSONL record per run, plus each built document and the final reply under `<out name>-artifacts/` for the judge |
 
 ## 6. Current business/state rules
 
@@ -115,6 +115,11 @@ re-verified here. The harness state is in the [HANDOFF](HANDOFF.md).
   no text by then, one final call without tools asks it to answer in words.
   That call omits `toolConfig` while its messages still hold the turn's tool
   calls; whether Bedrock accepts such a request is unmeasured.
+- A turn whose forced synthesis fails reaches the user as "(no response)":
+  production logs and swallows the error and replies with
+  `truncatedNotice(lastStopReason)` (production `agent-loop.ts:1070-1075`,
+  `:1130-1142`). A replay run in `error` on that call therefore counts as a
+  user-visible failure.
 - Only `pdf`, `docx` and `xlsx` are accepted formats.
 
 ## 7. Known runtime risks and approved next work
@@ -129,6 +134,7 @@ re-verified here. The harness state is in the [HANDOFF](HANDOFF.md).
 | RC5: Sonnet 4.6, no thinking, temperature 0.7, brevity default | Source | Not approved; E2 proposed |
 | RC6 and RC7: a guardrail or data-loss scan changes output; fallback pins chats to a weaker model | Unmeasured | W1, Step 0 |
 | Capture fidelity: production agents carry their own `CLAUDE.md` (all seven did on 2026-08-26), so a capture without `DIAG_AGENT_PROMPT_FILE` uses the wrong system prompt | [knowledge-scope-fanout HANDOFF](../knowledge-scope-fanout/HANDOFF.md) | W1, Step 0 fetches the real prompt before any replay |
+| Replay spend: the guardrail allowance assumes production's CDK guardrail (content and sensitive-information filters, $0.00025 per text unit) and 4 characters per output token, and the dry-run estimate ignores charged retries | `origin/production:infra/lib/guardrails-stack.ts`; the AWS Bedrock pricing page, 2026-09-14; `replay.ts` | W1, Step 0 reads the deployed guardrail's policies before Step 2 |
 
 ## 8. Exact focused and full validation commands
 
