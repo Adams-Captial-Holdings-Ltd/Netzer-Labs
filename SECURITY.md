@@ -1,66 +1,60 @@
 # Security Policy
 
-Netzar OS Enterprise runs entirely in your own AWS account, but it terminates
-webhooks from the public internet (Slack, Telegram), holds AWS credentials in
-CI, and brokers model calls — so security reports get priority handling.
-
-> **Doing diligence on this repository?** The governance controls this project
-> cannot enforce at its current GitHub plan tier are documented openly, with the
-> compensating control and residual risk for each, in
-> [docs/security-posture.md](./docs/security-posture.md). That page also carries
-> the standing accepted risks, including why `npm audit fix --force` must never
-> be run here.
+> Netzer OS handles customer-controlled infrastructure, credentials, messages,
+> and model traffic, so suspected vulnerabilities require private handling.
+> The repository does not currently have an externally usable private-reporting
+> channel or a published commercial support window. Both are release blockers,
+> not promises this draft tries to invent.
 
 ## Reporting a vulnerability
 
-**Do not open a public issue for a vulnerability.** Use one of the private
-channels:
+Do not open a public issue or attach secrets, raw support bundles, customer
+data, account identifiers, or exploit details to a public channel.
 
-1. **GitHub private security advisory** (preferred): on this repository, go to
-   *Security → Advisories → Report a vulnerability*. This opens a private
-   thread with the maintainers and supports coordinated disclosure.
-2. **Email**: <security contact — set at publish>. Include a description,
-   reproduction steps, and the affected version (the `deployedVersion` block
-   from `npx tsx scripts/support-bundle.ts` identifies your install precisely).
+**SECURITY CONTACT REQUIRED BEFORE EXTERNAL USE.** The business must create and
+monitor a security mailbox, replace this marker with that address, and test the
+complete receive/acknowledge/escalate path before a customer receives software.
 
-You can expect an acknowledgement within 72 hours. Please give us a reasonable
-window to ship a fix before public disclosure; we will credit reporters in the
-release notes unless you ask otherwise.
+GitHub private vulnerability reporting is currently disabled for this private
+repository, so the repository's *Security → Advisories → Report a
+vulnerability* link must not be represented as available. It may become the
+preferred alternative only after the setting is enabled and tested.
+
+When a private channel exists, a useful report contains:
+
+- the affected Netzer release tag, commit, and image digest;
+- a concise impact statement and reproducible steps;
+- whether customer data, credentials, or account boundaries may be affected;
+- logs or a redacted support bundle, never secret values.
+
+No response-time SLA is committed by this draft. Counsel and the support owner
+must approve any acknowledgement, remediation, disclosure, and customer-notice
+commitments.
 
 ## Supported versions
 
-The support window is **N-1** (see the deprecation and support-window policy,
-plan item 49): the latest release plus the release immediately before it.
+There is no externally supported commercial release today. Repository version
+`0.0.1`, moving branches, and untagged builds are development artifacts and are
+not customer-supported versions.
 
-| Version            | Supported | What you get                                            |
-| ------------------ | --------- | ------------------------------------------------------- |
-| Latest (`N`)       | Yes       | Security fixes, bug fixes, canary-proven direct upgrade |
-| Previous (`N-1`)   | Yes       | Security fixes; direct upgrade to `N` is canary-tested  |
-| Older than `N-1`   | No        | No fixes. Upgrade as a chain of sequential N-1 hops (`npm run update -- <tag>` performs one hop per invocation; repeat it per stepping-stone tag — the runner names the next tag when a jump is too far) |
+Before `v1.0.0`, the business must publish the contractually approved support
+window and test its upgrade path. The repository contains tooling designed for
+an `N`/`N-1` window, but no tags, releases, signing trust root, or retained
+release artifacts currently exist; therefore that tooling is not evidence of
+an active support promise.
 
-Security fixes land in a new release; they are not backported beyond `N-1`.
-If you run an out-of-window version, the remediation for any advisory is
-"upgrade along the chain".
+## Diagnostic handling
 
-## Sharing diagnostics privately (raw support bundles)
+The default support bundle is redacted. A raw bundle can contain real AWS
+resource names, ARNs, account identifiers, and hostnames. Generate or transmit
+a raw bundle only through a customer-approved private channel, after the
+recipient, retention period, and deletion procedure are agreed. Maintainers
+must never request secret values, tokens, private keys, `.env` contents,
+database exports, or unrestricted production access.
 
-Public issue reports must use the **redacted** support bundle
-(`npx tsx scripts/support-bundle.ts`), which hashes resource IDs, ARNs, account IDs, and
-hostnames so a paste does not publish your AWS posture.
+## Current control register
 
-Sometimes redacted output is not enough to diagnose a problem. For those
-cases there is a private escalation path:
-
-1. Open the issue publicly with the **redacted** bundle so the problem is
-   tracked.
-2. A maintainer will ask for the raw bundle **only if needed** and will open a
-   private channel for it — a GitHub security advisory thread, or the security
-   email above.
-3. Generate the raw bundle with `npx tsx scripts/support-bundle.ts --raw` and send it
-   **only** through that private channel. The raw bundle contains real
-   resource names, ARNs, your account ID, and your domain. Never attach it to
-   a public issue, gist, or discussion.
-
-Maintainers will never ask for secret values (tokens, keys, `.env` contents).
-The support bundle never contains them by construction — if anyone asks you
-to paste secrets, treat it as a phishing attempt and report it here.
+Repository-governance gaps and compensating controls are recorded in
+[docs/security-posture.md](docs/security-posture.md). Customer deployment and
+data-access constraints are recorded in
+[docs/CUSTOMER_DATA_BOUNDARY.md](docs/CUSTOMER_DATA_BOUNDARY.md).

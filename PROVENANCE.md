@@ -23,3 +23,10 @@ This document records the owner's provenance statement; it is not an independent
 - Replaced personal owner-alias examples with `owner:emmanuel`.
 - Prepared release, update, discussion, and security links for the new `emmanuelmadams4-lgtm/Netzer-Labs` repository.
 - Preserved internal `claudeclaw` and `CCE` deployment identifiers where changing them could break compatibility.
+
+## Current repository location
+
+The canonical private repository was subsequently transferred to the GitHub
+Organization `Adams-Captial-Holdings-Ltd/Netzer-Labs`. This note records the
+current technical location only; it is not evidence of a legal assignment or
+change in copyright ownership.

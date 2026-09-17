@@ -98,10 +98,10 @@ Per-PR docs CI is hermetic; these run at RELEASE time:
 
 ## 5. Last look
 
-- [ ] LICENSE: members-only license in place (v0 community, v1.0+ premium),
-      copyright Netzer Labs (Emmanuel Adams). Confirm the holder and the
-      version tiers are current BEFORE the repo reaches anyone outside the
-      core team; changing license terms after copies are out is much harder.
+- [ ] LICENSE: counsel has replaced the provisional proprietary notice with the
+      approved customer licensing structure, confirmed the legal licensor and
+      chain of title, and approved the third-party notices. Do this BEFORE the
+      repo or binaries reach anyone outside the authorized team.
 - [ ] SECURITY.md: replace `<security contact — set at publish>` with the
       real mailbox and confirm it is monitored.
 - [ ] Issue-template Discussions link points at the FINAL org/repo name.

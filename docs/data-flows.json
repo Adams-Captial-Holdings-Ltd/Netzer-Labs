@@ -112,6 +112,20 @@
       "notes": "src/lib/mcp/servers-repo.ts (registry, HTTPS-only, iam | bearer | none auth), src/lib/mcp/client.ts (SigV4 for AgentCore, bearer for vendors), dispatched from src/agent/agent-loop.ts. Which processors are involved depends entirely on which servers the operator registers"
     },
     {
+      "id": "salesforce-api",
+      "processor": "The customer-selected Salesforce tenant and Salesforce APIs",
+      "dataCategories": [
+        "OAuth client credentials and access/refresh tokens",
+        "SOQL query text and query results",
+        "record identifiers and fields read, created, updated, or deleted"
+      ],
+      "direction": "bidirectional",
+      "when": "An administrator configures and authorizes the Salesforce connection, a Salesforce tool is invoked, and salesforce_disabled is off",
+      "optOut": "Do not connect Salesforce; disconnect/remove its OAuth configuration; or trip salesforce_disabled",
+      "status": "active",
+      "notes": "src/lib/oauth/providers.ts performs customer-configurable login/token exchange and refresh; src/lib/salesforce/client.ts and src/lib/tools/salesforce-tools.ts send queries/records to the instance_url returned by Salesforce. PGN does not proxy this flow"
+    },
+    {
       "id": "ses-outbound-email",
       "processor": "Amazon SES, delivering to arbitrary external recipients",
       "dataCategories": ["email subject and body (model-generated)", "recipient addresses"],
@@ -139,7 +153,20 @@
       "when": "Every image build (Dockerfile base-image pull, docker buildx in deploy.ts and buildspec.yml)",
       "optOut": "Mirror base images into your private ECR and point the Dockerfile at the mirror",
       "status": "active",
-      "notes": "Runtime tasks pull only from your private ECR repo (claudeclaw-orchestrator); public registries are touched at build time only"
+      "notes": "Main application and Paperclip artifacts are built/imported into private ECR, but this entry is build-time only. The separately listed runtime-sidecar flow covers public X-Ray and optional Cloudflare image references"
+    },
+    {
+      "id": "public-container-registries-runtime",
+      "processor": "Amazon ECR Public and public Cloudflare container distribution",
+      "dataCategories": [
+        "image name/digest requested by ECS",
+        "customer NAT/egress IP and pull timing"
+      ],
+      "direction": "outbound",
+      "when": "A task starts with the public AWS X-Ray daemon image or an enabled Cloudflare sidecar that has not been mirrored into customer ECR",
+      "optOut": "Mirror every approved sidecar by digest into customer ECR and reference only the private copy",
+      "status": "active",
+      "notes": "infra/lib/compute-stack.ts defines the X-Ray and optional cloudflared containers. This is software-distribution metadata, not application payload, but it is an external runtime dependency and must be captured in the release SBOM"
     },
     {
       "id": "codebuild-github-credential",
@@ -150,6 +177,32 @@
       "optOut": "Keep CCE_CODEBUILD_ENABLED off; deploy from your laptop with npm run deploy instead",
       "status": "active",
       "notes": "infra/lib/codebuild-stack.ts, buildspec.yml. The credential is account-wide AWS state (it outlives the stack); the ci-coherence doctor check and the teardown catalog both know about it"
+    },
+    {
+      "id": "pgn-cloudflare-public-tunnel",
+      "processor": "Cloudflare and the PGN-controlled pgnos.ai zone",
+      "dataCategories": [
+        "complete encrypted browser HTTP and WebSocket traffic in transit",
+        "request/response metadata, hostnames, IP addresses, headers, cookies, and payloads visible according to the Cloudflare service configuration",
+        "Cloudflare tunnel connector credential"
+      ],
+      "direction": "bidirectional",
+      "when": "CCE_PUBLIC_ACCESS=1 enables the PGN-only infra-only overlay for app.pgnos.ai or staging.pgnos.ai",
+      "optOut": "Required for customer production: leave CCE_PUBLIC_ACCESS unset and configure DOMAIN_NAME/CCE_DASHBOARD_URL plus customer-owned DNS/TLS",
+      "status": "active",
+      "notes": "infra/lib/public-dashboard-access.ts deliberately restricts this mode to pgnos.ai and makes it mutually exclusive with DOMAIN_NAME. It is PGN demo/staging infrastructure, never the customer-production path"
+    },
+    {
+      "id": "paperclip-upstream-telemetry",
+      "processor": "Paperclip upstream telemetry service",
+      "dataCategories": [
+        "none in the Netzer task configuration; both upstream opt-out flags are set to the exact value 1"
+      ],
+      "direction": "outbound",
+      "when": "Not active in Netzer-managed ECS or the integration harness; would be possible only if an operator removes both opt-out controls or changes the upstream component",
+      "optOut": "PAPERCLIP_TELEMETRY_DISABLED=1 and DO_NOT_TRACK=1 are hardcoded in infra/lib/paperclip-stack.ts and docker-compose.paperclip.yml",
+      "status": "provisioned-unused",
+      "notes": "The pinned upstream Paperclip line defaults anonymized telemetry on. Netzer disables it explicitly so customer workloads do not call home by omission; infra/lib/paperclip-stack.test.ts asserts both flags"
     },
     {
       "id": "github-actions-ci",
@@ -172,7 +225,7 @@
       "when": "The dashboard checks the public GitHub releases feed, backend-side and fail-silent, cached daily (src/lib/updates/discovery.ts, wired via src/adapters/dashboard/handler.ts)",
       "optOut": "CCE_UPDATE_CHECK_DISABLED=1 (implemented; short-circuits with zero network calls); air-gapped installs lose only the update banner",
       "status": "active",
-      "notes": "Implemented and live: src/lib/updates/discovery.ts fetches the emmanuelmadams4-lgtm/Netzer-Labs releases feed via injected fetch, cached daily with backoff, fail-silent when GitHub is unreachable"
+      "notes": "Implemented but not commercially usable because the current repository has no releases or populated signing trust roots. src/lib/updates/discovery.ts now defaults to Adams-Captial-Holdings-Ltd/Netzer-Labs; CCE_UPSTREAM_OWNER/CCE_UPSTREAM_REPO can override it. The call remains backend-side, cached, and fail-silent"
     }
   ]
 }

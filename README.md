@@ -8,9 +8,9 @@ AI agents your team talks to in Slack and Telegram, running entirely in your AWS
 
 > **Compatibility note.** Some internal AWS resource identifiers and environment variables still use the historical `claudeclaw` / `CCE` prefixes. They are retained in this transfer to avoid breaking deployments and can be migrated deliberately in a later release.
 
-[![CDK](https://img.shields.io/badge/CDK-2.170-orange)](infra/) [![License](https://img.shields.io/badge/license-proprietary-blue)](LICENSE)
+[![CDK](https://img.shields.io/badge/CDK-2.170-orange)](infra/) [![License](https://img.shields.io/badge/license-proprietary-blue)](LICENSE.md)
 
-> **Who can use this.** EnterpriseOS is private, proprietary software. Repository access does not grant permission to copy, distribute, sublicense, sell, or disclose it. See [LICENSE](LICENSE).
+> **Who can use this.** EnterpriseOS is private, proprietary software. Repository access does not grant permission to use, copy, modify, distribute, sublicense, sell, or disclose it. See the attorney-review draft [LICENSE](LICENSE.md).
 
 ## Start here (in this order)
 
@@ -414,4 +414,4 @@ contracts unless a separately approved migration changes them.
 
 ## License
 
-EnterpriseOS is private, proprietary software. Copyright (c) 2026 Emmanuel Adams, operating as Netzer Labs. All rights reserved. Repository access does not grant redistribution, sublicensing, publication, sale, or disclosure rights. Third-party dependencies remain governed by their own licenses. See [LICENSE](LICENSE).
+EnterpriseOS is private, proprietary software. Copyright (c) 2026 Emmanuel Adams. All rights reserved. Repository access does not grant use, modification, redistribution, sublicensing, publication, sale, or disclosure rights. Third-party dependencies remain governed by their own licenses. See the draft [LICENSE](LICENSE.md) and [third-party notices](THIRD_PARTY_NOTICES.md); attorney review is required before external commercial use.

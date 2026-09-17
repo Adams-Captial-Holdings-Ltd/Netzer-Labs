@@ -20,7 +20,7 @@ by this workflow.
 ## First-Time Setup on a Computer
 
 ```bash
-git clone https://github.com/emmanuelmadams4-lgtm/Netzer-Labs.git
+git clone https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs.git
 cd Netzer-Labs
 git switch development
 npm ci --ignore-scripts

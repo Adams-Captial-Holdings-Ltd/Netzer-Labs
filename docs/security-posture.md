@@ -1,14 +1,14 @@
 # Security Posture and Gap Register
 
-> This page records the governance controls this repository **cannot enforce**
-> at its current GitHub plan tier, what compensates for each one, and the risk
-> that remains after the compensation. It exists so that the gaps are known
-> gaps rather than unknown ones.
+> This page records repository governance controls that are absent or disabled,
+> what currently compensates for each one, and the risk that remains. It does
+> not infer a GitHub plan limitation where the live API only proves that a
+> control is unconfigured.
 
 **Audience:** maintainers, and anyone doing security or procurement diligence on
 Netzar OS. For vulnerability *reporting*, see [SECURITY.md](../SECURITY.md).
 
-**Last reviewed:** 2026-08-12
+**Last reviewed:** 2026-08-28
 
 ---
 
@@ -20,11 +20,12 @@ credential-free, a secret scanner runs over synth artifacts and lifecycle
 fixtures on every PR, rollback is exercised in CI, and workflow tokens default
 to `contents: read`.
 
-The gaps are all in **platform-level enforcement of process**, and they share a
-single root cause: this is a private repository on **GitHub Free**. Branch
-protection, rulesets, and environment protection rules are Pro/Team features on
-private repos. The GitHub API returns `403 "Upgrade to GitHub Pro"` for all of
-them.
+The material gaps are in **platform-level enforcement of process**. The current
+private repository is owned by the `Adams-Captial-Holdings-Ltd` GitHub
+Organization. Live API evidence shows no rulesets, no protected promotion
+branches, and no Environment protection rules; this audit did not establish
+which paid plan or organization policy is required to enable the desired
+controls.
 
 Consequence, stated plainly: **the promotion ladder and the review requirement
 are conventions, not controls.** We detect violations; we cannot prevent them.
@@ -37,10 +38,10 @@ are conventions, not controls.** We detect violations; we cannot prevent them.
 
 | | |
 |---|---|
-| **Gap** | No branch is protected. `GET /repos/.../branches/{branch}/protection` returns `403` for `production`, `staging`, `qa`, and `development`. Force-pushes and direct commits to any branch are possible. |
+| **Gap** | No branch is protected. `GET /repos/.../branches/{branch}/protection` returns `404 Branch not protected` for `production`, `staging`, `qa`, and `development`, and the repository rulesets endpoint returns an empty list. Force-pushes and direct commits are possible. |
 | **Compensating control** | [`.github/workflows/branch-guard.yml`](../.github/workflows/branch-guard.yml) runs on every push to a promotion branch. A direct (non-merge) push, a merge from the wrong branch, or a force-push fails the job, notifies the admin, and leaves a permanent failed run in the Actions log. |
 | **Residual risk** | **Detection, not prevention.** A bad push is already in the branch when the alarm fires. Recovery is manual: `git reflog` / the Actions log identifies the lost range, and it must be restored by hand. |
-| **Closes when** | The account moves to GitHub Pro (personal, ~$4/mo) or an organization on Team. Both unlock branch protection and rulesets on private repos. |
+| **Closes when** | Organization owners select the necessary plan/policy and enable a tested branch/tag ruleset with no bypass for the commercial release path. |
 
 ### G-2 — Required reviews cannot be enforced
 
@@ -49,7 +50,7 @@ are conventions, not controls.** We detect violations; we cannot prevent them.
 | **Gap** | [`.github/CODEOWNERS`](../.github/CODEOWNERS) declares ownership of `/infra/`, `/.github/`, and the deploy and rollback scripts, but nothing requires the review it describes. CODEOWNERS only takes effect through branch protection. |
 | **Compensating control** | Single-maintainer repository, so in practice every change is authored by the code owner. `branch-guard` requires that promotion-branch changes arrive as merge commits, which keeps a pull request in the history of each promotion even when its review was self-administered. |
 | **Residual risk** | No four-eyes guarantee. If a second collaborator is added, this gap becomes materially worse and should be re-evaluated before granting write access. |
-| **Closes when** | Same as G-1. |
+| **Closes when** | Same as G-1, plus at least one independent reviewer/team replaces single-person self-review for commercial releases. |
 
 ### G-3 — Deployment environments have no protection rules
 
@@ -58,34 +59,34 @@ are conventions, not controls.** We detect violations; we cannot prevent them.
 | **Gap** | The `production`, `staging`, `qa`, and `development` environments all report `protection_rules: []`, `deployment_branch_policy: null`, `can_admins_bypass: true`. No required reviewer, no wait timer, no branch restriction. |
 | **Compensating control** | [`deploy.yml`](../.github/workflows/deploy.yml) is `workflow_dispatch`-only and requires the operator to type `deploy` into a confirmation input. `scripts/ci/deploy-source-guard.mjs` independently rejects a production deploy from any ref other than `refs/heads/production`, and the CDK OIDC trust is fail-closed on the exact repo and deploy subjects. |
 | **Residual risk** | A prod deploy needs no second person's approval. The source guard constrains *which ref* deploys; it cannot constrain *who* triggers it. |
-| **Closes when** | Same as G-1 — required reviewers on environments are a Pro/Team feature on private repos. |
+| **Closes when** | Organization owners enable required Environment reviewers, restrict deployment branches/tags, and disable administrator bypass for customer production. |
 
-### G-4 — Auto-merge cannot be enabled
+### G-4 — Auto-merge is disabled
 
 | | |
 |---|---|
-| **Gap** | `allow_auto_merge` cannot be turned on. The API accepts the `PATCH` with a `200` and silently leaves the field `false` — a plan limitation surfaced as a no-op rather than an error. |
+| **Gap** | `allow_auto_merge` is currently `false`; this is workflow friction, not a commercial security blocker. The historical claim that the current plan cannot enable it was not re-proven. |
 | **Compensating control** | None needed; merges are manual. Recorded here only so a future maintainer does not lose time to the silent failure. |
 | **Residual risk** | None material. |
-| **Closes when** | Same as G-1. |
+| **Closes when** | Enable only if maintainers want it after required-check and review controls are enforced. |
 
-### G-5 — No organization audit log
+### G-5 — Organization audit-log controls are unverified
 
 | | |
 |---|---|
-| **Gap** | The repository lives on a personal account (`GET /user/orgs` is empty), so there is no organization audit log for settings changes, permission grants, or secret access. |
+| **Gap** | The repository now lives in `Adams-Captial-Holdings-Ltd`, resolving the historical personal-account ownership finding. Audit-log availability, retention, export, alerting, and access review were not verified in this audit. |
 | **Compensating control** | The Actions run history is an immutable record of every deploy, and `cdk-drift.yml` compares deployed infrastructure against source daily, catching out-of-band AWS changes regardless of who made them. AWS CloudTrail covers the account side. |
-| **Residual risk** | Changes to GitHub repository settings themselves are unlogged. |
-| **Closes when** | The repository moves into an organization. |
+| **Residual risk** | Commercial evidence cannot yet show who changed repository settings, permissions, secrets, rules, or environments over the required retention period. |
+| **Closes when** | Organization owners verify audit-log retention/access, configure export/alerts if required, and retain evidence of settings and permission changes. |
 
 ### G-6 — No code scanning or GitHub secret scanning
 
 | | |
 |---|---|
-| **Gap** | CodeQL and GitHub's secret scanning are part of Advanced Security, a paid add-on not available here. `security_and_analysis` is `null`. |
+| **Gap** | Live repository settings report code security, secret scanning, and push protection disabled. The code-scanning API rejects access because Code Security is not enabled, and private vulnerability reporting is unavailable. |
 | **Compensating control** | `scripts/ci/secret-scan.mjs` runs on every PR over the synthesized `cdk.out` and the lifecycle fixtures with a maintained denylist. `.gitignore` excludes all real `.env` variants; only `.example` and `.reference` files are tracked. Dependabot alerts and security updates **are** enabled and are free on private repos. |
 | **Residual risk** | No static analysis for code-level vulnerability patterns. Secret scanning covers synth output and fixtures, not the entire source tree or git history. |
-| **Closes when** | Advanced Security is purchased, which requires an organization first. |
+| **Closes when** | Enable GitHub Code Security/secret scanning/push protection/private reporting or an approved equivalent, then prove full-tree and history coverage plus alert ownership. |
 
 ---
 
@@ -130,23 +131,24 @@ move synthesized infrastructure.
 
 ## Verifying this page
 
-The claims above are checkable. Each returns `403` while the gap is open:
+The branch endpoint returns `404 Branch not protected` and the rulesets endpoint
+returns an empty list while the gap is open:
 
 ```bash
-gh api repos/emmanuelmadams4-lgtm/Netzer-Labs/branches/production/protection
+gh api repos/Adams-Captial-Holdings-Ltd/Netzer-Labs/branches/production/protection
 ```
 ```bash
-gh api repos/emmanuelmadams4-lgtm/Netzer-Labs/rulesets
+gh api repos/Adams-Captial-Holdings-Ltd/Netzer-Labs/rulesets
 ```
 
 Environment protection state, and confirmation that Dependabot alerts are on
 (`204`, not `404`):
 
 ```bash
-gh api repos/emmanuelmadams4-lgtm/Netzer-Labs/environments --jq '.environments[] | {name, protection_rules, can_admins_bypass}'
+gh api repos/Adams-Captial-Holdings-Ltd/Netzer-Labs/environments --jq '.environments[] | {name, protection_rules, can_admins_bypass}'
 ```
 ```bash
-gh api repos/emmanuelmadams4-lgtm/Netzer-Labs/vulnerability-alerts -i | head -1
+gh api repos/Adams-Captial-Holdings-Ltd/Netzer-Labs/vulnerability-alerts -i | head -1
 ```
 
 Production-runtime advisories only, excluding the dev-only noise in AR-2:
@@ -157,10 +159,9 @@ npm audit --omit=dev --audit-level=high
 
 ---
 
-## If the plan tier changes
+## When governance is funded and approved
 
-G-1 through G-5 all close with the same purchase. In priority order once it is
-available:
+In priority order:
 
 1. A ruleset on `production` and `staging`: require a pull request, require
    code-owner review, require the `CI`, `Docs CI`, `Hermetic CDK Synth`,
@@ -170,11 +171,11 @@ available:
 3. Required reviewers and a `deployment_branch_policy` on the `production` and
    `staging` environments; set `can_admins_bypass: false`.
 
-**One migration hazard, if moving to an organization rather than buying Pro:**
+**Historical migration hazard, now resolved by the organization transfer:**
 `infra/lib/github-oidc.ts` builds the AWS OIDC trust from `CCE_GITHUB_OWNER`,
 which [`deploy.yml`](../.github/workflows/deploy.yml) derives from
 `github.repository_owner`. Transferring the repository changes the owner, so the
-deployed `ClaudeClawGitHubDeploy` role stops trusting the workflow — including
-the workflow that would redeploy the fix. Deploy the IAM stack **locally with
-admin credentials** to accept both the old and new subjects *before*
-transferring, then drop the old subject afterwards.
+deployed `ClaudeClawGitHubDeploy` role can stop trusting the workflow. The
+current repository is already organization-owned; any future owner/repository
+rename must update customer trust in a customer-approved change before the old
+subject is removed.

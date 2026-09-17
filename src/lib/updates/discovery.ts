@@ -121,9 +121,9 @@ export interface UpdateCheckResult {
 
 type EnvBag = Record<string, string | undefined>;
 
-/** Placeholder owner/repo: DISCOVERY defaults only, never deploy authority. */
-export const DEFAULT_UPSTREAM_OWNER = 'emmanuelmadams4-lgtm';
-export const DEFAULT_UPSTREAM_REPO = 'test';
+/** Canonical release repository: discovery only, never deploy authority. */
+export const DEFAULT_UPSTREAM_OWNER = 'Adams-Captial-Holdings-Ltd';
+export const DEFAULT_UPSTREAM_REPO = 'Netzer-Labs';
 
 /** Cached daily, per the plan: "checks the public releases feed … cached daily". */
 export const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;

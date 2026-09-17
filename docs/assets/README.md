@@ -13,7 +13,7 @@ code-owner review BINDING (bare CODEOWNERS is advisory) — see
 
 ## License
 
-Committed art in this folder is covered by the repository's [members-only license](../../LICENSE)
+Committed art in this folder is covered by the repository's [draft proprietary notice](../../LICENSE.md)
 unless a sidecar file next to the asset says otherwise. Do not commit art you
 do not have the right to license that way — no stock photos with seat
 licenses, no copied marketing imagery.

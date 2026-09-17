@@ -1,0 +1,690 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "serialNumber": "urn:uuid:2e14143c-9858-4542-861f-337a40ead2b0",
+  "metadata": {
+    "timestamp": "2026-08-28T19:50:51.227Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "npm",
+          "version": "11.17.0"
+        },
+        {
+          "type": "application",
+          "name": "cyclonedx-npm",
+          "group": "@cyclonedx",
+          "version": "6.0.1",
+          "author": "Jan Kowalleck",
+          "description": "Create CycloneDX Software Bill of Materials (SBOM) from NPM projects.",
+          "licenses": [
+            {
+              "license": {
+                "id": "Apache-2.0"
+              }
+            }
+          ],
+          "externalReferences": [
+            {
+              "url": "git+https://github.com/CycloneDX/cyclonedx-node-npm.git",
+              "type": "vcs",
+              "comment": "as detected from PackageJson property \"repository.url\""
+            },
+            {
+              "url": "https://github.com/CycloneDX/cyclonedx-node-npm#readme",
+              "type": "website",
+              "comment": "as detected from PackageJson property \"homepage\""
+            },
+            {
+              "url": "https://github.com/CycloneDX/cyclonedx-node-npm/issues",
+              "type": "issue-tracker",
+              "comment": "as detected from PackageJson property \"bugs.url\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:constraint:engine:node",
+              "value": ">=20.18.0"
+            },
+            {
+              "name": "cdx:npm:package:constraint:engine:npm",
+              "value": ">=9"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "cyclonedx-library",
+          "group": "@cyclonedx",
+          "version": "10.2.0",
+          "author": "Jan Kowalleck",
+          "description": "Core functionality of CycloneDX for JavaScript (Node.js or WebBrowser).",
+          "licenses": [
+            {
+              "license": {
+                "id": "Apache-2.0"
+              }
+            }
+          ],
+          "externalReferences": [
+            {
+              "url": "git+https://github.com/CycloneDX/cyclonedx-javascript-library.git",
+              "type": "vcs",
+              "comment": "as detected from PackageJson property \"repository.url\""
+            },
+            {
+              "url": "https://github.com/CycloneDX/cyclonedx-javascript-library#readme",
+              "type": "website",
+              "comment": "as detected from PackageJson property \"homepage\""
+            },
+            {
+              "url": "https://github.com/CycloneDX/cyclonedx-javascript-library/issues",
+              "type": "issue-tracker",
+              "comment": "as detected from PackageJson property \"bugs.url\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:constraint:engine:node",
+              "value": ">=20.18.0"
+            }
+          ]
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "name": "enterpriseos-dashboard",
+      "bom-ref": "enterpriseos-dashboard",
+      "purl": "pkg:npm/enterpriseos-dashboard",
+      "properties": [
+        {
+          "name": "cdx:npm:package:private",
+          "value": "true"
+        },
+        {
+          "name": "cdx:npm:package:path",
+          "value": ""
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "signals",
+      "group": "@preact",
+      "version": "2.9.1",
+      "bom-ref": "enterpriseos-dashboard|@preact/signals@2.9.1",
+      "description": "Manage state with style in Preact",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40preact/signals@2.9.1",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/preactjs/signals.git#packages/preact",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\" and \"repository.directory\""
+        },
+        {
+          "url": "https://preactjs.com",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/preactjs/signals/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/@preact/signals/-/signals-2.9.1.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "c55a8df262636d2379201ffc51b99df4d37e130eb326cc28471ae365b1f762c82432c84578ee9df33c441691d14eaf46259c7b7273ecd829c2a45aad19718db3"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@preact/signals"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "dompurify",
+      "version": "3.4.14",
+      "bom-ref": "enterpriseos-dashboard|dompurify@3.4.14",
+      "author": "Dr.-Ing. Mario Heiderich, Cure53",
+      "description": "DOMPurify is a DOM-only, super-fast, uber-tolerant XSS sanitizer for HTML, MathML and SVG. It runs as JavaScript and works in all modern browsers, as well as in Node.js (via jsdom). DOMPurify is written by security people who have vast background in web attacks and XSS. Fear not.",
+      "licenses": [
+        {
+          "expression": "(MPL-2.0 OR Apache-2.0)",
+          "acknowledgement": "declared"
+        }
+      ],
+      "purl": "pkg:npm/dompurify@3.4.14",
+      "externalReferences": [
+        {
+          "url": "git://github.com/cure53/DOMPurify.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/cure53/DOMPurify",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/cure53/DOMPurify/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.14.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "755a07f73f8c63e0bd22296018293761f16a8cb8b77c2866d8e88a24cce1e9ac6b279ab0c6a59a65a9a0987ae9bf6d8237f29d6d926e1841a07d0a0bd342d376"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/dompurify"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lucide-preact",
+      "version": "0.468.0",
+      "bom-ref": "enterpriseos-dashboard|lucide-preact@0.468.0",
+      "author": "Eric Fennis",
+      "description": "A Lucide icon library package for Preact applications",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lucide-preact@0.468.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/lucide-icons/lucide.git#packages/lucide-preact",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\" and \"repository.directory\""
+        },
+        {
+          "url": "https://lucide.dev",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/lucide-icons/lucide/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/lucide-preact/-/lucide-preact-0.468.0.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "d184370e567e92456904a3316a0e9fe558be93182eadbf9f0f65a89d675683602c259c730888893c22d586a915ff9ae73e340ee6251860823670fcee97e66add"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/lucide-preact"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "marked",
+      "version": "18.0.4",
+      "bom-ref": "enterpriseos-dashboard|marked@18.0.4",
+      "author": "Christopher Jeffrey",
+      "description": "A markdown parser built for speed",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/marked@18.0.4",
+      "externalReferences": [
+        {
+          "url": "git://github.com/markedjs/marked.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://marked.js.org",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "http://github.com/markedjs/marked/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/marked/-/marked-18.0.4.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "73f05368ace0d06e9ecd0c7dec3024614ee4d0733acacd05a9878a04bea1941072670cbec9c035f9fd2f0dd8cc1ca29e123760931d063aff4897a0fef3970ea8"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:constraint:engine:node",
+          "value": ">= 20"
+        },
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/marked"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "preact",
+      "version": "10.29.2",
+      "bom-ref": "enterpriseos-dashboard|preact@10.29.2",
+      "description": "Fast 3kb React-compatible Virtual DOM library.",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/preact@10.29.2",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/preactjs/preact.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://preactjs.com",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/preactjs/preact/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/preact/-/preact-10.29.2.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "eed366c20ffb9b3cc0a01ffc91283a1e5dfb26b680670dd9dc0d09498ed55e5670a3cd979f41bbc0a6cd36cdaaa05e19104b10193c0302ba0d76a2acd687c9c5"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/preact"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "wouter-preact",
+      "version": "3.10.0",
+      "bom-ref": "enterpriseos-dashboard|wouter-preact@3.10.0",
+      "author": "Alexey Taktarov",
+      "description": "Minimalist-friendly ~1.5KB router for Preact",
+      "licenses": [
+        {
+          "license": {
+            "id": "Unlicense",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/wouter-preact@3.10.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/molefrog/wouter.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/molefrog/wouter#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/molefrog/wouter/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/wouter-preact/-/wouter-preact-3.10.0.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "e1ad647755d7d8dd403c6392357c1334aaf4260b25d6f21dbeec99f8c1a53df66cdee5e60d2cfbd2451f0daf3ed8edcc5e164d6846b573a987cd28a176d7698b"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/wouter-preact"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "signals-core",
+      "group": "@preact",
+      "version": "1.14.2",
+      "bom-ref": "enterpriseos-dashboard|@preact/signals-core@1.14.2",
+      "description": "Manage state with style in every framework",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40preact/signals-core@1.14.2",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/preactjs/signals.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://preactjs.com",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/preactjs/signals/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/@preact/signals-core/-/signals-core-1.14.2.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "4591dd063f591789f8d11a788d2d39d841c78c159ff7a3fda0d7573df8504e8bc2b9663d8909f71aafa03932528013bd03f241b8f7cc396b125ff94853d3dcfc"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@preact/signals-core"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "trusted-types",
+      "group": "@types",
+      "version": "2.0.7",
+      "bom-ref": "enterpriseos-dashboard|@types/trusted-types@2.0.7",
+      "description": "TypeScript definitions for trusted-types",
+      "scope": "optional",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40types/trusted-types@2.0.7",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git#types/trusted-types",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\" and \"repository.directory\""
+        },
+        {
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/trusted-types",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/@types/trusted-types/-/trusted-types-2.0.7.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "49c68f767d5d41cce06e5d101537933a65471542eddfde17260390368c95859eabdaf2e730b25f04f779dd2079d93ff71b7e95235fe0d8c65a5f47300ee5ec7f"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/trusted-types"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "mitt",
+      "version": "3.0.1",
+      "bom-ref": "enterpriseos-dashboard|mitt@3.0.1",
+      "description": "Tiny 200b functional Event Emitter / pubsub.",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/mitt@3.0.1",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/developit/mitt.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/developit/mitt",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/developit/mitt/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/mitt/-/mitt-3.0.1.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "bca8af0137ebf7b976fd00426009176036eb2163ccd8820a125ed83e18c2bca946de4136826fae068ea71172b7339fc57e1fc52e9284c73390dc926824614a07"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/mitt"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "regexparam",
+      "version": "3.0.0",
+      "bom-ref": "enterpriseos-dashboard|regexparam@3.0.0",
+      "author": "Luke Edwards",
+      "description": "A tiny (399B) utility that converts route patterns into RegExp. Limited alternative to `path-to-regexp` 🙇‍",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/regexparam@3.0.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/lukeed/regexparam.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/lukeed/regexparam#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/lukeed/regexparam/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/regexparam/-/regexparam-3.0.0.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "452600b4fdf59af60b9001eb3a5876e6908d4398569d3d74e95ba419a6857ee26b645906457e4685401d3eaa520d7c4e840d9ce1a92646ea65bf5991aa7067e9"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:constraint:engine:node",
+          "value": ">=8"
+        },
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/regexparam"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "enterpriseos-dashboard",
+      "dependsOn": [
+        "enterpriseos-dashboard|@preact/signals@2.9.1",
+        "enterpriseos-dashboard|dompurify@3.4.14",
+        "enterpriseos-dashboard|lucide-preact@0.468.0",
+        "enterpriseos-dashboard|marked@18.0.4",
+        "enterpriseos-dashboard|preact@10.29.2",
+        "enterpriseos-dashboard|wouter-preact@3.10.0"
+      ]
+    },
+    {
+      "ref": "enterpriseos-dashboard|@preact/signals@2.9.1",
+      "dependsOn": [
+        "enterpriseos-dashboard|@preact/signals-core@1.14.2",
+        "enterpriseos-dashboard|preact@10.29.2"
+      ]
+    },
+    {
+      "ref": "enterpriseos-dashboard|dompurify@3.4.14",
+      "dependsOn": [
+        "enterpriseos-dashboard|@types/trusted-types@2.0.7"
+      ]
+    },
+    {
+      "ref": "enterpriseos-dashboard|lucide-preact@0.468.0",
+      "dependsOn": [
+        "enterpriseos-dashboard|preact@10.29.2"
+      ]
+    },
+    {
+      "ref": "enterpriseos-dashboard|marked@18.0.4"
+    },
+    {
+      "ref": "enterpriseos-dashboard|preact@10.29.2"
+    },
+    {
+      "ref": "enterpriseos-dashboard|wouter-preact@3.10.0",
+      "dependsOn": [
+        "enterpriseos-dashboard|mitt@3.0.1",
+        "enterpriseos-dashboard|preact@10.29.2",
+        "enterpriseos-dashboard|regexparam@3.0.0"
+      ]
+    },
+    {
+      "ref": "enterpriseos-dashboard|@preact/signals-core@1.14.2"
+    },
+    {
+      "ref": "enterpriseos-dashboard|@types/trusted-types@2.0.7"
+    },
+    {
+      "ref": "enterpriseos-dashboard|mitt@3.0.1"
+    },
+    {
+      "ref": "enterpriseos-dashboard|regexparam@3.0.0"
+    }
+  ]
+}

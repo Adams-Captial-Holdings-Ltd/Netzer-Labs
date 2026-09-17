@@ -31,6 +31,12 @@ work engine behind Missions — is the largest feature folder: it carries the fu
 [implementation plan](./features/paperclip/implementation-plan.md) and its
 [audit](./features/paperclip/plan-audit.md) alongside the usual README and HANDOFF.
 
+[Customer-hosted commercialization](./features/customer-hosted-commercialization/README.md)
+is the entry point for proprietary licensing readiness, customer AWS/DNS/data
+boundaries, immutable releases, supply-chain evidence, and the attorney review
+package. Its [historical audit](./COMMERCIALIZATION_READINESS.md) gives the
+2026-08-28 P0-P3 verdict, while its HANDOFF owns current next-action state.
+
 ---
 
 ## I want to deploy this

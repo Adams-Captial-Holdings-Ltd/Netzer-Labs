@@ -49,7 +49,7 @@ import {
 } from '../lib/release/signing.js';
 
 /** Upstream repo the real fetcher composes GitHub releases URLs from. */
-export const RELEASE_REPO = 'emmanuelmadams4-lgtm/Netzer-Labs';
+export const RELEASE_REPO = 'Adams-Captial-Holdings-Ltd/Netzer-Labs';
 
 /** Managed directory for worktrees + verified artifacts, relative to primary. */
 export const UPDATE_DIR = '.cce-update';

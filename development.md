@@ -22,7 +22,7 @@ Scope: local development only. Deploying, staging and production are covered by
 
 ### Netzar OS (this repository)
 
-- Repository: <https://github.com/emmanuelmadams4-lgtm/Netzer-Labs>
+- Repository: <https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs>
 - Branch used for development: `development`
 - npm package name: `enterpriseos`. The product is **Netzar OS Enterprise**.
   `claudeclaw-*` resource names and the `CCE` prefix are legacy compatibility
@@ -148,7 +148,7 @@ needed), AWS credentials, an AWS account, LocalStack, or a database server.
 From a clean checkout:
 
 ```bash
-git clone https://github.com/emmanuelmadams4-lgtm/Netzer-Labs.git
+git clone https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs.git
 cd Netzer-Labs
 git switch development
 npm ci --ignore-scripts

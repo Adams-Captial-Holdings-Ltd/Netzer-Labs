@@ -23,6 +23,8 @@ services:
       SERVE_UI: "false"
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
       PAPERCLIP_MIGRATION_AUTO_APPLY: "true"
       BETTER_AUTH_SECRET: ${PAPERCLIP_TEST_AUTH_SECRET:?set in CI env}
     depends_on:

@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # ── Edit these before running ────────────────────────────────────────
-REPO="emmanuelmadams4-lgtm/Netzer-Labs"
+REPO="Adams-Captial-Holdings-Ltd/Netzer-Labs"
 DESCRIPTION="Bedrock-native AI agent orchestrator — agents your team talks to in Slack/Telegram, running entirely in your AWS account. CDK-deployed, multi-agent, single-tenant."
 HOMEPAGE="https://github.com/${REPO}#readme"
 TOPICS=(aws bedrock cdk ai-agents slack-bot telegram-bot claude orchestrator infrastructure-as-code self-hosted)

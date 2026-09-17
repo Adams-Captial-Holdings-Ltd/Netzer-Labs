@@ -14,7 +14,7 @@ as a product name.
 
 ## Repository
 
-`emmanuelmadams4-lgtm/Netzer-Labs`
+`Adams-Captial-Holdings-Ltd/Netzer-Labs`
 
 ## Positioning
 

@@ -90,7 +90,7 @@ export function assembleRelease(opts: AssembleReleaseOptions): AssembledRelease 
     supportWindow: { directFrom: opts.directFrom ?? '' },
     upgradingUrl:
       opts.upgradingUrl ??
-      `https://github.com/emmanuelmadams4-lgtm/Netzer-Labs/blob/${opts.commit}/docs/release-pipeline.md`,
+      `https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/blob/${opts.commit}/docs/release-pipeline.md`,
     images: opts.images,
     artifactManifestKey: 'artifact-manifest.json',
   };

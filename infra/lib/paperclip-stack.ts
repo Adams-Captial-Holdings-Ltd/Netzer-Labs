@@ -472,6 +472,12 @@ export class PaperclipStack extends Stack {
         // first probe request). Bare hostname, no port: the guard compares
         // URL.hostname, and this list replaces config.json's allowedHostnames.
         PAPERCLIP_ALLOWED_HOSTNAMES: new URL(RESOURCE_NAMES.paperclipInternalUrl).hostname,
+        // Customer-hosted means no default vendor call-home. Paperclip ships
+        // anonymized telemetry enabled unless either of these exact flags is
+        // set. Keep both conventions explicit so a future upstream change
+        // cannot silently make a customer workload phone home.
+        PAPERCLIP_TELEMETRY_DISABLED: '1',
+        DO_NOT_TRACK: '1',
         // PAPERCLIP_MIGRATION_AUTO_APPLY is deliberately ABSENT here. See the
         // class doc; paperclip-stack.test.ts asserts the absence.
       },

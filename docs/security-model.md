@@ -1,6 +1,6 @@
 # Security model
 
-> Netzar OS Enterprise runs inside your own AWS account: the model calls go to Amazon Bedrock, the state lives in your DynamoDB and S3, and the app ships no third-party telemetry of its own. Data does leave your account in a small, named set of cases, chat platforms you connect, web-search vendors you give keys to, MCP servers you register, and build-time package registries, and every one of those flows is listed in a machine-readable inventory in this folder. This page explains who can touch what (IAM roles and their blast radius), where secrets live, how the audit trail is retained, what the network can reach, and what to harden before you put real data on it.
+> Netzar OS Enterprise runs inside your own AWS account: the model calls go to Amazon Bedrock, the state lives in customer-account data services, and the Netzer app ships no analytics SDK or PGN call-home. Data can leave through named customer integrations, model/tool traffic, package/image distribution, and the PGN-only Cloudflare overlay; every known flow is listed in a machine-readable inventory in this folder. This page explains who can touch what, where secrets live, how the audit trail is retained, what the network can reach, and what to harden before real data is used.
 
 This is the page that backs the "runs entirely in your AWS account" claim with specifics. Serious adopters should read it before deploying.
 
@@ -16,10 +16,14 @@ Every external data flow lives in [`data-flows.json`](./data-flows.json), one en
 | `web-search-tavily` / `-brave` / `-exa` / `-serper` | Tavily, Brave, Exa, Serper | Search query text (PII-gated) | The matching key is set and `web_search` runs | Unset the key; `web_search_disabled`; `CCE_WEB_SEARCH_PII_POLICY=refuse` |
 | `google-gemini` | Google | Nothing today, see below | Never (no runtime consumer) | Leave `GOOGLE_GEMINI_API_KEY` unset |
 | `mcp-tool-endpoints` | Whatever MCP servers you register | Tool arguments and results | Servers registered in runtime-config `mcp/servers` | Remove the server; `tool_use` kill switch |
+| `salesforce-api` | Customer Salesforce tenant | OAuth tokens, SOQL/records | Salesforce connected and tool invoked | Disconnect; `salesforce_disabled` |
 | `ses-outbound-email` | SES to arbitrary recipients | Model-generated email body + recipients | `CCE_EMAIL_FROM` set, `send_email` invoked | Unset it; `email_send_disabled` |
 | `npm-registry-build` | npm registry | Package names/versions, build-machine IP | Every image build | Private registry mirror |
 | `container-registries-build` | Docker Hub / ECR Public | Base-image pulls | Every image build | Mirror base images |
+| `public-container-registries-runtime` | ECR Public / Cloudflare distribution | Image name/digest and pull metadata | Public X-Ray or Cloudflare sidecar starts | Mirror by digest to customer ECR |
 | `codebuild-github-credential` | GitHub | Repo contents into CodeBuild via a stored PAT | `CCE_CODEBUILD_ENABLED=1` | Keep the flag off, deploy locally |
+| `pgn-cloudflare-public-tunnel` | Cloudflare / PGN `pgnos.ai` | Full HTTP/WebSocket traffic in transit | PGN demo/staging overlay enabled | Customer production must use customer DNS and omit the overlay |
+| `paperclip-upstream-telemetry` | Paperclip upstream | Nothing under Netzer task settings | Disabled with two exact opt-out flags | Keep both flags asserted |
 | `github-actions-ci` | GitHub | CI logs/artifacts on GitHub infra; OIDC deploys when enabled | Workflows run | Disable Actions; keep `CCE_CICD_ENABLED` off |
 | `github-releases-update-check` | GitHub | Egress IP + timing only, no payload | Active: daily backend releases check (`src/lib/updates/discovery.ts`, wired via the dashboard handler) | `CCE_UPDATE_CHECK_DISABLED=1` (implemented; zero network calls when set) |
 
@@ -30,7 +34,12 @@ Two honesty notes baked into the inventory:
 
 ## The telemetry claim, stated narrowly
 
-**There is no app-owned third-party telemetry.** No analytics SDK, no crash reporter, no usage phone-home, no vendor beacon is compiled into the orchestrator or the dashboard SPA.
+**There is no Netzer-app-owned third-party telemetry.** No analytics SDK, crash
+reporter, usage phone-home, or vendor beacon is compiled into the orchestrator
+or dashboard SPA. The embedded Paperclip component defaults its own telemetry
+on upstream; Netzer now sets both `PAPERCLIP_TELEMETRY_DISABLED=1` and
+`DO_NOT_TRACK=1`, with a synth assertion, so the customer task does not inherit
+that call-home by omission.
 
 What DOES leave, so the claim cannot be misread as "nothing ever leaves":
 
@@ -39,6 +48,9 @@ What DOES leave, so the claim cannot be misread as "nothing ever leaves":
 - Chat payloads to Slack and Telegram, the surfaces you connected.
 - Prompts to Amazon Bedrock (an AWS service; see model privacy below).
 - Search queries to the vendor whose key you configured, and MCP traffic to the servers you registered.
+- OAuth/query/record traffic to the customer-configured Salesforce tenant.
+- Complete traffic through Cloudflare only in the PGN `pgnos.ai` overlay, which
+  is prohibited for customer production.
 - AWS-native logs, metrics, traces, and audit records, which stay inside the customer account (CloudWatch, X-Ray, CloudTrail, the audit table and WORM bucket).
 - A daily GitHub releases check (backend-side, fail-silent) that reveals only egress IP and timing, opt out with `CCE_UPDATE_CHECK_DISABLED=1` (inventory entry `github-releases-update-check`, `src/lib/updates/discovery.ts`).
 
@@ -56,7 +68,7 @@ All model invocation goes through Amazon Bedrock: Claude (Opus/Sonnet/Haiku), Ti
 | **Task role** (`infra/lib/iam-stack.ts`, `TaskRole`) | CDK | The orchestrator's runtime identity: Bedrock invoke, the app's DDB tables and S3 buckets, SQS/SNS/Scheduler, Polly/Transcribe/SES, Secrets Manager reads for the app's secret paths. Explicit IAM **Deny** on DeleteItem/UpdateItem/DeleteTable for the audit-log table | App data and model spend in this account. Cannot rewrite audit history, cannot touch CDK roles |
 | **Task execution role** (`infra/lib/compute-stack.ts`, `executionRole`) | CDK | Pull the image from private ECR and resolve Secrets Manager values into the container at task start | Secret values it is scoped to, image pulls. No app-data access |
 | **Deploy identity** (your CLI credentials + the CDK bootstrap roles) | You / `cdk bootstrap` | Full stack create/update/destroy. `npm run deploy` runs under whatever admin-level profile you configured | The whole install. Protect it like root |
-| **GitHub OIDC deploy role** (`ClaudeClawGitHubDeploy`, opt-in) | CDK when `CCE_CICD_ENABLED=1` | Deploy from GitHub Actions. Trust is fail-closed: synth errors without an explicit `CCE_GITHUB_OWNER`/`REPO`, the trust condition pins exact `sub` subjects (never repo-wide) and requires the `sts.amazonaws.com` audience | Deploys from your repo's approved refs only; a fork can never inherit it |
+| **GitHub OIDC deploy role** (`ClaudeClawGitHubDeploy`, opt-in) | CDK when `CCE_CICD_ENABLED=1` | Exact-subject short-lived trust, ECR/deploy operations, scoped Paperclip secret value read/write, and assumption of CDK bootstrap roles | A compromised approved workflow can retrieve Paperclip secrets or alter infrastructure to create customer-data access. This is a P0; see `CUSTOMER_DATA_BOUNDARY.md` |
 | **CodeBuild service role** (opt-in, `CCE_CODEBUILD_ENABLED=1`) | CDK | Build + push images, image-only ECS roll | Image supply chain for the service. Anyone who can push a deploy tag ships code; protect tag creation |
 | **Drift-check role** (`CDK_DIFF_ROLE_ARN` workflow secret) | CLI/out-of-band | Read-only `cdk diff` from the daily drift workflow | Read access to stack templates and the synth inputs |
 | **Opt-in managed policies** (`CCE-IamCopilot`, `CCE-Playground-NonAnthropicInvoke`, `CCE-CostRemediation`) | CDK constructs gated by env flags, or attached live via CLI on existing installs | Each arms one dashboard feature (gated IAM apply, non-Anthropic Playground models, cost remediation). `CCE-IamCopilot` carries its own Deny protecting the task and CDK roles | Detach the policy to revoke the capability entirely; all three are listed in the [out-of-band catalog](./out-of-band-catalog.md) |

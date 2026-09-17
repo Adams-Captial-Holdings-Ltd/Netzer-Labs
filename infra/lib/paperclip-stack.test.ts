@@ -364,6 +364,8 @@ describe('UI serving and deployment mode', () => {
     expect(env.SERVE_UI).toBe('true');
     expect(env.PAPERCLIP_DEPLOYMENT_MODE).toBe('authenticated');
     expect(env.PAPERCLIP_HOME).toBe('/paperclip');
+    expect(env.PAPERCLIP_TELEMETRY_DISABLED).toBe('1');
+    expect(env.DO_NOT_TRACK).toBe('1');
   });
 
   it('never ships local_trusted anywhere in the template', () => {
