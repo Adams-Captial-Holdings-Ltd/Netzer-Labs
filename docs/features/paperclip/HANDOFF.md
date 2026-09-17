@@ -2,19 +2,19 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-09-08
-as_of_commit: 85737b506998e990f69a411c5b1892714a4f0eef
+observed_at: 2026-09-17
+as_of_commit: 4f1a860355146c34f59a2f35731819cfedb6d2c2
 ---
 
 # Paperclip integration handoff
 
-- **Branch:** `fix/paperclip-p0-0b-image-build` (from `development`, merged up to `271339b`); P0-0b image-build repair; PR pending.
+- **Branch:** `fix/paperclip-p0-0b-image-build` (from `development`, merged up to `271339b`); P0-0b image-build repair; no PR. **Pushed:** not yet at the time of writing; the coordinator pushes this branch to origin under the same name immediately after the 2026-09-17 commit as an owner-approved backup (no PR, no merge, no deploy) - confirm with `git ls-remote origin refs/heads/fix/paperclip-p0-0b-image-build`.
 - **Source state:** Phase 0 merged (#156 -> `development` `0a59063`, #157 -> `qa` `ec65ca5`, #158 -> `staging` `dd16ca4`). **Phase 1 also merged and deployed** (#162 -> `development`, #163 -> `qa`, #164 -> `staging` `4442d86`); `origin/development` is now `271339b` after the War Room table fix (#165).
 - **Deployment:** staging Deploy run [34021795520](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/34021795520) is green. Live verdicts from the Phase 0 live critic (2026-09-06 13:15-13:50Z, staging `dd16ca4`): **P0-1 PASS** (board read live over the tunnel, `CCE_PAPERCLIP_ENABLED=1` confirmed on task definition `:19`); **P0-2 FAIL then fixed on this branch** (every adapter push rejected 400 `invalid_body` -- the pinned image sends `context.issueId`, not top-level `issueId`; Research's adapter had no `url` -- both fixed, critic PASS, live re-check pending this branch's deploy plus the bootstrap repair); **P0-3 refusal/list PASS, update confounded** by the P0-2 dispatch defect cascading into a heartbeat re-block (re-check after P0-2 deploys). Production is untouched.
 
 ## Current objective and required order
 
-**Now (2026-09-08):** read [the Phase 0 completion handoff](handoffs/2026-09-08-p0-completion-and-workflows-direction.md). Phase 1 is shipped; what remains is Phase 0's three open items, and two of the three were mis-recorded until this session measured them. Its section 6 is the ordered next-action list and section 5 the campaign ledger.
+**Now (2026-09-17):** development is moving to a new machine. Read [the 2026-09-17 machine-transfer handoff](handoffs/2026-09-17-machine-transfer.md) first, then [the 2026-09-15 handoff](handoffs/2026-09-15-p0-0b-validate-and-ship.md) with its correction in mind (ledger M74). That correction: on 2026-09-15 the plan in force (`gauntlet-mode-direct-coordinator-gauntle-agile-hamster.md`) ran STEP 1. Lanes 1.1 (image gate 3/3), 1.2 (text tests 11/11) and 1.3 (red-first, 5 expected failures) passed. Lane 1.4 (the no-cache build-stage build) failed at `exporting to image` with a containerd input/output error because `C:` reached 0 bytes free, after its install step had logged `added 5 packages`. Lanes 1.5 and 1.6 never ran, and STEPS 3-7 never started. There is no P0-0b PR and no staging deploy. Phase 1 is shipped; what remains is Phase 0's three open items, and two of the three were mis-recorded until the 2026-09-08 session measured them. [The Phase 0 completion handoff](handoffs/2026-09-08-p0-completion-and-workflows-direction.md)'s section 6 is still the ordered next-action list. The campaign ledger (section 5) is carried forward, with the 2026-09-17 additions, in the machine-transfer handoff.
 
 **Three corrections that change what the next session should do:**
 
@@ -31,11 +31,11 @@ Superseding order (owner, 2026-09-05): the campaign now follows [missions-engine
 3. P0-2 -- the same live critic found the dispatch defect (every push 400 `invalid_body`: the pinned image nests the issue id under `context.issueId`, not top-level) and the Research-adapter defect (no `url`, so Paperclip escalated Research issues to Main within ~1 s). Both are **fixed on this branch** (`fix/paperclip-p0-2-dispatch-push`): critic PASS for the dispatch-parser fix (round 2) and the bootstrap-reconcile fix (round 1); live proof waits for this branch's deploy plus an operator bootstrap run with `PAPERCLIP_DISPATCH_SLUGS=main,research`.
 4. P0-3 -- **live PASS** for refusal and list (byte-identical refusal message; correct empty-board read); the update case was **confounded** by the P0-2 dispatch defect cascading into a heartbeat re-block -- re-check once P0-2 deploys.
 
-#### What is actually left (measured 2026-09-07/08)
+#### What is actually left (measured 2026-09-07/08, re-checked 2026-09-15)
 
 | item | state |
 |---|---|
-| **P0-0b** image build | **code done** on this branch; image gate 3/3 green. Owes: full-image build, arm64/QEMU lane, full suite in both flag states, ladder. |
+| **P0-0b** image build | **code done** on this branch. On 2026-09-15: image gate 3/3, text tests 11/11, and red-first 5 of 11 failing as designed. The no-cache build-stage build failed at export on a full disk, which is an infrastructure failure, not the fix. Owes: the build-stage build, full-image build, arm64 lane, full suite in both flag states, and the ladder, all on the new machine (2026-09-17 handoff, section 6). |
 | **P0-2c / A61** dispatch disposition loop | characterisation **done**; fix 3 **struck** (no disposition route exists). The issue-level in-flight claim is unwritten and is now the whole fix. |
 | **P0-3b / A62** | **struck.** Provenance is correct; the real refusal is Paperclip's own authorisation boundary. Owner ruled: execute as the owner. **May become unnecessary** under the Workflows direction -- ask before building. |
 
@@ -114,14 +114,24 @@ This session (2026-09-06), branch `fix/paperclip-p0-2-dispatch-push`, HEAD `68db
 
 Phase 0 live critic (2026-09-06 13:15-13:50Z, staging `dd16ca4`, run 34021795520; Fable live + Fable refuter, refuter PASS): tunnel opened via ECS Exec/SSM; `GET /api/missions?owner=main` and `POST /api/missions` both PASS (P0-1); `GET /api/companies/{cid}/agents` showed Research's `adapterConfig` missing `url` (P0-2 defect 1); repeated pushes to the orchestrator all logged 400 `invalid_body` in CloudWatch (P0-2 defect 2); `POST /agents/:id/wakeup` 202 for a self-wake, 403 `Agent can only invoke itself` cross-agent; five dashboard test-turns exercised the list/refuse/update mission-ACL paths (P0-3); `tool_invoke` audit scanned and found no rows for mission tools (expected, P49); cleanup cancelled six characterization missions, left `enabled_agents` at `["main","research"]`, closed the tunnel.
 
+- **2026-09-15 (this session, `fix/paperclip-p0-0b-image-build` `4f1a860`):** `ORCHESTRATOR_IMAGE_BUILD_TEST=1 npx vitest run --config vitest.integration.config.ts scripts/lib/lifecycle/orchestrator-dockerfile.build.integration.test.ts` -- exit 0, 3/3 pass, 47 s (FACT 8: the build stage builds, TypeScript resolves inside the stage at the lockfile version, and `dist/index.js` is emitted). Then `df -h` / PowerShell `Get-PSDrive` -- host `C:` found at 0 bytes free, confirmed by a direct ~60 KB Node write failing `ENOSPC`. No image build, `npm test`, or deploy command was run this session; free space was at about 2.7 GB when the session closed, not yet proven sufficient for the full amd64+arm64 build.
+- **2026-09-17 (machine transfer, `fix/paperclip-p0-0b-image-build` `4f1a860`):** docs only. The 2026-09-15 bullet above understates that session. Its evidence folder (devkit `archive/scratch/968da171/evidence/`) shows that lanes 1.2 (11/11), 1.3 (5 expected failures, Dockerfile restored) and 1.4 also ran. Lane 1.4 was `docker buildx build --platform linux/amd64 --target build --no-cache --load -t p0-0b:build --progress=plain .`, which exited 1 at `exporting to image` with a containerd input/output error on a full disk, after `added 5 packages in 5s` (ledger M74). On 2026-09-16 Docker Desktop's engine answered `docker system df` with HTTP 500 (ledger A65). This session ran only the two docs gates, git/gh reads and byte-copy checks.
+
 ## Active blockers
 
-- The deploy of this branch (`fix/paperclip-p0-2-dispatch-push`) to staging.
-- After that deploy: a fresh `aws login` (the operator session expires within about two hours of 13:10Z) to run the bootstrap repair over the tunnel with `PAPERCLIP_DISPATCH_SLUGS=main,research`, and then the live re-check for P0-2 and P0-3's update case.
+- This host cannot run the remaining image lanes. `C:` had 2.6-3.0 GB free on 2026-09-17, and Docker Desktop's engine has answered HTTP 500 since 2026-09-16 (ledger P57 and A65 in [the 2026-09-17 machine-transfer handoff](handoffs/2026-09-17-machine-transfer.md)). The work resumes on a new machine with at least 10 GB free and a healthy Docker.
+- After that: lanes 1.1-1.6, the full suite in both flag states, and the PR ladder for `fix/paperclip-p0-0b-image-build` -> `development` (agile-hamster STEPS 1-4; 2026-09-08 handoff, section 6, item 1). The owner-approved backup push is not a ladder rung (ledger P58): open no PR from it until STEPS 1-3 pass on the proposed tip.
 
 ## Smallest next action
 
-Open the PR `fix/paperclip-p0-2-dispatch-push` -> `development`. Once it promotes to staging: `aws login`, run the bootstrap over the tunnel with `PAPERCLIP_DISPATCH_SLUGS=main,research` (dry-run first -- expect the plan line naming `research`), then re-run the Phase 0 live critic for P0-2 (202 in CloudWatch, a worker turn, dedupe by `(runId, issueId)`) and for P0-3's update case.
+On the new machine, run agile-hamster STEP 0 preflight:
+
+1. Make a fresh clone of origin, with a worktree of `fix/paperclip-p0-0b-image-build` at its pushed tip (the 2026-09-17 docs commit, parent `4f1a860`).
+2. Re-check `git log -1 origin/development`, `gh run list --workflow deploy.yml --branch staging -L 3`, and the open PRs to qa and staging.
+3. Confirm the tree is clean.
+4. Start Docker, and require `docker info` and `docker system df` to answer, with at least 10 GB free.
+
+Then run STEP 1 from lane 1.1: re-prove 1.1-1.3 there, then 1.4 -> 1.5 -> 1.6. STEP 2 reuses the committed docs instead of regenerating them. On Apple Silicon, arm64 builds natively and amd64 under emulation, so record which host ran each lane. See [the 2026-09-17 machine-transfer handoff](handoffs/2026-09-17-machine-transfer.md), section 6.
 
 ## Guardrails for the resuming agent
 
@@ -132,6 +142,7 @@ Open the PR `fix/paperclip-p0-2-dispatch-push` -> `development`. Once it promote
 - Do not invent live payload types; capture redacted staging evidence first.
 - Do not start Phase 8.5, the bridge or Phases 10-12 on this branch; they follow Phase 0 and Phase 1 in missions-engine-plan.md.
 - Do not deploy production or create a release before staging is green.
+- Check free disk space with a realistic-sized probe (or `df`/`Get-PSDrive` directly), not a trivial write, before starting an image build on this host — it reached 0 bytes free on 2026-09-15.
 
 ## Session log index
 
@@ -139,6 +150,9 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Machine transfer](handoffs/2026-09-17-machine-transfer.md) | 2026-09-17 | Landed the 2026-09-15 drafts byte-exact from a temp scratchpad. Corrected that record: lanes 1.1-1.3 passed, 1.4 failed at export on a full disk, 1.5-1.6 never ran. Recorded the Docker engine damage and the owner-approved backup push, plus a path map and resume prompt for the new machine. Nothing built or deployed |
+| [P0-0b ship attempt, interrupted by a full disk](handoffs/2026-09-15-p0-0b-validate-and-ship.md) | 2026-09-15 | Reconfirmed the build-stage integration test (3/3, FACT 8); found the host disk at 0 bytes free before any image build ran; corrected a ten-ID collision in the section 5 ledger; nothing pushed, built, or deployed |
+| [Phase 0 completion and Workflows direction](handoffs/2026-09-08-p0-completion-and-workflows-direction.md) | 2026-09-08 | P0-0b repaired and gated (3/3 image-build integration test); A61 struck (no disposition route exists); A62 struck (`slugForUuid` throws; real cause is Paperclip's own 403); recorded the owner's "Workflows" surfacing direction |
 | [Phase 1 hierarchy close-out](handoffs/2026-09-07-p1-hierarchy-closeout.md) | 2026-09-07 | Confirmed the rebase reconcile was a no-op; closed the one coverage gap (`missions-hierarchy.test.ts`, 31 tests); ran the full step-7 validation in both flag states on `f0c26fb` (typecheck/build/both docs gates/`git diff --check` exit 0; both suites exit 1 on exactly the five A52 Windows-baseline files and nothing else, in both states; integration RAN, exit 9: no `.env`); nothing pushed or deployed |
 | [P0/P1 state and the 8.5 + bridge brief](handoffs/2026-09-06-p0-p1-state-and-8-5-bridge-handoff.md) | 2026-09-06 | Phase 0 live results (dispatch turns run; disposition loop and cross-board provenance open), Phase 1 code-complete on feat/paperclip-p1-hierarchy, P0-0b built; paste-ready brief for Phase 8.5 and the bridge |
 | [P0-2 dispatch-push fix](handoffs/2026-09-06-p0-2-dispatch-push-fix.md) | 2026-09-06 | Phase 0 live critic found the dispatch push 400ing and Research's adapter missing a url; both fixed on this branch; also characterized the issue-hierarchy/blocking wire shapes (P1-1) |
@@ -159,4 +173,4 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 | [updatedSince patch and Phase 0](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | 2026-08-18 | Added the approved artifact patch and ADR |
 | [Codex review](handoffs/2026-08-18-codex-review.md) | 2026-08-18 | Established the original release-contract finding |
 
-Authorities: [README](README.md), [implementation plan](implementation-plan.md), [plan audit](plan-audit.md), [bar and phases](bar-and-phases.md), [ADR 0010](../../adr/0010-paperclip-work-engine.md), and [this session's handoff](handoffs/2026-09-06-p0-2-dispatch-push-fix.md).
+Authorities: [README](README.md), [implementation plan](implementation-plan.md), [plan audit](plan-audit.md), [bar and phases](bar-and-phases.md), [ADR 0010](../../adr/0010-paperclip-work-engine.md), and [the newest session handoff](handoffs/2026-09-17-machine-transfer.md).
