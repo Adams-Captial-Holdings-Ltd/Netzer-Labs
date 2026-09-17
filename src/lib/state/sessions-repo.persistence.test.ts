@@ -11,7 +11,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isPersistentChat, repairEmptyTurns, NO_RESPONSE_NOTICE, type Turn } from './sessions-repo.js';
+import {
+  isPersistentChat,
+  repairEmptyTurns,
+  trimTurnsToBudget,
+  NO_RESPONSE_NOTICE,
+  type Turn,
+} from './sessions-repo.js';
 
 describe('isPersistentChat', () => {
   it('persists dashboard conversations', () => {
@@ -127,5 +133,67 @@ describe('repairEmptyTurns hardening', () => {
       expect(typeof turn.text).toBe('string');
       expect(turn.text.trim().length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * The turn window is capped by COUNT (MAX_TURNS) but that does not cap BYTES.
+ * DynamoDB rejects an item over 400KB and appendTurns only retries
+ * ConditionalCheckFailedException, so an oversized item throws and the turn is
+ * lost - the same class of bug as the empty-turn poisoning, one turn's size
+ * breaking the whole chat.
+ *
+ * Measured at TURN_MAX_TOKENS 8192, 20 maxed turns reach 284-324KB, already
+ * ~81% of the limit. This trim is what makes the ceiling safely tunable.
+ */
+describe('trimTurnsToBudget', () => {
+  const turn = (bytes: number, tag = 'x'): Turn => ({
+    role: 'assistant',
+    text: tag.repeat(bytes),
+    ts: 1,
+  });
+
+  it('keeps everything when the window already fits', () => {
+    const turns = [turn(100), turn(100)];
+    const { kept, dropped } = trimTurnsToBudget(turns, 10_000);
+    expect(kept).toHaveLength(2);
+    expect(dropped).toHaveLength(0);
+  });
+
+  it('drops the OLDEST turns first, keeping recent context whole', () => {
+    const turns = [turn(500, 'a'), turn(500, 'b'), turn(500, 'c')];
+    const { kept, dropped } = trimTurnsToBudget(turns, 1_200);
+    expect(kept[kept.length - 1]?.text[0]).toBe('c');
+    expect(dropped[0]?.text[0]).toBe('a');
+    expect(kept.length + dropped.length).toBe(3);
+  });
+
+  it('never truncates a kept turn - they stay complete', () => {
+    const turns = [turn(500, 'a'), turn(500, 'b')];
+    const { kept } = trimTurnsToBudget(turns, 700);
+    for (const k of kept) expect(k.text.length).toBe(500);
+  });
+
+  it('keeps the newest turn even if it alone blows the budget', () => {
+    // Returning an empty window would break Bedrock role alternation, which is
+    // the same trap repairEmptyTurns avoids by replacing rather than removing.
+    const { kept } = trimTurnsToBudget([turn(10), turn(50_000)], 100);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]?.text.length).toBe(50_000);
+  });
+
+  it('loses nothing: kept + dropped always reconstructs the input', () => {
+    const turns = [turn(400, 'a'), turn(400, 'b'), turn(400, 'c'), turn(400, 'd')];
+    const { kept, dropped } = trimTurnsToBudget(turns, 900);
+    expect([...dropped, ...kept]).toEqual(turns);
+  });
+
+  it('holds a realistic worst case under DynamoDB 400KB', () => {
+    // 20 turns of ~16KB each = ~320KB unbounded; the budget must cut it.
+    const turns = Array.from({ length: 20 }, () => turn(16_000));
+    const { kept } = trimTurnsToBudget(turns, 300_000);
+    const total = kept.reduce((n, t) => n + t.text.length + 64, 0);
+    expect(total).toBeLessThanOrEqual(300_000);
+    expect(kept.length).toBeGreaterThan(0);
   });
 });

@@ -78,6 +78,32 @@ const TOOL_TURN_LIMIT = 8;
  */
 const TURN_MAX_TOKENS = 8192;
 
+/** Hard bounds on the runtime override. Below the floor a document cannot be
+ * emitted at all; above the ceiling latency and per-turn cost climb without a
+ * matching gain, and session items grow toward DynamoDB's 400KB limit even with
+ * the byte-budget trim in sessions-repo. */
+const TURN_MAX_TOKENS_FLOOR = 1024;
+const TURN_MAX_TOKENS_CEILING = 32_768;
+
+/**
+ * Output ceiling for this turn, tunable at runtime without a deploy.
+ *
+ * Set it the same way every other tunable in this repo is set — the
+ * `runtime-config` table, category `agent`, key `max_output_tokens` — which the
+ * dashboard's `/config` route already writes and which propagates within the
+ * repo's 30s config cache. Global, not per-agent: every agent shares it, so a
+ * newly created agent inherits the same ceiling with no extra setup.
+ *
+ * Falls back to TURN_MAX_TOKENS and never throws: a config lookup failure must
+ * not be able to break a turn.
+ */
+export async function resolveTurnMaxTokens(): Promise<number> {
+  const raw = await getConfig('agent', 'max_output_tokens').catch(() => undefined);
+  const parsed = Number(raw);
+  if (!raw || !Number.isFinite(parsed)) return TURN_MAX_TOKENS;
+  return Math.min(TURN_MAX_TOKENS_CEILING, Math.max(TURN_MAX_TOKENS_FLOOR, Math.trunc(parsed)));
+}
+
 export interface AttachmentBlock {
   /** image or document */
   kind: 'image' | 'document';
@@ -809,6 +835,10 @@ async function runAdmittedTurn(
   const streamCallbacks: ConverseStreamCallbacks = {};
   if (emitModelChunk) streamCallbacks.onChunk = emitModelChunk;
 
+  // Resolved ONCE per turn, then reused by the initial call and every tool
+  // round, so a mid-turn config change cannot make rounds disagree.
+  const turnMaxTokens = await resolveTurnMaxTokens();
+
   const initial = await converseStreamTurnWithFallback(
     {
       modelId,
@@ -816,7 +846,7 @@ async function runAdmittedTurn(
       userText: req.userText,
       userContent,
       history: turnsToMessages(cleanHistory),
-      maxTokens: TURN_MAX_TOKENS,
+      maxTokens: turnMaxTokens,
       guardrail:
         effectiveGuardrailId && effectiveGuardrailId !== 'REPLACE_ME'
           ? { id: effectiveGuardrailId, version: guardrailVersion }
@@ -963,8 +993,8 @@ async function runAdmittedTurn(
           // converseStreamTurn already learned this and recorded the model), so
           // the tool-dispatch turns don't re-trip the ValidationException.
           inferenceConfig: modelRejectsTemperature(modelId)
-            ? { maxTokens: TURN_MAX_TOKENS }
-            : { maxTokens: TURN_MAX_TOKENS, temperature: 0.7 },
+            ? { maxTokens: turnMaxTokens }
+            : { maxTokens: turnMaxTokens, temperature: 0.7 },
           ...(invocation.anthropicBeta
             ? { additionalModelRequestFields: { anthropic_beta: invocation.anthropicBeta } }
             : {}),
@@ -1099,8 +1129,8 @@ async function runAdmittedTurn(
             system: cachedSystem,
             messages: synthMessages,
             inferenceConfig: modelRejectsTemperature(modelId)
-              ? { maxTokens: TURN_MAX_TOKENS }
-              : { maxTokens: TURN_MAX_TOKENS, temperature: 0.7 },
+              ? { maxTokens: turnMaxTokens }
+              : { maxTokens: turnMaxTokens, temperature: 0.7 },
             ...(invocation.anthropicBeta
               ? { additionalModelRequestFields: { anthropic_beta: invocation.anthropicBeta } }
               : {}),

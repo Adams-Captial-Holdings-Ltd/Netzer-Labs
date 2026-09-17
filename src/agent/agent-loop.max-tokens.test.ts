@@ -78,7 +78,7 @@ vi.mock('../lib/cost/ledger-gate.js', () => ({
 }));
 vi.mock('../lib/state/panic-state-repo.js', () => ({ tryAcquirePanic }));
 
-import { runAgentTurn } from './agent-loop.js';
+import { runAgentTurn, resolveTurnMaxTokens } from './agent-loop.js';
 
 describe('turn output ceiling', () => {
   beforeEach(() => {
@@ -115,5 +115,49 @@ describe('turn output ceiling', () => {
     await runAgentTurn(req('build me a pdf'));
     const input = converseStreamTurnWithFallback.mock.calls[0]?.[0];
     expect(input.maxTokens).toBeGreaterThan(1024);
+  });
+});
+
+/**
+ * The ceiling must be tunable without a deploy, the same way every other
+ * tunable in this repo is: the runtime-config table, category `agent`, key
+ * `max_output_tokens`, which the dashboard /config route already writes.
+ *
+ * It is GLOBAL, not per-agent - a newly created agent inherits it with no
+ * extra setup, which is the question that prompted this.
+ */
+describe('resolveTurnMaxTokens', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('falls back to the built-in default when nothing is configured', async () => {
+    getConfig.mockResolvedValue(undefined);
+    expect(await resolveTurnMaxTokens()).toBe(8192);
+  });
+
+  it('uses a configured override', async () => {
+    getConfig.mockResolvedValue('16384');
+    expect(await resolveTurnMaxTokens()).toBe(16384);
+  });
+
+  it('clamps above the ceiling rather than accepting anything', async () => {
+    getConfig.mockResolvedValue('999999');
+    expect(await resolveTurnMaxTokens()).toBe(32768);
+  });
+
+  it('clamps below the floor, since a document cannot be emitted at all there', async () => {
+    getConfig.mockResolvedValue('10');
+    expect(await resolveTurnMaxTokens()).toBe(1024);
+  });
+
+  it('ignores junk rather than sending NaN to Bedrock', async () => {
+    for (const junk of ['', 'lots', 'null', '  ']) {
+      getConfig.mockResolvedValue(junk);
+      expect(await resolveTurnMaxTokens()).toBe(8192);
+    }
+  });
+
+  it('never throws when the config lookup fails - a turn must not break on it', async () => {
+    getConfig.mockRejectedValue(new Error('ddb down'));
+    await expect(resolveTurnMaxTokens()).resolves.toBe(8192);
   });
 });
