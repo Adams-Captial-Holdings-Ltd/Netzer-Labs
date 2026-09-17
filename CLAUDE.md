@@ -43,6 +43,10 @@ and leave a code comment at the skipped call site rather than silently omitting.
   touch infra like the daily cost cap. Use it for normal feature work.
 - A full `cdk deploy` can shift env-backed tunables (e.g. the cost cap); don't
   run it to ship app code.
+- Because it is image-only, `deploy:cloud` returns **before** deploy phase a —
+  so it rebuilds the orchestrator image and nothing else. A change under
+  `vendor/paperclip` (the Paperclip work-engine image, ADR 0010) needs a full
+  `npm run deploy`, or a CI deploy at a tier/environment that provisions Paperclip.
 - Always run the FULL `npm test` before pushing, not a scoped run.
 
 ## Agent prompts
@@ -50,3 +54,14 @@ and leave a code comment at the skipped call site rather than silently omitting.
 - Per-agent system prompts live in the S3 config bucket at
   `agents/<id>/CLAUDE.md` (5-minute cache), NOT in this repo or DDB. Editing one
   is an S3 upload, no deploy.
+
+## Feature docs and session handoffs
+
+- Feature docs live in `docs/features/<slug>/`; the spec is
+  [`docs/features/README.md`](docs/features/README.md).
+- **Every session writes its own handoff**: copy
+  `docs/features/HANDOFF-TEMPLATE.md` to
+  `docs/features/<slug>/handoffs/YYYY-MM-DD-<session-slug>.md`, keep its
+  numbered sections 1–9, and carry section 5 forward verbatim.
+- That is the only template. Ignore any `HANDOFF-TEMPLATE.md` under
+  `.worktrees/` or a nested checkout — those are other branches.
