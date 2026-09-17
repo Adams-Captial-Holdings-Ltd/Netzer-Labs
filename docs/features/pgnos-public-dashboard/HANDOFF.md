@@ -148,6 +148,9 @@ MX record**, so no `@pgnos.ai` address can receive mail.
 
 ## Session index
 
+- [2026-08-13 — SES email status (raw)](handoffs/2026-08-13-email-ses-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: the SES
+  identity verified and the account still in the sandbox.
 - [2026-08-14 — staging public URL](handoffs/2026-08-14-staging-public-url.md):
   pushed the feature branch, merged it through PR #46, made every
   Cloudflare-facing name suffix-aware, and made staging deploy on merge.
@@ -155,6 +158,18 @@ MX record**, so no `@pgnos.ai` address can receive mail.
   found and fixed the two `deploy.yml` defects that would have broken the first
   CI production deploy, added the KMS grant SES needs for bounce telemetry, and
   created the `netzar-magic-link` configuration set. Not deployed.
+- [2026-08-14 — staging deploy (raw)](handoffs/2026-08-14-staging-deploy-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: the staging
+  environment brought online by a local Compute-stack deploy after CI failed.
+- [2026-08-14 — staging public URL (raw)](handoffs/2026-08-14-staging-public-url-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: `staging.pgnos.ai`
+  brought online, and the scheduled auto-pause that took it down.
+- [2026-08-14 — production SES email via the ladder (raw)](handoffs/2026-08-14-prod-ses-email-ladder-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: PR #53 open,
+  nothing deployed.
+- [2026-08-14 — production email ladder and tunnel outage (raw)](handoffs/2026-08-14-prod-email-ladder-and-tunnel-outage-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: the ladder
+  reached production and the deploy dropped the `cloudflared` sidecar.
 - [2026-08-15 — public entrypoint outage and guards](handoffs/2026-08-15-public-entrypoint-outage-guards.md):
   **both hostnames served Error 1033 from 2026-08-14 15:32/16:03 UTC.** The
   readiness probe ran six minutes before the same deploy granted it
@@ -164,6 +179,9 @@ MX record**, so no `@pgnos.ai` address can receive mail.
   the synth, decoupled the tunnel-secret grant from the sidecar so re-attaching
   cannot fail on AccessDenied, and stopped the smoke test being disabled by the
   fault it exists to catch. Not deployed.
+- [2026-08-15 — connector availability (raw)](handoffs/2026-08-15-connector-availability-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: Cloudflare
+  connector outage remediation, monitoring and HA hardening.
 
 Authorities: [README](README.md),
 [design spec](../../superpowers/specs/2026-08-11-netzar-os-pgnos-public-dashboard-email-design.md),
