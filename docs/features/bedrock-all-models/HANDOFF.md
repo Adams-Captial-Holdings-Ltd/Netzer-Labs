@@ -14,8 +14,9 @@ as_of_commit: 94e36864e76e7f7e1bfa4c1b5743f543f10bbaad
   `development`. Per the
   [branch-to-environment mapping](../../../development.md#branch-to-environment-mapping),
   a `feature/*` branch reaches no AWS environment.
-- Tip before the machine-transfer docs commit:
-  `94e36864e76e7f7e1bfa4c1b5743f543f10bbaad`. The last code commit is
+- Tip before the machine-transfer docs commits:
+  `94e36864e76e7f7e1bfa4c1b5743f543f10bbaad`. Those commits are `d72db1c`
+  and its follow-up correction. The last code commit is
   `1b6797ab643b08df0d39fd16de95f8a51876e551`.
 - Pushed: not yet at the time of writing; the coordinator pushes this branch to
   origin under the same name immediately after this commit as an
@@ -64,8 +65,14 @@ as_of_commit: 94e36864e76e7f7e1bfa4c1b5743f543f10bbaad
       `iam-stack.ts`.
     - **WI-2 through WI-9 must not start** until all five are ancestors of
       `origin/development` and the branch is rebased. Fetch and re-check first.
-    - If the back-merge has not landed when WI-2's SPECIFICATION opens, stop and
-      ask whether this campaign raises that PR itself.
+    - The back-merge has its own workstream: the chat-history-integrity
+      feature, branch `fix/backmerge-production-hotfixes`, in the clone
+      `C:\dev\_netzer-backmerge`. Its session log, committed there as
+      `a4bad74`, records the owner's scope decision of 2026-09-11: cherry-pick
+      PRs #103-#106 only. No hotfix commit has landed there yet.
+    - If the back-merge has not landed when WI-2's SPECIFICATION opens, check
+      that branch and ask the owner there. This campaign does not raise its
+      own back-merge PR.
   - **Consent.** Each of these needs the owner's explicit consent, separately,
     every time:
     - provider approval and `aws login`;
@@ -83,7 +90,8 @@ as_of_commit: 94e36864e76e7f7e1bfa4c1b5743f543f10bbaad
     a number. Renumber whichever merges into `development` second.
   - **Machine-bound tooling.** The paths below must be translated on the new machine:
     - `seed-generator.mjs` lines 7-8 hard-code Windows paths;
-    - the resume prompt's `--cli` path no longer exists even on this PC. Use
+    - the resume prompt's `--cli` path no longer exists even on this PC, and
+      the top-level `bin\codex.exe` there is an older 0.130.0-alpha.5. Use
       the `codex` CLI on PATH.
   - **Disk space.** This PC's C: drive had 2.9 GB free on 2026-09-17. Measure
     the new machine before WI-5's synth and WI-7's full validation.
@@ -99,11 +107,11 @@ as_of_commit: 94e36864e76e7f7e1bfa4c1b5743f543f10bbaad
       `npm run local:test:integration`. They belong to WI-7's full validation,
       before any push beyond the backup.
   - Docs, run in the clone by the machine-transfer session on 2026-09-17:
-    - `node scripts/ci/feature-knowledge.mjs`: `feature-knowledge: OK`, both
-      at `94e3686` and with this session's docs staged.
-    - `node scripts/ci/docs-links.mjs`: `docs-links: OK`, both at `94e3686`
-      and with this session's docs staged. The link counts are in the session
-      log, section 7.
+    - `node scripts/ci/feature-knowledge.mjs`: `feature-knowledge: OK` at
+      `94e3686`, with this session's docs staged, at `d72db1c`, and with the
+      correction staged.
+    - `node scripts/ci/docs-links.mjs`: `docs-links: OK` at the same four
+      points. The link counts are in the session log, section 7.
 - Smallest next action: start WI-1 CLEANUP in a fresh session from the resume
   handoff.
   - On this PC it is `C:\Users\EmmanuelAdams\.claude\plans\bedrock-all-models-handoff.md`.

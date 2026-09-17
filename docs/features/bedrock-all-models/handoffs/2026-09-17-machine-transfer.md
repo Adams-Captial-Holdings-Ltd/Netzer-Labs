@@ -20,7 +20,7 @@ supersedes: 2026-09-14-wi1-correction.md
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none, per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
 | Commit at session start | `94e36864e76e7f7e1bfa4c1b5743f543f10bbaad` |
-| Commit at session end | the docs commit that adds this file, `docs(bedrock-all-models): hand off for the machine transfer`. Read it with `git log -1 --format=%H -- docs/features/bedrock-all-models`: a file cannot carry the SHA of the commit that introduces it. No code changed in this session; the last code commit is still `1b6797ab643b08df0d39fd16de95f8a51876e551`. |
+| Commit at session end | two docs commits: `d72db1cae8cdb410b778d9011391978e91a74ff6` (`docs(bedrock-all-models): hand off for the machine transfer`) added this file, then a follow-up commit corrected it after an independent check. Read the final tip with `git log -1 --format=%H -- docs/features/bedrock-all-models`: a file cannot carry the SHA of the commit that last changes it. No code changed in this session; the last code commit is still `1b6797ab643b08df0d39fd16de95f8a51876e551`. |
 | Pushed | not yet at the time of writing; the coordinator pushes this branch to origin under the same name immediately after this commit as an owner-approved backup (no PR, no merge, no deploy) - confirm with `git ls-remote origin refs/heads/feature/bedrock-all-models` |
 | PR | none |
 | Deployed | no |
@@ -45,8 +45,10 @@ happened.
 top of `origin/development` at `271339b`, clean tree.
 
 **Pushes.** The plan made every push consent-gated, so the campaign stayed local-only. On 2026-09-17 the
-owner approved one backup push of this branch under its own name, with no PR, no merge and no deploy. The
-coordinator makes that push after this commit (P13).
+owner approved one backup push of this branch under its own name, with no PR, no merge and no deploy (P13).
+Pushed: not yet at the time of writing; the coordinator pushes this branch to origin under the same name
+immediately after this commit as an owner-approved backup (no PR, no merge, no deploy) - confirm with
+`git ls-remote origin refs/heads/feature/bedrock-all-models`.
 
 **Back-merge blocker: still open.** WI-2 through WI-9 stay blocked until the production-only hotfixes
 `1abba67`, `d828124`, `1124118` and `8c14b3f` (and `hotfix/empty-turn-poisoning`, `3bffea6`) are ancestors of
@@ -54,6 +56,7 @@ coordinator makes that push after this commit (P13).
 - Re-checked on 2026-09-17 with `git merge-base --is-ancestor`, without fetching. Every check exited 1.
 - In this clone, `FETCH_HEAD` was last written on 2026-09-14 at 10:00:22 (UTC-4). The remote refs last moved on 2026-09-13 at 22:21:41.
 - The main checkout's refs, fetched on 2026-09-16 at 10:04:15, give the same `origin/development` (`271339b`) and the same five results (A15).
+- The back-merge is its own workstream: the chat-history-integrity feature, on branch `fix/backmerge-production-hotfixes` (A18). The owner scoped it on 2026-09-11, and no hotfix commit has landed there yet. This campaign waits for it and does not raise its own back-merge PR.
 
 **Non-git state.** The plans, the gauntlet folder, the progress page and two scratchpads go into the private
 devkit repository. Section 8 maps each one.
@@ -81,19 +84,24 @@ needs:
   - `diff` shows exactly one added timeline row: `94e3686`'s "Session docs committed…" entry.
 - **ADR number clash.**
   - This branch adds `docs/adr/0011-every-bedrock-model-for-agents.md` (`d90af11`) and lists it in `docs/adr/README.md`.
-  - `feature/release-pipeline-v1` (tip `06dc8aa4ca7db6b83c5815e331667866be9bd956`, in `C:\dev\_netzer-release`) adds `docs/adr/0011-release-artifact-identity.md`.
+  - `feature/release-pipeline-v1` (in `C:\dev\_netzer-release`) adds `docs/adr/0011-release-artifact-identity.md`. Its tip was `06dc8aa` when first checked. That branch's own machine-transfer commit, `e1eb539`, followed on 2026-09-17, and the file is still there.
   - Whichever branch merges into `development` second must renumber its ADR (M12).
 - **The Codex binary moved.**
   - The resume prompt's `--cli` directory, `AppData\Local\OpenAI\Codex\bin\7ac07f4ce733f89a`, no longer exists.
-  - The only `codex.exe` under `bin` is now in `12219cbfbcbddde7`. It reports `codex-cli 0.154.0-alpha.6.2`, not the 0.153.4 that built WI-1 (A14).
+  - The newest `codex.exe` under `bin` is `bin\12219cbfbcbddde7\codex.exe`, dated 2026-09-16. It reports `codex-cli 0.154.0-alpha.6.2`, not the 0.153.4 that built WI-1 (A14).
+  - An older top-level `bin\codex.exe`, dated 2026-05-09, reports `codex-cli 0.130.0-alpha.5`. Do not use it. `codex` is not on PATH on this PC.
 - **The builder, for the record.**
   - Every WI-1 build and correction was Codex **gpt-5.6-sol at high effort**, the owner's call (P11).
   - Each ran through the claudex runner (`~/.claude/skills/claudex-loop/scripts/runner.py build --builder codex`), with `--cli` pointing at a Windows `codex.exe`.
   - On a new machine, `--cli` takes the absolute path of the `codex` CLI on PATH.
-- **No back-merge work was found locally.**
-  - `C:\dev\_netzer-backmerge` has a branch `fix/backmerge-production-hotfixes` at `271339b`, with no commits of its own.
+- **The back-merge has its own workstream, and no hotfix has been applied yet (A18).**
+  - The chat-history-integrity feature owns it, on branch `fix/backmerge-production-hotfixes` in the normal clone `C:\dev\_netzer-backmerge`.
+  - Its session log is `docs/features/chat-history-integrity/handoffs/2026-09-10-backmerge-production-hotfixes.md`, on that branch only. The file sat untracked in that tree until a sibling machine-transfer session committed it as `a4bad74` on 2026-09-17. That commit is docs-only and puts the branch one commit past `271339b`.
+  - The log records the owner's scope decision of 2026-09-11: cherry-pick the nine commits of PRs #103-#106 (the four fixes plus five companion commits). A `git merge origin/production` was rejected because it would also carry #90, #91, #168 and #170.
+  - No hotfix commit has landed there: `git merge-base --is-ancestor` exits 1 for all five against that branch's tip.
+  - The branch was not on `origin` when checked (`git ls-remote --exit-code` exited 2). It is due for the same kind of backup push under its own name; confirm with `git ls-remote origin refs/heads/fix/backmerge-production-hotfixes`.
   - `C:\dev\_netzer-hotfix-backmerge` is on `development` at `271339b`.
-  - Neither belongs to this campaign, and neither was touched.
+  - Neither clone belongs to this campaign, and this session only read them. The first version of this log (`d72db1c`) said no back-merge work existed locally. That was wrong (M13).
 
 ### 3.2 Critical files
 
@@ -126,14 +134,15 @@ needs:
 - [x] Re-checked the back-merge blocker against the existing remote refs, in this clone and, read-only, in the main checkout.
 - [x] Located every non-git file the campaign needs and mapped it to the devkit (section 8, Appendix A).
 - [x] Wrote this session log and updated [`HANDOFF.md`](../HANDOFF.md).
+- [x] Corrected both after an independent check of `d72db1c`: the back-merge workstream (A18, M13), the Codex binaries (A14), the release-pipeline tip and the pushed-state sentence in section 2.
 - [ ] WI-1 CLEANUP, then WI-1 VERIFICATION: not started (section 6).
 
 ### 4.2 Files modified
 
 | File | Change | Rationale |
 |---|---|---|
-| `docs/features/bedrock-all-models/handoffs/2026-09-17-machine-transfer.md` | New (this file) | One log per session |
-| `docs/features/bedrock-all-models/HANDOFF.md` | Overwritten: `observed_at`, `as_of_commit`, pushed state, the back-merge re-check, the smallest next action and the session index | Current state for the new machine |
+| `docs/features/bedrock-all-models/handoffs/2026-09-17-machine-transfer.md` | New (this file) in `d72db1c`; corrected in the follow-up commit | One log per session |
+| `docs/features/bedrock-all-models/HANDOFF.md` | Overwritten in `d72db1c`: `observed_at`, `as_of_commit`, pushed state, the back-merge re-check, the smallest next action and the session index. The follow-up commit corrected the back-merge blocker and the Codex note. | Current state for the new machine |
 
 ### 4.3 Decisions made
 
@@ -142,6 +151,7 @@ needs:
 | Re-check the back-merge against the existing remote refs, without `git fetch` | Fetch first | The transfer task asked for the check in this clone after noting its fetch date. The main checkout's newer refs (2026-09-16) agree. The next session fetches before WI-2 anyway (section 6.2). |
 | One backup push of `feature/bedrock-all-models` under its own name, owner-approved on 2026-09-17 | Keep the branch local-only | The machine is being retired, and local-only commits would be stranded. The push is a backup only; P13 keeps it from being read as consent for anything else. |
 | Leave the ADR 0011 clash for merge time: whichever ADR merges into `development` second is renumbered | Renumber now | Neither branch has merged. Renumbering now would change another campaign's branch or guess at the merge order. |
+| Point the next session at the existing back-merge workstream, and have it ask the owner there if that work stalls | Have this campaign raise its own back-merge PR, as the resume prompt suggests | A back-merge branch with an owner scope decision (2026-09-11) already exists (A18). A second PR would duplicate that work or contradict its scope. |
 | Treat the scratchpad copy as the progress page of record | Use the drafts copy | The scratchpad copy is what was published, and it is one timeline row newer. |
 | On a new machine, keep Codex gpt-5.6-sol at high effort through the claudex runner, with `--cli` set to the `codex` CLI on PATH | Keep the Windows `codex.exe` path | That path does not exist on a Mac, and on this PC its hash directory has already changed (A14). The builder choice is the owner's (P11) and is not reopened. |
 
@@ -155,6 +165,7 @@ session log is not an accepted decision.
 | ADR number 0011 is claimed by two live branches | `docs/adr/README.md` and the renumbered ADR, when the second branch merges | No. The fix belongs to whichever branch merges second; M12 carries it until then. |
 | `seed-generator.mjs` hard-codes Windows paths (lines 7-8) | The generator itself, or the devkit's campaign index | No. The generator lives outside the repo, and changing it is out of scope for a transfer session. Section 5 (traps) and Appendix A carry it. |
 | The Codex binary's hash directory moves on updates, and 0.154.0-alpha.6.2 is now installed | The user's Codex memory note | No. It is machine-specific and this machine is being retired; A14 carries it. |
+| The production-hotfix back-merge belongs to the chat-history-integrity feature, on `fix/backmerge-production-hotfixes` | That feature's `HANDOFF.md`, on that branch | No. That branch belongs to another workstream; A18 carries the pointer here. |
 | Where the campaign's non-git state lives | The devkit's `README.md` campaign index | No. The coordinator builds the devkit after this session; section 8 and Appendix A carry it here. |
 
 ## 5. Carried-forward mistakes, assumptions and precautions
@@ -259,15 +270,17 @@ ID scheme.
 | # | Mistake | Impact | Correction | Lesson |
 |---|---|---|---|---|
 | M12 | Two live branches each add an ADR numbered 0011. This branch adds `docs/adr/0011-every-bedrock-model-for-agents.md` (`d90af11`), and `feature/release-pipeline-v1` adds `docs/adr/0011-release-artifact-identity.md`. | Whichever merges into `development` second collides on the number, and the ADR index gets two 0011 rows. | Open. Renumber whichever ADR merges second, and fix its links. On this branch, `docs/adr/README.md`, the feature `README.md`, `HANDOFF.md`, `plan.md` and both earlier session logs cite `0011`. | Before picking an ADR number, list `docs/adr/` on every live campaign branch, not only on `development`. |
+| M13 | The first version of this log (`d72db1c`) said no back-merge work existed locally, and that the hash-directory `codex.exe` was the only one under `bin`. Both were wrong. `C:\dev\_netzer-backmerge` held an untracked back-merge session log, and a top-level `bin\codex.exe` (0.130.0-alpha.5) also exists. | The next session could have raised a second back-merge PR against an existing owner scope decision. A14 would also have been carried forward with a false claim. | Fixed in this session's follow-up commit, before the backup push: A14 reworded, A18 added, and sections 2, 3.1, 6.2, 6.3, 7 and 8 corrected. | Before saying a sibling clone has no work, read its `git status` (untracked files) and its feature folders, not only `git log`. List the whole directory before calling a file "the only one". |
 
 #### Standing assumptions (continues 5.3)
 
 | # | Assumption | Confidence and caveat |
 |---|---|---|
-| A14 | A9's Codex path is gone from this machine. On 2026-09-17, `AppData\Local\OpenAI\Codex\bin\7ac07f4ce733f89a` does not exist. The only `codex.exe` under `bin` is `bin\12219cbfbcbddde7\codex.exe`, which reports `codex-cli 0.154.0-alpha.6.2`, not the 0.153.4 that built WI-1. | Measured with `ls` and `--version` on 2026-09-17; no model call. On a new machine, use the `codex` CLI on PATH and pass its absolute path to `--cli`. The builder stays gpt-5.6-sol at high effort (P11). Before the CLEANUP build, confirm the new CLI serves that model; if Sol is refused, stop and ask (plan, Codex lane). |
+| A14 | A9's Codex path is gone from this machine. On 2026-09-17, `AppData\Local\OpenAI\Codex\bin\7ac07f4ce733f89a` does not exist. The newest `codex.exe` under `bin` is `bin\12219cbfbcbddde7\codex.exe` (dated 2026-09-16), which reports `codex-cli 0.154.0-alpha.6.2`, not the 0.153.4 that built WI-1. An older top-level `bin\codex.exe` (dated 2026-05-09) reports `codex-cli 0.130.0-alpha.5` and must not be used. `codex` is not on PATH on this PC. | Measured with `find`, `ls` and `--version` on 2026-09-17; no model call. On a new machine, use the `codex` CLI on PATH and pass its absolute path to `--cli`. The builder stays gpt-5.6-sol at high effort (P11). Before the CLEANUP build, confirm the new CLI serves that model; if Sol is refused, stop and ask (plan, Codex lane). |
 | A15 | The back-merge blocker (A7) still held on 2026-09-17. `git merge-base --is-ancestor` exits 1 against `origin/development` (`271339bc8b2feea85e6c31b115fdd34e757a72e2`) for `1abba67`, `d828124`, `1124118`, `8c14b3f` and `3bffea6` (`origin/hotfix/empty-turn-poisoning`). | Measured without fetching, in two places. In this clone, the remote refs last moved on 2026-09-13 at 22:21:41 (UTC-4), and `FETCH_HEAD` was last written on 2026-09-14 at 10:00:22. The main checkout's refs, fetched on 2026-09-16 at 10:04:15, give the same `origin/development` and the same five results. These refs are at least a day old: fetch and re-check before WI-2. |
 | A16 | Nothing happened on this campaign between 2026-09-14 15:53 (UTC-4) and this session. | Verified on 2026-09-17: `94e3686` was committed at 15:50:50; the newest file under `~/.claude/gauntlet/bedrock-all-models/` is from 15:51; the resume prompt from 15:51:58; the published progress page from 15:52; and the coordinating session `a4af3478` wrote its last transcript entry at 15:53:04 (19:53:04Z). No `WI-1-cleanup.md` work order and no `runs/wi1-cleanup/` exist. |
 | A17 | The campaign's non-git state lives outside the repo. The coordinator copies it into the private devkit (`https://github.com/emmanuelmadams4-lgtm/netzer-devkit`) after this session: plans under `claude/plans/`, the gauntlet folder under `claude/gauntlet/bedrock-all-models/`, and scratchpad-only files under `archive/scratch/<session-id>/`. | Mapped in section 8 and Appendix A; the devkit did not exist yet when this was written. `build-output.js` and `models.jsonl`, the model-card builder and raw inventory behind `model-cards.json`, will exist only in `archive/scratch/cfb8f29c/`. |
+| A18 | The back-merge that A7 waits for is its own workstream: the chat-history-integrity feature, branch `fix/backmerge-production-hotfixes`, normal clone `C:\dev\_netzer-backmerge`. Its session log, `docs/features/chat-history-integrity/handoffs/2026-09-10-backmerge-production-hotfixes.md` (committed there as `a4bad74` on 2026-09-17), records the owner's scope decision of 2026-09-11: cherry-pick the nine commits of PRs #103-#106 in production order, and do not merge `origin/production` (#90, #91, #168 and #170 stay out of scope). No hotfix commit had been applied there on 2026-09-17. | Checked read-only on 2026-09-17. That branch's tip is `a4bad74326bfe00d5c20441424f5c0411c8bf494`, one docs-only commit past `271339b`. `git merge-base --is-ancestor` exits 1 against it for `1abba67`, `d828124`, `1124118`, `8c14b3f` and `3bffea6`. `git ls-remote --exit-code origin refs/heads/fix/backmerge-production-hotfixes` exited 2: the branch was not on `origin` yet, and it is due for a backup push. Before WI-2, read that branch and its newest session log. If the back-merge has stalled, ask the owner about it in that workstream. This campaign does not raise its own back-merge PR. |
 
 #### Known traps (continues 5.4)
 
@@ -276,6 +289,7 @@ ID scheme.
 | `seed-generator.mjs` hard-codes `ROOT` (line 7) and `CLONE` (line 8) as Windows paths, and `OUT` and `REPORT` derive from them. Edit both lines before regenerating `model-seeds.ts` on a new machine. | `~/.claude/gauntlet/bedrock-all-models/seed-generator.mjs:7-10` |
 | The two copies of the progress page differ: the drafts copy lacks the last timeline row (`94e3686`). Republish from the published copy. | devkit `archive/scratch/a4af3478/bedrock-all-models-progress.html` versus `claude/gauntlet/bedrock-all-models/drafts/bedrock-all-models-progress.html` |
 | The resume prompt's runner command passes a Windows `codex.exe` path to `--cli`. That path is gone even on this PC (A14). | Appendix A, path map |
+| The resume prompt's back-merge step ("ask the owner whether this campaign raises the back-merge PR itself") predates A18. A back-merge branch with an owner scope decision already exists, so check it first. | A18; section 6.2, step 6 |
 | The CRLF trap above applies only on Windows with `core.autocrlf=true`. On macOS the working tree follows the LF blobs, so write new docs with LF there. | `git ls-files --eol docs/features/bedrock-all-models/` |
 | The PowerShell 5.1 and cp1252-console traps above apply only on Windows. On macOS Codex's shell accepts `&&`, but keep proof commands on separate lines so work orders stay portable. | `~/.claude/gauntlet/bedrock-all-models/work-orders/WI-1-correction-2.md`, PROOF |
 
@@ -292,7 +306,7 @@ embedded in Appendix A. After the devkit restore it is at `~/.claude/plans/bedro
 1. **Restore.**
    - Run the devkit restore.
    - Make a fresh clone of `origin` at `<dev-root>/_netzer-allmodels`, then `git checkout feature/bedrock-all-models`.
-   - Confirm that `git log --oneline -2` shows this session's docs commit on top of `94e3686`, and that the tree is clean.
+   - Confirm that `git log --oneline -3` shows this session's two docs commits (`d72db1c`, then its correction) on top of `94e3686`, and that the tree is clean.
    - Install dependencies, then check free disk space.
 2. **Translate the machine-bound paths (P12).**
    - Edit `seed-generator.mjs` lines 7-8.
@@ -304,7 +318,10 @@ embedded in Appendix A. After the devkit restore it is at `~/.claude/plans/bedro
    - Claude freezes `work-orders/WI-1-cleanup.md` with items (a) through (d).
    - Codex builds it (P11), and Claude checks the build and commits locally.
 5. **WI-1 VERIFICATION.** A fresh Opus session checks AM-01, AM-02, AM-05, AM-13, AM-16 and the catalog halves of AM-30 and AM-37.
-6. **Before WI-2's SPECIFICATION.** Run `git fetch`, then re-run the five ancestry checks (A7, A15). If any is still missing, ask the owner whether this campaign raises the back-merge PR, which is consent-gated.
+6. **Before WI-2's SPECIFICATION.**
+   - Run `git fetch`, then re-run the five ancestry checks (A7, A15).
+   - If any is still missing, check the back-merge workstream (A18). Run `git ls-remote origin refs/heads/fix/backmerge-production-hotfixes`, then read that branch's newest session log under `docs/features/chat-history-integrity/handoffs/`.
+   - If that work has stalled, ask the owner about it there. Do not raise a back-merge PR from this campaign. The resume prompt's back-merge step predates A18.
 7. **Progress page.** Read https://claude.ai/code/artifact/75ae6a25-4f55-4c59-b91b-c85246828f5a first, then republish it with `url`, starting from the published copy.
 
 ### 6.3 Blockers and open questions
@@ -312,11 +329,12 @@ embedded in Appendix A. After the devkit restore it is at `~/.claude/plans/bedro
 - [ ] **Blocker: back-merge.** The production-only hotfixes are still not on `origin/development` (A7, A15).
   - Needs: the back-merge to land, then a rebase of this branch.
   - Blocks WI-2 through WI-9. Does not block WI-1.
-  - No local back-merge work exists: `C:\dev\_netzer-backmerge`'s `fix/backmerge-production-hotfixes` has no commits beyond `271339b`.
+  - The fix is owned by the chat-history-integrity back-merge on `fix/backmerge-production-hotfixes` (`C:\dev\_netzer-backmerge`). On 2026-09-11 the owner scoped it to a cherry-pick of PRs #103-#106 (A18).
+  - Its session log is committed there as `a4bad74`. No hotfix commit has landed yet.
 - [ ] **Blocker: consent.** Provider approval, `aws login`, pushes, deploys, runtime-config writes and live model calls each need the owner's consent, separately, every time (plan, consent gates). The 2026-09-17 backup push does not change this (P13).
 - [ ] **Risk: ADR number clash (M12).** Resolve when the first of the two branches merges into `development`.
 - [ ] **Risk: Codex CLI version (A14).** WI-1 was built with 0.153.4; the next build runs on whatever the new machine installs.
-- [ ] **Risk: disk space.** This PC had 2.9 GB free at the start of this session and 2.7 GB later (`df -h /c`). Measure again on the new machine before the full `npm test`, WI-5's synth and WI-7's validation.
+- [ ] **Risk: disk space.** This PC had 2.9 GB free at the start of this session, 2.7 GB later and 2.6 GB when the correction began (`df -h /c`). Measure again on the new machine before the full `npm test`, WI-5's synth and WI-7's validation.
 - [ ] **Question:** should `docs/README.md` list this feature folder?
   - Suggested resolution: leave it for WI-7's docs pass (carried).
 
@@ -339,9 +357,9 @@ a false `pass` is not.
 | `npm --prefix web run typecheck` | not run | not run |
 | `npm --prefix web run build` | not run | not run |
 | `npm run local:test:integration` | not run | not run |
-| `node scripts/ci/docs-links.mjs` | At `94e3686`, clean tree: `docs-links: 141 markdown files · 1788 internal links checked · 74 external links skipped (checked on a schedule/at release, never per-PR)`, then `docs-links: OK` (exit 0) | With this file and `HANDOFF.md` staged: `docs-links: 142 markdown files · 1826 internal links checked · 74 external links skipped (checked on a schedule/at release, never per-PR)`, then `docs-links: OK` (exit 0) |
-| `node scripts/ci/feature-knowledge.mjs` | At `94e3686`: `feature-knowledge: OK` (exit 0) | With this file and `HANDOFF.md` staged: `feature-knowledge: OK` (exit 0) |
-| `git diff --check` | Clean tree at session start: `git status --short` printed nothing | `git diff --cached --check`: exit 0 for the two staged docs |
+| `node scripts/ci/docs-links.mjs` | At `94e3686`, clean tree: `docs-links: 141 markdown files · 1788 internal links checked · 74 external links skipped (checked on a schedule/at release, never per-PR)`, then `docs-links: OK` (exit 0) | With this file and `HANDOFF.md` staged: `docs-links: 142 markdown files · 1826 internal links checked · 74 external links skipped (checked on a schedule/at release, never per-PR)`, then `docs-links: OK` (exit 0). Correction: at `d72db1c` on a clean tree, the same 142 files and 1826 links, then `docs-links: OK`. With the corrections staged: `docs-links: 142 markdown files · 1827 internal links checked · 74 external links skipped (checked on a schedule/at release, never per-PR)`, then `docs-links: OK` (exit 0). The extra link is section 9's new link. |
+| `node scripts/ci/feature-knowledge.mjs` | At `94e3686`: `feature-knowledge: OK` (exit 0) | With this file and `HANDOFF.md` staged: `feature-knowledge: OK` (exit 0). Correction: OK at `d72db1c` and again with the corrections staged (exit 0). |
+| `git diff --check` | Clean tree at session start: `git status --short` printed nothing | `git diff --cached --check`: exit 0 for the two staged docs, and again for the staged corrections |
 
 Other commands this session ran, with their real results:
 - **Ancestry, in this clone.** `git merge-base --is-ancestor <sha> origin/development` exited 1 for each of `1abba67`, `d828124`, `1124118` and `8c14b3f`, and for `origin/hotfix/empty-turn-poisoning`.
@@ -354,8 +372,19 @@ Other commands this session ran, with their real results:
   - `ls --time-style=full-iso .git/FETCH_HEAD`: 2026-09-14 10:00:22 (UTC-4) in this clone, 2026-09-16 10:04:15 in the main checkout.
   - The clone's remote-ref reflog last moved at epoch 1789352501, which is 2026-09-13 22:21:41 (UTC-4).
 - **Branch count.** `git rev-list --count 271339b..HEAD`: 11.
-- **The other ADR 0011.** `git -C C:/dev/_netzer-release ls-tree --name-only feature/release-pipeline-v1 docs/adr/` lists `0011-release-artifact-identity.md`.
+- **The other ADR 0011.** `git -C C:/dev/_netzer-release ls-tree --name-only feature/release-pipeline-v1 docs/adr/` lists `0011-release-artifact-identity.md`. During the correction, `git log -3 feature/release-pipeline-v1` there showed `e1eb539ffde548becac1444db6584425a56e0f78` (2026-09-17 08:46:25) on top of `06dc8aa`, and the same `ls-tree` still listed the file.
 - **Codex.** `codex.exe --version` in `bin\12219cbfbcbddde7` printed `codex-cli 0.154.0-alpha.6.2`. `ls` of `bin\7ac07f4ce733f89a` failed with "No such file or directory".
+- **Codex, during the correction.** `find . -maxdepth 2 -iname '*.exe'` under `AppData\Local\OpenAI\Codex\bin` listed two `codex.exe` files:
+  - `12219cbfbcbddde7\codex.exe`, 297858352 bytes, dated 2026-09-16;
+  - the top-level `codex.exe`, 245812016 bytes, dated 2026-05-09, whose `--version` printed `codex-cli 0.130.0-alpha.5`.
+  - `command -v codex` found nothing: `codex` is not on PATH.
+- **Back-merge workstream, during the correction (read-only).** In `C:\dev\_netzer-backmerge`:
+  - `git branch --show-current` printed `fix/backmerge-production-hotfixes`.
+  - `git log -3` showed `a4bad74326bfe00d5c20441424f5c0411c8bf494` (2026-09-17 08:48:29, one docs file) on top of `271339b`.
+  - `git merge-base --is-ancestor <sha> HEAD` exited 1 for each of `1abba67`, `d828124`, `1124118`, `8c14b3f` and `3bffea6`.
+  - `git ls-remote --exit-code origin refs/heads/fix/backmerge-production-hotfixes` exited 2.
+  - `git status --short` showed that clone's own machine-transfer docs staged by another session. This session did not touch them.
+  - `git show HEAD:<the 2026-09-10 log>` was read for the owner's scope decision (its section 4.3) and its pending work (its section 6).
 - **Copy comparisons.**
   - `sha256sum`: the resume prompt and `drafts/cleanup-handoff.final.md` are identical (`22a12a120f6e0ed5d6e05b07e17d6960b40aee17f615f23a28f9da80aa59143d`).
   - The two progress-page copies differ (`5ac2cefd…` published, `322907e0…` drafts), and `diff` shows one added line.
@@ -363,6 +392,7 @@ Other commands this session ran, with their real results:
 - **Section 5 check.** A node script compared this file's staged blob with `HEAD:docs/features/bedrock-all-models/handoffs/2026-09-14-wi1-correction.md`. The `## 5.` heading is identical, and the old section 5 body (17112 bytes) is an exact byte prefix of the new one. The appended part starts at `### Added 2026-09-17 (machine transfer)`.
 - **Appendix A check.** The same script found the fenced prompt byte-identical to `bedrock-all-models-handoff.md` (13355 bytes each). The staged blob has no CR bytes, and the CRLF working copy normalizes to it.
 - **Secret scan.** The staged diff was grepped for the key and token prefixes the transfer rules list (AWS access keys, GitHub tokens, Slack tokens, Anthropic keys, PEM private keys): no hits. A grep for base64-like runs of 40 or more characters, excluding 40-hex SHAs, matched only the SHA-256 digest above and the runner command's path in Appendix A.
+- **Correction re-checks.** The section 5 and Appendix A checks were re-run on the corrected staged blob. The carried section 5 body is still an exact byte prefix, the embedded prompt is still byte-identical, and the blob has no CR bytes. The secret scan of the correction's staged diff found no key or token prefixes.
 - **Not run:** the npm checks. This session changed only documentation. The full suite would also write Vitest caches to a drive with under 3 GB free. The code checks last ran at `1b6797a` (2026-09-14 log, section 7).
 - **No AWS command ran, and nothing was fetched or pushed by this session.**
 
@@ -370,15 +400,17 @@ Other commands this session ran, with their real results:
 
 - **Tools and services:**
   - Windows 11 Pro, Node v24.19.0, git 2.55.0.windows.3.
-  - Codex CLI 0.154.0-alpha.6.2 at `bin\12219cbfbcbddde7` (A14).
-  - The C: drive is 99% full: 2.9 GB free at session start, 2.7 GB later.
+  - Codex CLI 0.154.0-alpha.6.2 at `bin\12219cbfbcbddde7`. An older 0.130.0-alpha.5 sits at the top-level `bin\codex.exe`, and `codex` is not on PATH (A14).
+  - The C: drive is 99% full: 2.9 GB free at session start, 2.7 GB later, 2.6 GB when the correction began.
 - **Active processes:** none started by this session.
 - **Environment variables:** none set by this session. **Never values, never secrets.**
 - **Uncommitted work left in the tree:**
-  - `C:\dev\_netzer-allmodels`: none after the docs commit.
+  - `C:\dev\_netzer-allmodels`: none after the docs commits.
+  - `C:\dev\_netzer-backmerge` (not this campaign's) had another session's machine-transfer docs staged. This session only read that clone.
   - The main checkout `C:\dev\Netzer-Labs` (branch `fix/knowledge-scope-fanout`) still carries a large uncommitted tree that is not this campaign's. It was only read (`git for-each-ref`, `git merge-base`), per **P6**.
 - **Git state:**
-  - Branch `feature/bedrock-all-models`; tip before this session's commit `94e36864e76e7f7e1bfa4c1b5743f543f10bbaad`.
+  - Branch `feature/bedrock-all-models`; tip before this session's first commit `94e36864e76e7f7e1bfa4c1b5743f543f10bbaad`.
+  - This session's commits: `d72db1cae8cdb410b778d9011391978e91a74ff6`, then the correction commit. Read the final tip with `git log -1 --format=%H`.
   - Pushed: not yet at the time of writing; the coordinator pushes this branch to origin under the same name immediately after this commit as an owner-approved backup (no PR, no merge, no deploy) - confirm with `git ls-remote origin refs/heads/feature/bedrock-all-models`
 - **Where the non-git state lives.** The devkit (`https://github.com/emmanuelmadams4-lgtm/netzer-devkit`) is being built after this session, so its paths below are the planned layout:
 
@@ -408,6 +440,7 @@ Other commands this session ran, with their real results:
 - [ADR 0011 — Every Converse-capable Bedrock model for agents](../../../adr/0011-every-bedrock-model-for-agents.md) (proposed; number clash, M12)
 - [ADR 0003 — Cross-region Bedrock inference profiles](../../../adr/0003-bedrock-inference-profiles.md)
 - [ADR index](../../../adr/README.md)
+- [chat-history-integrity HANDOFF](../../chat-history-integrity/HANDOFF.md), as it stands on this branch. The back-merge session log (A18) exists only on `fix/backmerge-production-hotfixes`: `docs/features/chat-history-integrity/handoffs/2026-09-10-backmerge-production-hotfixes.md`.
 - [Feature knowledge framework](../../README.md)
 - [Local development guide](../../../../development.md)
 - [Contributing and branch promotion](../../../../CONTRIBUTING.md)
@@ -427,7 +460,7 @@ Other commands this session ran, with their real results:
 | `C:\dev\Netzer-Labs` (the main checkout; this campaign never edits it) | `<dev-root>/Netzer-Labs` | `origin` |
 | `%TEMP%\claude\C--dev-Netzer-Labs\a4af3478-9a25-4a83-9f4b-052487801f55\scratchpad\` | no local equivalent; read from the devkit | devkit `archive/scratch/a4af3478/` |
 | `%TEMP%\claude\C--dev-Netzer-Labs\cfb8f29c-ae0a-4fa3-843f-9f45455e855c\scratchpad\` | no local equivalent; read from the devkit | devkit `archive/scratch/cfb8f29c/` |
-| `C:\Users\EmmanuelAdams\AppData\Local\OpenAI\Codex\bin\<hash>\codex.exe`; the prompt names `7ac07f4ce733f89a`, which no longer exists (A14) | the `codex` CLI on PATH; pass its absolute path (`command -v codex`) to `--cli` | local install |
+| `C:\Users\EmmanuelAdams\AppData\Local\OpenAI\Codex\bin\<hash>\codex.exe`; the prompt names `7ac07f4ce733f89a`, which no longer exists. The top-level `bin\codex.exe` is an older 0.130.0-alpha.5; do not use it (A14) | the `codex` CLI on PATH; pass its absolute path (`command -v codex`) to `--cli` | local install |
 | `%APPDATA%\Claude\claude-code\<version>\claude.exe` (A12) | the new machine's Claude Code CLI. Never launch it through `runner.py inspect` from inside Claude Code. | local install |
 | `seed-generator.mjs` line 7 (`ROOT`) and line 8 (`CLONE`) | absolute paths of `~/.claude/gauntlet/bedrock-all-models` and `<dev-root>/_netzer-allmodels` | edit by hand |
 | `python` in the runner command | `python3` on macOS, if `python` is not on PATH | local install |
@@ -443,7 +476,7 @@ Related plans, by devkit path:
 
 Below is `~/.claude/plans/bedrock-all-models-handoff.md`, verbatim, from devkit
 `claude/plans/bedrock-all-models-handoff.md`. Its paths are this Windows PC's; translate them with A.1. Its
-`--cli` path no longer exists (A14).
+`--cli` path no longer exists (A14). Its back-merge step predates A18: follow section 6.2, step 6 instead.
 
 `````text
 GAUNTLET_MODE: DIRECT_COORDINATOR
