@@ -67,6 +67,7 @@ tested_by:
   - infra/lib/paperclip-stack.test.ts
   - scripts/lib/cost-gate.test.ts
   - scripts/lib/lifecycle/paperclip-image-pipeline.test.ts
+  - scripts/lib/lifecycle/orchestrator-dockerfile.test.ts
   - scripts/lib/paperclip/bootstrap-secret.test.ts
   - src/ops/paperclip-phase-probe.test.ts
   - src/adapters/dashboard/missions-hierarchy.test.ts
@@ -77,6 +78,8 @@ evidence:
   - docs/features/paperclip/implementation-plan.md
   - docs/features/paperclip/plan-audit.md
 ---
+
+> **On `development`:** this folder's code (and some documents it cites) still lives on branch `fix/paperclip-p0-0b-image-build`. Links to those files are plain text here, and relationships that do not exist on `development` are omitted; the full list is in that branch's copy of this README.
 
 # Paperclip integration
 
@@ -189,6 +192,8 @@ took effect at staging Deploy run 34004002068 (2026-09-06T01:28Z, `5a5bf65`) -- 
 and the production environment sets none. The legacy
 router remains intentionally present until the separately reviewed retirement
 gate has two clean production weeks of evidence.
+
+Separately, `fix/paperclip-p0-0b-image-build` repairs a second, unrelated build-stage defect: under `--omit=dev`, npm silently failed to reify the three compiler packages named on its own install command (they are `devDependencies`, so npm inferred a dev edge and skipped them), and `npx tsc` then fetched the unrelated registry stub `tsc@2.0.4` instead of failing loudly. Fixed by an isolated install prefix plus invoking `node node_modules/typescript/bin/tsc` directly, and gated by a real image-build integration test (3/3 green, reconfirmed 2026-09-15). Code-complete but not yet merged; the full amd64 build, the arm64/QEMU lane, the full suite in both flag states, and the PR ladder are still outstanding — see [HANDOFF.md](HANDOFF.md) for exact status.
 
 The 2026-09-06 Phase 0 live critic (staging `dd16ca4`, run 34021795520) found the inbound dispatch push rejected 400 `invalid_body` on every attempt and the Research agent's adapter missing a push `url`; both are fixed on `fix/paperclip-p0-2-dispatch-push` (`0e09c9e` fix(paperclip): accept the real adapter push, whose issue id rides under context; `cd4c664` fix(paperclip): reconcile a reused agent's adapter config and arm dispatch slugs from the environment), PR pending against `development`.
 
@@ -455,6 +460,13 @@ npm run test:paperclip:down
 
 `test:paperclip:all` chains with `&&`, so when a test fails the `down` step
 never runs — clean the disposable stack up explicitly.
+
+The build-stage image test needs Docker and an explicit opt-in, so CI never
+runs it. Run it whenever the Dockerfile build stage changes:
+
+```powershell
+$env:ORCHESTRATOR_IMAGE_BUILD_TEST=1; npx vitest run --config vitest.integration.config.ts scripts/lib/lifecycle/orchestrator-dockerfile.build.integration.test.ts
+```
 
 Docs gates, required before any push that touches this folder:
 
