@@ -185,6 +185,114 @@ gate at invoke), C-16 (ambiguity error preserved). Live via `/api/test-turn`: `m
 `research`'s board and gets rows; `main` updates a mission it created for `research`; `research`
 cannot update a mission `main` owns and did not delegate (typed refusal text unchanged in shape).
 
+### Phase 0 status and corrections (measured 2026-09-07/08)
+
+P0-1 is live PASS. P0-0, P0-2 and P0-3 shipped code and then failed their live checks; two
+of the three recorded causes were wrong. What follows was measured, not reasoned.
+
+**P0-0b — the shipped knob was never the fix, and neither was its replacement.** The
+replacement installed `typescript`, `@types/pdfkit` and `@types/ws` under `--omit=dev`. All
+three are `devDependencies`, so npm inferred a dev edge for each, treated them as undefined
+for diffing, and reified none: the install reported `up to date in 3s` having added none of
+the three packages named on its own command line, and `npx tsc` then fetched the unrelated
+registry package `tsc@2.0.4` ("This is not the tsc command you are looking for") and killed
+the stage. All nine text tests were green throughout, because every one is `readFileSync` +
+`String.includes`. Repaired by installing the three in an empty directory (no manifest, so
+no dev edge to infer -- the same command now reports `added 5 packages`) and compiling with
+`node node_modules/typescript/bin/tsc` rather than `npx`, which resolves a missing binary by
+fetching one. Proven by a real image gate that builds the stage and asserts *inside* it.
+
+**A61 -- "report a run disposition" is STRUCK.** Measured against the live service, not the
+pinned snapshot: `disposition`, `complete`, `completion`, `succeed` and `result` match no
+path. The only run-lifecycle writes are `POST /api/heartbeat-runs/{runId}/cancel` and
+`POST /api/heartbeat-runs/{runId}/watchdog-decisions`, whose body is
+`{"decision": "snooze" | "continue" | "dismissed_false_positive"}` -- a watchdog control,
+not a disposition channel. There is no route by which we can report a run's outcome, so the
+issue-level in-flight claim carries A61 alone. Also found and previously uncatalogued:
+`GET /api/issues/{issueId}/active-run`. The A61 mechanism is visible on the issue row
+(`checkoutRunId`, `executionRunId`, `executionLockedAt`, `executionState`, and the
+`monitor*` recovery timer). Wakeup path settled: `/api/agents/{id}/wakeup`.
+
+**A62 -- STRUCK, the recorded cause is false.** It claimed foreign-board rows project
+without the provenance join so `createdByAgent` reads `'paperclip'`. Live, `createdByAgentId`
+is null on 0 of 18 rows and all three research-board rows read `createdByAgent=main` through
+our own ACL. It is mechanically impossible anyway: `slugForUuid` throws rather than returning
+`'paperclip'`, so that fallback fires only on a null field, which no row has.
+
+**The real P0-3 defect.** `main` creates a mission for `research` (`createdByAgent=main`,
+correct), then `main` -- creator, not owner -- cancels it and gets
+`Issue is outside this actor's authorization boundary - Paperclip PATCH /api/issues/... responded 403`.
+Our ACL said yes; **Paperclip refused.** Every write goes out with the acting agent's key
+and `reconcilerKey`/`dispatchSecret` are deliberately absent from the client, while Paperclip
+scopes issue writes to the assignee. **P0-3's live acceptance is unachievable as written
+under the current credential model.** Owner ruling (2026-09-07): execute as the owner --
+Netzar's ACL decides who may act, and the write then goes out with the assignee's key, with
+the audit row recording actor-vs-executor.
+
+**Direction (owner, 2026-09-07): "Workflows".** Harness Paperclip rather than reimplement
+it -- keep its features, surface them under a Netzar tab named **Workflows**, restyled to our
+palette. Paperclip serves a full SPA and ships white-labelling, so the restyle is
+configuration. `workflow*` is absent from Paperclip's 475 routes and from the Netzar SPA, so
+the name collides with nothing; Paperclip's own `project` (a dated milestone and a
+credential/billing boundary) stays internal. **This puts P0-3b at risk of being wasted
+work** -- if the tab surfaces Paperclip's own board under Paperclip's own permissions, the
+cross-board mutation may not need to exist. Settle that before building it. P0-0b and A61
+are needed under every version of the plan.
+
+### Phase 0 status, corrected by measurement (2026-09-07/08)
+
+P0-1 is live PASS. P0-0, P0-2 and P0-3 shipped code, and the live checks that followed
+found three things the text above does not say. Two of the three were **mis-recorded** and
+are struck here rather than carried forward.
+
+**P0-0b — the shipped knob was not the fix, and neither was its replacement.** The
+`ENV npm_config_fetch_timeout` line does not prevent the ETIMEDOUT (the kernel socket
+timeout fires first and npm already retries). Its replacement — installing the three
+compile packages under `--omit=dev` — could not work either, and the image proved it: all
+three are `devDependencies`, npm infers a dev edge for any name already in
+`devDependencies`, `--no-save` only suppresses the manifest write, and a node marked dev
+under `--omit=dev` is treated as undefined for diffing. The install reported `up to date in
+3s` having added **none** of the three packages named on its own command line, and
+`npx tsc` then fetched the unrelated registry stub `tsc@2.0.4` and died. Repaired by
+installing them in an empty directory (no manifest, so no dev edge to infer) and compiling
+with `node node_modules/typescript/bin/tsc` — `npx` resolves a missing binary by *fetching*
+one, which a build stage must never do. Gated by a real
+`docker buildx build --target build` that asserts facts **inside** the produced image.
+
+**A61 — "report a run disposition" is struck. There is no such route.** Measured against
+the live service, not the pinned snapshot: `disposition`, `complete`, `completion`,
+`succeed` and `result` match no path. The only run-lifecycle writes are
+`POST /api/heartbeat-runs/{runId}/cancel` and `POST /api/heartbeat-runs/{runId}/watchdog-decisions`,
+whose body is `{"decision": "snooze" | "continue" | "dismissed_false_positive"}` — a
+watchdog control, not a disposition channel. The issue-level in-flight claim therefore
+carries A61 alone. Two things found in passing: `GET /api/issues/{issueId}/active-run`
+exists and was uncatalogued, and the whole A61 mechanism is on the issue row
+(`checkoutRunId`, `executionRunId`, `executionLockedAt`, `executionState`, plus the
+`monitor*` recovery timer). The wakeup path is `/api/agents/{id}/wakeup`; README:388 is
+wrong.
+
+**A62 — struck. The recorded cause is impossible.** `createdByAgentId` is null on 0 of 18
+live rows; all three research-board rows read `createdByAgent=main` through our own ACL;
+and `slugForUuid` **throws** rather than returning `'paperclip'`, so the literal fallback
+can only fire on a null field that no row has. The real P0-3 failure is that our ACL
+authorises the cross-board update and then **Paperclip refuses it**: `PATCH /api/issues/{id}`
+returns 403 "Issue is outside this actor's authorization boundary", because every write
+goes out with the acting agent's key while Paperclip scopes issue writes to the assignee.
+**P0-3's live acceptance is unachievable as written under the current credential model.**
+Owner ruling (2026-09-07): Netzar's ACL stays the authority on *who may act*; once it
+authorises, the write is sent with the **assignee's** key, and the audit row records
+actor-vs-executor.
+
+**Direction (owner, 2026-09-07): "Workflows".** Keep all of Paperclip's features and
+surface them under a Netzar tab named **Workflows**, restyled to our palette, rather than
+reimplementing them. Paperclip serves a full SPA and ships white-labelling
+(`/api/companies/{cid}/branding`, `/logo`, and a `PAPERCLIP_RUNTIME_BRANDING_START` slot in
+the app shell), so restyling is configuration, not code. `workflow*` appears zero times in
+Paperclip's 475 routes and nowhere in the Netzar SPA; Paperclip's own `project` is a dated
+milestone and a credential/billing boundary, so it stays internal and never becomes our
+noun. The repeatable-run primitive is Paperclip's **routine**. This is the same destination
+as B-6 below. It may make P0-3b unnecessary — settle the direction before building it.
+
 ## Phase 1: hierarchy on the wire and in the detail modal
 
 **P1-1 Characterize before typing.** Over the tunnel: create parent and child issues
