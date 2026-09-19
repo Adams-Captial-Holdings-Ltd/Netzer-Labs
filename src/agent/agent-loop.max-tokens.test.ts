@@ -127,6 +127,18 @@ describe('turn output ceiling', () => {
     const input = converseStreamTurnWithFallback.mock.calls[0]?.[0];
     expect(input.maxTokens).toBe(16384);
   });
+
+  it('accepts a ceiling stored as a number, and the turn still runs', async () => {
+    // getConfig returns the stored attribute unchecked despite its string type,
+    // so a ceiling saved as a number arrives as a number. `raw?.trim()` threw on
+    // it, which failed the whole turn.
+    getConfig.mockImplementation(async (category: string, key: string) =>
+      category === 'agent' && key === 'max_output_tokens' ? (16384 as unknown as string) : undefined,
+    );
+    await expect(resolveTurnMaxTokens()).resolves.toBe(16384);
+    await expect(runAgentTurn(req('build me a long report'))).resolves.toBeDefined();
+    expect(converseStreamTurnWithFallback.mock.calls[0]?.[0].maxTokens).toBe(16384);
+  });
 });
 
 /**
