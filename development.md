@@ -508,9 +508,9 @@ fidelity. **Cannot** = does not work locally, reason given.
 
 | Command | What it runs | Verified result |
 |---|---|---|
-| `npm test` | Full vitest unit suite | **178 files, 1927 tests, all passing** |
+| `npm test` | Full vitest unit suite | **246 files, 3209 tests, all passing** (2026-09-19, credentials stripped as in [AWS safety](#aws-safety)) |
 | `npm run typecheck` | `tsc --noEmit` | **Clean** |
-| `npm run local:test:integration` | Integration suite against Floci | **31/32 passing**, 1 known emulator gap |
+| `npm run local:test:integration` | Integration suite against Floci | **38 passed, 25 skipped, 1 failed**: the known emulator gap (2026-09-19) |
 | `npm run build` | `tsc -p tsconfig.build.json` | Not run during this work |
 | `npm --prefix web run typecheck` | Dashboard types | Not run during this work |
 | `npm --prefix web run build` | Dashboard production build | Not run during this work |
