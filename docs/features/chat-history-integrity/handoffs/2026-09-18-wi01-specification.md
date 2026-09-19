@@ -123,7 +123,7 @@ This session wrote tests and docs only. No production code changed. The implemen
 | BR-001 is moot | Keep the collapse-by-path step | Conflicts are resolved inside each pick and never committed. Its check survives: no conflict marker reachable at `HEAD`. |
 | BR-002 kept as two dry-runs | | In the implementation proof list; baseline indicators in 7.3. |
 | BR-003 kept, scoped to code | | AC-0.1-1 (`-- src infra`), per M20 |
-| Provider: Claude Opus | Codex terra (policy BALANCED) | The code picks auto-merge, but the War Room slice is a hand-applied partial hunk in a diverged `handler.ts`, the diagram text needs reconciling, and PDF safety needs judgment. A Codex work order would cost more to write and inspect than the ~25 lines it would produce. |
+| Provider: Codex `gpt-5.6-terra` writes the edits; Claude Opus applies the picks, inspects and proves (owner, 2026-09-18) | Claude Opus implements everything (this session's first call) | The owner's brief sends implementation code to the smallest capable Codex model, with Opus reviewing and correcting. The specification left the work bounded: production is the reference, the tests already fail for the right reasons, six files are named, and a proof script exists. The runner leaves changes uncommitted, so the picks stay with Claude. |
 
 ### 4.4 Durable facts promoted out of this log
 
@@ -321,10 +321,10 @@ Run the Gauntlet `DIRECT_COORDINATOR / IMPLEMENTATION` handoff for WI-0.1 (secti
 
 ### 6.2 Immediate next steps
 
-1. Cherry-pick the nine commits with `-x`, in production order, resolving each conflict by the rules in 3.1.
-2. Apply #170's slice by hand: `pdf.ts` to production's blob `285f601624`, and the route's `toPdfSafeText` + `422` hunk into development's existing route.
-3. Reconcile the four mapped diagrams: one description of the empty-turn guard in `architecture-security.md`, production's drift-gate annotations, and a development-worded annotation for the War Room slice.
-4. Run the proofs in the implementation handoff, then write the session log and update `HANDOFF.md`.
+1. Claude cherry-picks the nine commits with `-x`, in production order, keeping development's side on every conflict (3.1 lists them).
+2. Codex (`gpt-5.6-terra`, through `codex-build --unreviewed-spec`) makes the remaining edits from the work order kept outside the checkout (`~/.claude/plans/netzar-chat-plan/wi-0.1-codex-work-order.md`): `pdf.ts` to production's blob `285f601624`, the route's `toPdfSafeText` + `422` hunk, production's drift-gate notes, one description of the empty-turn guard, and a development-worded note for the War Room slice.
+3. Claude inspects Codex's diff and reruns every proof itself. Escalation to `gpt-5.6-sol`, then `gpt-6-astra`, is allowed but never silent; Claude Opus is the last fallback.
+4. Write the session log and update `HANDOFF.md`.
 
 ### 6.3 Blockers and open questions
 
