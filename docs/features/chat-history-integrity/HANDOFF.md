@@ -27,7 +27,7 @@ WI-0.2 (plan section 10, P0 step 2): make the turn output ceiling tunable at run
 - The ceiling comes from `resolveTurnMaxTokens()`, which reads runtime-config `agent/max_output_tokens`. The default is 8192, the clamp is 1024-32768, and writing it through `/config` is admin-only. It is read once per turn and used by all three model calls.
 - The byte budget is `trimTurnsToBudget()` in `appendTurns`, at 300,000 bytes. It drops the oldest exchanges first, cuts only at a user turn, and never stores turns over budget.
 
-**Status: CLEANUP rerun done 2026-09-19, awaiting a fresh VERIFICATION** ([log](handoffs/2026-09-19-wi02-cleanup-rerun.md)).
+**Status: CLEANUP rerun done 2026-09-19. Next is a small SPECIFICATION amendment that adds the pinning test the owner approved, then a fresh VERIFICATION** ([log](handoffs/2026-09-19-wi02-cleanup-rerun.md), sections 4.3 and 6.5).
 - It fixes the one VERIFICATION failure ([log](handoffs/2026-09-19-wi02-verification.md), section 4.3). README 2.1 now names the paths that replay a stored chat transcript through `getSession`: the dashboard, Slack and Telegram adapters, both scheduled-task runners and the Paperclip dispatch worker. It also says why Jarvis and the TLDR bar are not among them.
 - The full claim re-check found one more false claim: section 4 said `generate_document`'s spec validation was unchanged. That is corrected too, and 2.3's production observation is now dated.
 - The stamp is `e036f7a`, where 56 claim checks pass. The fixes are docs only, with no code defect and no runtime risk.
@@ -58,16 +58,16 @@ WI-0.2 (plan section 10, P0 step 2): make the turn output ceiling tunable at run
 | Item | Status |
 |---|---|
 | README 2.1 named Jarvis as a `getSession` consumer, and section 4 called the spec validation unchanged | Both corrected in `e1cdc11` by the CLEANUP rerun ([log](handoffs/2026-09-19-wi02-cleanup-rerun.md), sections 3.1 and 4.3). Awaiting a fresh VERIFICATION. |
-| Push and PR for `chore/wi02-cleanup` | Not authorized, and not yet due. The full step 7 list passed at `974399b`, and the code has not changed since. After a fresh VERIFICATION PASS, `WI02_BASE=development bash wi-0.2-full-validation.sh` must run on the exact HEAD to be pushed. |
-| No test pins a non-string `max_output_tokens` value | The fix is a `typeof` guard with a comment, and a scratchpad replica check exercised it. A pinning test would change AC-0.2-2 (7 ceiling tests) and AC-0.2-7 (3209), so it needs a SPECIFICATION amendment. It is the owner's call ([implementation log](handoffs/2026-09-18-wi02-implementation.md), section 6.3). |
-| Raising `agent/max_output_tokens` above 8192 in production | Unknown whether a non-streaming tool round (`ConverseCommand`, no client timeout set) finishes at that length. Exercise one long tool round first. The default stays 8192. The owner has asked for an "unlimited ceiling". That is a behavior change, so it is a proposed new work item recorded in the Gauntlet state file, not part of WI-0.2. |
+| Push and PR for `chore/wi02-cleanup` | The owner said yes (2026-09-19), once a fresh VERIFICATION passes and `WI02_BASE=development bash wi-0.2-full-validation.sh` has run on the exact HEAD. The owner also said yes to promoting `development → qa → staging` after that PR merges. Each step is its own PR, and the `staging` merge deploys. |
+| No test pins a non-string `max_output_tokens` value | The owner said yes (2026-09-19). A SPECIFICATION amendment adds one ceiling test, so AC-0.2-2 becomes 8 ceiling tests and AC-0.2-7 becomes 3210 tests. That is the next session ([implementation log](handoffs/2026-09-18-wi02-implementation.md), section 6.3). |
+| Raising `agent/max_output_tokens` above 8192 in production | Unknown whether a non-streaming tool round (`ConverseCommand`, no client timeout set) finishes at that length. Exercise one long tool round first. The default stays 8192. On the "unlimited ceiling", the owner chose (c) on 2026-09-19: large documents go through the incremental document tool, which is approved for P4 but not built yet. No separate ceiling item is planned. |
 | Documents of unbounded size | A higher ceiling still caps a document at one call's output (README section 2.3). The owner said yes (2026-09-19) to an incremental document tool as a proposed P4 item. It needs its own SPECIFICATION and is outside WI-0.2. |
 | Documentation debts found in CLEANUP | Classified and not patched ([log](handoffs/2026-09-19-wi02-cleanup.md), section 6.4): the README's `tested_by` and `implemented_by` omit the builder files and `builders.test.ts`; section 2.4 sits after 3a; and sections 3a and 4 disagree about production PDFs as of 2026-08-24. |
 | The knowledge Q&A route (`handler.ts:2826-2828`) sends browser-posted history text to Bedrock with no empty-text guard | Technical debt, unrelated to WI-0.2. It is per request and never stored, so it cannot poison a chat. Not patched ([log](handoffs/2026-09-19-wi02-cleanup-rerun.md), section 4.3). |
 | Production-only hotfixes #90, #91, #168 and the rest of #170 are not ancestors of `development` | Deferred: out of scope by owner decision. **Do not promote `staging → production` until they are reconciled.** The two sides' War Room notes in `architecture-security.md` each describe their own branch: production's (#170) the route's port, the back-merge's only the slice. |
 | `1124118` (Haiku id) takes effect only through a CDK deploy | A note for whoever deploys. Nothing on a `chore/*` branch deploys. |
-| The approved `development.md` amendment (Gauntlet plan section 9) | Applied 2026-09-18 as `4b0ed85` on its own local branch `docs/npm-test-credential-strip` (worktree `_netzer-devmd-amend`). Not pushed. The full validation list must run there before a push. |
-| The `development.md` Automated tests table is stale | Reported, not amended. The amendment needs owner approval. |
+| The approved `development.md` amendment (Gauntlet plan section 9) | Rebased onto `b152b7a` as `b7ab004`, with the test-table refresh `aeb20a7` on top. The full validation list on `aeb20a7` equals the baseline. Pushed 2026-09-19 on the owner's yes: [PR #178](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/178) into `development`, not merged. |
+| The `development.md` Automated tests table is stale | The owner approved the fix (2026-09-19). It is `aeb20a7`, in PR #178. |
 | `npm run local` dies with `spawn npm ENOENT` on Windows (`scripts/local/dev.mjs:79-80`) | Deferred to its own `fix/*` branch. |
 | PDF and DOCX had never run in production (as of 2026-08-24) | Not re-checked |
 | Does the model reliably *pick* `generate_document`? (open on 2026-08-24; truncation may have been hiding it) | Not re-checked |
@@ -76,12 +76,12 @@ WI-0.2 (plan section 10, P0 step 2): make the turn output ceiling tunable at run
 
 ## Smallest next action
 
-Start the WI-0.2 VERIFICATION in a fresh session from the Gauntlet handoff, with a fresh critic on `chore/wi02-cleanup`:
+Start the WI-0.2 SPECIFICATION amendment in a fresh session from the Gauntlet handoff, on `chore/wi02-cleanup`:
 
-1. Re-check README 2.1, 2.3's date and section 4 against the code, independently.
-2. Run `wi-0.2-proof.sh` and `wi-0.2-full-validation.sh`, both with `WI02_BASE=development`, on the exact HEAD.
+1. Add one test that pins a `max_output_tokens` value stored as a number.
+2. Show that the test fails on the old `raw?.trim()` form and passes on the current code.
 
-On PASS, WI-0.2 is VERIFIED, and WI-0.3 SPECIFICATION is next.
+A fresh VERIFICATION of the whole item follows. On PASS, WI-0.2 is VERIFIED, and WI-0.3 SPECIFICATION is next.
 
 ## Related
 

@@ -557,6 +557,8 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ### 6.1 Smallest next action
 
+**Superseded by 6.5.** The owner said yes to the pinning test, so a SPECIFICATION amendment comes first, and the VERIFICATION below follows it.
+
 A fresh WI-0.2 VERIFICATION of the corrected README, as a new session with Claude Opus and no Codex. The critic:
 
 1. re-checks 2.1, 2.3's date and section 4 against the code, independently;
@@ -583,6 +585,25 @@ A fresh WI-0.2 VERIFICATION of the corrected README, as a new session with Claud
   - The cleanup log's three README debts.
   - F6.
   - The `mission-tools.ts:150` line citation.
+
+### 6.5 Owner answers, after this session's two commits
+
+The owner answered the open questions on 2026-09-19:
+
+1. **Pinning test: yes**, option (b). The next session is a SPECIFICATION amendment, and 6.1's VERIFICATION follows it.
+2. **F4 stays** ("fix it").
+3. **Push and PR for `chore/wi02-cleanup`: yes**, after a fresh VERIFICATION PASS and the step 7 list on the exact HEAD.
+4. **Promote `development → qa → staging`: yes**, after that PR merges. Production stays blocked.
+5. **"Unlimited ceiling": (c).** Large documents go through the incremental document tool, which is approved for P4 but not built yet. The 8192 default stays.
+6. **Land `docs/npm-test-credential-strip`: yes.** This session:
+   - rebased it onto `b152b7a` (`b7ab004`);
+   - ran the full step 7 list on `aeb20a7`, which equals the baseline: 246 files and 3209 tests; integration 38 passed, 25 skipped, 1 failed, the Floci gap;
+   - pushed it and opened [PR #178](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/178) into `development`. It is not merged.
+7. **Refresh `development.md`'s test table: yes.** That is `aeb20a7`, in PR #178. Only the `npm test` and integration rows changed.
+
+**One-time decision.** The step 7 list for `aeb20a7` ran in `_netzer-turn-ceiling`, on a detached checkout of that exact commit.
+- Why: the worktree has no `node_modules`, and the two commits' package files are identical.
+- Afterwards, the clone went back to `chore/wi02-cleanup`, clean.
 
 ## 7. Verification actually performed
 
