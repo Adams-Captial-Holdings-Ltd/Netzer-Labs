@@ -3,7 +3,7 @@ feature: chat-history-integrity
 document_role: index
 status: current
 observed_at: 2026-09-19
-as_of_commit: d1876b167333cbef2ce4a085ecc6a275251c0956
+as_of_commit: e036f7a18854aa53abed12fe227f503d816fda12
 implemented_by:
   - src/lib/state/sessions-repo.ts
   - src/agent/agent-loop.ts
@@ -51,10 +51,18 @@ A turn whose text is empty, whitespace-only, or absent gets
 
 Two properties of that placement are deliberate and load-bearing:
 
-- **It repairs on read, not on write.** Every consumer that converts stored
-  turns into Bedrock messages — the agent loop, the dashboard TLDR path, Jarvis
-  — reads through `getSession`, so one guard covers all of them. It also means
-  chats poisoned *before* this fix recover on their own, with no migration.
+- **It repairs on read, not on write.** Every path that replays a stored chat
+  transcript to Bedrock as conversation turns reads it through `getSession`, so
+  one guard covers all of them: the dashboard, Slack and Telegram adapters, the
+  two scheduled-task runners and the Paperclip dispatch worker each load the
+  session with `getSession` and pass its turns to the agent loop as `history`.
+  It also means chats poisoned *before* this fix recover on their own, with no
+  migration.
+
+  Jarvis is not one of these paths. It replays its own turns from
+  `src/lib/state/jarvis-memory-repo.ts`, whose `appendTurn` refuses empty text
+  on write, so an empty Jarvis turn is never stored. The dashboard TLDR bar
+  replays no transcript: it summarizes the tab data the browser posts.
 - **It replaces the text rather than dropping the turn.** Bedrock also requires
   roles to alternate. Removing a lone empty assistant turn would leave two user
   turns adjacent, trading one rejection for another.
@@ -86,10 +94,11 @@ The initial call matters and was missed on the first attempt. It passes its
 input straight to `converseStreamTurnWithFallback`, which without an explicit
 `maxTokens` falls through to `?? 1024` in
 [`src/lib/bedrock/client.ts`](../../../src/lib/bedrock/client.ts) — and for a
-turn that never reaches tool use, that is the only call there is. Raising only
-the tool loop left production still returning `outputTokens: 1024` after
-deploying. `src/agent/agent-loop.max-tokens.test.ts` pins the initial call
-specifically, and was verified to fail when the fix is reverted.
+turn that never reaches tool use, that is the only call there is. On
+2026-08-24, raising only the tool loop left production still returning
+`outputTokens: 1024` after deploying. `src/agent/agent-loop.max-tokens.test.ts`
+pins the initial call specifically, and was verified to fail when the fix is
+reverted.
 
 Spend remains bounded by the daily cost cap, which is the control that actually
 stops runaway cost.
@@ -209,8 +218,9 @@ unmeasured, and `MAX_TOTAL_CELLS` remains the bound regardless.
 
 ## 4. What is NOT covered here
 
-- **`generate_document` itself.** Its kill switch, cost-cap re-check, spec
-  validation and S3 handling are unchanged and were not defective.
+- **`generate_document` itself.** Its kill switch, cost-cap re-check and S3
+  handling are unchanged since this folder opened on 2026-08-24, and were not
+  defective. Its spec validation did change: sections 2.4 and 2.5 cover that.
 - **PDF and DOCX in production.** As of 2026-08-24, neither format has ever
   been generated in production — 90 days of logs (the full retention window)
   contain exactly two `generate_document` invocations, both `xlsx`, both
