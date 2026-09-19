@@ -12,8 +12,9 @@
  * Item-size budget: measured at 284-324KB worst case against DDB's 400KB cap,
  * NOT the ~50KB this comment claimed while the output ceiling was 1024 tokens.
  * TURN_MAX_TOKENS is now 8192, which multiplies every persisted assistant turn
- * by eight; 20 maxed turns (the MAX_TURNS cap) still fit, but the headroom is
- * a fraction of what it was. Re-measure before raising the ceiling again.
+ * by eight. MAX_TURN_WINDOW_BYTES keeps the stored window at or under 300,000
+ * bytes (UTF-8 text plus 64 bytes per turn) whatever the ceiling; the remaining
+ * scalar attributes and firstMessage (at most 120 chars) are small.
  */
 
 import {
@@ -28,6 +29,57 @@ import { getConfig } from './runtime-config-repo.js';
 
 const TABLE = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 const MAX_TURNS = 20;
+/**
+ * Byte budget for the stored turn window, on top of the MAX_TURNS count cap.
+ *
+ * DynamoDB rejects an item over 400KB, and `appendTurns` only retries
+ * ConditionalCheckFailedException — anything else throws, so an oversized item
+ * fails the write and the turn is lost. That is the same class of bug as the
+ * empty-turn poisoning: a size problem in one turn breaking the whole chat.
+ *
+ * The count cap alone does not bound bytes. Measured at TURN_MAX_TOKENS 8192,
+ * 20 maxed turns reach 284-324KB — already ~81% of the limit, so the ceiling
+ * could not be raised again without this. Trimming by bytes is what makes the
+ * ceiling safely tunable at runtime.
+ *
+ * Oldest turns are dropped first and still flow to memory ingest, so nothing
+ * is silently lost: recent context stays WHOLE rather than every turn being
+ * truncated, because a half-sentence in every turn is worse context than fewer
+ * complete ones.
+ */
+const MAX_TURN_WINDOW_BYTES = 300_000;
+
+/** Byte size of a turn as DynamoDB will store it. */
+function turnBytes(t: Turn): number {
+  return Buffer.byteLength(t.text ?? '', 'utf8') + 64; // 64 ~ role/ts/surface overhead
+}
+
+/**
+ * Trim the oldest turns until the window fits the byte budget. The cut moves to
+ * a user turn: Bedrock rejects a conversation whose first message is the
+ * assistant's, and later Converse calls require strict alternation. An empty
+ * window is valid because the next request starts with a new user message.
+ * A reply ceiling bounds only replies, not user turns, so kept may be empty and
+ * never exceeds the budget. Dropped turns still reach memory ingest.
+ */
+export function trimTurnsToBudget(
+  turns: Turn[],
+  budget = MAX_TURN_WINDOW_BYTES,
+): { kept: Turn[]; dropped: Turn[] } {
+  let total = 0;
+  let cut = 0;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    total += turnBytes(turns[i]!);
+    if (total > budget) {
+      cut = i + 1;
+      break;
+    }
+  }
+  if (cut > 0) {
+    while (cut < turns.length && turns[cut]?.role !== 'user') cut++;
+  }
+  return { kept: turns.slice(cut), dropped: turns.slice(0, cut) };
+}
 const TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 // Default ingest cadence: distill the conversation into memory every N turns,
 // runtime-tunable via runtime-config `memory/ingest_every_n_turns`. Clamped to
@@ -234,8 +286,10 @@ export async function appendTurns(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const existing = await getSession(agentId, chatId);
     const combined = [...(existing?.turns ?? []), ...newTurns];
-    const merged = combined.slice(-MAX_TURNS);
-    const evicted = combined.slice(0, Math.max(0, combined.length - MAX_TURNS));
+    const byCount = combined.slice(-MAX_TURNS);
+    const countEvicted = combined.slice(0, Math.max(0, combined.length - MAX_TURNS));
+    const { kept: merged, dropped: byteEvicted } = trimTurnsToBudget(byCount);
+    const evicted = [...countEvicted, ...byteEvicted];
 
     // Memory ingest on a high-water mark: summarize the conversation into memory
     // every N turns (runtime-tunable) and ALWAYS before any turn evicts off the

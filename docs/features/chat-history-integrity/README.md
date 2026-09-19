@@ -74,9 +74,11 @@ enough to emit a document: `generate_document` requires the entire spec inline
 as tool-call JSON, so any real report ran past the ceiling and came back
 `stopReason: max_tokens` with no text and no usable tool call.
 
-The ceiling is now the named constant `TURN_MAX_TOKENS`, set to `8192`, and it
-is applied at **all four** model call sites — the initial streamed call and each
-tool-loop round.
+The ceiling is resolved per turn from runtime-config `agent/max_output_tokens`,
+with `TURN_MAX_TOKENS` as the default (`8192`) and a 1024-32768 clamp. The
+admin-only `/config` write changes it without a deploy, and the resolved value
+is applied at all three model calls — the initial streamed call and each tool-loop
+round.
 
 The initial call matters and was missed on the first attempt. It passes its
 input straight to `converseStreamTurnWithFallback`, which without an explicit
@@ -89,6 +91,14 @@ specifically, and was verified to fail when the fix is reverted.
 
 Spend remains bounded by the daily cost cap, which is the control that actually
 stops runaway cost.
+
+A larger ceiling makes every stored reply larger, so the stored window is bounded
+by bytes as well as by count. `trimTurnsToBudget`, called from `appendTurns`,
+keeps it at or under `MAX_TURN_WINDOW_BYTES` (300,000 bytes, text plus 64 per
+turn) whatever the ceiling, which leaves the session item under DynamoDB's 400KB
+limit. It drops the oldest exchanges first and cuts only at a user turn, so a
+stored history never starts with a reply, and the kept window may be empty.
+Dropped turns still reach memory ingest.
 
 **This does not make documents unbounded.** At 8192 tokens, after JSON
 structural overhead, a document is roughly 4,500–5,000 words — about 10–12
@@ -192,6 +202,8 @@ smaller documents.`
 caps a tool-call spec near 24 KB, which measures at roughly 160 MB. This bound
 exists so that raising the token ceiling later — the obvious next step for
 larger documents — cannot quietly turn a document request into a process kill.
+The configurable maximum allows a spec about four times larger; that case is
+unmeasured, and `MAX_TOTAL_CELLS` remains the bound regardless.
 
 ## 4. What is NOT covered here
 
@@ -213,8 +225,10 @@ missing. Check by content instead. On the tree in question:
 
 - `git grep -n TOOL_LOOP_MAX_TOKENS -- src infra` prints nothing and exits 1.
   Keep the path scope: docs mention the old name even on production;
-- `src/agent/agent-loop.ts` has `maxTokens: TURN_MAX_TOKENS` five times,
-  covering all three model calls in `runAgentTurn`;
+- `src/agent/agent-loop.ts` has either `maxTokens: TURN_MAX_TOKENS` five times,
+  or, once WI-0.2 lands, `maxTokens: turnMaxTokens` five times fed by one
+  `await resolveTurnMaxTokens()` in `runAdmittedTurn`, covering all three model
+  calls in `runAgentTurn`;
 - `infra/lib/constants.ts` has `claude-haiku-4-5-20251001-v1:0`;
 - `src/lib/documents/pdf.ts` exports `assertPdfRenderable` and `toPdfSafeText`;
 - exactly one `function repairEmptyTurns` exists (`src/lib/state/sessions-repo.ts`);
