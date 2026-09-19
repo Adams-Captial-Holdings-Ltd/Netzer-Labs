@@ -3,7 +3,7 @@ feature: chat-history-integrity
 document_role: handoff
 status: current
 observed_at: 2026-09-18
-as_of_commit: fdda55c1a77d46df0bc0cf943a7ee3bc87f03cd7
+as_of_commit: 56e37b05c655dcdc364086f9310b5c3e3d3b1dff
 ---
 
 # Chat history integrity — current state
@@ -12,43 +12,50 @@ as_of_commit: fdda55c1a77d46df0bc0cf943a7ee3bc87f03cd7
 
 | | |
 |---|---|
-| Branch | `fix/backmerge-production-hotfixes`: the back-merge of production hotfix PRs #103–#106, plus the `toPdfSafeText`/422 slice of #170 |
-| Based on | `development` at `9e8e42b3ba772bd4ec23a8290f829fa12f3fc8e5` (rebased 2026-09-18). On top: two test-only commits, two docs commits, nine `-x` picks, two implementation commits, and one docs commit each from implementation, cleanup and verification |
-| Next merge target | `development` |
-| Deployment state | **This branch deploys nothing.** Production (`de244e6`, deployed 2026-09-09) runs the hotfixes. `development` and `staging` do not. |
-| Pushed | **No.** `origin/fix/backmerge-production-hotfixes` is still the 2026-09-17 backup at `9e832da`. The local branch was rebased, so the next push is a force-push and needs the owner's explicit authorization. |
-| PR | None for the back-merge yet. The original fix, [#96](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/96), is on `development` and `staging` as `9d72979`. |
+| Branch | `fix/turn-ceiling-byte-budget` (WI-0.2): a runtime-tunable turn output ceiling and a byte budget on the stored turn window. It is transplanted from the parked `wip/docgen-crash-turn-ceiling` (`ef0768f`), which stays untouched as the source. |
+| Based on | `fix/backmerge-production-hotfixes` at `9f1cd584da37b0de3c0de8615f46fab4d321b7fe`, WI-0.1's verified back-merge. On top: one tests-only red commit (`56e37b0`) and one docs commit. |
+| Next merge target | `development`, after WI-0.1 lands there |
+| Deployment state | **Nothing here deploys.** Production (`de244e6`, deployed 2026-09-09) runs the hotfixes. `development` and `staging` do not have them yet. |
+| Pushed | WI-0.2: **no**. WI-0.1: **yes**. `fix/backmerge-production-hotfixes` was force-pushed 2026-09-18 on the owner's authorization (`9e832da...9f1cd58`, with lease). |
+| PR | WI-0.1: [#176](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/176) into `development`. 9/9 checks green, `MERGEABLE`/`CLEAN`, **not merged**; merging is the owner's call. #176's own copy of this file predates the push. WI-0.2: none yet. |
 
 Staging is reachable only by the promotion chain `development → qa → staging`. Each step is its own pull request, because `scripts/ci/deploy-source-guard.mjs` refuses any staging deploy whose ref is not `refs/heads/staging`. Nothing on a `fix/*` branch reaches an AWS environment.
 
 ## Current objective
 
-WI-0.1: back-merge the nine commits of #103–#106 into `development` by `git cherry-pick -x`, reconciled with `9d72979`. Add only the `toPdfSafeText` + 422 slice of #170 (`4765612`), not its scroll UI. Owner scope, 2026-09-18.
+WI-0.2 (plan section 10, P0 step 2): make the turn output ceiling tunable at runtime and bound the stored window by bytes.
+- The ceiling comes from `resolveTurnMaxTokens()`, which reads runtime-config `agent/max_output_tokens`. The default is 8192, the clamp is 1024-32768, and the write is admin-only. It is read once per turn and used by all three model calls.
+- The byte budget is `trimTurnsToBudget()` in `appendTurns`, at 300,000 bytes. It drops the oldest exchanges first, cuts only at a user turn, and never stores turns over budget.
 
-**Status: VERIFIED 2026-09-18, PASS, by a fresh critic. Not landed.** Every criterion, AC-0.1-1 to AC-0.1-8, passes on evidence the verification session ran itself at `fdda55c`. The picks are `81c9d0e`…`246bd2b`. Codex `gpt-5.6-terra` wrote `020fad8` (the #170 slice) and `6d43213` (the diagram notes), and CLEANUP changed neither. Landing needs the owner's push and PR authorization.
+**Status: SPECIFICATION complete 2026-09-18. Red at `56e37b0`, tests only.** 13 tests fail for the intended reasons. Acceptance criteria AC-0.2-1..6 are executable in `~/.claude/plans/netzar-chat-plan/wi-0.2-proof.sh`, and AC-0.2-7 is the full step 7 list. Next is IMPLEMENTATION, by Codex `gpt-5.6-terra` under the bounded work order `wi-0.2-codex-work-order.md`, with Claude inspecting and proving.
 
 ## Live state worth knowing
 
-- **Verification at `fdda55c`, credentials stripped (2026-09-18):**
-  - The proof passes: 5 files, 58/58 tests. Typecheck, `diagrams-drift` and `git diff --check` exit 0.
-  - Every content check in [README section 4a](README.md#4a-checking-a-branch-for-these-fixes-by-content-never-by-ancestry) passes. On `9e8e42b`, all fail except `repairEmptyTurns`.
-  - `pdf.ts`, `types.ts`, `sessions-repo.ts` and the four ported tests equal production's blobs. The War Room route (64 lines) and its import equal production's.
-  - RED-2: removing the initial call's `maxTokens` fails `agent-loop.max-tokens.test.ts` 2/2. An identity `toPdfSafeText` fails both emoji tests with 422.
-  - No pick adds a line its production original lacks. Nothing from #90, #91 or #168 came in.
-- **Full validation at `fdda55c`:** typecheck, `npm test` (245 files, 3196 tests), build, web typecheck, web build, `local:verify`, docs-links, feature-knowledge, docs-assets, PR-context diagrams-drift and `git diff --check` all exit 0. `local:test:integration` fails only the documented `destroy.integration.test.ts` Floci gap, as on the baseline. Only `docs/features/` has changed since.
-- **Baseline on `9e8e42b`:** green except the same Floci gap (244 files, 3174 tests).
-- **BR-002 dry-run (at `6d43213`, not rerun since):** production + HEAD has 9 conflicted files (14 before the picks). Staging + HEAD is conflict-free.
+- **Red at `56e37b0`:**
+  - 6 × `resolveTurnMaxTokens is not a function` and 5 × `trimTurnsToBudget is not a function`.
+  - The initial call sends 8192 where the configured 16384 is expected.
+  - On the base, `appendTurns` writes a 450,271-byte item, over DynamoDB's 409,600.
+  - Typecheck fails only on the two missing exports. WI-0.1's 58 proof tests still pass.
+- **The spec departs from the parked code in two places.**
+  - The trim cuts only at a user turn and never keeps turns over budget. The parked version could leave an assistant turn first in the window, a new path to permanent poisoning ([log](handoffs/2026-09-18-wi02-specification.md), M29).
+  - A whitespace-only config value falls back to 8192.
+- **Baseline on `9f1cd58`:** the full step 7 list matches the WI-0.1 baseline: `npm test` 245 files and 3196 tests, and the only failure is the documented `destroy.integration.test.ts` Floci gap. `typecheck` and `npm test` are also green in this clone.
+- **README section 4a on `9f1cd58`:** every content check passes. WI-0.2's PR amends the `maxTokens` bullet to accept either form, because the literal count becomes 0 once the ceiling is resolved per turn.
+- **BR-002 dry-run (at `6d43213`, not rerun since):** merging production into HEAD gives 9 conflicted files. Merging staging into HEAD is conflict-free.
 - **Chat `dashboard:1787596504860` (agent `elon-strategy`)** was poisoned in production on 2026-08-24. It has not been re-checked since production received the empty-turn repair (`8c14b3f`, #103).
 
 ## Blockers and open items
 
 | Item | Status |
 |---|---|
-| Push and PR authorization | Not given for this work. The push is a force-push over the `9e832da` backup. Ask the owner. Before the push, run the full `development.md` step 7 list on the exact HEAD being pushed. |
-| Authorship of the nine picks | They keep their original author, `e.adams@personalgrowthcs.com`, with `emmanuelmadams4@gmail.com` as committer. Owner to confirm before the first push. |
-| Production-only hotfixes #90, #91, #168 and the rest of #170 are not ancestors of `development` | Deferred: out of scope by owner decision. **Do not promote `staging → production` until they are reconciled.** The two sides' War Room notes in `architecture-security.md` each describe their own branch: production's (#170) the route's port, this branch's only the slice. |
-| Line 51 of `request-lifecycle.md` calls `TOOL_LOOP_MAX_TOKENS` the tool loop's ceiling; the code has `TURN_MAX_TOKENS` on all three calls | Technical debt, upheld by VERIFICATION. The text is production's own (`3bffea6`), carried verbatim. Fix it once on `development` after the back-merge lands, including the "tool loop's" wording. Rewording diverges from production at any time, so deferring the fix does not avoid the promotion conflict. Line 1's mention is a dated #96 record and is not stale. See the [verification log](handoffs/2026-09-18-wi01-verification.md), section 4.3. |
-| `1124118` (Haiku id) takes effect only through a CDK deploy | A note for whoever deploys. This branch deploys nothing. |
+| Merge PR #176 (WI-0.1) | Owner's call, and CI is green. WI-0.2 lands after it. Once it merges, confirm `origin/development` by content (README section 4a). If `development` moved past `9f1cd58`'s tree, rebase WI-0.2 and rerun the proof with `WI02_BASE=development`. |
+| Authorship of the nine picks | **Decided 2026-09-18:** they keep their original author, `e.adams@personalgrowthcs.com`, with `emmanuelmadams4@gmail.com` as committer. |
+| Line 51 of `request-lifecycle.md` calls `TOOL_LOOP_MAX_TOKENS` the tool loop's ceiling | **Owner, 2026-09-18:** WI-0.2's PR fixes that last sentence only; it is phase-scoped. Line 1's mention is a dated #96 record and stays. The fix makes line 51 differ from production's, so the promotion takes `development`'s side. |
+| Raising `agent/max_output_tokens` above 8192 in production | Unknown whether a non-streaming tool round (`ConverseCommand`, no client timeout set) finishes at that length. Exercise one long tool round first. The default stays 8192. |
+| Documents of unbounded size | The owner asked. The answer: a higher ceiling still caps a document at one call's output, and unbounded size needs an incremental tool (README section 2.3). Offered as a proposed P4 work item, not approved. Outside WI-0.2. |
+| `web/node_modules` missing in `_netzer-turn-ceiling` | Run `npm --prefix web ci` before the step 7 list there. |
+| Production-only hotfixes #90, #91, #168 and the rest of #170 are not ancestors of `development` | Deferred: out of scope by owner decision. **Do not promote `staging → production` until they are reconciled.** The two sides' War Room notes in `architecture-security.md` each describe their own branch: production's (#170) the route's port, the back-merge's only the slice. |
+| `1124118` (Haiku id) takes effect only through a CDK deploy | A note for whoever deploys. Nothing on a `fix/*` branch deploys. |
 | The approved `development.md` amendment (Gauntlet plan section 9) | Applied 2026-09-18 as `4b0ed85` on its own local branch `docs/npm-test-credential-strip` (worktree `_netzer-devmd-amend`). Not pushed. The full validation list must run there before a push. |
 | The `development.md` Automated tests table is stale | Reported, not amended. The amendment needs owner approval. |
 | `npm run local` dies with `spawn npm ENOENT` on Windows (`scripts/local/dev.mjs:79-80`) | Deferred to its own `fix/*` branch. |
@@ -59,14 +66,14 @@ WI-0.1: back-merge the nine commits of #103–#106 into `development` by `git ch
 
 ## Smallest next action
 
-The owner confirms the picks' authorship, then authorizes or declines the force-push and a PR into `development`. After the back-merge lands, WI-0.2 SPECIFICATION runs from the Gauntlet handoff.
+Start WI-0.2 IMPLEMENTATION in a fresh session from the Gauntlet handoff. Codex carries out `wi-0.2-codex-work-order.md`, and Claude Opus inspects the diff, commits locally, and reruns `wi-0.2-proof.sh` until every line passes.
 
 ## Related
 
 - [README](README.md), including the [content check](README.md#4a-checking-a-branch-for-these-fixes-by-content-never-by-ancestry)
-- [2026-09-18 verification log](handoffs/2026-09-18-wi01-verification.md): the PASS verdict, with each criterion's command and output at `fdda55c`
-- [2026-09-18 cleanup log](handoffs/2026-09-18-wi01-cleanup.md): the no-change review and the checks at `31b2660`
-- [2026-09-18 implementation log](handoffs/2026-09-18-wi01-implementation.md): the picks, the Codex call, every proof result
+- [2026-09-18 WI-0.2 specification log](handoffs/2026-09-18-wi02-specification.md): G0, the landing of WI-0.1, the seam, the red state and the acceptance criteria
+- [2026-09-18 verification log](handoffs/2026-09-18-wi01-verification.md): the PASS verdict for WI-0.1, with each criterion's command and output at `fdda55c`
+- [2026-09-17 docgen-crash-wip-transfer](handoffs/2026-09-17-docgen-crash-wip-transfer.md): the parked turn-ceiling work and its two known test defects
 - [knowledge-scope-fanout HANDOFF](../knowledge-scope-fanout/HANDOFF.md), which records the closed `staging → production` PR #61
 - [Feature knowledge framework](../README.md)
 
@@ -74,6 +81,7 @@ The owner confirms the picks' authorship, then authorizes or declines the force-
 
 | Date | Session | Subject |
 |---|---|---|
+| 2026-09-18 | [wi02-specification](handoffs/2026-09-18-wi02-specification.md) | G0 failed (WI-0.1 not on `development`). Owner decisions: authorship kept; push, PR and stack now; line 51 fixed in WI-0.2. Ran step 7 on `9f1cd58`, force-pushed with lease, opened PR #176 (green). WI-0.2 red at `56e37b0`: the parked tests ported with both defects fixed, plus a user-turn boundary rule for the byte trim and an `appendTurns` storage-seam test. Codex work order written. |
 | 2026-09-18 | [wi01-verification](handoffs/2026-09-18-wi01-verification.md) | A fresh critic verified WI-0.1: PASS. The proof, AC-0.1-1 to AC-0.1-8, the seven blobs, the route, RED-2 and full validation were all rerun at `fdda55c`, and each matches production or the baseline. No pick adds a line its production original lacks. Both CLEANUP findings upheld as classified, with (b)'s rationale corrected. |
 | 2026-09-18 | [wi01-cleanup](handoffs/2026-09-18-wi01-cleanup.md) | Reviewed `020fad8` and `6d43213` with `/refactor`: no change. `pdf.ts` and the War Room route are still production's bytes. The proof and every content check pass at `31b2660`. Classified two findings and patched neither: a cosmetic note reference, and a stale `TOOL_LOOP_MAX_TOKENS` sentence carried verbatim from production. |
 | 2026-09-18 | [wi01-implementation](handoffs/2026-09-18-wi01-implementation.md) | Applied the nine picks with `-x` (five resolved empty). Codex `gpt-5.6-terra` wrote the #170 slice and the diagram notes, and Claude inspected and proved them. Every content check passes; full validation matches the baseline. Applied the approved `development.md` amendment on its own branch. |
