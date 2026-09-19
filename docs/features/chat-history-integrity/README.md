@@ -13,6 +13,8 @@ tested_by:
   - src/lib/state/sessions-repo.persistence.test.ts
   - src/agent/agent-loop.history.test.ts
   - src/adapters/dashboard/warroom-transcript.test.ts
+  - src/agent/agent-loop.max-tokens.test.ts
+  - src/lib/state/sessions-repo.byte-budget.test.ts
 ---
 
 # Chat history integrity
@@ -77,8 +79,8 @@ as tool-call JSON, so any real report ran past the ceiling and came back
 The ceiling is resolved per turn from runtime-config `agent/max_output_tokens`,
 with `TURN_MAX_TOKENS` as the default (`8192`) and a 1024-32768 clamp. The
 admin-only `/config` write changes it without a deploy, and the resolved value
-is applied at all three model calls — the initial streamed call and each tool-loop
-round.
+is applied at all three model calls: the initial streamed call, each tool-loop
+round, and the post-loop synthesis call.
 
 The initial call matters and was missed on the first attempt. It passes its
 input straight to `converseStreamTurnWithFallback`, which without an explicit
@@ -142,7 +144,7 @@ writes `?` for anything outside WinAnsi. A build that still throws returns
 returned 200 with unrenderable text written as garbage (`Ship it Ø=Þ€ done '`),
 and a status-only test cannot see that: `warroom-transcript.test.ts` pins the
 `?` substitution. Observed 2026-09-18 on `fix/backmerge-production-hotfixes`
-(`6d43213`); `development` gains it when that branch merges.
+(`6d43213`); it reached `development` with PR #176 (`264d024`, 2026-09-19).
 
 ## 3. Why all three document formats failed together
 
@@ -160,7 +162,7 @@ executed at all.
 
 This is recorded because it corrected the premise of the investigation.
 
-CloudWatch metrics outlive log retention. Over **450 days**, the entire life of
+CloudWatch metrics outlive log retention. As of 2026-08-24, over **450 days**, the entire life of
 the metric, `generate_document` was invoked **5 times**, all by agent `main`,
 with **zero errors**:
 
@@ -209,7 +211,7 @@ unmeasured, and `MAX_TOTAL_CELLS` remains the bound regardless.
 
 - **`generate_document` itself.** Its kill switch, cost-cap re-check, spec
   validation and S3 handling are unchanged and were not defective.
-- **PDF and DOCX in production.** As of `observed_at`, neither format has ever
+- **PDF and DOCX in production.** As of 2026-08-24, neither format has ever
   been generated in production — 90 days of logs (the full retention window)
   contain exactly two `generate_document` invocations, both `xlsx`, both
   successful. Those two code paths remain unproven outside unit tests.
