@@ -3,7 +3,7 @@ feature: chat-history-integrity
 document_role: handoff
 status: current
 observed_at: 2026-09-19
-as_of_commit: d1876b167333cbef2ce4a085ecc6a275251c0956
+as_of_commit: 974399bcadb9c7845df5f7755b343a1790f02d13
 ---
 
 # Chat history integrity — current state
@@ -12,7 +12,7 @@ as_of_commit: d1876b167333cbef2ce4a085ecc6a275251c0956
 
 | | |
 |---|---|
-| Branch | `chore/wi02-cleanup` (WI-0.2 CLEANUP): comment and doc precision on the merged WI-0.2 lines. Cut from `origin/development` at `b152b7a`. On top: the cleanup (`d1876b1`) and one docs commit. |
+| Branch | `chore/wi02-cleanup` (WI-0.2 CLEANUP): comment and doc precision on the merged WI-0.2 lines. Cut from `origin/development` at `b152b7a`. On top: the cleanup (`d1876b1`), its docs commit (`974399b`), and the VERIFICATION session's docs commit. |
 | Based on | `development` at `b152b7a96bb5f9c64f9654184029fe2b276d07b7`, the merge of PR #177 (WI-0.2). Its tree equals `c58da7c`'s. PR #176 (WI-0.1) merged before it as `264d024`. |
 | Next merge target | `development` |
 | Deployment state | **Nothing here deploys.** `development` now holds WI-0.1 and WI-0.2. Neither has been promoted: `qa`, `staging` and `production` do not have WI-0.2, and `staging` deploys on push, so promotion needs its own authorization. Production (`de244e6`, deployed 2026-09-09) runs the hotfixes that WI-0.1 back-merged. |
@@ -27,15 +27,17 @@ WI-0.2 (plan section 10, P0 step 2): make the turn output ceiling tunable at run
 - The ceiling comes from `resolveTurnMaxTokens()`, which reads runtime-config `agent/max_output_tokens`. The default is 8192, the clamp is 1024-32768, and writing it through `/config` is admin-only. It is read once per turn and used by all three model calls.
 - The byte budget is `trimTurnsToBudget()` in `appendTurns`, at 300,000 bytes. It drops the oldest exchanges first, cuts only at a user turn, and never stores turns over budget.
 
-**Status: CLEANUP complete 2026-09-19 at `d1876b1`**, on `chore/wi02-cleanup`, local only. WI-0.2 itself was merged into `development` (`b152b7a`) before CLEANUP and VERIFICATION ran, on the owner's instruction. Next is VERIFICATION, in a fresh session: WI-0.2 as merged, plus this cleanup.
+**Status: VERIFICATION FAIL 2026-09-19, on one criterion** ([log](handoffs/2026-09-19-wi02-verification.md), section 4.3). The README stamp that CLEANUP moved to `d1876b1` certifies section 2.1's claim that Jarvis "reads through `getSession`". Jarvis replays its own turns from `jarvis-memory-repo.loadRecent` instead. This is a doc defect, with no code defect and no runtime risk. Next is a fresh CLEANUP rerun that corrects that sentence and settles the stamp, then a fresh VERIFICATION. WI-0.2 itself was merged into `development` (`b152b7a`) before CLEANUP and VERIFICATION ran, on the owner's instruction.
 
 ## Live state worth knowing
 
-- **Green at `d1876b1`:**
-  - `WI02_BASE=development bash wi-0.2-proof.sh`: every line PASS, exit 0. The drift gate saw no drift across 5 changed files.
-  - Full `npm test` with credentials stripped: 246 files and 3209 tests pass, the same as the baseline at `b152b7a`.
-  - The README's code claims were re-checked at `d1876b1` (22 checks), so its stamp moved from `f64d1e0` to `d1876b1`.
-  - The full step 7 list has **not** run on this branch. It ran on `c58da7c` (the same tree as `b152b7a`) on 2026-09-19 and matched the baseline. It is due again before the cleanup is pushed.
+- **Green at `974399b`, checked by the fresh critic** ([log](handoffs/2026-09-19-wi02-verification.md), section 7):
+  - `WI02_BASE=development bash wi-0.2-proof.sh`: every line PASS, exit 0, 0 changed paths.
+  - The full step 7 list (`wi-0.2-full-validation.sh`) equals the baseline. `npm test`: 246 files and 3209 tests. Integration: 38 passed, 25 skipped, 1 failed, the Floci gap.
+  - Both mapped diagrams render with the pinned `mmdc` 10.9.1.
+  - The cleanup is comment-only in `src/` (identical comment-stripped transpile) and changes no test.
+  - Fixes 1-4, 6 and 7, and fix 5's `tested_by` and its dates, are true against the code.
+- **Not green:** the README stamp, for the one false claim above.
 - **A comment-only change to a mapped source fails the diagram drift gate.** `scripts/ci/diagrams-drift.mjs` cannot tell a comment from code. The cleanup touched both mapped diagrams' notes, each fixing a real imprecision ([log](handoffs/2026-09-19-wi02-cleanup.md), section 4.3).
 - **Two defects in the first Codex build were caught by inspection, not by the tests** ([implementation log](handoffs/2026-09-18-wi02-implementation.md), section 4.3):
   - `raw?.trim()` threw on a config value stored as a number, which would have failed every turn.
@@ -51,7 +53,8 @@ WI-0.2 (plan section 10, P0 step 2): make the turn output ceiling tunable at run
 
 | Item | Status |
 |---|---|
-| Push and PR for `chore/wi02-cleanup` | Not authorized yet. First the full step 7 list must run on its exact HEAD: `WI02_BASE=development bash wi-0.2-full-validation.sh`. |
+| README 2.1 names Jarvis as a `getSession` consumer | False since 2026-08-24, and re-certified by the cleanup's stamp. Jarvis reads `jarvis-memory-repo.loadRecent`, whose `appendTurn` refuses empty text on write. Phase-scoped to the WI-0.2 CLEANUP rerun ([log](handoffs/2026-09-19-wi02-verification.md), sections 3.1 and 4.3). |
+| Push and PR for `chore/wi02-cleanup` | Not authorized, and not yet due. The full step 7 list passed at `974399b`, but the branch goes back to CLEANUP. After the CLEANUP rerun and a fresh VERIFICATION PASS, `WI02_BASE=development bash wi-0.2-full-validation.sh` must run on the exact HEAD to be pushed. |
 | No test pins a non-string `max_output_tokens` value | The fix is a `typeof` guard with a comment, and a scratchpad replica check exercised it. A pinning test would change AC-0.2-2 (7 ceiling tests) and AC-0.2-7 (3209), so it needs a SPECIFICATION amendment. It is the owner's call ([implementation log](handoffs/2026-09-18-wi02-implementation.md), section 6.3). |
 | Raising `agent/max_output_tokens` above 8192 in production | Unknown whether a non-streaming tool round (`ConverseCommand`, no client timeout set) finishes at that length. Exercise one long tool round first. The default stays 8192. The owner has asked for an "unlimited ceiling". That is a behavior change, so it is a proposed new work item recorded in the Gauntlet state file, not part of WI-0.2. |
 | Documents of unbounded size | A higher ceiling still caps a document at one call's output (README section 2.3). The owner said yes (2026-09-19) to an incremental document tool as a proposed P4 item. It needs its own SPECIFICATION and is outside WI-0.2. |
@@ -68,11 +71,19 @@ WI-0.2 (plan section 10, P0 step 2): make the turn output ceiling tunable at run
 
 ## Smallest next action
 
-Start WI-0.2 VERIFICATION in a fresh session from the Gauntlet handoff. It verifies WI-0.2 as merged on `development` plus `chore/wi02-cleanup`: rerun `wi-0.2-proof.sh` and then `wi-0.2-full-validation.sh`, both with `WI02_BASE=development`, and render both mapped diagrams.
+Start the WI-0.2 CLEANUP rerun in a fresh session from the Gauntlet handoff. It works on `chore/wi02-cleanup`:
+
+1. Correct README 2.1's consumer sentence to match the code.
+2. Re-check every README code claim, listing each "every X" from imports and call sites.
+3. Settle the stamp.
+4. Run `wi-0.2-proof.sh` with `WI02_BASE=development`, then the docs gates.
+
+A fresh VERIFICATION follows.
 
 ## Related
 
 - [README](README.md), including the [content check](README.md#4a-checking-a-branch-for-these-fixes-by-content-never-by-ancestry)
+- [2026-09-19 WI-0.2 verification log](handoffs/2026-09-19-wi02-verification.md): the verdict per criterion, the one FAIL (README 2.1's Jarvis claim), and every command and its result at `974399b`
 - [2026-09-19 WI-0.2 cleanup log](handoffs/2026-09-19-wi02-cleanup.md): the seven comment and doc fixes, the drift-gate finding, and the README claim re-check
 - [2026-09-18 WI-0.2 implementation log](handoffs/2026-09-18-wi02-implementation.md): the Codex build and its correction, the two defects, and the proof at `3ae63b4`
 - [2026-09-18 WI-0.2 specification log](handoffs/2026-09-18-wi02-specification.md): G0, the landing of WI-0.1, the seam, the red state and the acceptance criteria
@@ -85,6 +96,7 @@ Start WI-0.2 VERIFICATION in a fresh session from the Gauntlet handoff. It verif
 
 | Date | Session | Subject |
 |---|---|---|
+| 2026-09-19 | [wi02-verification](handoffs/2026-09-19-wi02-verification.md) | A fresh critic verified WI-0.2 as merged plus the cleanup, at `974399b`: FAIL on one criterion. Everything else passed: the proof on every line, the full step 7 list at baseline, both diagrams rendering, a comment-only cleanup with no test change, the whole-item scope, and a mutation check. The failure is the README stamp, which certifies section 2.1's false claim that Jarvis reads through `getSession`. Routed to a CLEANUP rerun. |
 | 2026-09-19 | [wi02-cleanup](handoffs/2026-09-19-wi02-cleanup.md) | After #176 and #177 merged, cleaned up WI-0.2 on `chore/wi02-cleanup` off `development`. Fixed comments and docs only (`d1876b1`): the clamp comment, the trim's reason and pointer, the restored evict-backstop comment, README 2.3 and `tested_by`, and two diagram notes the drift gate forced a review of. Re-checked the README's code claims and moved its stamp. The proof passed on every line, and `npm test` gave 246 files and 3209 tests. |
 | 2026-09-18 | [wi02-implementation](handoffs/2026-09-18-wi02-implementation.md) | Codex `gpt-5.6-terra` built WI-0.2 from the work order. Claude rejected the first build on two defects the tests could not see (a non-string config value threw; a `;` broke the Mermaid render) and sent the one allowed correction. Committed `3ae63b4`. The proof passed on every line twice, and `npm test` gave 246 files and 3209 tests. Promoted the byte budget into README 2.3. |
 | 2026-09-18 | [wi02-specification](handoffs/2026-09-18-wi02-specification.md) | G0 failed (WI-0.1 not on `development`). Owner decisions: authorship kept; push, PR and stack now; line 51 fixed in WI-0.2. Ran step 7 on `9f1cd58`, force-pushed with lease, opened PR #176 (green). WI-0.2 red at `56e37b0`: the parked tests ported with both defects fixed, plus a user-turn boundary rule for the byte trim and an `appendTurns` storage-seam test. Codex work order written. |
