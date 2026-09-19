@@ -7,9 +7,12 @@ as_of_commit: f64d1e04b2d85853752e393b310ef243460958dd
 implemented_by:
   - src/lib/state/sessions-repo.ts
   - src/agent/agent-loop.ts
+  - src/lib/documents/pdf.ts
+  - src/adapters/dashboard/handler.ts
 tested_by:
   - src/lib/state/sessions-repo.persistence.test.ts
   - src/agent/agent-loop.history.test.ts
+  - src/adapters/dashboard/warroom-transcript.test.ts
 ---
 
 # Chat history integrity
@@ -119,6 +122,18 @@ else does. The real fix is embedding a Unicode TTF, which means shipping a font
 binary — a deliberate decision, not something to fold into a bug fix. Until
 then, DOCX is the answer for non-Latin content, and the error says so.
 
+The War Room transcript export is the one caller that must not be refused:
+its text is whatever the agents said, which nobody controls. So
+`GET /api/warroom-transcripts/:id` (`src/adapters/dashboard/handler.ts`)
+passes the title, the participants line and every turn through
+`toPdfSafeText`, which shares `renderable` with `assertPdfRenderable` and
+writes `?` for anything outside WinAnsi. A build that still throws returns
+`422 {error: 'pdf_render_failed'}` rather than a 500. Before this, the route
+returned 200 with unrenderable text written as garbage (`Ship it Ø=Þ€ done '`),
+and a status-only test cannot see that: `warroom-transcript.test.ts` pins the
+`?` substitution. Observed 2026-09-18 on `fix/backmerge-production-hotfixes`
+(`6d43213`); `development` gains it when that branch merges.
+
 ## 3. Why all three document formats failed together
 
 This is worth stating plainly, because it misled the original investigation.
@@ -189,6 +204,29 @@ larger documents — cannot quietly turn a document request into a process kill.
 - **Tool selection.** Whether the model reliably *chooses* `generate_document`
   when asked for a document is a separate open question. See the
   [HANDOFF](HANDOFF.md).
+
+## 4a. Checking a branch for these fixes: by content, never by ancestry
+
+Cherry-picked commits never become ancestors. After the back-merge lands,
+`git merge-base --is-ancestor` and `git cherry` still report these fixes as
+missing. Check by content instead. On the tree in question:
+
+- `git grep -n TOOL_LOOP_MAX_TOKENS -- src infra` prints nothing and exits 1.
+  Keep the path scope: docs mention the old name even on production;
+- `src/agent/agent-loop.ts` has `maxTokens: TURN_MAX_TOKENS` five times,
+  covering all three model calls in `runAgentTurn`;
+- `infra/lib/constants.ts` has `claude-haiku-4-5-20251001-v1:0`;
+- `src/lib/documents/pdf.ts` exports `assertPdfRenderable` and `toPdfSafeText`;
+- exactly one `function repairEmptyTurns` exists (`src/lib/state/sessions-repo.ts`);
+- these five test files pass: `src/agent/agent-loop.max-tokens.test.ts`,
+  `src/agent/agent-loop.history.test.ts`,
+  `src/lib/state/sessions-repo.persistence.test.ts`,
+  `src/lib/documents/builders.test.ts` and
+  `src/adapters/dashboard/warroom-transcript.test.ts`.
+
+On `development` at `9e8e42b`, every code check fails except the single
+`repairEmptyTurns` definition. On `fix/backmerge-production-hotfixes` at
+`6d43213`, every check passes (both observed 2026-09-18).
 
 ## 5. Authorities
 
