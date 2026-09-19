@@ -92,6 +92,14 @@ specifically, and was verified to fail when the fix is reverted.
 Spend remains bounded by the daily cost cap, which is the control that actually
 stops runaway cost.
 
+A larger ceiling makes every stored reply larger, so the stored window is bounded
+by bytes as well as by count. `trimTurnsToBudget`, called from `appendTurns`,
+keeps it at or under `MAX_TURN_WINDOW_BYTES` (300,000 bytes, text plus 64 per
+turn) whatever the ceiling, which leaves the session item under DynamoDB's 400KB
+limit. It drops the oldest exchanges first and cuts only at a user turn, so a
+stored history never starts with a reply, and the kept window may be empty.
+Dropped turns still reach memory ingest.
+
 **This does not make documents unbounded.** At 8192 tokens, after JSON
 structural overhead, a document is roughly 4,500–5,000 words — about 10–12
 pages. Anything larger still truncates. It now truncates *cleanly*, leaving the
