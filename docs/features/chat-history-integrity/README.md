@@ -2,8 +2,8 @@
 feature: chat-history-integrity
 document_role: index
 status: current
-observed_at: 2026-08-24
-as_of_commit: f64d1e04b2d85853752e393b310ef243460958dd
+observed_at: 2026-09-19
+as_of_commit: d1876b167333cbef2ce4a085ecc6a275251c0956
 implemented_by:
   - src/lib/state/sessions-repo.ts
   - src/agent/agent-loop.ts
