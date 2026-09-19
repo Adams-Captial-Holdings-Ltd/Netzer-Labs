@@ -11,7 +11,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isPersistentChat, repairEmptyTurns, NO_RESPONSE_NOTICE, type Turn } from './sessions-repo.js';
+import {
+  isPersistentChat,
+  repairEmptyTurns,
+  trimTurnsToBudget,
+  NO_RESPONSE_NOTICE,
+  type Turn,
+} from './sessions-repo.js';
 
 describe('isPersistentChat', () => {
   it('persists dashboard conversations', () => {
@@ -127,5 +133,79 @@ describe('repairEmptyTurns hardening', () => {
       expect(typeof turn.text).toBe('string');
       expect(turn.text.trim().length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * The turn window is capped by COUNT (MAX_TURNS), which does not cap BYTES.
+ * DynamoDB rejects an item over 400KB and appendTurns retries only
+ * ConditionalCheckFailedException, so an oversized item throws and the turn is
+ * lost. Measured at TURN_MAX_TOKENS 8192, 20 maxed turns reach 284-324KB, so
+ * the ceiling cannot rise without a byte budget.
+ *
+ * The cut must also land on an exchange boundary. Stored turns alternate
+ * user/assistant, and Bedrock rejects a conversation whose first message is
+ * the assistant's - on every later turn, the same chat-killing class as the
+ * empty-turn poisoning.
+ */
+describe('trimTurnsToBudget', () => {
+  const turn = (role: Turn['role'], bytes: number, tag = 'x'): Turn => ({
+    role,
+    text: tag.repeat(bytes),
+    ts: 1,
+  });
+  const exchange = (tag: string, reply: number, ask = 10): Turn[] => [
+    turn('user', ask, tag),
+    turn('assistant', reply, tag),
+  ];
+  // What the budget counts: UTF-8 bytes of text plus 64 for role/ts/surface.
+  const size = (turns: Turn[]) =>
+    turns.reduce((n, t) => n + Buffer.byteLength(t.text, 'utf8') + 64, 0);
+
+  it('keeps everything when the window already fits', () => {
+    const turns = exchange('a', 100);
+    expect(trimTurnsToBudget(turns, 10_000)).toEqual({ kept: turns, dropped: [] });
+  });
+
+  it('drops the OLDEST exchanges first and loses nothing', () => {
+    const turns = [...exchange('a', 500), ...exchange('b', 500), ...exchange('c', 500)];
+    const { kept, dropped } = trimTurnsToBudget(turns, 1_200);
+    expect(kept.map((t: Turn) => t.text[0])).toEqual(['c', 'c']);
+    // Kept turns stay whole: kept + dropped rebuilds the input exactly.
+    expect([...dropped, ...kept]).toEqual(turns);
+  });
+
+  it('never strands a reply at the front: the kept window starts with a user turn', () => {
+    // A long user turn (a pasted document) is where the byte cut lands on a
+    // user turn; cutting there leaves that turn's reply first in the window.
+    const turns = [...exchange('a', 10), ...exchange('b', 100, 2_000), ...exchange('c', 100)];
+    const { kept, dropped } = trimTurnsToBudget(turns, 1_000);
+    expect(kept[0]?.role).toBe('user');
+    expect(kept.map((t: Turn) => t.text[0])).toEqual(['c', 'c']);
+    expect([...dropped, ...kept]).toEqual(turns);
+  });
+
+  it('stores nothing over budget, even when the newest exchange alone exceeds it', () => {
+    // The output ceiling bounds a reply, not a user turn, so keeping the newest
+    // turn regardless can still write an item DynamoDB refuses - and keeping
+    // only the reply strands it first. An empty window is valid: the next
+    // request is just the new user message, and the dropped exchange still
+    // reaches memory ingest through appendTurns.
+    const turns = [...exchange('a', 10), ...exchange('b', 100, 5_000)];
+    const { kept, dropped } = trimTurnsToBudget(turns, 1_000);
+    expect(size(kept)).toBeLessThanOrEqual(1_000);
+    expect(kept).toEqual([]);
+    expect(dropped).toEqual(turns);
+  });
+
+  it('holds the budget at the configurable maximum, counting bytes not characters', () => {
+    // 32,768 output tokens is roughly 128KB of reply. '€' is 3 bytes in UTF-8,
+    // so a character count would undercount this window threefold.
+    const reply: Turn = { role: 'assistant', text: '€'.repeat(43_000), ts: 1 };
+    const turns = Array.from({ length: 10 }, () => [turn('user', 200), reply]).flat();
+    const { kept } = trimTurnsToBudget(turns, 300_000);
+    expect(size(kept)).toBeLessThanOrEqual(300_000);
+    expect(kept[0]?.role).toBe('user');
+    expect(kept.length).toBeGreaterThan(0);
   });
 });
