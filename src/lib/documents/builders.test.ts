@@ -5,7 +5,10 @@ import { buildXlsx } from './xlsx.js';
 import {
   validateDocumentSpec,
   validateSpreadsheetSpec,
+  MAX_TOTAL_CELLS,
+  MAX_CELL_LEN,
 } from './types.js';
+import { assertPdfRenderable } from './pdf.js';
 
 const PDF_MAGIC = Buffer.from('%PDF-');
 // DOCX + XLSX are both zip-archived OOXML; the zip magic is 'PK\x03\x04'.
@@ -144,5 +147,153 @@ describe('buildXlsx', () => {
     expect(bytes.length).toBeGreaterThan(2000);
     // ExcelJS would throw if we passed `bad/name:here` directly; the
     // build succeeding proves we sanitized.
+  });
+});
+
+/**
+ * A document build must never be able to kill the process.
+ *
+ * The per-dimension bounds do not bound their product, and there is no column
+ * bound at all, so MAX_SHEETS x MAX_SHEET_ROWS x 20 columns passed every check
+ * and then OOMed — measured: 4,000,000 cells dies, 2,000,000 peaks at 1,870 MB
+ * RSS against a 4 GB task shared with two sidecars. An OOM is a SIGKILL, not a
+ * catchable error, so the tool's try/catch cannot turn it into a tool error and
+ * the whole chat process goes with it.
+ *
+ * Nothing a model can emit today reaches this: TURN_MAX_TOKENS (8192) caps a
+ * tool-call spec near 24 KB, ~160 MB. The bound exists so that raising the
+ * token ceiling later cannot quietly turn a document request into a process
+ * kill.
+ */
+describe('total cell budget', () => {
+  const wide = (sheets: number, rows: number, cols: number) => ({
+    title: 'Budget',
+    sheets: Array.from({ length: sheets }, (_, i) => ({
+      name: `S${i}`,
+      rows: Array.from({ length: rows }, () => Array.from({ length: cols }, () => 'x')),
+    })),
+  });
+
+  it('rejects a spreadsheet past the budget with a clean error, not an OOM', () => {
+    // 3 x 10,000 x 8 = 240,000 cells, over the budget but cheap to build.
+    expect(() => validateSpreadsheetSpec(wide(3, 10_000, 8))).toThrow(/total cells/i);
+  });
+
+  it('tells the person what to do about it', () => {
+    expect(() => validateSpreadsheetSpec(wide(3, 10_000, 8))).toThrow(/smaller/i);
+  });
+
+  it('still accepts a genuinely large but survivable spreadsheet', () => {
+    // 2 x 5,000 x 10 = 100,000 cells, under the budget.
+    const out = validateSpreadsheetSpec(wide(2, 5_000, 10));
+    expect(out.sheets).toHaveLength(2);
+  });
+
+  it('bounds document tables on the same budget', () => {
+    const spec = {
+      title: 'Budget',
+      sections: Array.from({ length: 50 }, () => ({
+        heading: 'h',
+        table: { rows: Array.from({ length: 1_000 }, () => Array.from({ length: 10 }, () => 'x')) },
+      })),
+    };
+    expect(() => validateDocumentSpec(spec)).toThrow(/total cells/i);
+  });
+
+  it('leaves an ordinary document well clear of the budget', () => {
+    const out = validateDocumentSpec({
+      title: 'SWOT',
+      sections: [{ heading: 'Strengths', body: 'text', table: { rows: [['a', 'b'], ['c', 'd']] } }],
+    });
+    expect(out.sections).toHaveLength(1);
+    expect(MAX_TOTAL_CELLS).toBeGreaterThan(1000);
+  });
+});
+
+/**
+ * "Corrupt but successful" is the worst outcome this tool can produce: the
+ * build returns bytes, isError is never set, S3 accepts them, and the person
+ * gets a presigned URL to a broken file. Every case below was CONFIRMED by
+ * measurement before it was fixed, and each must now be a clean throw that the
+ * tool converts into a tool error.
+ */
+describe('corrupt-but-successful cases', () => {
+  it('refuses PDF text the built-in font would render as garbage', () => {
+    // Confirmed: pdfkit Helvetica is /WinAnsiEncoding, so these produced a
+    // structurally perfect PDF displaying mangled symbols, with no error.
+    for (const bad of ['Beijing 财务报告', 'Δelta', 'Привет', '🚀 launch', 'done ✅']) {
+      expect(() =>
+        assertPdfRenderable({ title: bad, sections: [{ body: 'x' }] }),
+      ).toThrow(/cannot render/i);
+    }
+  });
+
+  it('points at docx, which does handle those characters', () => {
+    expect(() =>
+      assertPdfRenderable({ title: '财务', sections: [{ body: 'x' }] }),
+    ).toThrow(/docx/i);
+  });
+
+  it('still accepts the punctuation a model actually types', () => {
+    expect(() =>
+      assertPdfRenderable({
+        title: 'Q4 — “Growth”… €1,200 café • naïve 50°',
+        sections: [{ heading: 'It’s fine', body: 'em—dash, en–dash, ™ and ½' }],
+      }),
+    ).not.toThrow();
+  });
+
+  it('strips C0 control characters instead of writing malformed XML', () => {
+    // Confirmed: raw C0 bytes reached word/document.xml, so DOCX returned a
+    // file whose primary part is not well-formed XML - while XLSX stripped
+    // them. The two builders now agree.
+    const dirty = 'a' + String.fromCharCode(0) + 'b' + String.fromCharCode(1) + 'c';
+    const out = validateDocumentSpec({
+      title: 'Ctrl',
+      sections: [{ table: { rows: [[dirty]] } }],
+    });
+    expect(out.sections[0]?.table?.rows[0]?.[0]).toBe('abc');
+  });
+
+  it('keeps tab and newline, which are legal and deliberate', () => {
+    const keep = 'a' + String.fromCharCode(9) + 'b' + String.fromCharCode(10) + 'c';
+    const out = validateDocumentSpec({
+      title: 'Ws',
+      sections: [{ table: { rows: [[keep]] } }],
+    });
+    expect(out.sections[0]?.table?.rows[0]?.[0]).toBe(keep);
+  });
+
+  it('rejects an object cell rather than writing "[object Object]"', () => {
+    expect(() =>
+      validateDocumentSpec({ title: 'T', sections: [{ table: { rows: [[{ value: 3 }]] } }] }),
+    ).toThrow(/not objects or arrays/i);
+  });
+
+  it('rejects a cell Excel could not open, at the exact boundary', () => {
+    const sheet = (len: number) => ({
+      title: 'T',
+      sheets: [{ name: 'S', rows: [['x'.repeat(len)]] }],
+    });
+    expect(() => validateSpreadsheetSpec(sheet(MAX_CELL_LEN))).not.toThrow();
+    expect(() => validateSpreadsheetSpec(sheet(MAX_CELL_LEN + 1))).toThrow(/Excel cannot open/i);
+  });
+
+  it('rejects rows-as-objects rather than returning an empty workbook', () => {
+    // Confirmed: `if (!Array.isArray(row)) continue` discarded every row and
+    // reported success, handing back a valid but completely empty workbook.
+    expect(() =>
+      validateSpreadsheetSpec({ title: 'T', sheets: [{ name: 'S', rows: [{ a: 1 }, 'nope', 42] }] }),
+    ).toThrow(/must each be an array/i);
+  });
+
+  it('rejects malformed document table rows the same way', () => {
+    expect(() =>
+      validateDocumentSpec({ title: 'T', sections: [{ table: { rows: ['not-an-array'] } }] }),
+    ).toThrow(/must be an array/i);
+  });
+
+  it('leaves the total-cell budget intact', () => {
+    expect(MAX_TOTAL_CELLS).toBe(200_000);
   });
 });

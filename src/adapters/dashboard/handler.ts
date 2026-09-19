@@ -132,7 +132,7 @@ import { addonConfigured, listAddons } from '../../lib/addons/registry.js';
 import { exportChatData, purgeChatData } from '../../lib/tools/privacy-tools.js';
 import { getMeeting } from '../../lib/warroom/meetings-repo.js';
 import { getHistory } from '../../lib/warroom/publisher.js';
-import { buildPdf } from '../../lib/documents/pdf.js';
+import { buildPdf, toPdfSafeText } from '../../lib/documents/pdf.js';
 import {
   saveAgentFile,
   listRevisions,
@@ -3214,20 +3214,37 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       sinceSeq = page[page.length - 1]!.seq;
     }
 
-    // ponytail: pdfkit standard Helvetica is WinAnsi — emoji/CJK in replies will not render; embed a TTF if that matters.
-    const title = meeting.title || 'War Room';
-    const buf = await buildPdf({
-      title,
-      sections: [
-        {
-          body: `Participants: ${(meeting.participants ?? []).join(', ')} · Created ${meeting.createdAt ?? ''}`,
-        },
-        ...turns.map((t) => ({
-          heading: t.type === 'agent' ? t.agentId || t.speaker : t.speaker,
-          body: t.content,
-        })),
-      ],
-    });
+    // pdfkit's built-in Helvetica is WinAnsi, so `buildPdf` REFUSES anything
+    // outside it rather than emit a garbled file. That refusal is right for a
+    // document the caller authored and wrong here: nobody controls what an
+    // agent puts in a reply, and a single emoji would otherwise fail the whole
+    // export. Substitute instead, so the transcript always downloads.
+    const title = toPdfSafeText(meeting.title || 'War Room');
+    let buf: Buffer;
+    try {
+      buf = await buildPdf({
+        title,
+        sections: [
+          {
+            body: toPdfSafeText(
+              `Participants: ${(meeting.participants ?? []).join(', ')} · Created ${meeting.createdAt ?? ''}`,
+            ),
+          },
+          ...turns.map((t) => ({
+            heading: toPdfSafeText(t.type === 'agent' ? t.agentId || t.speaker : t.speaker),
+            body: toPdfSafeText(t.content),
+          })),
+        ],
+      });
+    } catch (err) {
+      // Backstop for anything substitution missed. A 500 here reads as "the
+      // server is broken"; this says what actually happened.
+      logger.warn({ meetingId, err }, 'war room transcript PDF failed to render');
+      return c.json(
+        { error: 'pdf_render_failed', detail: err instanceof Error ? err.message : String(err) },
+        422,
+      );
+    }
     const slug =
       title
         .toLowerCase()

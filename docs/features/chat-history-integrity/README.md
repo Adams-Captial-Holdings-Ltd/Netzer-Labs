@@ -7,9 +7,12 @@ as_of_commit: f64d1e04b2d85853752e393b310ef243460958dd
 implemented_by:
   - src/lib/state/sessions-repo.ts
   - src/agent/agent-loop.ts
+  - src/lib/documents/pdf.ts
+  - src/adapters/dashboard/handler.ts
 tested_by:
   - src/lib/state/sessions-repo.persistence.test.ts
   - src/agent/agent-loop.history.test.ts
+  - src/adapters/dashboard/warroom-transcript.test.ts
 ---
 
 # Chat history integrity
@@ -64,16 +67,72 @@ something smaller; otherwise it falls back to `NO_RESPONSE_NOTICE`.
 This closes the hole at its source, while `repairEmptyTurns` remains the
 backstop for anything already stored or written by a path not yet audited.
 
-### 2.3 `TOOL_LOOP_MAX_TOKENS` — documents fit in a reply again
+### 2.3 `TURN_MAX_TOKENS` — documents fit in a reply again
 
-The tool loop's per-round output ceiling was a hard-coded `1024`. That is not
+Every model call in a turn carried a hard-coded `maxTokens: 1024`. That is not
 enough to emit a document: `generate_document` requires the entire spec inline
 as tool-call JSON, so any real report ran past the ceiling and came back
 `stopReason: max_tokens` with no text and no usable tool call.
 
-The ceiling is now the named constant `TOOL_LOOP_MAX_TOKENS`, set to `8192`.
+The ceiling is now the named constant `TURN_MAX_TOKENS`, set to `8192`, and it
+is applied at **all four** model call sites — the initial streamed call and each
+tool-loop round.
+
+The initial call matters and was missed on the first attempt. It passes its
+input straight to `converseStreamTurnWithFallback`, which without an explicit
+`maxTokens` falls through to `?? 1024` in
+[`src/lib/bedrock/client.ts`](../../../src/lib/bedrock/client.ts) — and for a
+turn that never reaches tool use, that is the only call there is. Raising only
+the tool loop left production still returning `outputTokens: 1024` after
+deploying. `src/agent/agent-loop.max-tokens.test.ts` pins the initial call
+specifically, and was verified to fail when the fix is reverted.
+
 Spend remains bounded by the daily cost cap, which is the control that actually
 stops runaway cost.
+
+**This does not make documents unbounded.** At 8192 tokens, after JSON
+structural overhead, a document is roughly 4,500–5,000 words — about 10–12
+pages. Anything larger still truncates. It now truncates *cleanly*, leaving the
+chat alive and telling the person to ask for a smaller piece, but an RFP-scale
+document needs an incremental tool, not a higher ceiling.
+
+### 2.5 Corrupt-but-successful builds now fail cleanly
+
+An adversarial pass over the builders found four cases where a build returned
+bytes, `isError` was never set, S3 accepted them, and the person received a
+presigned URL to a **broken file**. That is worse than a refusal, and it is
+precisely what the isolation bar exists to prevent — a clean tool error was
+always the required outcome. All four were confirmed by measurement before
+being fixed, and each now throws.
+
+| Case | What it produced | Now |
+|---|---|---|
+| Any codepoint outside WinAnsi in a **PDF** — Greek, Cyrillic, CJK, emoji, even a check mark | A structurally perfect PDF that opens anywhere and displays garbage | `assertPdfRenderable` throws and points at DOCX, which handles the full range |
+| C0 control characters in a **DOCX** | Correct PK magic, all 18 OPC parts, and a `word/document.xml` that is not well-formed XML | Stripped in `cellText`, matching what exceljs already did for XLSX — the two builders had disagreed on the same input |
+| A cell over 32,767 characters in an **XLSX** | A file real Excel refuses to open | `MAX_CELL_LEN` rejects it; verified at the exact boundary |
+| `rows` emitted as objects rather than arrays | Every row silently discarded, and a valid but completely **empty** workbook reported as a success | Throws, rather than `continue` |
+
+Object and array cells are also rejected instead of being coerced to the
+literal text `"[object Object]"` or `"1,2"`.
+
+The PDF limitation is worth stating plainly: `src/lib/documents/pdf.ts` uses
+pdfkit's built-in Helvetica, a Type1 font declared `/Encoding
+/WinAnsiEncoding`. Latin-1 plus the WinAnsi punctuation block renders; nothing
+else does. The real fix is embedding a Unicode TTF, which means shipping a font
+binary — a deliberate decision, not something to fold into a bug fix. Until
+then, DOCX is the answer for non-Latin content, and the error says so.
+
+The War Room transcript export is the one caller that must not be refused:
+its text is whatever the agents said, which nobody controls. So
+`GET /api/warroom-transcripts/:id` (`src/adapters/dashboard/handler.ts`)
+passes the title, the participants line and every turn through
+`toPdfSafeText`, which shares `renderable` with `assertPdfRenderable` and
+writes `?` for anything outside WinAnsi. A build that still throws returns
+`422 {error: 'pdf_render_failed'}` rather than a 500. Before this, the route
+returned 200 with unrenderable text written as garbage (`Ship it Ø=Þ€ done '`),
+and a status-only test cannot see that: `warroom-transcript.test.ts` pins the
+`?` substitution. Observed 2026-09-18 on `fix/backmerge-production-hotfixes`
+(`6d43213`); `development` gains it when that branch merges.
 
 ## 3. Why all three document formats failed together
 
@@ -87,6 +146,53 @@ is what trips the output ceiling. The three builders
 `generate_document`'s own error handling was never at fault: the tool never
 executed at all.
 
+## 3a. What the history actually shows
+
+This is recorded because it corrected the premise of the investigation.
+
+CloudWatch metrics outlive log retention. Over **450 days**, the entire life of
+the metric, `generate_document` was invoked **5 times**, all by agent `main`,
+with **zero errors**:
+
+| Date | Calls | What it was |
+|---|---|---|
+| 2026-08-12 | 1 | "PGN Test Workbook" |
+| 2026-08-15 | 1 | "PGN Consulting - Sample Report" |
+| 2026-08-24 | 3 | Including the first PDF ever generated in production |
+
+`maxTokens: 1024` dates to `355c397`, the initial release, and never held
+another value. **There was no regression.** Two toy spreadsheets fit under the
+ceiling and made the feature look shipped; every real document since exceeded
+it, truncated mid-tool-call, and destroyed its own conversation before the tool
+could run.
+
+Zero errors across 450 days is not a health signal here. It is the signature of
+a feature that was never exercised, because the failure killed the chat before
+it could reach the tool's error path.
+
+### 2.4 `MAX_TOTAL_CELLS` — a build cannot kill the process
+
+The per-dimension bounds in `src/lib/documents/types.ts` do not bound their
+product, and there was no column bound at all, so `MAX_SHEETS x MAX_SHEET_ROWS
+x 20 columns` passed every check and then killed the process.
+
+Measured on Node v24 at a production-equivalent heap: **4,000,000 cells OOMs**,
+and **2,000,000 cells peaks at 1,870 MB RSS** against a 4 GB task shared with
+two sidecars. An OOM is a SIGKILL, not a catchable error — the tool's own
+try/catch cannot turn it into a tool error, and the whole chat process goes
+with it. That is precisely the outcome the isolation bar forbids.
+
+`MAX_TOTAL_CELLS` (200,000) bounds the whole spec, tables and sheets alike,
+checked as each sheet or table is accepted. Verified under a 1,592 MB heap
+ceiling that the unguarded build did not survive: the same spec now throws in
+6 ms at 106 MB with `spec exceeds 200,000 total cells ... Split it into several
+smaller documents.`
+
+**Nothing a model can currently emit comes close.** `TURN_MAX_TOKENS` (8192)
+caps a tool-call spec near 24 KB, which measures at roughly 160 MB. This bound
+exists so that raising the token ceiling later — the obvious next step for
+larger documents — cannot quietly turn a document request into a process kill.
+
 ## 4. What is NOT covered here
 
 - **`generate_document` itself.** Its kill switch, cost-cap re-check, spec
@@ -98,6 +204,29 @@ executed at all.
 - **Tool selection.** Whether the model reliably *chooses* `generate_document`
   when asked for a document is a separate open question. See the
   [HANDOFF](HANDOFF.md).
+
+## 4a. Checking a branch for these fixes: by content, never by ancestry
+
+Cherry-picked commits never become ancestors. After the back-merge lands,
+`git merge-base --is-ancestor` and `git cherry` still report these fixes as
+missing. Check by content instead. On the tree in question:
+
+- `git grep -n TOOL_LOOP_MAX_TOKENS -- src infra` prints nothing and exits 1.
+  Keep the path scope: docs mention the old name even on production;
+- `src/agent/agent-loop.ts` has `maxTokens: TURN_MAX_TOKENS` five times,
+  covering all three model calls in `runAgentTurn`;
+- `infra/lib/constants.ts` has `claude-haiku-4-5-20251001-v1:0`;
+- `src/lib/documents/pdf.ts` exports `assertPdfRenderable` and `toPdfSafeText`;
+- exactly one `function repairEmptyTurns` exists (`src/lib/state/sessions-repo.ts`);
+- these five test files pass: `src/agent/agent-loop.max-tokens.test.ts`,
+  `src/agent/agent-loop.history.test.ts`,
+  `src/lib/state/sessions-repo.persistence.test.ts`,
+  `src/lib/documents/builders.test.ts` and
+  `src/adapters/dashboard/warroom-transcript.test.ts`.
+
+On `development` at `9e8e42b`, every code check fails except the single
+`repairEmptyTurns` definition. On `fix/backmerge-production-hotfixes` at
+`6d43213`, every check passes (both observed 2026-09-18).
 
 ## 5. Authorities
 

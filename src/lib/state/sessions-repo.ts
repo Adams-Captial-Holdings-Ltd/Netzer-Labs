@@ -9,8 +9,11 @@
  *   updatedAt: epoch seconds
  *   ttl: epoch seconds (7 days from updatedAt; auto-deletes idle sessions)
  *
- * Item-size budget: ~50KB (well under DDB's 400KB cap). Turns trimmed
- * to 20 most-recent on every write.
+ * Item-size budget: measured at 284-324KB worst case against DDB's 400KB cap,
+ * NOT the ~50KB this comment claimed while the output ceiling was 1024 tokens.
+ * TURN_MAX_TOKENS is now 8192, which multiplies every persisted assistant turn
+ * by eight; 20 maxed turns (the MAX_TURNS cap) still fit, but the headroom is
+ * a fraction of what it was. Re-measure before raising the ceiling again.
  */
 
 import {
@@ -103,7 +106,13 @@ export const NO_RESPONSE_NOTICE = '(no response)';
  * turns adjacent and trade one rejection for another.
  */
 export function repairEmptyTurns(turns: Turn[]): Turn[] {
-  return turns.map((t) => (t.text?.trim() ? t : { ...t, text: NO_RESPONSE_NOTICE }));
+  return turns.map((t) =>
+    // `typeof`, not `t.text?.trim()`: optional chaining guards null and
+    // undefined but NOT a wrong type, and a legacy row whose text is a number
+    // would throw a TypeError inside getSession — turning a poisoned chat into
+    // a 500 instead of repairing it.
+    typeof t.text === 'string' && t.text.trim() ? t : { ...t, text: NO_RESPONSE_NOTICE },
+  );
 }
 
 export interface Turn {
