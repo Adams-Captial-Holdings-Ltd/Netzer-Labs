@@ -508,7 +508,7 @@ fidelity. **Cannot** = does not work locally, reason given.
 
 | Command | What it runs | Verified result |
 |---|---|---|
-| `npm test` | Full vitest unit suite | **246 files, 3209 tests, all passing** (2026-09-19, credentials stripped as in [AWS safety](#aws-safety)) |
+| `npm test` | Full vitest unit suite | **247 files, 3215 tests, all passing** (2026-09-20, no credential stripping needed — see [AWS safety](#aws-safety)) |
 | `npm run typecheck` | `tsc --noEmit` | **Clean** |
 | `npm run local:test:integration` | Integration suite against Floci | **38 passed, 25 skipped, 1 failed**: the known emulator gap (2026-09-19) |
 | `npm run build` | `tsc -p tsconfig.build.json` | Not run during this work |
@@ -531,7 +531,7 @@ test was **not** modified. Root cause is documented under
 
 ## AWS safety
 
-Local development cannot reach a real AWS environment. Four independent layers:
+Local development cannot reach a real AWS environment. Five independent layers:
 
 1. **Explicit endpoint.** `AWS_ENDPOINT_URL=http://127.0.0.1:4566` in `.env`.
    AWS SDK v3 honours this natively for every client, so all traffic goes to
@@ -545,6 +545,10 @@ Local development cannot reach a real AWS environment. Four independent layers:
 4. **No credentials on the machine.** The verified machine has no `~/.aws`
    directory and no `AWS_*` shell variables, so the default credential chain has
    nothing to fall back to.
+5. **A hermetic test suite.** `vitest.setup.ts` neutralises the environment,
+   shared-config and IMDS credential sources inside the test process, and fails
+   any test that dials `*.amazonaws.com`. Layer 4 is a property of one machine;
+   this one travels with the repository.
 
 The guard's final check is a positive proof rather than an assumption: it calls
 `sts:GetCallerIdentity` through the configured endpoint and requires the account
@@ -615,9 +619,22 @@ safe. `src/adapters/dashboard/cost-cap.test.ts` posts a daily cap through
 on `claudeclaw-monthly-cost` in whatever account your credentials resolve to.
 The sync's errors are swallowed, so the suite stays green either way.
 `src/lib/vectors/durability.repro.test.ts` stubs S3 and the Bedrock embedder;
-it is not the AWS-reaching test. Until a Vitest AWS guard lands, never run
-`npm test` with ambient credentials: unset `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, then run
+it is not the AWS-reaching test.
+
+That is now handled for you, and hand-stripping is no longer required.
+`vitest.setup.ts` loads into every worker before any test file and does two
+things: it removes `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+and `AWS_SESSION_TOKEN` from the environment and points the config and
+credentials files at the null device, so the SDK's provider chain resolves
+nothing; and it arms a tripwire on `http`/`https` that refuses any request to a
+`*.amazonaws.com` host, records it, and **fails the test that made it** even
+when the caller swallows the error — which `budget-writer.ts` does.
+`src/adapters/dashboard/cost-cap.test.ts` also mocks `budget-writer` directly,
+so that suite no longer has any intent to call AWS.
+
+`src/__test-utils__/aws-guard.test.ts` proves both layers are armed. If it ever
+fails, treat `npm test` as unsafe again and strip by hand until it is fixed:
+unset the four variables above, then run
 `AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true npm test`.
 
 ---
