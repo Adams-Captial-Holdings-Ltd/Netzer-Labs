@@ -508,9 +508,9 @@ fidelity. **Cannot** = does not work locally, reason given.
 
 | Command | What it runs | Verified result |
 |---|---|---|
-| `npm test` | Full vitest unit suite | **178 files, 1927 tests, all passing** |
+| `npm test` | Full vitest unit suite | **246 files, 3209 tests, all passing** (2026-09-19, credentials stripped as in [AWS safety](#aws-safety)) |
 | `npm run typecheck` | `tsc --noEmit` | **Clean** |
-| `npm run local:test:integration` | Integration suite against Floci | **31/32 passing**, 1 known emulator gap |
+| `npm run local:test:integration` | Integration suite against Floci | **38 passed, 25 skipped, 1 failed**: the known emulator gap (2026-09-19) |
 | `npm run build` | `tsc -p tsconfig.build.json` | Not run during this work |
 | `npm --prefix web run typecheck` | Dashboard types | Not run during this work |
 | `npm --prefix web run build` | Dashboard production build | Not run during this work |
@@ -609,12 +609,16 @@ Safe locally: `npm run typecheck`, `npm run build`, `npm run synth`,
 everything under `npm run local:*`, and `--help` on any lifecycle CLI.
 
 `npm test` is **not** fully hermetic, despite previously being listed here as
-safe. `src/lib/vectors/durability.repro.test.ts` writes to the real staging
-vectors bucket, so the suite reaches AWS and fails when the session lapses —
-which means a red run cannot be distinguished from an expired login. Verified
-2026-08-26: the same two files that fail without credentials pass in isolation
-with them. Treat a red `npm test` as inconclusive until you have checked
-`aws sts get-caller-identity`.
+safe. `src/adapters/dashboard/cost-cap.test.ts` posts a daily cap through
+`src/adapters/dashboard/cost-cap.ts`, whose `syncBudgetToDailyCap`
+(`src/lib/aws/budget-writer.ts`) calls STS and then AWS Budgets `UpdateBudget`
+on `claudeclaw-monthly-cost` in whatever account your credentials resolve to.
+The sync's errors are swallowed, so the suite stays green either way.
+`src/lib/vectors/durability.repro.test.ts` stubs S3 and the Bedrock embedder;
+it is not the AWS-reaching test. Until a Vitest AWS guard lands, never run
+`npm test` with ambient credentials: unset `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, then run
+`AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true npm test`.
 
 ---
 
