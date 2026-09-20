@@ -80,8 +80,8 @@ const TURN_MAX_TOKENS = 8192;
 
 /** Hard bounds on the runtime override. Below the floor a document cannot be
  * emitted at all; above the ceiling latency and per-turn cost climb without a
- * matching gain, and session items grow toward DynamoDB's 400KB limit even with
- * the byte-budget trim in sessions-repo. */
+ * matching gain. Stored size is not the reason: MAX_TURN_WINDOW_BYTES in
+ * sessions-repo caps the window at 300,000 bytes whatever the ceiling. */
 const TURN_MAX_TOKENS_FLOOR = 1024;
 const TURN_MAX_TOKENS_CEILING = 32_768;
 

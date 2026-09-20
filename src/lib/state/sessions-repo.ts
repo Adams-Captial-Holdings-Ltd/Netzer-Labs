@@ -56,11 +56,14 @@ function turnBytes(t: Turn): number {
 
 /**
  * Trim the oldest turns until the window fits the byte budget. The cut moves to
- * a user turn: Bedrock rejects a conversation whose first message is the
- * assistant's, and later Converse calls require strict alternation. An empty
- * window is valid because the next request starts with a new user message.
- * A reply ceiling bounds only replies, not user turns, so kept may be empty and
- * never exceeds the budget. Dropped turns still reach memory ingest.
+ * a user turn because every later request replays the stored window first: a
+ * window that starts with a reply makes every later request start with the
+ * assistant's message, which Bedrock rejects, so the chat fails from then on.
+ * Converse's strict user/assistant alternation is noted at the post-loop
+ * synthesis call in agent/agent-loop.ts. An empty window is valid because the
+ * next request starts with a new user message. A reply ceiling bounds only
+ * replies, not user turns, so kept may be empty and never exceeds the budget.
+ * Dropped turns still reach memory ingest.
  */
 export function trimTurnsToBudget(
   turns: Turn[],
@@ -288,6 +291,10 @@ export async function appendTurns(
     const combined = [...(existing?.turns ?? []), ...newTurns];
     const byCount = combined.slice(-MAX_TURNS);
     const countEvicted = combined.slice(0, Math.max(0, combined.length - MAX_TURNS));
+    // Bytes as well as count: see MAX_TURN_WINDOW_BYTES. Byte-dropped turns join
+    // the count-evicted ones because evicted.length is what trips decideIngest's
+    // evict backstop. Without them, a trim by bytes alone could drop turns that
+    // were never summarized.
     const { kept: merged, dropped: byteEvicted } = trimTurnsToBudget(byCount);
     const evicted = [...countEvicted, ...byteEvicted];
 
