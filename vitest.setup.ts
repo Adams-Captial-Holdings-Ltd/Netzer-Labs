@@ -56,7 +56,12 @@ function hostOf(arg: unknown): string | undefined {
   return undefined;
 }
 
+// Installed once per worker, keyed on `globalThis`. That assumes `globalThis`
+// and the `node:http` builtin are torn down together, which holds for vitest's
+// default pool but not for a VM-isolated one. This repository uses the default.
 if (!guardHost.__netzarAwsGuard) {
+  // `neutralised` names what the guard acts on, not what it found set: the
+  // deletes below run whether or not the variable was present.
   const neutralised: string[] = [];
   for (const name of CREDENTIAL_VARS) {
     delete process.env[name];
