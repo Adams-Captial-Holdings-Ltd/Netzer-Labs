@@ -50,6 +50,13 @@ vi.mock('../../lib/audit/audit-writer.js', () => ({
   writeAudit: (event: unknown) => writeAudit(event),
 }));
 
+// The POST route mirrors the cap to AWS Budgets and swallows the error, so the
+// real call would reach STS + Budgets in whatever account resolves. Stubbed, as
+// in authz-matrix.test.ts: with credentials neutralised it already resolves null.
+vi.mock('../../lib/aws/budget-writer.js', () => ({
+  syncBudgetToDailyCap: () => Promise.resolve(null),
+}));
+
 import { buildCostCapRouter } from './cost-cap.js';
 
 // res.json() is typed as Promise<unknown>; read it as a plain record so the
