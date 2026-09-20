@@ -2,8 +2,8 @@
 feature: chat-history-integrity
 document_role: handoff
 status: current
-observed_at: 2026-09-19
-as_of_commit: 50cfd5b8b0318c4123f54c582afaa72f3779cb9c
+observed_at: 2026-09-20
+as_of_commit: fa3b294463cd90f789a7d48e19dabfed08045d2f
 ---
 
 # Chat history integrity — current state
@@ -12,12 +12,12 @@ as_of_commit: 50cfd5b8b0318c4123f54c582afaa72f3779cb9c
 
 | | |
 |---|---|
-| Branch | `fix/test-credential-isolation` (WI-0.3): the AWS guard for the unit suite. Cut from `origin/development` at `0f41b53`. On top: the red state (`87c07b7`, test only), the guard (`54cb972`), its docs (`f533052`), the cleanup (`e09d673`, comments only), its docs (`3f9c94e`), the verification docs (`50cfd5b`) and this session's landing docs commit. |
+| Branch | `fix/test-credential-isolation` (WI-0.3): the AWS guard for the unit suite. Cut from `origin/development` at `0f41b53`. On top: the red state (`87c07b7`, test only), the guard (`54cb972`), its docs (`f533052`), the cleanup (`e09d673`, comments only), its docs (`3f9c94e`), the verification docs (`50cfd5b`), the landing docs (`fa3b294`) and this session's landing-merge docs commit. |
 | Based on | `development` at `0f41b532668dc95e25db7473244db00e1b1cf5ed`, the merge of PR #179. It holds WI-0.1 (#176 → `264d024`), WI-0.2 (#177 → `b152b7a`), the `development.md` amendment (#178 → `33d9126`) and the WI-0.2 cleanup (#179). |
 | Next merge target | `development` |
 | Deployment state | **Nothing here deploys.** Nothing has been promoted past `development`: `qa`, `staging` and `production` still lack WI-0.1, WI-0.2 and the cleanup. `staging` deploys on push, so promotion needs its own authorization. Production (`de244e6`, deployed 2026-09-09) runs the hotfixes WI-0.1 back-merged. |
-| Pushed | WI-0.3: **not as of this commit**, local only. The push is a separate owner authorization taken immediately after it; its outcome lives in the [landing log](handoffs/2026-09-19-wi03-landing.md) 7.3 and the Gauntlet state file. WI-0.1, WI-0.2, the amendment and the cleanup: yes, all merged into `development` on 2026-09-19. Every head branch is deleted on `origin`. |
-| PR | WI-0.3: none. Earlier: [#176](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/176), [#177](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/177), [#178](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/178), [#179](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/179), all merged. |
+| Pushed | WI-0.3: **yes** — `origin/fix/test-credential-isolation` is at `fa3b294`, and this session's docs commit is pushed with it. The PR into `development` is opened immediately after this commit; its number, its checks and the merge commit live in the Gauntlet state file and in the [landing-merge log](handoffs/2026-09-20-wi03-landing-merge.md) 7.3. WI-0.1, WI-0.2, the amendment and the cleanup: yes, all merged into `development` on 2026-09-19. Every head branch is deleted on `origin`. |
+| PR | WI-0.3: opened into `development` right after this commit (number in the Gauntlet state file). Earlier: [#176](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/176), [#177](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/177), [#178](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/178), [#179](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/179), all merged. |
 
 Staging is reachable only by the promotion chain `development → qa → staging`. Each step is its own pull request, because `scripts/ci/deploy-source-guard.mjs` refuses any staging deploy whose ref is not `refs/heads/staging`. Nothing on a `fix/*` branch reaches an AWS environment.
 
@@ -33,7 +33,7 @@ WI-0.3 (plan section 10, P0 step 3): make `npm test` hermetic — a credential-s
 
 ## Live state worth knowing
 
-- **Green again at `50cfd5b`**, the exact HEAD prepared for the push: the full step 7 list re-run 2026-09-20T03:49Z equals the baseline — `npm test` 247 files / 3215 tests with credentials planted and no stripping, `guard-violations: 0`, integration 38 passed / 25 skipped / 1 failed (the Floci `checkSecrets` gap, by name), all 11 other gates exit 0, 0 changed paths left behind ([landing log](handoffs/2026-09-19-wi03-landing.md), 7.2).
+- **Green at `fa3b294`, alone in the checkout**: the full step 7 list re-run 2026-09-20T03:58Z with every credential source **stripped** equals the baseline — `npm test` 247 files / 3215 tests, `guard-violations: 0`, integration 38 passed / 25 skipped / 1 failed (the Floci `checkSecrets` gap, by name), all 11 other gates exit 0, 0 changed paths left behind ([landing-merge log](handoffs/2026-09-20-wi03-landing-merge.md), 7.2). The earlier run at `50cfd5b` matched too, but two agents were building in that tree at once, so it was re-run rather than trusted ([landing log](handoffs/2026-09-19-wi03-landing.md), 7.2).
 - **Green at `3f9c94e`**, re-derived by the verification ([log](handoffs/2026-09-19-wi03-verification.md), section 7):
   - `bash wi-0.3-proof.sh` in scored mode: 9 lines PASS, `FAILS=0`, exit 0, 0 changed paths left behind.
   - `npm test` with credentials **planted and not stripped**: 247 files, 3215 tests, exit 0, and **zero** `NETZAR-AWS-GUARD VIOLATION` lines.
@@ -72,11 +72,12 @@ WI-0.3 (plan section 10, P0 step 3): make `npm test` hermetic — a credential-s
 
 ## Smallest next action
 
-Push `fix/test-credential-isolation` and open its PR into `development`, after re-running the full step 7 list on the exact HEAD pushed and confirming once more in that conversation. The owner chose this order on 2026-09-19 over amending `development.md` first. Once the PR merges, owner decision 23 goes on its **own** branch off the updated `development` — the drafted re-amendment (with 4.2's wording fix), the Automated tests row at 247 files / 3215 tests, and A39's one-line `tsconfig.json` include. Putting either here would fail AC-0.3-6.
+Once the WI-0.3 PR merges, owner decision 23 goes on its **own** branch off the updated `development` — the drafted re-amendment (with the landing log's 4.2 wording fix), the Automated tests row at 247 files / 3215 tests, and A39's one-line `tsconfig.json` include. Putting either here would fail AC-0.3-6. After that, owner decision 18's promotion chain, each step its own PR, each confirmed before the push.
 
 ## Related
 
 - [README](README.md), including the [content check](README.md#4a-checking-a-branch-for-these-fixes-by-content-never-by-ancestry)
+- [2026-09-20 WI-0.3 landing-merge log](handoffs/2026-09-20-wi03-landing-merge.md): the clean-tree re-run of the full step 7 list on the exact HEAD pushed, and the push, PR and merge
 - [2026-09-19 WI-0.3 landing log](handoffs/2026-09-19-wi03-landing.md): why owner decision 23 was deferred behind the merge, and the full step 7 list re-run on the exact HEAD prepared for the push
 - [2026-09-19 WI-0.3 verification log](handoffs/2026-09-19-wi03-verification.md): the PASS verdict for WI-0.3 at `3f9c94e`, every criterion re-derived from the code, and the provider-chain gap it found
 - [2026-09-19 WI-0.3 cleanup log](handoffs/2026-09-19-wi03-cleanup.md): the two comments, what was deliberately left duplicated, and the proof and step 7 list re-run at `e09d673`
@@ -95,6 +96,7 @@ Push `fix/test-credential-isolation` and open its PR into `development`, after r
 
 | Date | Session | Subject |
 |---|---|---|
+| 2026-09-20 | [wi03-landing-merge](handoffs/2026-09-20-wi03-landing-merge.md) | Finished the landing, alone in the checkout. Re-derived the branch state rather than trusting three documents that disagreed about it (`50cfd5b` vs `fa3b294`, pushed vs not), re-ran the full step 7 list on the exact HEAD pushed with every credential source stripped — 247 files / 3215 tests, 0 violations, integration 38/25/1, all other gates exit 0 — then opened the PR into `development`, merged it once every check was green, and deleted the head branch. No source file was touched and `development.md` was not edited. |
 | 2026-09-19 | [wi03-landing](handoffs/2026-09-19-wi03-landing.md) | Was handed owner decision 23 — apply the drafted `development.md` re-amendment plus A39's `tsconfig.json` line — and applied neither, on purpose. `development.md` describes the branch it is read on, and the guard is not on `development` yet; the `tsconfig.json` line proves it mechanically by failing typecheck there. The owner chose the honest order: land WI-0.3 first, then amend. Prepared the landing instead — the full step 7 list re-run on the exact clean HEAD `50cfd5b` equals the baseline (247 files / 3215 tests, 0 violations, integration 38/25/1). Caught one flaw in the draft before it could land: its new layer 5 says "every credential source", which A45 contradicts. |
 | 2026-09-19 | [wi03-verification](handoffs/2026-09-19-wi03-verification.md) | A fresh critic verified WI-0.3 at `3f9c94e`: **PASS** on all eight criteria, each re-derived from the repository. The proof is 9 PASS / `FAILS=0`; `npm test` is 247 files / 3215 tests with credentials planted and no stripping and zero violations; the full step 7 list equals the baseline on that exact HEAD. Both negative controls were read as output, not scored from a line — the real `budget-writer` dial was refused, logged its own swallow, and failed its test anyway. Corrected one count: the branch scope is 8 paths at `3f9c94e`, 7 at `e09d673`. One new finding classified, not patched: layer 1 leaves the container-credential and web-identity chain members set, which layer 2 still covers (A45). |
 | 2026-09-19 | [wi03-cleanup](handoffs/2026-09-19-wi03-cleanup.md) | Cleaned up WI-0.3 with `/refactor`, scope-locked: two comments in `vitest.setup.ts` (`e09d673`), naming what `neutralised` actually records and the pool assumption under the once-per-worker install. No behaviour changed. The duplicated credential list and guard type in `aws-guard.test.ts` were left alone on purpose — unifying them would make the contract test assert against the implementation's own constant. The proof still exits 0 on all nine lines, and the full step 7 list was re-run (a file in `setupFiles` is a config file, P36) and equals the baseline. One new finding classified, not patched: the tripwire reads the first host-bearing argument, while node gives `options` precedence over a `url` string (A43). |
