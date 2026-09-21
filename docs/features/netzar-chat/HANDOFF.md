@@ -39,10 +39,19 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
   identified as `netzer-os-floci` / `floci/floci:1.6.0` **before** that
   integration result was read — a stray LocalStack there turns the one expected
   failure into a pass.
-- Blockers: none for this documentation work. CHATUI-008 is blocked on **owner
-  decision 6** — a dedicated spend-capped staging token and agent, authorized
-  per run — before the authenticated staging QA and the dependent full-journey
-  blind critic can start.
+- Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
+  spend-capped staging token and agent, authorized per run — before the
+  authenticated staging QA and the dependent full-journey blind critic can
+  start. That token is now on the **critical path**: under the accepted 9-step
+  roadmap, nothing after F1 can be verified against real Bedrock without it.
+  `bar/staging/VERIFY.json` still records 1 pass (HTTP 200) and 4 sign-in
+  failures, "no STAGING_TOKEN … cannot verify authed surfaces".
+- The F1 gate is red and proved red for the right reason: `f1-proof.sh` reads
+  `FAILS=10` in the local tier and `FAILS=4` in the staging tier at `ea0a28f`,
+  with the negative control reading `FAIL` in both. The blocking defect for a
+  local conversation reload was measured rather than inferred — with the chat
+  mock running, `/api/sessions` returns 11 conversations and
+  `/api/sessions/transcript` returns `{"turns":[]}` for every one of them.
 - Smallest next action: build the F1 test foundations — a thin local end-to-end
   harness that drives the Chat screen and reloads a conversation, and one added
   CI lane that runs it on every pull request. The authenticated staging half of
@@ -52,6 +61,7 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
   `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-21-f1-specification.md](handoffs/2026-09-21-f1-specification.md)
 - [2026-09-21-final-p0-verification.md](handoffs/2026-09-21-final-p0-verification.md)
 - [2026-09-21-wi-0.4-landing.md](handoffs/2026-09-21-wi-0.4-landing.md)
 - [2026-09-20-wi-0.4-verification.md](handoffs/2026-09-20-wi-0.4-verification.md)
