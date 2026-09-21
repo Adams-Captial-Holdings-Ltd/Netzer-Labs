@@ -60,10 +60,24 @@ as_of_commit: 2e06d4b29306758b257dc22c655ded6431f6f6c2
   route to its old hard-coded empty array makes the suite fail at the
   post-reload assertion, checked at two separate commits. The **staging tier is
   untouched** and reads `FAILS=4`; it is blocked on decision 6's token.
+- **One caveat on that green, found by the owner after the phase closed (A86):**
+  the spec calls `page.reload()` as soon as the reply becomes visible, which is
+  several chunks before the stream ends, so the mock records **107 of the
+  fixture's 1007 characters — 10.6%** and the assertion passes only because the
+  phrase it looks for sits inside that first tenth. AC-F1-L5 is still met, the
+  stored turns do come back, and no recorded result changes. But the gate is
+  weaker than it reads, and its `stream cut mid-turn` warning would print on
+  every CI run, which is how a log line stops being read. CLEANUP's first job is
+  to wait for the product's own end-of-turn signal — the Send button returning
+  from "Stop generating" to "Send message" — and then re-run the mutation
+  control.
 - Smallest next action: **CLEANUP**, scope-locked to the six paths this work
-  item touched. It owns four carried items — the unbounded in-memory transcript
-  map in the dev mock, a text-assertion precision nit in the spec, and comment
-  tidying. Then a fresh VERIFICATION by a critic that did not build it. The
+  item touched. It owns five carried items, in order: **(1) A86 — make the spec
+  wait for the real end of the turn before reloading, then re-run the mutation
+  control**, since it is the only one that changes what the gate measures;
+  (2) the unbounded in-memory transcript map in the dev mock; (3) the
+  text-assertion precision nit; (4) comment tidying if warranted; (5) nothing
+  else. Then a fresh VERIFICATION by a critic that did not build it. The
   authenticated staging half of F1 cannot start until owner decision 6's token
   exists. Promotion of `development` → `qa` → `staging` is owner decision 18, is
   still due, and needs its own authorization — the `qa` → `staging` merge runs a

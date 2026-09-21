@@ -1011,6 +1011,7 @@ Short pointers only. The owning document has the detail; do not copy it here.
 | P57 | Give a browser gate's web server `reuseExistingServer: false` and a strict port. | A dev server already on the port was probably started WITHOUT the feature flag the suite depends on. Reusing it fails the suite for a reason that reads as a product defect; with `--strictPort` a busy port fails loudly instead, which is the answer you can act on. It also means the suite always exercises the code in the tree, never a stale process. |
 | P58 | When a dependency version is chosen for a CONVENIENCE reason — a cached artifact, a faster install, an existing lockfile entry — run `npm audit` against that exact pin before committing it. A convenience reason is not a security reason, and this repository's CI does not run `npm audit`, so nothing downstream will catch it. | **M55**. `@playwright/test@1.54.2` was pinned because its chromium revision was already on the dev machine. It carries a HIGH advisory on the browser-download path the new CI job actually uses. |
 | P59 | Run the review fan-out BEFORE the phase's last gate run, not after, and budget for the gates to run again. | Two of its findings changed code this phase had already proved green, so the proof, the mutation control and the full step 7 list all had to be re-established at a new HEAD. That is the correct order — a review that cannot change the diff is decoration — but it costs a second round of every gate, and a session that has already "finished" will be tempted to carry the finding instead. |
+| P60 | To wait for an asynchronous process to FINISH, assert the product's own completion signal, never the first appearance of its output. Text that streams becomes visible long before it is complete. | **A86**. The spec asserted the reply's text and immediately reloaded, which raced the stream and stored 10.6% of the reply. Here the real signal is in the product already: the Send button reads "Stop generating" while a turn is streaming and returns to "Send message" when it ends. A sleep would also have "worked" and would have been the wrong fix — it swaps a race for a slower race. |
 
 #### Mistakes already made, and their corrections (continued)
 
@@ -1030,6 +1031,7 @@ Short pointers only. The owning document has the detail; do not copy it here.
 | A83 | At the final HEAD `2e06d4b`, with every AWS credential source **stripped**, the full step 7 list equals the baseline: `npm test` 247 files / 3215 tests exit 0, `guard-violations: 0`; integration 38 passed / 25 skipped / 1 failed — the Floci `checkSecrets` gap confirmed **by name**; all 11 other gates exit 0; **0 changed paths**. `docs-links` 204 files / 3237 links. | Observed 2026-09-21T18:40:16Z-18:40:53Z, one run of 37 s, alone in the checkout (**P41**), emulator identified first (**P50**). It also ran identically at `d266fa9` (18:27:08Z-18:27:46Z) before the two review-driven commits. Same numbers as A48, A49, A52, A69 and A71. |
 | A84 | The review fan-out at this phase's exit — `ecc:code-reviewer`, `ecc:security-reviewer`, `ecc:silent-failure-hunter`, read-only, in parallel, each handed the clone path and commit explicitly — returned **APPROVE / WARN / WARN**. All three independently confirmed the change cannot reach a production build or a deployed environment (`apply: 'serve'` plus the guarded dynamic import at `web/vite.config.ts:39-40`), that the seeded localStorage identity is not an authorization bypass, and that the CI job adds no service and pins its action SHAs. **Two findings changed the code** (M55 and the silent-failure set); the rest are carried. | Observed 2026-09-21. Reports at `~/.claude/plans/ponytail-claudex-loop-grill-me-ticklish-dijkstra-reviews/wi-f1-{code-reviewer,security-reviewer,silent-failure-hunter}.md`, outside the repository. Each reviewer's own summary was treated as a lead: the one finding that changed a dependency was re-verified with `npm audit` first, and that re-verification corrected the reviewer. |
 | A85 | The chat mock no longer fails silently, fixed in `2e06d4b`: `play(...).then(...)` has a `.catch()` that logs and states nothing was recorded; a turn arriving with no `chatId` is warned about rather than dropped in silence; and a stream cut mid-turn announces that it is recording a partial reply. | Observed 2026-09-21. The partial-reply **behaviour** is unchanged and deliberate — replaying what was actually streamed is the honest transcript — only its silence is fixed. Web typecheck exits 0 and the suite still passes after the change. |
+| A86 | **The spec RELOADS MID-STREAM, so what it replays is a 10.6% PARTIAL reply.** `page.reload()` fires as soon as the `REPLY` phrase becomes visible, which is several chunks before the stream ends, so the mock records only what had been written: **107 of the default fixture's 1007 characters**. The post-reload assertion passes *only* because "Here is the summary you asked for" sits inside that first tenth. | Observed 2026-09-21 **by the owner**, running `npm run e2e:chat` after this phase had closed — from the `[chat-mock] stream cut mid-turn: recording the partial reply (107 chars)` line that **A85 had added an hour earlier**, printing on a **GREEN** run. Lengths measured against `web/dev/fixtures.ts`, not estimated. **Nothing in this log is false** — AC-F1-L5 asks that the stored turns come back and they do — but the gate proves less than a reader would assume, and the new CI lane would print that warning on every run, which is **M44**: a deliberate action whose log line pollutes a passing run teaches people to ignore the log. **Fix is CLEANUP item 1** in the state file's section 0: wait for the product's own end-of-turn signal — the Send button returns from "Stop generating" to "Send message" (`web/src/components/chat/Composer.tsx:385,399`) — then re-run the mutation control, because this is the one edit that changes what the gate measures. |
 
 #### Known traps that cost time (continued)
 
@@ -1040,6 +1042,7 @@ Short pointers only. The owning document has the detail; do not copy it here.
 | Playwright's `webServer` starts the dev server from the config file's own directory unless `cwd` is set. A command written as `npm --prefix web run dev` therefore fails from `tests/e2e/chat/` until `cwd` points at the repository root. | `tests/e2e/chat/playwright.config.ts` |
 | `playwright-core` no longer exports `./browsers.json`, so reading the required chromium revision that way throws `ERR_PACKAGE_PATH_NOT_EXPORTED` on a current version. Use `npx playwright install --dry-run chromium`, which prints the revision AND its install path. | This log, **A79** |
 | `npm audit` reports 18 pre-existing repo-wide advisories (9 moderate, 8 high, 1 critical) unrelated to this work, and `npm audit` is **not** part of this repository's CI. Do not read a green CI as a clean dependency tree, and do not read this count as something this work item introduced. | This log, **M55** |
+| A cumulative SSE reply becomes *visible* long before it is *complete*, so an assertion on its text is NOT an end-of-turn signal. Asserting on the first sign of output and then acting makes the next step race the stream. | This log, **A86** / **P60** |
 
 ## 6. What this phase did
 
@@ -1234,6 +1237,14 @@ Everything below ran. Nothing is recorded that did not (**P2**).
 | 24 | full step 7 at `2e06d4b`, creds stripped, alone in the tree | **= BASELINE**, 18:40:16Z-18:40:53Z (**A83**) |
 | 25 | `lsof` on 5180/5181 after every server stop | port released each time (**M19**) |
 | 26 | `git status --porcelain` after every step | empty |
+| 27 | **the OWNER ran `npm run e2e:chat`** after this phase had closed | **passed**, 1.0 s — and printed `[chat-mock] stream cut mid-turn: recording the partial reply (107 chars)` |
+| 28 | measured the fixture against that number rather than inferring it | default reply **1007 chars**; 107 = **10.6%**; the asserted phrase IS inside the first 107 — **A86** |
+
+**Added after the phase closed.** Rows 27-28 and **A86**, **P60** were appended in a follow-up
+docs commit, because the owner's own run surfaced something the session had not seen. They change
+no result above: the gate is still `FAILS=0`, the mutation control still fails under mutation, and
+step 7 still matched the baseline. What they change is how strong the gate should be *described*
+as being, which is exactly the kind of thing this ledger exists to keep honest.
 
 **Not run, and not claimed:** nothing was pushed, no PR was opened, nothing was promoted, and no
 AWS API was called. The staging tier (AC-F1-S1..S5) was not attempted and cannot be: it is
@@ -1249,9 +1260,18 @@ baseline on the exact HEAD. The gate is proved capable of failing, twice, by mut
 fan-out ran at exit and two of its findings changed the code rather than being carried.
 **Local only — nothing pushed, no PR, nothing promoted.**
 
+**One caveat on that verdict, added after the fact and deliberately not buried: A86.** The spec
+reloads while the reply is still streaming, so what it replays is 10.6% of the reply, and it
+passes because the phrase it asserts sits in that first tenth. AC-F1-L5 is still met — the stored
+turns do come back — but the gate is weaker than it reads, and its warning line would print on
+every CI run. That is CLEANUP's first job, not a later idea.
+
 Smallest next action: **CLEANUP**, scope-locked to the six paths this work item touched. It owns
-four carried items: the unbounded in-memory Map, the `getByText` precision nit, and any comment
-tidying in the mock and the spec. Then a fresh VERIFICATION by a critic that did not build this.
+five carried items, in this order: **(1) A86 — make the spec wait for the product's own
+end-of-turn signal before reloading, then re-run the mutation control**, because it is the only
+one that changes what the gate measures; (2) the unbounded in-memory Map; (3) the `getByText`
+precision nit; (4) comment tidying in the mock and the spec if genuinely warranted; (5) nothing
+else. Then a fresh VERIFICATION by a critic that did not build this.
 
 **Owed to the owner, and neither is mine to do:** the spend-capped **STAGING_TOKEN** (decision
 6), which is now the critical path for every step after F1 and blocks the staging tier entirely;
