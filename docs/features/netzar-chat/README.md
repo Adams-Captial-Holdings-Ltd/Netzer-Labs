@@ -2,14 +2,16 @@
 feature: netzar-chat
 document_role: index
 status: current
-observed_at: 2026-08-25
-as_of_commit: 06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710
+observed_at: 2026-09-20
+as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
   - web/tailwind.config.ts
   - web/src/lib/theme.ts
 tested_by:
+  - src/adapters/dashboard/chat-stream.test.ts
+  - src/adapters/dashboard/chat-helpers.test.ts
   - src/lib/jarvis/route-manifest.test.ts
 approved_work:
   - docs/features/netzar-chat/plan.md
@@ -34,10 +36,12 @@ layer is used.
 
 ## 2. What netzar-chat does today
 
-Today the Chat tab is a single 838-line component (`web/src/pages/Chat.tsx`)
-with a basic bubble UI. The port decomposes it into `web/src/lib/chat/*`
-(transport + helpers, behavior-identical) and `web/src/components/chat/*`
-(LibreChat-structured UI re-themed to this product), keeping intact:
+The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 591-line state and
+composition shell. Transport and helpers live in the eight modules under
+`web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
+17 top-level files under `web/src/components/chat/` — 15 component files plus
+the `conversation-groups.ts` helper and the `useChatScroll.ts` hook — alongside
+its `lc/` donor-derived support tree. It keeps intact:
 
 - the SSE turn stream (`POST /api/test-turn/stream`; events `chunk` cumulative,
   `tool {label, step}`, `media`, `kb`, `image`, `artifact`, `reply`, `final`,
@@ -49,15 +53,14 @@ with a basic bubble UI. The port decomposes it into `web/src/lib/chat/*`
   run footer, error bubble, kb/image/artifact renderings) per
   [CLAUDE.md](../../../CLAUDE.md).
 
-It is **not yet** any of: implemented (work in progress — see HANDOFF), a change
-to any other page, a change to `AgentDetail.tsx`'s ChatTab, or a change to the
-backend.
+It does not change any other page, `AgentDetail.tsx`'s ChatTab, or the backend.
 
 ## 3. Current status and current source commit
 
-Planned and in progress on branch `feature/netzar-chat`, based on
-`development` at `06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710`. This is source
-evidence only; nothing is deployed.
+Merged into `development` as PR #129 (merge
+`b3b427497d63d8f4d1faa147b46c9681c19bc460`, 2026-08-27). The merge is present
+on `origin/qa` and `origin/staging`, and staging is the AWS environment reached
+through the branch-to-environment mapping; it is not on `origin/production`.
 
 ## 4. Source of truth
 
@@ -74,13 +77,11 @@ evidence only; nothing is deployed.
 
 | Area | Verified location | Present behavior |
 |---|---|---|
-| Chat page (pre-port) | `web/src/pages/Chat.tsx` | Monolith: sidebar, header, list, composer, dialogs |
-| SSE client | `web/src/pages/Chat.tsx` (send()) | fetch+reader, hand-rolled SSE framing |
-| Markdown | `web/src/pages/Chat.tsx` + `.chat-md` in `web/src/index.css` | marked → DOMPurify, shared prose block |
+| Chat composition and state | `web/src/pages/Chat.tsx` | Page shell coordinating chat state, routes, API calls, and the extracted UI |
+| SSE client and chat helpers | `web/src/lib/chat/stream.ts`, `web/src/lib/chat/helpers.ts` | SSE framing, event handling, conversation identifiers, and client-side helpers |
+| Chat UI | `web/src/components/chat/` | Header, transcript, live-tool state, composer, agent/model menus, and conversation sidebar |
+| Markdown | `web/src/lib/chat/markdown.ts`, `web/src/lib/chat/code-block.ts`, `.chat-md` in `web/src/index.css` | marked → DOMPurify, chat-scoped highlighted code blocks |
 | Route | `web/src/App.tsx` (`/chat`, `/chat/:agentId`) | Parsed by `src/lib/jarvis/route-manifest.test.ts` — do not change |
-
-(The port updates this table as files land; each phase's handoff records the
-delta.)
 
 ## 6. Current business/state rules
 
@@ -100,13 +101,13 @@ delta.)
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
-| Opacity-modifier Tailwind classes on semantic tokens emit no CSS | raw `var()` strings in `web/tailwind.config.ts` lack `<alpha-value>` | [CHATUI-001](plan.md) |
-| Streaming/tool UX unverifiable locally | Floci Bedrock stub: one chunk, no tool events (`development.md` known limitations) | [CHATUI-000](plan.md) mock harness; [CHATUI-007](plan.md) staging QA |
+| Authenticated staging UI is not yet verified | Floci Bedrock stub: one chunk, no tool events; staging verification needs an owner-authorized spend-capped token | [CHATUI-008](plan.md) |
+| An opacity modifier on a plain semantic token still emits no CSS, so `bg-primary/10` is silently a no-op | the semantic keys in [web/tailwind.config.ts](../../../web/tailwind.config.ts) are raw `var()` strings with nowhere to inject an alpha channel; the alpha-capable `-a` siblings added by CHATUI-001 sit beside them rather than replacing them | none open — the mitigation landed in [CHATUI-001](plan.md); the standing rule is the appendix mapping (`any <color>/<opacity>` → `-a` triplet keys or `*-dim` vars only). The chat subtree observed 2026-09-20 has zero occurrences; the rest of `web/src` still has them |
 
 ## 8. Exact focused and full validation commands
 
 Focused: `npx vitest run src/adapters/dashboard/chat-stream.test.ts
-src/adapters/dashboard/chat-helpers.test.ts` (once they exist), plus
+src/adapters/dashboard/chat-helpers.test.ts`, plus
 `npm --prefix web run typecheck && npm --prefix web run build`.
 
 Full pre-push suite (all must actually run):
