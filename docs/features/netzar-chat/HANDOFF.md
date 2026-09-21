@@ -23,16 +23,23 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
   `FAILS=24` on the untouched baseline at `eee0a83` and `FAILS=0` after these
   documents and their session logs, and `FAILS=0` again after the CLEANUP pass
   that resolved F1, F2 and F3; `docs-links`, `feature-knowledge`,
-  `docs-mermaid`, `docs-assets` and `git diff --check` all exit 0. The full
-  `development.md` step 7 list was **not** run here and is not claimed: it is a
-  pre-push gate, nothing is pushed yet, and no source, config, `package.json`,
-  lockfile or `vitest.*` file is touched. It runs in full on the exact HEAD the
-  landing phase pushes.
-- Smallest next action: obtain owner decision 6 — mint a dedicated spend-capped
-  staging token and authorize each staging-verification run — before starting
-  CHATUI-008.
+  `docs-mermaid`, `docs-assets` and `git diff --check` all exit 0. A fresh
+  critic then re-ran the proof at all four commits — `FAILS=24` / `0` / `0` /
+  `0`, the negative control reading `FAIL` at every one — and the five gates at
+  `ef804f7` (`docs-links` 200 files / 3093 links, `docs-assets` 1.98 MB), and
+  re-derived every claim from the repository rather than from the logs:
+  **WI-0.4 is VERIFIED**. The full `development.md` step 7 list was **not** run
+  here and is not claimed: it is a pre-push gate, nothing is pushed yet, and no
+  source, config, `package.json`, lockfile or `vitest.*` file is touched. It
+  runs in full on the exact HEAD the landing phase pushes.
+- Smallest next action: land this documentation branch — push, PR into
+  `development`, merge only on green checks **and** a full step 7 list matching
+  the baseline on the exact HEAD pushed, then delete the head branch. After
+  that, CHATUI-008 still needs owner decision 6 — a dedicated spend-capped
+  staging token and per-run authorization — before it can start.
 
 Session index (newest first):
+- [2026-09-20-wi-0.4-verification.md](handoffs/2026-09-20-wi-0.4-verification.md)
 - [2026-09-20-wi-0.4-cleanup.md](handoffs/2026-09-20-wi-0.4-cleanup.md)
 - [2026-09-20-wi-0.4-implementation.md](handoffs/2026-09-20-wi-0.4-implementation.md)
 - [2026-09-20-wi-0.4-specification.md](handoffs/2026-09-20-wi-0.4-specification.md)
