@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-21
-as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
+as_of_commit: 2e06d4b29306758b257dc22c655ded6431f6f6c2
 ---
 
 # Netzar Chat handoff
@@ -22,12 +22,17 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
   last P0 work item, and a fresh whole-goal critic then passed the six-line P0
   exit gate at that commit.
 - Current work lives on `feat/f1-test-foundations`, cut from
-  `origin/development` at `08f85db`; merge target `development`. Pushed: **no**.
-  **PR: none.** Deployment: none. This frontmatter still stamps `eee0a83`
-  deliberately: every commit since then changes only Markdown under
-  `docs/features/netzar-chat/`, so the source its claims describe is
-  byte-identical, and moving the stamp would re-date every undated claim beneath
-  it for no reason.
+  `origin/development` at `08f85db`; merge target `development`. HEAD
+  `2e06d4b29306758b257dc22c655ded6431f6f6c2`. Pushed: **no**. **PR: none.**
+  Deployment: none. This frontmatter now stamps that commit rather than
+  `eee0a83`, because the earlier reason for holding the stamp back has expired:
+  F1 is the first work item since then to change source and configuration
+  files — `tests/e2e/chat/`, `web/dev/mock-stream-plugin.ts`, `package.json`,
+  the lockfile and `.github/workflows/ci.yml` — so the source these claims
+  describe is no longer byte-identical to `eee0a83` (P23). The containment
+  statements above were re-derived against `origin/qa` `ac0cbcc`,
+  `origin/staging` `8299f04` and `origin/production` `de244e6`, all three
+  unmoved since they were last proved.
 - Baseline recorded before any change on this branch, on 2026-09-21 at
   `08f85db`, alone in the checkout and with credentials stripped: the full
   `development.md` step 7 list **matches the baseline** — `npm test` 247 files /
@@ -46,21 +51,26 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
   roadmap, nothing after F1 can be verified against real Bedrock without it.
   `bar/staging/VERIFY.json` still records 1 pass (HTTP 200) and 4 sign-in
   failures, "no STAGING_TOKEN … cannot verify authed surfaces".
-- The F1 gate is red and proved red for the right reason: `f1-proof.sh` reads
-  `FAILS=10` in the local tier and `FAILS=4` in the staging tier at `ea0a28f`,
-  with the negative control reading `FAIL` in both. The blocking defect for a
-  local conversation reload was measured rather than inferred — with the chat
-  mock running, `/api/sessions` returns 11 conversations and
-  `/api/sessions/transcript` returns `{"turns":[]}` for every one of them.
-- Smallest next action: build the F1 test foundations — a thin local end-to-end
-  harness that drives the Chat screen and reloads a conversation, and one added
-  CI lane that runs it on every pull request. The authenticated staging half of
-  F1 cannot start until owner decision 6's token exists. Promotion of
-  `development` → `qa` → `staging` is owner decision 18, is still due, and needs
-  its own authorization — the `qa` → `staging` merge runs a full
-  `cdk deploy --all`.
+- **The F1 gate's LOCAL tier is GREEN:** `f1-proof.sh` reads `FAILS=0`, exit 0,
+  with all 11 rows PASS and the negative control still reading `FAIL`, at
+  `2e06d4b`. It read `FAILS=10` at `e7dc543` before this work. The full step 7
+  list also ran on that exact HEAD and matched the baseline above
+  (18:40:16Z-18:40:53Z), because `package.json` and `ci.yml` are configuration
+  files. The gate is proved capable of failing: reverting the mock's transcript
+  route to its old hard-coded empty array makes the suite fail at the
+  post-reload assertion, checked at two separate commits. The **staging tier is
+  untouched** and reads `FAILS=4`; it is blocked on decision 6's token.
+- Smallest next action: **CLEANUP**, scope-locked to the six paths this work
+  item touched. It owns four carried items — the unbounded in-memory transcript
+  map in the dev mock, a text-assertion precision nit in the spec, and comment
+  tidying. Then a fresh VERIFICATION by a critic that did not build it. The
+  authenticated staging half of F1 cannot start until owner decision 6's token
+  exists. Promotion of `development` → `qa` → `staging` is owner decision 18, is
+  still due, and needs its own authorization — the `qa` → `staging` merge runs a
+  full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-21-f1-implementation.md](handoffs/2026-09-21-f1-implementation.md)
 - [2026-09-21-f1-specification.md](handoffs/2026-09-21-f1-specification.md)
 - [2026-09-21-final-p0-verification.md](handoffs/2026-09-21-final-p0-verification.md)
 - [2026-09-21-wi-0.4-landing.md](handoffs/2026-09-21-wi-0.4-landing.md)
