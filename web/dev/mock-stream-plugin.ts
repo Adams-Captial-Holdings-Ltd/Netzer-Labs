@@ -205,6 +205,15 @@ function mockSessions(): unknown {
 // written up above the sidebar fixture; it is not repeated here.
 const transcripts = new Map<string, Array<{ role: string; text: string; ts: number }>>();
 
+// The one bound on that Map. A dev server left running all day accumulates a
+// conversation per "New chat" click and never released one, which both reviews
+// raised. 200 is far above any real session (the sidebar fixture has 11 rows)
+// and still finite. A Map iterates in INSERTION order and `set` on an existing
+// key does not reorder it, so this evicts the oldest conversation created, not
+// the least recently used — good enough here, and LRU is the upgrade if a
+// session ever hits the cap for real.
+const MAX_CONVERSATIONS = 200;
+
 /** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
 function recordTurn(chatId: string, userText: string, replyText: string): void {
   if (!chatId) {
@@ -221,6 +230,14 @@ function recordTurn(chatId: string, userText: string, replyText: string): void {
     { role: 'user', text: userText, ts },
     ...(replyText ? [{ role: 'assistant', text: replyText, ts }] : []),
   ]);
+  // Evicting in silence would be worse than not evicting at all: reopening a
+  // dropped conversation returns an empty transcript, which is exactly what the
+  // hard-coded `{ turns: [] }` this route replaced used to do. Say it happened.
+  while (transcripts.size > MAX_CONVERSATIONS) {
+    const oldest = transcripts.keys().next().value as string;
+    transcripts.delete(oldest);
+    console.warn(`[chat-mock] ${MAX_CONVERSATIONS} conversations held; forgetting the oldest (${oldest}). Reopening it will come back empty. Restart the dev server for a clean slate.`);
+  }
 }
 
 export function mockStreamPlugin(): Plugin {

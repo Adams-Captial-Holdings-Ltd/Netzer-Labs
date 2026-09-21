@@ -21,6 +21,12 @@ const PROMPT = 'f1 harness: does a reload replay the turns?';
 // because the assistant turn is rendered (web/dev/fixtures.ts).
 const REPLY = 'Here is the summary you asked for';
 
+// The LAST line of that same reply (web/dev/fixtures.ts). REPLY opens the text,
+// so a truncated stream still carries it; this phrase only appears if the WHOLE
+// reply was streamed, stored and replayed. It is the row that would catch the
+// mid-stream race returning — see the end-of-turn wait below.
+const REPLY_END = 'pull the underlying audit events';
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((caps) => {
     localStorage.setItem('cce_token', 'local-dev-dashboard-token');
@@ -53,10 +59,29 @@ test('streams a reply, then replays the stored turns after a reload', async ({ p
   await send.click();
 
   // The reply streams in over mock SSE, whose chunk events carry the text
-  // cumulatively. `.first()` because the prompt is also the conversation's
-  // title, so it legitimately appears twice once the turn exists.
-  await expect(page.getByText(PROMPT).first()).toBeVisible();
+  // cumulatively. The prompt assertion is scoped to the message row, not to the
+  // page: the prompt is ALSO the conversation's title, and that title is derived
+  // from Chat.tsx's own state, so a page-wide match could be satisfied by the
+  // header alone while the transcript itself rendered nothing. `role="group"` +
+  // `aria-label` is the row's own markup (the ported MessageRow under
+  // web/src/components/chat/lc/), so this can only pass on the rendered bubble.
+  const sentMessage = page.getByRole('group', { name: 'Your message' }).getByText(PROMPT);
+  await expect(sentMessage).toBeVisible();
   await expect(page.getByText(REPLY).first()).toBeVisible();
+
+  // WAIT FOR THE TURN TO END, not for its first output. A cumulative SSE reply
+  // becomes VISIBLE long before it is COMPLETE, so reloading on the assertion
+  // above raced the stream: the mock recorded whatever fraction had been sent
+  // (~7-11% of the fixture, varying per run) and said so — `stream cut mid-turn`
+  // printed on an otherwise GREEN run. The end-of-turn signal is the product's
+  // own: the composer's control reads "Stop generating" while a turn streams and
+  // returns to "Send message" when it ends (web/src/components/chat/Composer.tsx).
+  // A sleep would only have slowed the race down.
+  //
+  // This must stay AFTER the REPLY assertion. Before any output arrives the Send
+  // button has not been swapped out yet, so the wait would be satisfied by the
+  // pre-send state and prove nothing.
+  await expect(send).toBeVisible();
 
   // THE ROW THAT MATTERS. The active conversation id lives in sessionStorage
   // (`cce_chat_active`, web/src/lib/chat/helpers.ts), which survives a reload,
@@ -65,6 +90,10 @@ test('streams a reply, then replays the stored turns after a reload', async ({ p
   // hard-coded `{"turns":[]}` and the page fell back to its empty landing
   // state, which is why a local reload could not be driven at all.
   await page.reload();
-  await expect(page.getByText(PROMPT).first()).toBeVisible();
+  await expect(sentMessage).toBeVisible();
   await expect(page.getByText(REPLY).first()).toBeVisible();
+  // The tail, not just the head. REPLY alone passed even when only a tenth of
+  // the reply had been stored, so it could not tell a complete replay from a
+  // truncated one. This phrase can.
+  await expect(page.getByText(REPLY_END)).toBeVisible();
 });
