@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-21
-as_of_commit: 2e06d4b29306758b257dc22c655ded6431f6f6c2
+as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
 ---
 
 # Netzar Chat handoff
@@ -23,7 +23,7 @@ as_of_commit: 2e06d4b29306758b257dc22c655ded6431f6f6c2
   exit gate at that commit.
 - Current work lives on `feat/f1-test-foundations`, cut from
   `origin/development` at `08f85db`; merge target `development`. HEAD
-  `2e06d4b29306758b257dc22c655ded6431f6f6c2`. Pushed: **no**. **PR: none.**
+  `e8a0d8cb0ccd93f314ab057182b483f756edeca6`. Pushed: **no**. **PR: none.**
   Deployment: none. This frontmatter now stamps that commit rather than
   `eee0a83`, because the earlier reason for holding the stamp back has expired:
   F1 is the first work item since then to change source and configuration
@@ -53,37 +53,41 @@ as_of_commit: 2e06d4b29306758b257dc22c655ded6431f6f6c2
   failures, "no STAGING_TOKEN … cannot verify authed surfaces".
 - **The F1 gate's LOCAL tier is GREEN:** `f1-proof.sh` reads `FAILS=0`, exit 0,
   with all 11 rows PASS and the negative control still reading `FAIL`, at
-  `2e06d4b`. It read `FAILS=10` at `e7dc543` before this work. The full step 7
-  list also ran on that exact HEAD and matched the baseline above
-  (18:40:16Z-18:40:53Z), because `package.json` and `ci.yml` are configuration
-  files. The gate is proved capable of failing: reverting the mock's transcript
-  route to its old hard-coded empty array makes the suite fail at the
-  post-reload assertion, checked at two separate commits. The **staging tier is
-  untouched** and reads `FAILS=4`; it is blocked on decision 6's token.
-- **One caveat on that green, found by the owner after the phase closed (A86):**
-  the spec calls `page.reload()` as soon as the reply becomes visible, which is
-  several chunks before the stream ends, so the mock records **107 of the
-  fixture's 1007 characters — 10.6%** and the assertion passes only because the
-  phrase it looks for sits inside that first tenth. AC-F1-L5 is still met, the
-  stored turns do come back, and no recorded result changes. But the gate is
-  weaker than it reads, and its `stream cut mid-turn` warning would print on
-  every CI run, which is how a log line stops being read. CLEANUP's first job is
-  to wait for the product's own end-of-turn signal — the Send button returning
-  from "Stop generating" to "Send message" — and then re-run the mutation
-  control.
-- Smallest next action: **CLEANUP**, scope-locked to the six paths this work
-  item touched. It owns five carried items, in order: **(1) A86 — make the spec
-  wait for the real end of the turn before reloading, then re-run the mutation
-  control**, since it is the only one that changes what the gate measures;
-  (2) the unbounded in-memory transcript map in the dev mock; (3) the
-  text-assertion precision nit; (4) comment tidying if warranted; (5) nothing
-  else. Then a fresh VERIFICATION by a critic that did not build it. The
+  `e8a0d8c` — and at `2e06d4b` before CLEANUP. It read `FAILS=10` at `e7dc543`
+  before this work. The full step 7 list ran on `2e06d4b` and matched the
+  baseline above (18:40:16Z-18:40:53Z), because `package.json` and `ci.yml` are
+  configuration files; CLEANUP touched **neither**, so P36 did not fire again
+  and the list was not re-run. The gate is proved capable of failing: reverting
+  the mock's transcript route to its old hard-coded empty array makes the suite
+  fail at the post-reload assertion, checked now at **three** separate commits,
+  most recently at `e8a0d8c` where it fails at `chat.spec.ts:93`. The **staging
+  tier is untouched** and reads `FAILS=4`; it is blocked on decision 6's token.
+- **A86 is RESOLVED (`e8a0d8c`).** The spec used to call `page.reload()` as soon
+  as the reply became visible, several chunks before the stream ended, so the
+  mock recorded a fraction of the reply — 107 characters on the owner's run, 71
+  on CLEANUP's, out of **991** (A86's "1007" counted the source literal, whose
+  16 escape sequences are two characters each; M56). It now waits for the
+  product's own end-of-turn signal, the Send button returning from "Stop
+  generating" to "Send message", so the whole reply is stored and replayed, and
+  a new assertion on a phrase from the **last 33 characters** of the fixture
+  would catch the race returning. The `stream cut mid-turn` warning no longer
+  prints on a green run. The mutation control was re-run after the change and
+  still fails.
+- Smallest next action: a fresh **VERIFICATION** at `e8a0d8c`, by a critic that
+  did not build it. CLEANUP is complete: all five of its carried items are
+  closed — A86 fixed as above; the dev mock's transcript map capped at 200
+  conversations with a **loud** eviction (a silent one would return the empty
+  transcript this route was changed to stop returning); the prompt assertions
+  scoped to the message row's own `role="group"` + `aria-label` rather than the
+  whole page, which the mutation control confirms did not weaken them; comments
+  updated only where the code moved under them; nothing else. The
   authenticated staging half of F1 cannot start until owner decision 6's token
   exists. Promotion of `development` → `qa` → `staging` is owner decision 18, is
   still due, and needs its own authorization — the `qa` → `staging` merge runs a
   full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-21-f1-cleanup.md](handoffs/2026-09-21-f1-cleanup.md)
 - [2026-09-21-f1-implementation.md](handoffs/2026-09-21-f1-implementation.md)
 - [2026-09-21-f1-specification.md](handoffs/2026-09-21-f1-specification.md)
 - [2026-09-21-final-p0-verification.md](handoffs/2026-09-21-final-p0-verification.md)
