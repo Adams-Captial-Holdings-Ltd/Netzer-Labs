@@ -205,9 +205,16 @@ function mockSessions(): unknown {
 // written up above the sidebar fixture; it is not repeated here.
 const transcripts = new Map<string, Array<{ role: string; text: string; ts: number }>>();
 
-/** Append one exchange. A turn with no chatId is not addressable, so it is dropped. */
+/** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
 function recordTurn(chatId: string, userText: string, replyText: string): void {
-  if (!chatId) return;
+  if (!chatId) {
+    // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
+    // either an unparseable body or a caller that is not the chat page.
+    // Dropping it in silence would present later as the transcript route
+    // losing turns, which is a much harder thing to work out from the outside.
+    console.warn('[chat-mock] turn carried no chatId: not recorded, so a reload will not replay it');
+    return;
+  }
   const ts = Date.now() / 1000;
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
@@ -231,7 +238,22 @@ export function mockStreamPlugin(): Plugin {
           // one thread, so it always completes before this server can accept
           // the next request — including the reload's transcript read. There is
           // no race to guard against here.
-          void play(turn.text, res).then((reply) => recordTurn(turn.chatId, turn.text, reply));
+          void play(turn.text, res)
+            .then((reply) => {
+              // A cut stream records what the client actually received, which is
+              // the honest transcript — but a mysteriously short reply on replay
+              // is worth a word here rather than a puzzle later.
+              if (res.destroyed) {
+                console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.length} chars)`);
+              }
+              recordTurn(turn.chatId, turn.text, reply);
+            })
+            // Without this, a throw anywhere above becomes an unhandled
+            // rejection that takes the whole dev server down and blames
+            // whatever ran next. Nothing is recorded, and it says so.
+            .catch((err: unknown) => {
+              console.error('[chat-mock] turn failed, nothing recorded:', err);
+            });
         });
       });
 
