@@ -21,7 +21,8 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
   PR: none. Deployment: none — a `docs/*` branch reaches no AWS environment.
 - Last checks actually run, all on this branch: the WI-0.4 claim proof went
   `FAILS=24` on the untouched baseline at `eee0a83` and `FAILS=0` after these
-  documents and their session logs; `docs-links`, `feature-knowledge`,
+  documents and their session logs, and `FAILS=0` again after the CLEANUP pass
+  that resolved F1, F2 and F3; `docs-links`, `feature-knowledge`,
   `docs-mermaid`, `docs-assets` and `git diff --check` all exit 0. The full
   `development.md` step 7 list was **not** run here and is not claimed: it is a
   pre-push gate, nothing is pushed yet, and no source, config, `package.json`,
@@ -32,6 +33,7 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
   CHATUI-008.
 
 Session index (newest first):
+- [2026-09-20-wi-0.4-cleanup.md](handoffs/2026-09-20-wi-0.4-cleanup.md)
 - [2026-09-20-wi-0.4-implementation.md](handoffs/2026-09-20-wi-0.4-implementation.md)
 - [2026-09-20-wi-0.4-specification.md](handoffs/2026-09-20-wi-0.4-specification.md)
 - [2026-08-27-phases-1-6-and-harvest.md](handoffs/2026-08-27-phases-1-6-and-harvest.md)
