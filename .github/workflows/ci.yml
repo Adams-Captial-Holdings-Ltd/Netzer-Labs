@@ -255,3 +255,43 @@ jobs:
             exit 1
           fi
           echo "OK: graceful failure (exit ${code}, clean error, no stack trace)"
+
+  # F1, step 2 of the roadmap: the ONE local browser lane. It drives the Vite
+  # dev server with the dev-only chat mock (CCE_CHAT_MOCK=1) and needs NO
+  # emulator and NO orchestrator — the Chat tab's DynamoDB-backed reads are
+  # answered by web/dev/mock-stream-plugin.ts, and the spec seeds identity into
+  # localStorage, which web/src/lib/auth.ts hydrates from. That matters: the
+  # `integration` job above owns the ONLY 4566 service in this file, and two
+  # emulators on that port must never run at once (development.md, Automated
+  # tests). This job adds no service of any kind.
+  #
+  # It targets localhost only. A lane that runs on every pull request and
+  # quietly dialled a deployment would spend real Bedrock money each time.
+  e2e-chat:
+    name: Chat E2E (local mock, no emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install dashboard dependencies
+        run: npm ci --prefix web
+
+      - name: Install the pinned Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Chat E2E (Vite dev server + CCE_CHAT_MOCK=1)
+        run: npm run e2e:chat
