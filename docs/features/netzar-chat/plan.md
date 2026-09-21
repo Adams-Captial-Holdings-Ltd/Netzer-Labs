@@ -221,14 +221,21 @@ blind critic.
 ```yaml
 outcome: superseded
 reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
-present_in_current_source: false
+present_in_current_source: true
 deployment: staging
 verification: code_verified
 ```
 
 Superseded by CHATUI-008: its full validation, PR, and promotion deliverables
-landed, but authenticated staging QA and the dependent full-journey blind critic
-did not run.
+landed, but authenticated staging QA, the dependent full-journey blind critic,
+and the doc-owner line-pin refresh did not run. Those three move to CHATUI-008.
+
+`present_in_current_source: true` reads against the `reachable_commit` above:
+`b3b4274` is an ancestor of `development`, so what this phase did ship is in the
+source today. `false` is the value for a superseded item whose work never landed
+or was reverted, which carries `reachable_commit: none` (see `MISSION-033` in
+[the missions backlog](../../missions-v2-backlog.md)). What is missing here is
+named in the paragraph above, not encoded in this key.
 
 ### CHATUI-008 — staging verification of the shipped chat UI
 

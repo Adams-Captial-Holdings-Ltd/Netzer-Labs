@@ -39,8 +39,9 @@ layer is used.
 The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 591-line state and
 composition shell. Transport and helpers live in the eight modules under
 `web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
-17 components under `web/src/components/chat/`, plus its `lc/` donor-derived
-support tree. It keeps intact:
+17 top-level files under `web/src/components/chat/` — 15 component files plus
+the `conversation-groups.ts` helper and the `useChatScroll.ts` hook — alongside
+its `lc/` donor-derived support tree. It keeps intact:
 
 - the SSE turn stream (`POST /api/test-turn/stream`; events `chunk` cumulative,
   `tool {label, step}`, `media`, `kb`, `image`, `artifact`, `reply`, `final`,
@@ -101,6 +102,7 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 | Risk | Evidence | Approved next work |
 |---|---|---|
 | Authenticated staging UI is not yet verified | Floci Bedrock stub: one chunk, no tool events; staging verification needs an owner-authorized spend-capped token | [CHATUI-008](plan.md) |
+| An opacity modifier on a plain semantic token still emits no CSS, so `bg-primary/10` is silently a no-op | the semantic keys in [web/tailwind.config.ts](../../../web/tailwind.config.ts) are raw `var()` strings with nowhere to inject an alpha channel; the alpha-capable `-a` siblings added by CHATUI-001 sit beside them rather than replacing them | none open — the mitigation landed in [CHATUI-001](plan.md); the standing rule is the appendix mapping (`any <color>/<opacity>` → `-a` triplet keys or `*-dim` vars only). The chat subtree observed 2026-09-20 has zero occurrences; the rest of `web/src` still has them |
 
 ## 8. Exact focused and full validation commands
 
