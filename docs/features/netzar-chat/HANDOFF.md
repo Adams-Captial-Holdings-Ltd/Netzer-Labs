@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-21
-as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
+as_of_commit: 9923d9f3c24f992eb58d0df07b240d5caf75eab2
 ---
 
 # Netzar Chat handoff
@@ -27,22 +27,15 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   the Gauntlet state file. That landing finished F1's **local** half only.
 - Current work lives on **`feat/f1-staging-tier`**, cut from
   `origin/development` at `f7eb6f4`; merge target `development`. It carries
-  F1's **STAGING** tier and is **unpushed** (`ls-remote` empty). This session is
-  a SPECIFICATION: it changes no source, configuration or test file, and made
-  **no staging call and no AWS API call of any kind**.
-  Deployment: none. This frontmatter still stamps `e8a0d8c` rather than
-  `eee0a83`, because the earlier reason for holding the stamp back has expired:
-  F1 is the first work item since then to change source and configuration
-  files — `tests/e2e/chat/`, `web/dev/mock-stream-plugin.ts`, `package.json`,
-  the lockfile and `.github/workflows/ci.yml` — so the source these claims
-  describe is no longer byte-identical to `eee0a83` (P23). It does **not**
-  move to this log's commit, for the same reason in reverse: VERIFICATION
-  changed no source, configuration or test file at all, so the source is
-  byte-identical at `e8a0d8c` and here, and moving the stamp would re-date
-  every undated claim beneath it. The containment
-  statements above were re-derived against `origin/qa` `ac0cbcc`,
-  `origin/staging` `8299f04` and `origin/production` `de244e6`, all three
-  unmoved since they were last proved.
+  F1's **STAGING** tier and is **unpushed**. The latest session is an
+  IMPLEMENTATION of **Layer A**: it adds `tests/e2e/staging/` and made **no
+  staging call, no AWS API call, no deploy and no promotion**. Deployment: none.
+  The frontmatter stamp **moves to `9923d9f`** — it had been held at `e8a0d8c`
+  because VERIFICATION changed no source, and that reason has expired: this work
+  adds a test source file, so the source these claims describe is no longer
+  byte-identical to the old stamp (P23). The containment statements above were
+  re-derived against `origin/qa` `ac0cbcc`, `origin/staging` `8299f04` and
+  `origin/production` `de244e6`, all three unmoved since last proved.
 - Baseline recorded before any change on this branch, on 2026-09-21 at
   `08f85db`, alone in the checkout and with credentials stripped: the full
   `development.md` step 7 list **matches the baseline** — `npm test` 247 files /
@@ -85,16 +78,17 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   the mock's transcript route to its old hard-coded empty array makes the suite
   fail at the post-reload assertion, checked now at **three** separate commits,
   most recently at `e8a0d8c` where it fails at `chat.spec.ts:93`.
-- **The gate now has THREE tiers** (2026-09-21). `F1_TIER=local` is unchanged and
-  still reads `FAILS=0`, 11/11, re-run after the edit to prove it. A new
-  `F1_TIER=staging-harness` scores **Layer A** — six rows asking whether the
-  harness is *capable* of the five observations, needing **no token and no
-  spend** — and reads `FAILS=6`. `F1_TIER=staging` is **Layer B**, unchanged at
-  `FAILS=4`, and still needs the token plus its own per-run authorization. The
-  split exists because a red caused by a missing credential gives a builder
-  nothing to fix; the four real defects underneath it only became visible once
-  the token stopped explaining the red. Layer A is **all shape rows** and cannot
-  be otherwise, so a green Layer A means "capable on paper", never "works".
+- **The gate has THREE tiers, and Layer A is now GREEN** (2026-09-21).
+  Re-derived at `9923d9f`: `F1_TIER=local` **`FAILS=0`, exit 0, `ASSESSED=11`**
+  — the landed tier is unaffected by the new files; `F1_TIER=staging-harness`
+  **`FAILS=0`, exit 0, `ASSESSED=6`, 6/6 PASS** (it read `FAILS=6` at
+  `b855b6c`); `F1_TIER=staging` **`FAILS=4`, unchanged** — Layer B is untouched
+  and still needs decision 6/33's token plus its own per-run authorization.
+  **CONTROL reads `FAIL` in all three.** Layer A is **all shape rows** and
+  cannot be otherwise, so `FAILS=0` there means **"capable on paper", never
+  "works"**. The one behavioural claim this work makes is narrow: the
+  seeded-required-checks fix was executed against a dead local port and recorded
+  all 12 checks with none left `not reached`.
 - **A86 is RESOLVED (`e8a0d8c`).** The spec used to call `page.reload()` as soon
   as the reply became visible, several chunks before the stream ended, so the
   mock recorded a fraction of the reply — 107 characters on the owner's run, 71
@@ -134,29 +128,29 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   still `FAIL`. The five docs gates exit 0 (`docs-links` 207 files / 3337
   links). Because the push is the trigger, step 7 runs **again** on the HEAD
   this log commit creates (P51); that second result lives in the state file.
-- Smallest next action: **IMPLEMENTATION of F1's staging tier, Layer A** — port
-  `verify-staging.js` into the repository at **`tests/e2e/staging/`** (owner
-  **decision 38**) and close the four defects, until
-  `F1_TIER=staging-harness` reads `FAILS=0`. That work needs **no token, makes no
-  staging call and costs nothing**, so it is not blocked. Layer B — one
-  authorized run against real staging — still needs decision 6/33's token and
-  its own fresh authorization in the conversation that performs it. No new
-  package is required: raw `playwright` already resolves via
-  `@playwright/test@1.63.0`. Do **not** add a CI job for the staging suite: it
-  costs money and must never run on every pull request. CLEANUP is complete: all five
-  of its carried items are
-  closed — A86 fixed as above; the dev mock's transcript map capped at 200
-  conversations with a **loud** eviction (a silent one would return the empty
-  transcript this route was changed to stop returning); the prompt assertions
-  scoped to the message row's own `role="group"` + `aria-label` rather than the
-  whole page, which the mutation control confirms did not weaken them; comments
-  updated only where the code moved under them; nothing else. The
-  authenticated staging half of F1 cannot start until owner decision 6's token
-  exists. Promotion of `development` → `qa` → `staging` is owner decision 18, is
-  still due, and needs its own authorization — the `qa` → `staging` merge runs a
-  full `cdk deploy --all`.
+- **The review fan-out found two defects no gate row could see** (2026-09-21),
+  both inherited verbatim from the archived harness and both passing all six
+  shape rows. The sign-in verdict tested `page.url()` for `/login`, but this SPA
+  has **no `/login` route** — `AuthGate` renders `<Login/>` in place and a
+  rejected token only sets local error state — so it reported a successful
+  sign-in for **any** token, valid or not. And the streaming-cadence check
+  measured the whole transcript container, which also holds `LiveFooter`'s
+  wall-clock elapsed-seconds counter, so a single-shot reply could have scored
+  as genuine streaming. Both fixed in `9923d9f`; the three reports live outside
+  the repository in the Gauntlet review directory.
+- Smallest next action: **CLEANUP of F1's staging tier, Layer A** — scope-locked
+  to `tests/e2e/staging/run.mjs`, the only source file this work added. Then
+  VERIFICATION by a fresh critic. **Layer B is what actually finishes F1** — one
+  authorized run against real staging — and it still needs decision 6/33's token
+  *and* its own fresh authorization in the conversation that performs it.
+  Nothing is pushed; a push, a PR and any promotion each need their own
+  authorization. Do **not** add a CI job for the staging suite: it costs real
+  money and must never run on every pull request. Promotion of `development` →
+  `qa` → `staging` is owner decision 18, is still due, and the `qa` → `staging`
+  merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-21-f1-staging-implementation.md](handoffs/2026-09-21-f1-staging-implementation.md)
 - [2026-09-21-f1-staging-specification.md](handoffs/2026-09-21-f1-staging-specification.md)
 - [2026-09-21-f1-landing.md](handoffs/2026-09-21-f1-landing.md)
 - [2026-09-21-f1-verification.md](handoffs/2026-09-21-f1-verification.md)
