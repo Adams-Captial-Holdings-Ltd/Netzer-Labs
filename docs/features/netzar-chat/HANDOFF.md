@@ -3,18 +3,25 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: 0391eacf3b2b0145fc4bfcef09628a22c71fa37c
+as_of_commit: 6ce1ca0c6c0fee5d5fd2eb1feb8f1bba38c06a56
 ---
 
 # Netzar Chat handoff
 
-- **CURRENT: P1 WI-1.0 IMPLEMENTATION is complete — step 3 of 10, conversation
-  identity and durable transcript. The containment gate is CLOSED; CLEANUP is
-  next.** Branch `feature/p1-conversation-identity`, cut from
-  `origin/development` @ `3393f6c`; merge target `development`. **Pushed: no.
-  PR: none. Deployment: none.** No AWS call, no promotion. WI-1.0 only — no
-  storage change, no ownership change, no new item type, which owner decision 11
-  gates behind this work item.
+- **CURRENT: P1 WI-1.0 CLEANUP is complete — step 3 of 10, conversation
+  identity and durable transcript. VERIFICATION is next.** Branch
+  `feature/p1-conversation-identity`, cut from `origin/development` @ `3393f6c`;
+  merge target `development`. **Pushed: no. PR: none. Deployment: none.** No AWS
+  call, no promotion. WI-1.0 only — no storage change, no ownership change, no
+  new item type, which owner decision 11 gates behind this work item. CLEANUP
+  changed **no executable line**: it corrected three statements the code had
+  stopped supporting — the predicate's own comment (it called a `#`-free chatId
+  an enforced invariant; nothing enforces it), the containment test's header (it
+  still described the pre-fix route in the present tense), and the security
+  diagram's two WI-1.0 notes (the Jarvis `sessions` action is gated by a
+  `viewer` role floor, not `sessions:read`, and the rule's `#` limit was
+  missing). Each `.ts` edit is proved comment-only by a byte-identical
+  comment-stripped transpile. Detail in the WI-1.0 cleanup log.
 - **P1's gate at the final code commit:** `P1_TIER=containment` **`FAILS=0`,
   `ASSESSED=6`, 6/6 PASS**; `P1_TIER=storage` **unmoved at `FAILS=8`,
   `ASSESSED=8`** — a containment change that moved the storage tier would mean
@@ -80,13 +87,12 @@ as_of_commit: 0391eacf3b2b0145fc4bfcef09628a22c71fa37c
   count stated in it is stale the moment it is committed — the same reason P40
   keeps a merge SHA out of the file it describes. Re-derive it with
   `git rev-list --count origin/development..HEAD`. See **M64**.
-  The latest session is the **VERIFICATION** of **Layer A**; the CLEANUP before
-  it named two literals, and the IMPLEMENTATION before that added
+  Layer A's last session before it landed was its **VERIFICATION**; the CLEANUP
+  before it named two literals, and the IMPLEMENTATION before that added
   `tests/e2e/staging/`. None of the three made a **staging call, an AWS API call,
-  a deploy or a promotion**, and none read the token. Deployment: none. The
-  frontmatter stamp stays at **`3fc3de4`**: cleanup edited a test source file and
-  moved it there, and VERIFICATION changed no source at all, so the source these
-  claims describe is still byte-identical to that stamp (P23).
+  a deploy or a promotion**, and none read the token. Deployment: none. Those
+  three sessions checked their claims at **`3fc3de4`** (P23); the frontmatter
+  stamp has since moved with P1's work.
   The containment statements above were
   re-derived against `origin/qa` `ac0cbcc`, `origin/staging` `8299f04` and
   `origin/production` `de244e6`, all three unmoved since last proved.
@@ -101,7 +107,9 @@ as_of_commit: 0391eacf3b2b0145fc4bfcef09628a22c71fa37c
   identified as `netzer-os-floci` / `floci/floci:1.6.0` **before** that
   integration result was read — a stray LocalStack there turns the one expected
   failure into a pass.
-- Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
+- **Superseded 2026-09-22, kept for context** — owner decision 43 says the
+  staging token exists and staging testing is authorized, and Layer B has since
+  run (below). Original text: Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
   spend-capped staging token and agent, authorized per run — before the
   authenticated staging QA and the dependent full-journey blind critic can
   start. That token is now on the **critical path**: under the accepted
@@ -278,27 +286,31 @@ as_of_commit: 0391eacf3b2b0145fc4bfcef09628a22c71fa37c
   real verdict, **zero** left `not reached`, conversation screenshots on all four
   surfaces, and the two turn checks failing for the correct local reason, which
   is a free negative control. Full detail in the Layer B session log.
-- **Last required checks, on the exact final code commit**, with fake
-  credentials planted: the full `development.md` step 7 list carries **no
-  failure but the known Floci gap** — `npm test` **248 files / 3221 tests, all
-  passing**, `guard-violations: 0`; integration 38 passed / 25 skipped / 1
-  failed, the Floci `checkSecrets … schedule-deleted` gap **by name** on an
-  emulator identified as `floci/floci:1.6.0` first; typecheck, build, both web
-  gates, `local:verify` and all five docs gates exit 0; `git diff --check` 0; 0
-  changed paths. It does **not** "match the baseline" and is not claimed to: the
-  baseline is 247 files / 3215 tests and the arithmetic closes as +1 file and +6
-  tests. **Sole occupancy did NOT hold and is not claimed:** two orphaned
-  `tsx watch` trees were live in the checkout throughout and the execution
-  environment refused the `kill`; they then recompiled and restarted the
-  orchestrator on port 3000 in response to this session's edits.
-- **Smallest next action: CLEANUP of WI-1.0, in a fresh session, on
-  `feature/p1-conversation-identity`**, scope-locked to the four touched files.
-  The two carried review findings — filtering after a bounded read can
-  under-report, and nothing signals a dropped row — are **not** cleanup; they
-  belong to WI-1.2's specification, because WI-1.2's per-message rows are what
-  make them consequential. Nothing is pushed; a push, a PR and any promotion each
-  need their own authorization in the conversation that performs them.
-- **Four things awaiting the owner, none of them blocking CLEANUP:** whether a
+- **Last required checks, at the frontmatter's commit** (CLEANUP's last commit
+  before its log), with fake credentials planted: the full `development.md`
+  step 7 list carries **no failure but the known Floci gap** — `npm test`
+  **248 files / 3221 tests, all passing**, `guard-violations: 0`; integration 38
+  passed / 25 skipped / 1 failed, the Floci `checkSecrets … schedule-deleted`
+  gap **by name** on an emulator identified as `floci/floci:1.6.0` first;
+  typecheck, build, both web gates, `local:verify`, `docs-links`,
+  `feature-knowledge`, `docs-assets` and the PR-context drift gate exit 0;
+  `git diff --check` 0; 0 changed paths — gate for gate the same as the run at
+  CLEANUP's entry commit. It does **not** "match the baseline" and is not claimed
+  to: the baseline is 247 files / 3215 tests and the arithmetic closes as +1 file
+  and +6 tests. **Both P1 tiers were byte-identical to the entry run after every
+  CLEANUP commit**: containment `FAILS=0`, `ASSESSED=6`; storage `FAILS=8`;
+  CONTROL `FAIL` in both. **Sole occupancy did NOT hold and is not claimed:** two
+  orphaned `tsx watch` trees were live in the checkout throughout, the execution
+  environment refuses the `kill`, and they restarted the orchestrator on port
+  3000 again in response to CLEANUP's `handler.ts` edit.
+- **Smallest next action: VERIFICATION of WI-1.0, in a fresh session, by a
+  critic that built none of it**, on `feature/p1-conversation-identity`. The two
+  carried review findings — filtering after a bounded read can under-report, and
+  nothing signals a dropped row — are **not** verification failures; they belong
+  to WI-1.2's specification, because WI-1.2's per-message rows are what make them
+  consequential. Nothing is pushed; a push, a PR and any promotion each need
+  their own authorization in the conversation that performs them.
+- **Four things awaiting the owner, none of them blocking VERIFICATION:** whether a
   `#`-bearing chatId should be fixed at the write path, by relaxing the
   predicate, or by giving WI-1.2 an unambiguous key shape (the recommendation,
   because it is the only one still correct after P3 adds attachments);
@@ -325,6 +337,7 @@ as_of_commit: 0391eacf3b2b0145fc4bfcef09628a22c71fa37c
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-p1-wi-1.0-cleanup.md](handoffs/2026-09-22-p1-wi-1.0-cleanup.md)
 - [2026-09-22-p1-wi-1.0-implementation.md](handoffs/2026-09-22-p1-wi-1.0-implementation.md)
 - [2026-09-22-p1-specification.md](handoffs/2026-09-22-p1-specification.md)
 - [2026-09-22-f1-layer-b-first-run.md](handoffs/2026-09-22-f1-layer-b-first-run.md)
