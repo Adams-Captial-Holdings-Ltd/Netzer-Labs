@@ -27,8 +27,8 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   the Gauntlet state file. That landing finished F1's **local** half only.
 - Current work lives on **`feat/f1-staging-tier`**, cut from
   `origin/development` at `f7eb6f4`; merge target `development`. It carries
-  F1's **STAGING** tier and is **unpushed**, now **5** commits off
-  `origin/development`. The latest session is the **CLEANUP** of **Layer A**;
+  F1's **STAGING** tier and is **unpushed**, now **6** commits off
+  `origin/development` (counted with `git rev-list --count`, not from memory — see M64). The latest session is the **CLEANUP** of **Layer A**;
   the IMPLEMENTATION before it added `tests/e2e/staging/`. Neither made a
   **staging call, an AWS API call, a deploy or a promotion**, and neither read
   the token. Deployment: none. The frontmatter stamp **moves to `3fc3de4`**,
