@@ -25,9 +25,8 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   the head branch `feat/f1-test-foundations` is deleted on `origin` and locally.
   A file cannot state the commit it is inside (P40), so the merge SHA lives in
   the Gauntlet state file. That landing finished F1's **local** half only.
-- Current work lives on **`feat/f1-staging-tier`**, cut from
-  `origin/development` at `f7eb6f4`; merge target `development`. It carries
-  F1's **STAGING** tier and is **unpushed**. Its commit **count** is deliberately
+- The staging-tier work **has landed**; `feat/f1-staging-tier` is deleted on
+  `origin` and locally, so no branch carries it any more. Its commit **count** is deliberately
   not written here: every commit this file is part of changes that number, so a
   count stated in it is stale the moment it is committed — the same reason P40
   keeps a merge SHA out of the file it describes. Re-derive it with
@@ -183,15 +182,19 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   returned six findings the brief never asked for, four of them accuracy defects
   in the cleanup session's own log; all four are corrected and recorded in that
   log's section 8 rather than quietly edited.
-- **LANDING ATTEMPTED AND BLOCKED (2026-09-22). NOTHING IS PUSHED.** The branch
-  is validated, committed and still local. The `git push` was **refused by the
-  execution environment's own permission layer**, not by any rule in this
-  repository — a harness-level denial that no amount of authorization reasoning
-  overrides. It was **not** routed around: using a different tool to perform the
-  same push would bypass the intent of the denial, so the phase stopped there and
-  the work is parked for the owner. See
-  `netzar-chat-plan/overnight/parked/2026-09-22-f1-layer-a-landing.md`.
-  Authorization itself was decided explicitly and in writing
+- **F1's STAGING tier, LAYER A, is MERGED into `development`** (2026-09-22). The
+  first push attempt was refused by the execution environment's own permission
+  layer — not by any rule in this repository — and was **not** routed around,
+  because using different tooling for the same push bypasses the intent of a
+  denial rather than finding a safer route. The owner was asked what was needed,
+  answered **"go ahead and push"** in the same session, and that direct
+  authorization is what this landing rests on (**constraint 8**). All **10** CI
+  checks green; the commit CI tested confirmed equal to the commit on origin and
+  to the commit validated locally before the merge; head branch deleted on origin
+  and locally. The merged tree is the **same object** as the validated commit's
+  tree, so the merge introduced nothing. The pull request number and merge commit
+  live in the Gauntlet state file (**P40**). Full detail in section 9 of the
+  landing log. Earlier authorization reasoning was decided in writing
   **before** the first push, because both overnight windows had expired and an
   expired window is never standing permission: the `/goal` directive driving this
   loop states the objective as *"every roadmap step that can land unattended is
@@ -201,10 +204,11 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   `development` **and nothing more**; promotion, `qa`/`staging`/`production`,
   force-push and deploy stay forbidden and are not implied. The reasoning is
   quoted in full in section 2.1 of the landing log (**P76**). The full step 7 list
-  ran **twice**, alone in the checkout — once at `8fbe1db` and again on the exact
-  HEAD that *would have been* pushed (**P77/P51**) — and matched the baseline both
-  times, so the work is landing-ready the moment a push is permitted. **There is
-  no pull request and no merge commit**, because nothing left this machine.
+  ran **three times**, alone in the checkout — at `8fbe1db`, at `7f857e4`, and
+  finally on `a5e3ee0`, **the commit actually pushed** (**P77/P51**) — and matched
+  the baseline every time. The third run mattered: the **M67** correction commit
+  had moved the tip after the second, and pushing on the strength of a run against
+  the older commit is exactly the stale-HEAD claim **M65** records.
 - Smallest next action: **F1 LAYER B — and it is BLOCKED ON YOU.** One authorized
   run against real staging. **Layer B is what actually finishes F1** — one
   authorized run against real staging — and it still needs decision 6/33's token
