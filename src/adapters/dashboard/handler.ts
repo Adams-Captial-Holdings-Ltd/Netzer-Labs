@@ -183,11 +183,12 @@ const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
  * every future type, and the one that got forgotten is precisely the failure
  * this gate exists to prevent.
  *
- * A chatId carries no `#`: the repository's own memories key,
- * `SK=MEM#<chatId>#<iso>#<uuid>` (`lib/tools/dynamodb-tools.ts:63`), already
- * depends on that, so this reuses an existing invariant rather than inventing
- * one. The agentId is left unconstrained beyond the prefix, because only the
- * sort key distinguishes a conversation from its own messages.
+ * It assumes a chatId carries no `#`, and nothing enforces that: an
+ * already-prefixed id passes `safeDashboardChatId` verbatim, and a Paperclip
+ * chatId embeds an externally supplied issueId unfiltered. A conversation whose
+ * chatId contains `#` is therefore excluded, silently. The agentId is left
+ * unconstrained beyond the prefix, because only the sort key distinguishes a
+ * conversation from its own messages.
  */
 export function isConversationRow(item: Record<string, unknown>): boolean {
   const sk = typeof item.SK === 'string' ? item.SK : '';
