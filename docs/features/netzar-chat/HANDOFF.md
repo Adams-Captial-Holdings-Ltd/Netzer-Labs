@@ -21,17 +21,15 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   `docs/wi-0.4-chat-docs` was deleted on `origin` and locally. That closed the
   last P0 work item, and a fresh whole-goal critic then passed the six-line P0
   exit gate at that commit.
-- Current work lives on `feat/f1-test-foundations`, cut from
-  `origin/development` at `08f85db`; merge target `development`. The
-  VERIFICATION below scored HEAD
-  `a7bdb13ea4a78e95d404cf339fd2835a6ec8d338`; its log added one docs-only
-  commit on top, `a88086ef4cc450e1e2e526380369c452d196789a`, and **this**
-  landing log adds one more. A file cannot state the commit it is inside
-  (P40), so that SHA, the PR number and the merge commit all live in the
-  Gauntlet state file. **This branch is being pushed and opened as a pull
-  request into `development` now**, under a fresh owner yes given in the
-  conversation that performs it (constraint 8; owner decision 32 recorded the
-  intent). It lands F1's **local** tier only.
+- **F1's LOCAL tier is MERGED.** It landed as PR **`#183`** into `development`;
+  the head branch `feat/f1-test-foundations` is deleted on `origin` and locally.
+  A file cannot state the commit it is inside (P40), so the merge SHA lives in
+  the Gauntlet state file. That landing finished F1's **local** half only.
+- Current work lives on **`feat/f1-staging-tier`**, cut from
+  `origin/development` at `f7eb6f4`; merge target `development`. It carries
+  F1's **STAGING** tier and is **unpushed** (`ls-remote` empty). This session is
+  a SPECIFICATION: it changes no source, configuration or test file, and made
+  **no staging call and no AWS API call of any kind**.
   Deployment: none. This frontmatter still stamps `e8a0d8c` rather than
   `eee0a83`, because the earlier reason for holding the stamp back has expired:
   F1 is the first work item since then to change source and configuration
@@ -59,10 +57,24 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
 - Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
   spend-capped staging token and agent, authorized per run — before the
   authenticated staging QA and the dependent full-journey blind critic can
-  start. That token is now on the **critical path**: under the accepted 9-step
+  start. That token is now on the **critical path**: under the accepted
   roadmap, nothing after F1 can be verified against real Bedrock without it.
   `bar/staging/VERIFY.json` still records 1 pass (HTTP 200) and 4 sign-in
   failures, "no STAGING_TOKEN … cannot verify authed surfaces".
+- **The token alone is NOT sufficient, established 2026-09-21.** The archived
+  harness cannot make three of the five observations the staging tier scores,
+  for reasons a credential does not fix: its in-page `/api/*` fetch uses
+  `credentials: 'include'` while the dashboard authenticates only with
+  `Authorization: Bearer` and has no cookie auth at all (`web/src/lib/api.ts:88`),
+  so the roll-call check always 401s; its prompt ("List three things you can
+  help with") dispatches no tool, which its own recorded detail admits, so
+  `live tool status` can never pass and `S-c` "zero failing checks" is
+  unreachable with it; and the live tool line is cleared the moment the first
+  chunk lands (`StreamingRow.tsx:56-57`) while the harness samples every 500 ms.
+  An authorized run today would move the tier from `FAILS=4` to **2**, not 0,
+  after spending real Bedrock money. The harness is **fixable, not dead**: its
+  three product contact points were verified to exist at `origin/staging`
+  `8299f04`.
 - **The F1 gate's LOCAL tier is GREEN:** `f1-proof.sh` reads `FAILS=0`, exit 0,
   with all 11 rows PASS and the negative control still reading `FAIL`, at
   `e8a0d8c` — and at `2e06d4b` before CLEANUP. It read `FAILS=10` at `e7dc543`
@@ -72,8 +84,17 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   and the list was not re-run. The gate is proved capable of failing: reverting
   the mock's transcript route to its old hard-coded empty array makes the suite
   fail at the post-reload assertion, checked now at **three** separate commits,
-  most recently at `e8a0d8c` where it fails at `chat.spec.ts:93`. The **staging
-  tier is untouched** and reads `FAILS=4`; it is blocked on decision 6's token.
+  most recently at `e8a0d8c` where it fails at `chat.spec.ts:93`.
+- **The gate now has THREE tiers** (2026-09-21). `F1_TIER=local` is unchanged and
+  still reads `FAILS=0`, 11/11, re-run after the edit to prove it. A new
+  `F1_TIER=staging-harness` scores **Layer A** — six rows asking whether the
+  harness is *capable* of the five observations, needing **no token and no
+  spend** — and reads `FAILS=6`. `F1_TIER=staging` is **Layer B**, unchanged at
+  `FAILS=4`, and still needs the token plus its own per-run authorization. The
+  split exists because a red caused by a missing credential gives a builder
+  nothing to fix; the four real defects underneath it only became visible once
+  the token stopped explaining the red. Layer A is **all shape rows** and cannot
+  be otherwise, so a green Layer A means "capable on paper", never "works".
 - **A86 is RESOLVED (`e8a0d8c`).** The spec used to call `page.reload()` as soon
   as the reply became visible, several chunks before the stream ended, so the
   mock recorded a fraction of the reply — 107 characters on the owner's run, 71
@@ -113,11 +134,16 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   still `FAIL`. The five docs gates exit 0 (`docs-links` 207 files / 3337
   links). Because the push is the trigger, step 7 runs **again** on the HEAD
   this log commit creates (P51); that second result lives in the state file.
-- Smallest next action: **F1's STAGING tier (AC-F1-S1..S5)**, which is what
-  finishes F1. It cannot start until owner decision 6's spend-capped staging
-  token exists — the owner is creating it (decision 33) — and each staging run
-  is authorized separately. Landing the local tier does **not** finish F1 and
-  does **not** promote anything. CLEANUP is complete: all five
+- Smallest next action: **IMPLEMENTATION of F1's staging tier, Layer A** — port
+  `verify-staging.js` into the repository at **`tests/e2e/staging/`** (owner
+  **decision 38**) and close the four defects, until
+  `F1_TIER=staging-harness` reads `FAILS=0`. That work needs **no token, makes no
+  staging call and costs nothing**, so it is not blocked. Layer B — one
+  authorized run against real staging — still needs decision 6/33's token and
+  its own fresh authorization in the conversation that performs it. No new
+  package is required: raw `playwright` already resolves via
+  `@playwright/test@1.63.0`. Do **not** add a CI job for the staging suite: it
+  costs money and must never run on every pull request. CLEANUP is complete: all five
   of its carried items are
   closed — A86 fixed as above; the dev mock's transcript map capped at 200
   conversations with a **loud** eviction (a silent one would return the empty
@@ -131,6 +157,7 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-21-f1-staging-specification.md](handoffs/2026-09-21-f1-staging-specification.md)
 - [2026-09-21-f1-landing.md](handoffs/2026-09-21-f1-landing.md)
 - [2026-09-21-f1-verification.md](handoffs/2026-09-21-f1-verification.md)
 - [2026-09-21-f1-cleanup.md](handoffs/2026-09-21-f1-cleanup.md)
