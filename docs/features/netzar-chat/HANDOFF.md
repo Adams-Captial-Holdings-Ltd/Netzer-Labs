@@ -2,8 +2,8 @@
 feature: netzar-chat
 document_role: handoff
 status: current
-observed_at: 2026-09-21
-as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
+observed_at: 2026-09-22
+as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
 ---
 
 # Netzar Chat handoff
@@ -21,30 +21,27 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   `docs/wi-0.4-chat-docs` was deleted on `origin` and locally. That closed the
   last P0 work item, and a fresh whole-goal critic then passed the six-line P0
   exit gate at that commit.
-- Current work lives on `feat/f1-test-foundations`, cut from
-  `origin/development` at `08f85db`; merge target `development`. The
-  VERIFICATION below scored HEAD
-  `a7bdb13ea4a78e95d404cf339fd2835a6ec8d338`; its log added one docs-only
-  commit on top, `a88086ef4cc450e1e2e526380369c452d196789a`, and **this**
-  landing log adds one more. A file cannot state the commit it is inside
-  (P40), so that SHA, the PR number and the merge commit all live in the
-  Gauntlet state file. **This branch is being pushed and opened as a pull
-  request into `development` now**, under a fresh owner yes given in the
-  conversation that performs it (constraint 8; owner decision 32 recorded the
-  intent). It lands F1's **local** tier only.
-  Deployment: none. This frontmatter still stamps `e8a0d8c` rather than
-  `eee0a83`, because the earlier reason for holding the stamp back has expired:
-  F1 is the first work item since then to change source and configuration
-  files — `tests/e2e/chat/`, `web/dev/mock-stream-plugin.ts`, `package.json`,
-  the lockfile and `.github/workflows/ci.yml` — so the source these claims
-  describe is no longer byte-identical to `eee0a83` (P23). It does **not**
-  move to this log's commit, for the same reason in reverse: VERIFICATION
-  changed no source, configuration or test file at all, so the source is
-  byte-identical at `e8a0d8c` and here, and moving the stamp would re-date
-  every undated claim beneath it. The containment
-  statements above were re-derived against `origin/qa` `ac0cbcc`,
-  `origin/staging` `8299f04` and `origin/production` `de244e6`, all three
-  unmoved since they were last proved.
+- **F1's LOCAL tier is MERGED.** It landed as PR **`#183`** into `development`;
+  the head branch `feat/f1-test-foundations` is deleted on `origin` and locally.
+  A file cannot state the commit it is inside (P40), so the merge SHA lives in
+  the Gauntlet state file. That landing finished F1's **local** half only.
+- Current work lives on **`feat/f1-staging-tier`**, cut from
+  `origin/development` at `f7eb6f4`; merge target `development`. It carries
+  F1's **STAGING** tier and is **unpushed**. Its commit **count** is deliberately
+  not written here: every commit this file is part of changes that number, so a
+  count stated in it is stale the moment it is committed — the same reason P40
+  keeps a merge SHA out of the file it describes. Re-derive it with
+  `git rev-list --count origin/development..HEAD`. See **M64**.
+  The latest session is the **VERIFICATION** of **Layer A**; the CLEANUP before
+  it named two literals, and the IMPLEMENTATION before that added
+  `tests/e2e/staging/`. None of the three made a **staging call, an AWS API call,
+  a deploy or a promotion**, and none read the token. Deployment: none. The
+  frontmatter stamp stays at **`3fc3de4`**: cleanup edited a test source file and
+  moved it there, and VERIFICATION changed no source at all, so the source these
+  claims describe is still byte-identical to that stamp (P23).
+  The containment statements above were
+  re-derived against `origin/qa` `ac0cbcc`, `origin/staging` `8299f04` and
+  `origin/production` `de244e6`, all three unmoved since last proved.
 - Baseline recorded before any change on this branch, on 2026-09-21 at
   `08f85db`, alone in the checkout and with credentials stripped: the full
   `development.md` step 7 list **matches the baseline** — `npm test` 247 files /
@@ -59,10 +56,24 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
 - Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
   spend-capped staging token and agent, authorized per run — before the
   authenticated staging QA and the dependent full-journey blind critic can
-  start. That token is now on the **critical path**: under the accepted 9-step
+  start. That token is now on the **critical path**: under the accepted
   roadmap, nothing after F1 can be verified against real Bedrock without it.
   `bar/staging/VERIFY.json` still records 1 pass (HTTP 200) and 4 sign-in
   failures, "no STAGING_TOKEN … cannot verify authed surfaces".
+- **The token alone is NOT sufficient, established 2026-09-21.** The archived
+  harness cannot make three of the five observations the staging tier scores,
+  for reasons a credential does not fix: its in-page `/api/*` fetch uses
+  `credentials: 'include'` while the dashboard authenticates only with
+  `Authorization: Bearer` and has no cookie auth at all (`web/src/lib/api.ts:88`),
+  so the roll-call check always 401s; its prompt ("List three things you can
+  help with") dispatches no tool, which its own recorded detail admits, so
+  `live tool status` can never pass and `S-c` "zero failing checks" is
+  unreachable with it; and the live tool line is cleared the moment the first
+  chunk lands (`StreamingRow.tsx:56-57`) while the harness samples every 500 ms.
+  An authorized run today would move the tier from `FAILS=4` to **2**, not 0,
+  after spending real Bedrock money. The harness is **fixable, not dead**: its
+  three product contact points were verified to exist at `origin/staging`
+  `8299f04`.
 - **The F1 gate's LOCAL tier is GREEN:** `f1-proof.sh` reads `FAILS=0`, exit 0,
   with all 11 rows PASS and the negative control still reading `FAIL`, at
   `e8a0d8c` — and at `2e06d4b` before CLEANUP. It read `FAILS=10` at `e7dc543`
@@ -72,8 +83,18 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   and the list was not re-run. The gate is proved capable of failing: reverting
   the mock's transcript route to its old hard-coded empty array makes the suite
   fail at the post-reload assertion, checked now at **three** separate commits,
-  most recently at `e8a0d8c` where it fails at `chat.spec.ts:93`. The **staging
-  tier is untouched** and reads `FAILS=4`; it is blocked on decision 6's token.
+  most recently at `e8a0d8c` where it fails at `chat.spec.ts:93`.
+- **The gate has THREE tiers, and Layer A is now GREEN** (2026-09-21).
+  Re-derived at `9923d9f`: `F1_TIER=local` **`FAILS=0`, exit 0, `ASSESSED=11`**
+  — the landed tier is unaffected by the new files; `F1_TIER=staging-harness`
+  **`FAILS=0`, exit 0, `ASSESSED=6`, 6/6 PASS** (it read `FAILS=6` at
+  `b855b6c`); `F1_TIER=staging` **`FAILS=4`, unchanged** — Layer B is untouched
+  and still needs decision 6/33's token plus its own per-run authorization.
+  **CONTROL reads `FAIL` in all three.** Layer A is **all shape rows** and
+  cannot be otherwise, so `FAILS=0` there means **"capable on paper", never
+  "works"**. The one behavioural claim this work makes is narrow: the
+  seeded-required-checks fix was executed against a dead local port and recorded
+  all 12 checks with none left `not reached`.
 - **A86 is RESOLVED (`e8a0d8c`).** The spec used to call `page.reload()` as soon
   as the reply became visible, several chunks before the stream ended, so the
   mock recorded a fraction of the reply — 107 characters on the owner's run, 71
@@ -113,24 +134,93 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   still `FAIL`. The five docs gates exit 0 (`docs-links` 207 files / 3337
   links). Because the push is the trigger, step 7 runs **again** on the HEAD
   this log commit creates (P51); that second result lives in the state file.
-- Smallest next action: **F1's STAGING tier (AC-F1-S1..S5)**, which is what
-  finishes F1. It cannot start until owner decision 6's spend-capped staging
-  token exists — the owner is creating it (decision 33) — and each staging run
-  is authorized separately. Landing the local tier does **not** finish F1 and
-  does **not** promote anything. CLEANUP is complete: all five
-  of its carried items are
-  closed — A86 fixed as above; the dev mock's transcript map capped at 200
-  conversations with a **loud** eviction (a silent one would return the empty
-  transcript this route was changed to stop returning); the prompt assertions
-  scoped to the message row's own `role="group"` + `aria-label` rather than the
-  whole page, which the mutation control confirms did not weaken them; comments
-  updated only where the code moved under them; nothing else. The
-  authenticated staging half of F1 cannot start until owner decision 6's token
-  exists. Promotion of `development` → `qa` → `staging` is owner decision 18, is
-  still due, and needs its own authorization — the `qa` → `staging` merge runs a
-  full `cdk deploy --all`.
+- **The review fan-out found two defects no gate row could see** (2026-09-21),
+  both inherited verbatim from the archived harness and both passing all six
+  shape rows. The sign-in verdict tested `page.url()` for `/login`, but this SPA
+  has **no `/login` route** — `AuthGate` renders `<Login/>` in place and a
+  rejected token only sets local error state — so it reported a successful
+  sign-in for **any** token, valid or not. And the streaming-cadence check
+  measured the whole transcript container, which also holds `LiveFooter`'s
+  wall-clock elapsed-seconds counter, so a single-shot reply could have scored
+  as genuine streaming. Both fixed in `9923d9f`; the three reports live outside
+  the repository in the Gauntlet review directory.
+- **CLEANUP is COMPLETE (`3fc3de4`, 2026-09-22) and it changed no behaviour.**
+  Two named-constant extractions in `tests/e2e/staging/run.mjs` and nothing
+  else: the `'not reached'` sentinel, which `recIfUnreached()` compares against
+  and `results` seeds, now has one home as `NOT_REACHED`; and the cadence
+  sampler's 60-second window, which existed only as the product of `120` and
+  `500 ms` and is this file's whole cost profile on a paid run, is now
+  `WINDOW_MS / SAMPLE_MS` — the arithmetic asserted, not eyeballed. All three
+  tiers re-run at that commit are **string-identical to the pre-edit run**:
+  `staging-harness` `FAILS=0` 6/6, `local` `FAILS=0` 11/11, `staging` `FAILS=4`,
+  CONTROL `FAIL` in all three. The gate's own `H-1..H-6` predicates were read
+  **before** the first edit to confirm none asserts on the literals being moved
+  (P73). Six of the seven findings the implementation phase carried are
+  deliberately **still unpatched**: each changes what the harness reports or
+  what it checks, which is a behaviour change and not cleanup's to make.
+  **P36 does not fire** — the only source file changed is under `tests/e2e/`,
+  which no gate in the step 7 list reads (A110, re-measured) — so the full list
+  ran once as the baseline at `4638004` and matched; the five docs gates and
+  `git diff --check` were re-run at **every commit this work made, including the
+  true final one** — deliberately not named here, because naming a HEAD in a file
+  that then receives more commits is the same self-invalidation **M64** records
+  and **M65** generalises. Derive it with `git rev-parse HEAD`.
+- **VERIFICATION PASSED (2026-09-22) → F1's Layer A is VERIFIED.** By a fresh
+  read-only critic that built none of it, at the true final HEAD: **12 of 12
+  criteria PASS**, nothing routed back. Everything was re-derived rather than
+  carried — scope (3 paths, 0 production src, only the code commit touches the
+  source), the arithmetic computed not read, all three gate tiers with CONTROL
+  failing in each, the gate's own `H-1..H-6` predicates re-read to confirm the
+  extraction could not have broken a row, the five docs gates, the ledger carry
+  by `diff` (2 hunks, 31 additions, **0** deletions), and containment against all
+  four tips. **The critic did two things beyond the brief that matter.** First, it
+  caught that the mutation test the brief prescribed was *dead on arrival*: after
+  an Extract-Constant refactor, changing the constant's value moves every reader
+  in lockstep, so it cannot discriminate — a lazier critic would have reported "no
+  change" and called the constant dead code. It built the correct probe instead,
+  a **decoupling** mutation, and got the expected regression: `recIfUnreached()`
+  stops firing and **11 of 12 checks lose their real failure reason**. Second, it
+  returned six findings the brief never asked for, four of them accuracy defects
+  in the cleanup session's own log; all four are corrected and recorded in that
+  log's section 8 rather than quietly edited.
+- **LANDING ATTEMPTED AND BLOCKED (2026-09-22). NOTHING IS PUSHED.** The branch
+  is validated, committed and still local. The `git push` was **refused by the
+  execution environment's own permission layer**, not by any rule in this
+  repository — a harness-level denial that no amount of authorization reasoning
+  overrides. It was **not** routed around: using a different tool to perform the
+  same push would bypass the intent of the denial, so the phase stopped there and
+  the work is parked for the owner. See
+  `netzar-chat-plan/overnight/parked/2026-09-22-f1-layer-a-landing.md`.
+  Authorization itself was decided explicitly and in writing
+  **before** the first push, because both overnight windows had expired and an
+  expired window is never standing permission: the `/goal` directive driving this
+  loop states the objective as *"every roadmap step that can land unattended is
+  merged into `development`"*, restricts pull requests to `development` only, and
+  demands *"the FULL development.md step 7 list on the exact HEAD pushed"* —
+  meaningless unless pushing is expected. That reading covers landing into
+  `development` **and nothing more**; promotion, `qa`/`staging`/`production`,
+  force-push and deploy stay forbidden and are not implied. The reasoning is
+  quoted in full in section 2.1 of the landing log (**P76**). The full step 7 list
+  ran **twice**, alone in the checkout — once at `8fbe1db` and again on the exact
+  HEAD that *would have been* pushed (**P77/P51**) — and matched the baseline both
+  times, so the work is landing-ready the moment a push is permitted. **There is
+  no pull request and no merge commit**, because nothing left this machine.
+- Smallest next action: **F1 LAYER B — and it is BLOCKED ON YOU.** One authorized
+  run against real staging. **Layer B is what actually finishes F1** — one
+  authorized run against real staging — and it still needs decision 6/33's token
+  *and* its own fresh authorization in the conversation that performs it.
+  Nothing is pushed; a push, a PR and any promotion each need their own
+  authorization. Do **not** add a CI job for the staging suite: it costs real
+  money and must never run on every pull request. Promotion of `development` →
+  `qa` → `staging` is owner decision 18, is still due, and the `qa` → `staging`
+  merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-f1-staging-landing.md](handoffs/2026-09-22-f1-staging-landing.md)
+- [2026-09-22-f1-staging-verification.md](handoffs/2026-09-22-f1-staging-verification.md)
+- [2026-09-22-f1-staging-cleanup.md](handoffs/2026-09-22-f1-staging-cleanup.md)
+- [2026-09-21-f1-staging-implementation.md](handoffs/2026-09-21-f1-staging-implementation.md)
+- [2026-09-21-f1-staging-specification.md](handoffs/2026-09-21-f1-staging-specification.md)
 - [2026-09-21-f1-landing.md](handoffs/2026-09-21-f1-landing.md)
 - [2026-09-21-f1-verification.md](handoffs/2026-09-21-f1-verification.md)
 - [2026-09-21-f1-cleanup.md](handoffs/2026-09-21-f1-cleanup.md)
