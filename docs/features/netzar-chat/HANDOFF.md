@@ -24,10 +24,14 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
 - Current work lives on `feat/f1-test-foundations`, cut from
   `origin/development` at `08f85db`; merge target `development`. The
   VERIFICATION below scored HEAD
-  `a7bdb13ea4a78e95d404cf339fd2835a6ec8d338`, and this log adds one
-  docs-only commit on top of it — a file cannot state the commit it is
-  inside (P40), so that SHA lives in the Gauntlet state file. Pushed:
-  **no**. **PR: none.**
+  `a7bdb13ea4a78e95d404cf339fd2835a6ec8d338`; its log added one docs-only
+  commit on top, `a88086ef4cc450e1e2e526380369c452d196789a`, and **this**
+  landing log adds one more. A file cannot state the commit it is inside
+  (P40), so that SHA, the PR number and the merge commit all live in the
+  Gauntlet state file. **This branch is being pushed and opened as a pull
+  request into `development` now**, under a fresh owner yes given in the
+  conversation that performs it (constraint 8; owner decision 32 recorded the
+  intent). It lands F1's **local** tier only.
   Deployment: none. This frontmatter still stamps `e8a0d8c` rather than
   `eee0a83`, because the earlier reason for holding the stamp back has expired:
   F1 is the first work item since then to change source and configuration
@@ -99,11 +103,21 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   mid-turn … (71 chars)`), which shows the fix is behavioural rather than
   cosmetic; and with that broken spec in place the proof still reads `FAILS=0`
   and never mentions the warning, which proves **P61** by measurement.
-- Smallest next action: **ask the owner whether to land F1's local tier** —
-  push `feat/f1-test-foundations` and open a PR into `development`. That needs
-  a fresh yes in the conversation that performs it (constraint 8), and because
-  the push is the trigger, the **full step 7 list runs on the exact HEAD
-  pushed**, and again if the push adds a commit. CLEANUP is complete: all five
+- **LANDING gates, run in this session on the exact HEAD `a88086e` before
+  anything was pushed**, alone in the checkout and with credentials stripped:
+  the full step 7 list **matches the baseline** in 38 s — `npm test` 247 files /
+  3215 tests exit 0, `guard-violations: 0`; integration 38 passed, 25 skipped, 1
+  failed, the Floci `checkSecrets` gap confirmed **by name** on an emulator
+  identified as `floci/floci:1.6.0` first; all 11 other gates exit 0; 0 changed
+  paths. `f1-proof.sh` local tier reads `FAILS=0`, exit 0, 11/11 PASS, CONTROL
+  still `FAIL`. The five docs gates exit 0 (`docs-links` 207 files / 3337
+  links). Because the push is the trigger, step 7 runs **again** on the HEAD
+  this log commit creates (P51); that second result lives in the state file.
+- Smallest next action: **F1's STAGING tier (AC-F1-S1..S5)**, which is what
+  finishes F1. It cannot start until owner decision 6's spend-capped staging
+  token exists — the owner is creating it (decision 33) — and each staging run
+  is authorized separately. Landing the local tier does **not** finish F1 and
+  does **not** promote anything. CLEANUP is complete: all five
   of its carried items are
   closed — A86 fixed as above; the dev mock's transcript map capped at 200
   conversations with a **loud** eviction (a silent one would return the empty
@@ -117,6 +131,7 @@ as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
   full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-21-f1-landing.md](handoffs/2026-09-21-f1-landing.md)
 - [2026-09-21-f1-verification.md](handoffs/2026-09-21-f1-verification.md)
 - [2026-09-21-f1-cleanup.md](handoffs/2026-09-21-f1-cleanup.md)
 - [2026-09-21-f1-implementation.md](handoffs/2026-09-21-f1-implementation.md)
