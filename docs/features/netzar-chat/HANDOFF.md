@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
+as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
 ---
 
 # Netzar Chat handoff
@@ -209,8 +209,31 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   the baseline every time. The third run mattered: the **M67** correction commit
   had moved the tip after the second, and pushing on the strength of a run against
   the older commit is exactly the stale-HEAD claim **M65** records.
-- Smallest next action: **F1 LAYER B — and it is BLOCKED ON YOU.** One authorized
-  run against real staging. **Layer B is what actually finishes F1** — one
+- **LAYER B RAN FOR THE FIRST TIME (2026-09-22), by the owner, with their own
+  token — and it was worth it.** 10 of 12 passed. **Proved for the first time:**
+  sign-in works on staging on all four surfaces, and the bearer roll-call returns
+  `3 active agents, 5 models from real Bedrock (HTTP 200/200)` — so **D1 is now
+  behaviourally proven**, having only ever been closed against re-derived source.
+  **The two turn checks read `not reached`** — the seeded sentinel, meaning never
+  attempted. The cause was navigation, not the token: `App.tsx` redirects to
+  `/getting-started` when neither onboarding key is in `localStorage`, and every
+  automated run is a fresh profile by design, so **every deep link into the
+  dashboard lands on the onboarding checklist**. The run's own landing screenshot
+  shows the breadcrumb. **It cost nothing** — the message is sent inside the
+  skipped block, so no model turn ever ran. Three defects fixed: the harness now
+  seeds the onboarding key before any page script; the composer-missing branch
+  records both checks failed **with the URL it was actually on**; and the gate,
+  outside the repo, now reads the file the harness writes instead of a September
+  snapshot of an **August** run — under which a perfect run would still have
+  scored `FAILS=4`. Verified against the local dashboard: all 12 checks carry a
+  real verdict, **zero** left `not reached`, conversation screenshots on all four
+  surfaces, and the two turn checks failing for the correct local reason, which
+  is a free negative control. Full detail in the Layer B session log.
+- Smallest next action: **A SECOND authorized staging run, by the owner.** It is
+  the first that will actually spend, because the turn will now be sent. It tests
+  what the first could not: **D2** (a prompt that really dispatches a tool) and
+  **D3** (the subscribed tool observer), both still source-derived only, plus real
+  streaming against real Bedrock. **Layer B is what actually finishes F1** — one
   authorized run against real staging — and it still needs decision 6/33's token
   *and* its own fresh authorization in the conversation that performs it.
   Nothing is pushed; a push, a PR and any promotion each need their own
@@ -220,6 +243,7 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-f1-layer-b-first-run.md](handoffs/2026-09-22-f1-layer-b-first-run.md)
 - [2026-09-22-f1-staging-landing.md](handoffs/2026-09-22-f1-staging-landing.md)
 - [2026-09-22-f1-staging-verification.md](handoffs/2026-09-22-f1-staging-verification.md)
 - [2026-09-22-f1-staging-cleanup.md](handoffs/2026-09-22-f1-staging-cleanup.md)

@@ -142,7 +142,16 @@ try {
     // Layer B run is authorized and paid for one turn at a time, so losing the whole run to a
     // single transient error is not acceptable.
     try {
-      await ctx.addInitScript((t) => localStorage.setItem('cce_theme', t), theme);
+      // A fresh browser profile has empty localStorage, and App.tsx redirects to
+      // /getting-started whenever neither onboarding key is set — regardless of the URL asked
+      // for. Every automated run is a fresh profile by design, so WITHOUT THIS every deep link
+      // into the dashboard lands on the onboarding checklist instead of its target. Found by the
+      // first real staging run: sign-in and the roll-call passed, and the chat checks were never
+      // reached because the page was never chat. The key is the one GettingStarted.tsx exports.
+      await ctx.addInitScript((t) => {
+        localStorage.setItem('cce_theme', t);
+        localStorage.setItem('cce_company_onboarding_seen', '1');
+      }, theme);
       await installToolStatusObserver(ctx);
       const page = await ctx.newPage();
       // tests/e2e/cost/run.mjs:23 and tests/e2e/iam/run.mjs:28 both raise this. A deployed staging
@@ -244,6 +253,16 @@ try {
           await page.waitForTimeout(8_000);
         }
         await page.screenshot({ path: `${OUT}/${tag}-conversation.png` }).catch(() => {});
+      } else if (tag === PRIMARY) {
+        // No composer means the turn was never sent, so both turn checks would otherwise keep
+        // their seeded 'not reached' and say nothing about WHY. That is the same defect class the
+        // required-check seeding exists to close, surviving in a second place: a skip that records
+        // nothing is indistinguishable from a crash. Name the reason and the page we were actually
+        // on — on the first real staging run that page was the onboarding checklist, and the URL
+        // is what would have said so immediately.
+        const why = `composer not found on ${page.url()} — the turn was never sent`;
+        rec('streaming cadence (real Bedrock)', false, why);
+        rec('live tool status', false, why);
       }
 
       // 4. THEME rendered, at this breakpoint.
