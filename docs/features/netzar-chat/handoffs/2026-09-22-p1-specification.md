@@ -1569,6 +1569,7 @@ Short pointers only. The owning document has the detail; do not copy it here.
 | A132 | **The sessions table has no GSI** — `infra/lib/dynamo-stack.ts:92-99` is `PK`/`SK`/`ttl` with no `addGlobalSecondaryIndex`, while every indexed table in that file chains one immediately after `new Table(...)`. | Observed 2026-09-22. Two consequences: a per-message record must share its conversation's partition (`SK=CHAT#<chatId>#MSG#…`, matching the repo's own `MEM#<chatId>#<iso>#<uuid>` convention at `dynamodb-tools.ts:64`), and **"list the conversations owned by user X" cannot become a Query** — it stays a scan-and-filter unless decision 11 is reopened with the owner. Say so rather than designing around it. |
 | A133 | **The ownership tag is keyed to an ephemeral per-login value.** `dashboardIdentity` returns `dashboard:${p.tokenHash}` (`handler.ts:196-204`); `createToken` mints `randomBytes(32)` and hashes it (`tokens-repo.ts:124-125`); `mintSessionToken` calls it once per login (`handler.ts:485-493`). A durable `userId` already rides the principal for member sessions and is discarded — captured only as `dashboardUserId` for cost attribution (`:1941`, `:2278`), and absent entirely from `SessionEnrichment` (`sessions-repo.ts:261-264`). The env root token carries no `userId` at all (`:1023`). | Observed 2026-09-22. So token rotation orphans conversations, and **decision 1**'s requirement that root / no-`userId` tokens bind to one concrete immutable user has a concrete home: `dashboardIdentity`. |
 | A134 | At `3393f6c` the P1 gate reads: `P1_TIER=containment` **`FAILS=5`, exit 5, `ASSESSED=6`** (only C-f, the no-CDK guard, passes); `P1_TIER=storage` **`FAILS=8`, exit 8, `ASSESSED=8`**. **CONTROL reads FAIL in both**, and the table prints exactly one `\| FAIL \|` row beyond the scored ones — the control, scored outside `FAILS` (**A100**). | Observed 2026-09-22, one run per tier, after the P80/P81 corrections. The first draft's readings (`FAILS=5` and `FAILS=6`) are **not** comparable: two storage rows were passing for the reasons M71 records. |
+| A136 | **At the commit that added the red (`2dadbc7`), the WHOLE suite has exactly one failure and it is the intended one.** `npm test` reads **248 files / 3217 tests, 1 failed | 3216 passed**, and the single failure is `GET /sessions — containment (WI-1.0) > lists ONLY the conversation when the same partition also holds per-message rows`, **by name**. The arithmetic closes against A129: +1 file and +2 tests are this session's file, and 3216 passed = the baseline's 3215 plus this file's control. Integration is **unchanged** at 38 passed / 25 skipped / 1 failed (the Floci `checkSecrets` gap); typecheck, build, both web gates, `local:verify`, the five docs gates and `diff-check` all exit 0; `guard-violations: 0`; **0 changed paths**; 1 `amazonaws.com` hit, **A72**'s stub. | Observed 2026-09-22T16:28:05Z-16:28:40Z, one run, scored from the per-gate logs (**P65/M57**). Run at **whole-suite scope on purpose** (**P29**): a file-scoped run cannot support the claim that this is the *only* failure. The commit is named rather than "the final HEAD" because a later docs commit moves the tip and would make that phrase false — **M65**. The P41 caveat on A129 applies unchanged. |
 | A135 | The red state is `src/adapters/dashboard/sessions-containment.test.ts`: **1 failed, 1 passed**. The failing test asserts that a per-agent `GET /sessions` returns one conversation when the partition holds a conversation row and a `CHAT#…#MSG#…` row; it fails `expected … to have a length of 1 but got 2`. The passing test is the **control** — the same route, same auth, same fixture, only the conversation row — so the red is about containment and not about auth, routing or the harness. | Observed 2026-09-22, one run (753 ms). The red is not a syntax error, a bad fixture, a missing credential or a pre-existing failure. `npm test` at the same commit is unchanged at 247 files / 3215 tests plus this file's 2. |
 
 #### Known traps that cost time (continued)
@@ -1671,11 +1672,18 @@ of this list was captured to files.
 | `bash -n p1-proof.sh` | exit 0 |
 | `P1_TIER=containment` / `P1_TIER=storage` | **FAILS=5 / ASSESSED=6** and **FAILS=8 / ASSESSED=8**, CONTROL **FAIL** in both (**A134**) |
 
+| the full step 7 list again, at `2dadbc7` | `npm test` **248 files / 3217 tests, 1 failed** — the intended red, **by name**; integration unchanged 38/25/1; everything else exit 0; 0 changed paths (**A136**) |
+
+**On the second run, and why it does not "match the baseline".** It must not. The red test is
+committed, so the suite carries exactly one failure by design, and saying "= baseline" here would be
+the kind of flattering sentence this log exists to prevent. What is claimed instead is narrower and
+checkable: **the whole suite has one failure, it is the one this session wrote, and every other gate
+is unmoved.** The arithmetic closes against the baseline — +1 file, +2 tests, and 3216 passed is
+3215 plus this file's control.
+
 **Not run, and why.** Nothing was pushed, no PR was opened, nothing was promoted, and no AWS call
-was made — none is authorized in this phase. The full step 7 list was run once, as the **baseline
-before any change**; it is re-run at this session's own HEAD before the log is called complete, and
-the result of that second run is recorded with it (**P77**: the list that matters is the one that
-passed on the commit that actually exists).
+was made — none is authorized in this phase. `npm run e2e:chat` and the F1 gate tiers were not
+re-run: this session changes no file any of them reads.
 
 ## 8. What is next
 
