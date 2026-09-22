@@ -2,8 +2,8 @@
 feature: netzar-chat
 document_role: handoff
 status: current
-observed_at: 2026-09-21
-as_of_commit: 9923d9f3c24f992eb58d0df07b240d5caf75eab2
+observed_at: 2026-09-22
+as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
 ---
 
 # Netzar Chat handoff
@@ -27,13 +27,13 @@ as_of_commit: 9923d9f3c24f992eb58d0df07b240d5caf75eab2
   the Gauntlet state file. That landing finished F1's **local** half only.
 - Current work lives on **`feat/f1-staging-tier`**, cut from
   `origin/development` at `f7eb6f4`; merge target `development`. It carries
-  F1's **STAGING** tier and is **unpushed**. The latest session is an
-  IMPLEMENTATION of **Layer A**: it adds `tests/e2e/staging/` and made **no
-  staging call, no AWS API call, no deploy and no promotion**. Deployment: none.
-  The frontmatter stamp **moves to `9923d9f`** — it had been held at `e8a0d8c`
-  because VERIFICATION changed no source, and that reason has expired: this work
-  adds a test source file, so the source these claims describe is no longer
-  byte-identical to the old stamp (P23). The containment statements above were
+  F1's **STAGING** tier and is **unpushed**, now **5** commits off
+  `origin/development`. The latest session is the **CLEANUP** of **Layer A**;
+  the IMPLEMENTATION before it added `tests/e2e/staging/`. Neither made a
+  **staging call, an AWS API call, a deploy or a promotion**, and neither read
+  the token. Deployment: none. The frontmatter stamp **moves to `3fc3de4`**,
+  because cleanup edited a test source file, so the source these claims describe
+  is no longer byte-identical to the old stamp (P23). The containment statements above were
   re-derived against `origin/qa` `ac0cbcc`, `origin/staging` `8299f04` and
   `origin/production` `de244e6`, all three unmoved since last proved.
 - Baseline recorded before any change on this branch, on 2026-09-21 at
@@ -138,9 +138,26 @@ as_of_commit: 9923d9f3c24f992eb58d0df07b240d5caf75eab2
   wall-clock elapsed-seconds counter, so a single-shot reply could have scored
   as genuine streaming. Both fixed in `9923d9f`; the three reports live outside
   the repository in the Gauntlet review directory.
-- Smallest next action: **CLEANUP of F1's staging tier, Layer A** — scope-locked
-  to `tests/e2e/staging/run.mjs`, the only source file this work added. Then
-  VERIFICATION by a fresh critic. **Layer B is what actually finishes F1** — one
+- **CLEANUP is COMPLETE (`3fc3de4`, 2026-09-22) and it changed no behaviour.**
+  Two named-constant extractions in `tests/e2e/staging/run.mjs` and nothing
+  else: the `'not reached'` sentinel, which `recIfUnreached()` compares against
+  and `results` seeds, now has one home as `NOT_REACHED`; and the cadence
+  sampler's 60-second window, which existed only as the product of `120` and
+  `500 ms` and is this file's whole cost profile on a paid run, is now
+  `WINDOW_MS / SAMPLE_MS` — the arithmetic asserted, not eyeballed. All three
+  tiers re-run at that commit are **string-identical to the pre-edit run**:
+  `staging-harness` `FAILS=0` 6/6, `local` `FAILS=0` 11/11, `staging` `FAILS=4`,
+  CONTROL `FAIL` in all three. The gate's own `H-1..H-6` predicates were read
+  **before** the first edit to confirm none asserts on the literals being moved
+  (P73). Six of the seven findings the implementation phase carried are
+  deliberately **still unpatched**: each changes what the harness reports or
+  what it checks, which is a behaviour change and not cleanup's to make.
+  **P36 does not fire** — the only source file changed is under `tests/e2e/`,
+  which no gate in the step 7 list reads (A110, re-measured) — so the full list
+  ran once as the baseline at `4638004` and matched; the five docs gates and
+  `git diff --check` were re-run at the exact final HEAD.
+- Smallest next action: **VERIFICATION of F1's staging tier, Layer A**, by a
+  fresh critic that built none of it. **Layer B is what actually finishes F1** — one
   authorized run against real staging — and it still needs decision 6/33's token
   *and* its own fresh authorization in the conversation that performs it.
   Nothing is pushed; a push, a PR and any promotion each need their own
@@ -150,6 +167,7 @@ as_of_commit: 9923d9f3c24f992eb58d0df07b240d5caf75eab2
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-f1-staging-cleanup.md](handoffs/2026-09-22-f1-staging-cleanup.md)
 - [2026-09-21-f1-staging-implementation.md](handoffs/2026-09-21-f1-staging-implementation.md)
 - [2026-09-21-f1-staging-specification.md](handoffs/2026-09-21-f1-staging-specification.md)
 - [2026-09-21-f1-landing.md](handoffs/2026-09-21-f1-landing.md)
