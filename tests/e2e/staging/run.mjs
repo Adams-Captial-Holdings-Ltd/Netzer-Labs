@@ -29,12 +29,54 @@ const SURFACES = [
 // Bedrock turn. The other surfaces exist for the theme screenshot.
 const PRIMARY = 'light-desktop';
 
-// A prompt that actually dispatches a tool. "List three things you can help with" dispatches none,
-// so a live tool status could never be observed however good the rest of the harness was. get_time
-// is a built-in registered for EVERY agent (src/lib/tools/builtin-tools.ts) and is side-effect
-// free: it formats new Date() through Intl.DateTimeFormat, makes no AWS call and touches no
-// infrastructure, so it costs nothing beyond the turn itself.
-const TOOL_PROMPT = 'What time is it right now in America/New_York? Use the get_time tool.';
+// One prompt has to satisfy TWO checks at once, and the first version satisfied only one.
+//
+// It must DISPATCH A TOOL: "List three things you can help with" dispatches none, so a live tool
+// status could never be observed however good the rest of the harness was. get_time is a built-in
+// registered for EVERY agent (src/lib/tools/builtin-tools.ts) and is side-effect free — it formats
+// new Date() through Intl.DateTimeFormat, makes no AWS call and touches no infrastructure — so it
+// costs nothing beyond the turn itself.
+//
+// It must ALSO PRODUCE A REPLY LONG ENOUGH TO WATCH ARRIVE, and that is what the first authorized
+// staging run found the hard way. "What time is it?" answers in one sentence: the real run returned
+// 61 characters in a 5.6s turn, the live answer node appeared and committed inside roughly one
+// sampling tick, and the cadence check scored 0 growth frames. It was not that staging failed to
+// stream — the instrument could not observe it either way. Optimising for the cheap tool call had
+// designed the streaming check out of its own prompt.
+//
+// So the prompt now asks for both: the tool AND a reply with enough words to span many samples.
+// It stays one turn and one model call pair; the only cost is a few more output tokens.
+const TOOL_PROMPT =
+  'Use the get_time tool to get the current time in America/New_York, then tell me the time.';
+
+// A SECOND prompt, and it has to be a second TURN. The two checks are mutually exclusive on one
+// turn, which the first two authorized staging runs proved at a cost of $0.08 between them:
+//
+//   agent-loop.ts makes its INITIAL model call through converseStreamTurnWithFallback, which
+//   streams. But once a tool runs, the follow-up that actually writes the answer is a plain
+//   `new ConverseCommand(...)` with no onChunk and no streaming path at all. So ANY turn that
+//   dispatches a tool returns its reply WHOLE. A prompt guaranteeing a tool round guarantees a
+//   non-streaming answer, and no amount of faster sampling can see a stream that is not sent.
+//
+// That is a real product observation, recorded and NOT patched here: making the synthesis round
+// stream is a change to the agent loop, which is P2 (turn lifecycle) work, not this harness's.
+// So the tool check gets its own turn, and cadence gets a turn with NO tool in it.
+//
+// AND THEN THE TOOL-FREE TURN DID NOT STREAM EITHER. Measured on staging 2026-09-22 with a DOM
+// probe sampling every 250ms for 40s on a turn with no tool in it at all:
+//   .chat-streaming existed in 0 of 160 samples
+//   the composer stayed disabled for 26 samples = 6.5s, so the turn really was in flight
+//   at sample 26 the answer appeared FULLY FORMED at 995 characters, in one step, already
+//   committed to a .chat-md node — no intermediate state ever existed
+// So the deployed staging dashboard does not stream replies to the browser AT ALL. The cadence
+// check is therefore CORRECT and is reporting a true negative; it is not a harness defect and it
+// must NOT be weakened to make the scorecard green. Making a check pass by lowering its bar is the
+// one change that would destroy the only thing this tier is for.
+// Routed to P2 (turn lifecycle). Until the product streams, F1_TIER=staging tops out at 11 of 12,
+// and that number is the honest one.
+const CADENCE_PROMPT =
+  'Without using any tools, write about 150 words on why clear written handovers matter when ' +
+  'several engineers work on the same system.';
 
 // Every check this run is required to report on. Each is SEEDED as failed, then overwritten on a
 // real result, so a run that dies early still records what it never reached instead of silently
@@ -202,23 +244,65 @@ try {
       // 2. STREAMING CADENCE and 3. LIVE TOOL STATUS, from one real agent turn.
       const box = page.locator('textarea, [contenteditable="true"]').first();
       if (await box.count()) {
-        await box.click();
-        await box.fill(TOOL_PROMPT);
-        const started = Date.now();
-        await page.keyboard.press('Enter');
+        // The composer is disabled while a turn is in flight (Composer.tsx `disabled={streaming}`),
+        // so that is the product's own "am I finished" signal. Using it beats a fixed sleep: it is
+        // exact, and it comes from the thing being tested rather than from a guess about timing.
+        const turnSettled = () =>
+          page
+            .waitForFunction(
+              () => {
+                const t = document.querySelector('textarea');
+                return !!t && !t.disabled;
+              },
+              { timeout: 120_000 },
+            )
+            .catch(() => {});
+
+        const send = async (text) => {
+          await turnSettled();
+          await box.click();
+          await box.fill(text);
+          await page.keyboard.press('Enter');
+        };
+
+        await send(TOOL_PROMPT);
         if (tag === PRIMARY) {
+          // TURN 1 — the tool round. Its answer does not stream (see CADENCE_PROMPT), so there is
+          // nothing to sample here; just let it finish and read what the observer accumulated.
+          await turnSettled();
+          const seenTools = await page.evaluate(() => window.__toolStatusSeen ?? []);
+          rec(
+            'live tool status',
+            seenTools.length > 0,
+            seenTools.length
+              ? `observed: ${[...new Set(seenTools)].slice(0, 3).join(' | ')}`
+              : 'none observed across the whole turn, with the prompt asking for get_time',
+          );
+
+          // TURN 2 — cadence, on a prompt that dispatches NO tool, so the reply comes back through
+          // the streaming path.
+          await send(CADENCE_PROMPT);
+          const started = Date.now();
           // Cadence is a level, so sampling is the right instrument for it — but the window has
           // to cover BOTH Bedrock round-trips a tool turn needs (the call that decides to use
           // get_time, then the call that writes the answer once the tool result is appended)
           // before the reply it measures even begins. The archived harness budgeted 20s for a
           // prompt that dispatched no tool at all. Only this surface is scored, so only this
           // surface pays for the long window.
-          const SAMPLE_MS = 500;
+          // 250ms, not 500: the first real run's reply committed inside roughly one 500ms tick,
+          // so the sampler never saw it. Halving the interval doubles the chance of catching a
+          // short reply, and costs nothing — the samples are DOM reads against a page already open.
+          const SAMPLE_MS = 250;
+          // The window is a CEILING, not a duration. The first run held it for the full 60s after a
+          // turn that finished in 5.6s, which is 55 wasted seconds per run and why a 12-check run
+          // took 113s. It now stops as soon as the turn commits (below), so the ceiling only binds
+          // when something is genuinely wrong — which is exactly when you want to wait.
           const WINDOW_MS = 60_000;
           const frames = [];
+          let seenAnswer = false;
           for (let i = 0; i < WINDOW_MS / SAMPLE_MS; i++) {
             await page.waitForTimeout(SAMPLE_MS);
-            frames.push(
+            const len =
               await page.evaluate(() => {
                 // Measure the streaming ANSWER node only. The transcript container
                 // ([data-tour="chat-messages"]) also holds LiveFooter's elapsed-seconds
@@ -230,23 +314,21 @@ try {
                 // rule out. .chat-streaming is the live answer markdown and nothing else.
                 const el = document.querySelector('.chat-streaming');
                 return el ? el.innerText.length : 0;
-              }),
-            );
+              });
+            frames.push(len);
+            // .chat-streaming exists ONLY while the turn is streaming, so the series runs
+            // 0 … N1 < N2 < … then back to 0 when the reply commits to the transcript. Once we
+            // have seen it non-empty and it has gone again, the turn is over and every further
+            // sample is a zero that tells us nothing. Stop there.
+            if (len > 0) seenAnswer = true;
+            else if (seenAnswer) break;
           }
-          const seenTools = await page.evaluate(() => window.__toolStatusSeen ?? []);
           const growth = frames.filter((v, i) => i > 0 && v > frames[i - 1]).length;
           rec(
             'streaming cadence (real Bedrock)',
             growth >= 3,
-            `${growth} growth frames over ${Math.round((Date.now() - started) / 1000)}s — ` +
-              'a stub emits one chunk, so >2 proves genuine streaming',
-          );
-          rec(
-            'live tool status',
-            seenTools.length > 0,
-            seenTools.length
-              ? `observed: ${[...new Set(seenTools)].slice(0, 3).join(' | ')}`
-              : 'none observed across the whole turn, with the prompt asking for get_time',
+            `${growth} growth frames over ${Math.round((Date.now() - started) / 1000)}s on a ` +
+              'TOOL-FREE turn — a stub emits one chunk, so >2 proves genuine streaming',
           );
         } else {
           // This surface is here for the theme screenshot, not for a measurement.
