@@ -1336,9 +1336,9 @@ Short pointers only. The owning document has the detail; do not copy it here.
 
 ## 6. What this phase did
 
-**ATTEMPTED to land F1's staging tier, Layer A, into `development`. The push was BLOCKED and
-NOTHING WAS PUSHED.** See **6.4** — the phase ran every gate, passed every one, and then stopped at
-the push. No promotion, no staging call, no deploy, and no pull request. The work being landed is the ported and repaired staging QA harness at
+**LANDED F1's staging tier, Layer A, into `development`** — but not on the first attempt. The first
+attempt was **blocked at the push** by the execution environment (**6.4**); the owner then authorized
+it directly and it landed (**section 9**). No promotion, no staging call, no deploy. The work being landed is the ported and repaired staging QA harness at
 `tests/e2e/staging/run.mjs` plus its documentation: built in IMPLEMENTATION, tidied in CLEANUP, and
 **VERIFIED by a fresh critic that built none of it (12 of 12 criteria)**.
 
@@ -1380,7 +1380,10 @@ runs a full `cdk deploy --all`. After this merge `development` is still five-plu
 merge commit would be recorded in the **Gauntlet state file's STATUS** and in
 `netzar-chat-plan/overnight/ledger.txt`, not here.
 
-### 6.4 The outcome: BLOCKED at the push, and not routed around
+### 6.4 The first attempt: BLOCKED at the push, and not routed around
+
+> **Superseded by section 9**, which records what happened after the owner lifted the block. Kept in
+> full, because the decision not to route around the refusal is the part worth keeping.
 
 Steps 1 through 3 of 6.2 completed and passed. **Step 4 did not happen.** `git push -u origin
 feat/f1-staging-tier` was **refused by the execution environment's own permission layer**, which is
@@ -1446,12 +1449,13 @@ gap **by name**; typecheck, build, web typecheck, web build exit 0; five docs ga
 tiers re-run there: `staging-harness` `FAILS=0`/6, `local` `FAILS=0`/11, `staging` `FAILS=4`, CONTROL
 **FAIL** in each.
 
-**That is the run a pull request would have carried, and there is no pull request** — the push was
-refused (**6.4**). The evidence stands attached to `7f857e4` for whoever lands it.
+That run covered `7f857e4`. The push was refused at that point (**6.4**), and one further commit —
+the **M67** correction — landed afterwards, so **the full list was run a third time on `a5e3ee0`,
+the commit actually pushed**, and matched the baseline again. See **section 9**.
 
 ### 7.3 What was NOT done
 
-**No push, and therefore no pull request, no CI run and no merge.** No promotion. No push to `qa`, `staging` or `production`. No `cdk deploy`, no
+No promotion. No push to `qa`, `staging` or `production`. No `cdk deploy`, no
 `npm run deploy:cloud`. No staging call and no token read. No AWS call. No force-push. No writer
 agent touched the branch — **LANDING is read-only reviewers only**. No edit to `development.md`,
 `CONTRIBUTING.md`, `CLAUDE.md`, `docs/features/README.md`, settings or skills.
@@ -1464,3 +1468,57 @@ performs it, with its **first run attended** — it has never run once and a har
 day's budget. An unattended iteration must **park** it with a report rather than run it.
 
 **Landing Layer A did not finish F1, and F1 is still step 2 of 10.**
+
+## 9. The outcome, after the owner lifted the block
+
+**F1's staging tier, Layer A, is MERGED into `development`.**
+
+The owner was asked directly what was needed, answered **"go ahead and push"** in the same session,
+and that is the authorization this landing rests on — explicit, in the conversation that performed
+the action, exactly as **user constraint 8** requires. The `/goal` reading in **2.1** was never
+needed; it is left in place because it was written before the attempt and removing it now would hide
+a judgement that was made.
+
+**The validated HEAD had moved, and that mattered.** Section 7.2's run covered `7f857e4`, but the
+**M67** correction commit landed afterwards, making `a5e3ee0` the real tip. Pushing `a5e3ee0` on the
+strength of a run against `7f857e4` would have been precisely the stale-HEAD claim **M65** records.
+So **the full `development.md` step 7 list was run a third time, alone in the checkout, on
+`a5e3ee0`** — and matched the baseline: `npm test` 247 files / 3215 tests exit 0, `AWS_GUARD_VIOLATION`
+lines 0; integration 38 passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap **by name**;
+typecheck, build, web typecheck, web build exit 0; five docs gates exit 0 (docs-links 213 files /
+3550 links); `git diff --check` exit 0; 0 changed paths. All three tiers re-derived there:
+`staging-harness` **FAILS=0 / 6**, `local` **FAILS=0 / 11**, `staging` **FAILS=4**, CONTROL **FAIL**
+in each.
+
+**Then, in order:** pushed; **one** pull request into `development` and nothing else; all **10**
+checks green — including `Chat E2E (local mock, no emulator)` at 1m34s and `Integration Tests
+(LocalStack)` at 1m34s; the commit CI tested confirmed **equal** to the commit on origin **and** to
+the commit validated locally, all three `a5e3ee0`, before the merge button was touched; merged with
+a merge commit; head branch deleted on origin and locally.
+
+**The merge introduced nothing beyond what was validated**, proved rather than assumed: the tree of
+`a5e3ee0` and the tree of the merged `development` are the **same object**,
+`778cbb5359db6b6be0607eb060f80f1f390846df`.
+
+**Containment proved, not assumed:** the work is an ancestor of `development` and of **none** of
+`qa`, `staging` or `production`, whose tips are unmoved at `ac0cbcc`, `8299f04` and `de244e6`.
+
+**A file cannot state the commit it is inside (P40)**, so the pull request number and the merge
+commit live in the Gauntlet state file's `STATUS` and in `netzar-chat-plan/overnight/ledger.txt`.
+
+### 9.1 What this still does not do
+
+**It does not finish F1.** Layer A is entirely shape rows: green means *capable on paper*, never
+*works*. **Layer B** — one authorized run against real staging — is what finishes F1, and it is still
+parked: `netzar-chat-plan/overnight/parked/2026-09-22-f1-layer-b-staging-run.md`.
+
+**It promotes nothing.** Owner decision 18 (`development -> qa -> staging`) is separate, still due,
+and its `qa -> staging` merge runs a full `cdk deploy --all`.
+
+### 9.2 The correction cycle, recorded rather than tidied away
+
+This document has now been corrected **twice**: once when it claimed a landing that had not happened
+yet (**M67**), and once when it claimed a block that the owner had since lifted. Both corrections are
+visible above rather than smoothed over. That is the cost of **P77** — the write-up must be committed
+before the push, so it will always describe a future that has not resolved — and the discipline that
+makes the cost acceptable is correcting it in the same session, every time, in the open.
