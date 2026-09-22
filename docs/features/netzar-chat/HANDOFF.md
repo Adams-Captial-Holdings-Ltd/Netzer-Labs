@@ -8,11 +8,20 @@ as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
 
 # Netzar Chat handoff
 
-- **CURRENT: P1 WI-1.0 is VERIFIED — step 3 of 10, conversation identity and
-  durable transcript. The owner decides what comes next** (below). Branch
-  `feature/p1-conversation-identity`, cut from `origin/development` @ `3393f6c`;
-  merge target `development`. **Pushed: no. PR: none. Deployment: none.** No AWS
-  call, no promotion. WI-1.0 only — no storage change, no ownership change, no
+- **CURRENT: P1 WI-1.0 is VERIFIED, and this commit is the one its LANDING
+  pushes — step 3 of 10, conversation identity and durable transcript.** Owner
+  decision 44: land WI-1.0 now, as its own pull request into `development`.
+  Branch `feature/p1-conversation-identity`, cut from `origin/development` @
+  `3393f6c`; merge target `development`. **At this commit: pushed no, PR none,
+  deployment none.** After it, the landing session runs the full
+  `development.md` step 7 list on this exact commit and asks the owner once
+  more, with the numbers; only on a yes will it push, open one pull request into
+  `development`, and merge it when every check is green. The pull request number
+  and the merge commit will live in the Gauntlet state file, because a file
+  cannot state the commit it is inside (P40). The code being landed is
+  byte-identical to the commit the critic scored, `a5c377b`. Landing does not
+  finish P1, promotes nothing (decision 18) and makes no AWS call. WI-1.0
+  only — no storage change, no ownership change, no
   new item type, which owner decision 11 gates behind this work item. A fresh
   critic that built none of it re-derived **every** criterion from the
   repository — AC-1.0-1..7 and V-a..V-g, all **PASS**, nothing routed back: the
@@ -308,17 +317,19 @@ as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
   commits' collected-file lists differ by exactly one file, the containment test
   — so +1 file and +6 tests is measured, not arithmetic. Both P1 tiers:
   containment `FAILS=0`, `ASSESSED=6`; storage `FAILS=8`; CONTROL `FAIL` in both.
-- **Smallest next action: the owner's one decision — land WI-1.0 now as its own
-  pull request into `development` (recommended), or keep building WI-1.1 on this
-  branch first.** Landing is its own session: it asks once more right before
-  pushing and runs the full step 7 list on the exact HEAD pushed. The carried
-  review findings — filtering after a bounded read can under-report, and nothing
-  signals a dropped row — plus the verification's untested `PK` half are **not**
-  verification failures; all three belong to WI-1.2's specification, because
-  WI-1.2's per-message rows are what make them consequential. Nothing is pushed;
-  a push, a PR and any promotion each need their own authorization in the
-  conversation that performs them.
-- **Awaiting the owner:** the landing decision above; whether a `#`-bearing
+  The landing runs the same list again on the commit it pushes; that result
+  lives in the Gauntlet state file (P40).
+- **Smallest next action: the landing's gates on this commit, then the owner's
+  yes or no — push, open the pull request into `development`, and merge it when
+  every check is green.** After WI-1.0 lands, the next work item is **WI-1.1's
+  specification**: ownership binds to an immutable user, and the send route
+  enforces it. The carried review findings — filtering after a bounded read can
+  under-report, and nothing signals a dropped row — plus the verification's
+  untested `PK` half are **not** landing blockers; all three belong to WI-1.2's
+  specification, because WI-1.2's per-message rows are what make them
+  consequential. A push, a PR and any promotion each need their own
+  authorization in the conversation that performs them.
+- **Awaiting the owner:** the landing's yes or no, asked after its gates run; whether a `#`-bearing
   chatId should be fixed at the write path, by relaxing the predicate, or by
   giving WI-1.2 an unambiguous key shape (the recommendation, because it is the
   only one still correct after P3 adds attachments) — the silent drop is now
@@ -346,6 +357,7 @@ as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-p1-wi-1.0-landing.md](handoffs/2026-09-22-p1-wi-1.0-landing.md)
 - [2026-09-22-p1-wi-1.0-verification.md](handoffs/2026-09-22-p1-wi-1.0-verification.md)
 - [2026-09-22-p1-wi-1.0-cleanup.md](handoffs/2026-09-22-p1-wi-1.0-cleanup.md)
 - [2026-09-22-p1-wi-1.0-implementation.md](handoffs/2026-09-22-p1-wi-1.0-implementation.md)
