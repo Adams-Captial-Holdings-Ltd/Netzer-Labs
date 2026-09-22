@@ -31,12 +31,15 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   not written here: every commit this file is part of changes that number, so a
   count stated in it is stale the moment it is committed — the same reason P40
   keeps a merge SHA out of the file it describes. Re-derive it with
-  `git rev-list --count origin/development..HEAD`. See **M64**. The latest session is the **CLEANUP** of **Layer A**;
-  the IMPLEMENTATION before it added `tests/e2e/staging/`. Neither made a
-  **staging call, an AWS API call, a deploy or a promotion**, and neither read
-  the token. Deployment: none. The frontmatter stamp **moves to `3fc3de4`**,
-  because cleanup edited a test source file, so the source these claims describe
-  is no longer byte-identical to the old stamp (P23). The containment statements above were
+  `git rev-list --count origin/development..HEAD`. See **M64**.
+  The latest session is the **VERIFICATION** of **Layer A**; the CLEANUP before
+  it named two literals, and the IMPLEMENTATION before that added
+  `tests/e2e/staging/`. None of the three made a **staging call, an AWS API call,
+  a deploy or a promotion**, and none read the token. Deployment: none. The
+  frontmatter stamp stays at **`3fc3de4`**: cleanup edited a test source file and
+  moved it there, and VERIFICATION changed no source at all, so the source these
+  claims describe is still byte-identical to that stamp (P23).
+  The containment statements above were
   re-derived against `origin/qa` `ac0cbcc`, `origin/staging` `8299f04` and
   `origin/production` `de244e6`, all three unmoved since last proved.
 - Baseline recorded before any change on this branch, on 2026-09-21 at
@@ -158,9 +161,33 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   **P36 does not fire** — the only source file changed is under `tests/e2e/`,
   which no gate in the step 7 list reads (A110, re-measured) — so the full list
   ran once as the baseline at `4638004` and matched; the five docs gates and
-  `git diff --check` were re-run at the exact final HEAD.
-- Smallest next action: **VERIFICATION of F1's staging tier, Layer A**, by a
-  fresh critic that built none of it. **Layer B is what actually finishes F1** — one
+  `git diff --check` were re-run at **every commit this work made, including the
+  true final one** — deliberately not named here, because naming a HEAD in a file
+  that then receives more commits is the same self-invalidation **M64** records
+  and **M65** generalises. Derive it with `git rev-parse HEAD`.
+- **VERIFICATION PASSED (2026-09-22) → F1's Layer A is VERIFIED.** By a fresh
+  read-only critic that built none of it, at the true final HEAD: **12 of 12
+  criteria PASS**, nothing routed back. Everything was re-derived rather than
+  carried — scope (3 paths, 0 production src, only the code commit touches the
+  source), the arithmetic computed not read, all three gate tiers with CONTROL
+  failing in each, the gate's own `H-1..H-6` predicates re-read to confirm the
+  extraction could not have broken a row, the five docs gates, the ledger carry
+  by `diff` (2 hunks, 31 additions, **0** deletions), and containment against all
+  four tips. **The critic did two things beyond the brief that matter.** First, it
+  caught that the mutation test the brief prescribed was *dead on arrival*: after
+  an Extract-Constant refactor, changing the constant's value moves every reader
+  in lockstep, so it cannot discriminate — a lazier critic would have reported "no
+  change" and called the constant dead code. It built the correct probe instead,
+  a **decoupling** mutation, and got the expected regression: `recIfUnreached()`
+  stops firing and **11 of 12 checks lose their real failure reason**. Second, it
+  returned six findings the brief never asked for, four of them accuracy defects
+  in the cleanup session's own log; all four are corrected and recorded in that
+  log's section 8 rather than quietly edited.
+- Smallest next action: **LANDING of F1's staging tier, Layer A** — and it is
+  **NOT authorized yet**. Both overnight authorization windows have EXPIRED, and
+  the standing rule is that every push, PR and merge needs a fresh owner yes **in
+  the conversation that performs it**. The work is verified, green and sitting on
+  this machine only. **Layer B is what actually finishes F1** — one
   authorized run against real staging — and it still needs decision 6/33's token
   *and* its own fresh authorization in the conversation that performs it.
   Nothing is pushed; a push, a PR and any promotion each need their own
@@ -170,6 +197,7 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-f1-staging-verification.md](handoffs/2026-09-22-f1-staging-verification.md)
 - [2026-09-22-f1-staging-cleanup.md](handoffs/2026-09-22-f1-staging-cleanup.md)
 - [2026-09-21-f1-staging-implementation.md](handoffs/2026-09-21-f1-staging-implementation.md)
 - [2026-09-21-f1-staging-specification.md](handoffs/2026-09-21-f1-staging-specification.md)

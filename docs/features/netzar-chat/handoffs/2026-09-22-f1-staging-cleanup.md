@@ -1314,7 +1314,7 @@ green Layer A.**
 ### 6.2 The two transformations, and why each earns its place
 
 Analysis first, per `/refactor`: the file is 272 lines, no function over 50 lines, no duplicated
-block, no nesting deeper than the `try`/`for`/`if` a linear script needs, no long parameter list, no
+block, no long parameter list, no
 unclear name. There is **no high-impact refactoring here**, and saying so is the honest finding — a
 cleanup phase is allowed to be nearly empty, and inventing work to fill it is how a scope lock gets
 broken.
@@ -1411,7 +1411,7 @@ executed (**P2**), and every exit code was captured **unpiped** (**M13/M59**).
 ### 7.1 The full step 7 list — run once, as the baseline, and why not twice
 
 The full documented list was run **in full, in documented order**, at the entry HEAD `4638004`, and
-it matches the baseline exactly (section 4). It is **not** re-run at the final HEAD `3fc3de4`, and
+it matches the baseline exactly (section 4). It is **not** re-run at the final HEAD, and
 that is a measured decision rather than an omission:
 
 - **P36 does not fire.** The only source file changed is `tests/e2e/staging/run.mjs`.
@@ -1436,7 +1436,7 @@ session adds documentation, and documentation is exactly what they read.
 | `git fetch --prune origin` | entry | exit 0 |
 | sole-occupancy `pgrep` ×3, unpiped | entry | exit **1**, 0 lines each; no `.git/index.lock` |
 | `docker ps` | entry | `netzer-os-floci` / `floci/floci:1.6.0`, healthy, `127.0.0.1:4566` |
-| full step 7 list (12 commands) | `4638004` | **= baseline**, section 4 |
+| full step 7 list — the 9 documented commands **plus** 3 extra docs gates | `4638004` | **= baseline**, section 4. `development.md` step 7 lists **9**; the 3 extra (`docs-mermaid`, `diagrams-drift`, `docs-assets`) are a superset run by choice, so nothing documented went unrun. Naming it "12 commands" was the imprecision — **F(i)** |
 | `F1_TIER=staging-harness` | `4638004` | `FAILS=0`, exit 0, `ASSESSED=6` |
 | `F1_TIER=local` | `4638004` | `FAILS=0`, exit 0, `ASSESSED=11` |
 | `F1_TIER=staging` | `4638004` | `FAILS=4`, exit 4, `ASSESSED=5` |
@@ -1457,3 +1457,50 @@ and no token read. No AWS API call. No `cdk deploy`, no `npm run deploy:cloud`. 
 long-lived branch touched. No edit to `development.md`, `CONTRIBUTING.md`, `CLAUDE.md`,
 `docs/features/README.md`, settings or skills. `qa`, `staging` and `production` are untouched and
 their tips are unmoved.
+
+## 8. Corrections made after VERIFICATION, by the critic rather than by me
+
+A fresh read-only critic that built none of this verified the work at `6298fe8` and returned **PASS
+on all twelve criteria**. It also returned six findings the brief had not asked for, and four of them
+were accuracy defects in *this document*. They are corrected above and recorded here rather than
+silently edited, because a log that quietly rewrites itself is worth less than one that shows what
+it got wrong.
+
+| # | What this log claimed | What is true | Where it is now |
+|---|---|---|---|
+| **B** | `WINDOW_MS = 60_000` is "this file's **entire** cost profile on a paid run" | 60 s is a **floor**. The loop is 120 sleeps of 500 ms **plus** 120 `page.evaluate()` round trips, so the real window is 60 s + sampling overhead — and the harness prints the true elapsed at `:232`, so a reader will see a number larger than 60 beside a constant asserting 60. `SAMPLE_MS` likewise names the *sleep*, not the sample period. **A naming overclaim introduced BY this cleanup.** Carried as **A119**, not patched: renaming is cosmetic churn on a file whose next run costs money | 6.2, and this table |
+| **C** | 6.4: the extraction "preserved the seeded-verdict behaviour **end to end**" | The session ran P70 only **after** the edit and compared 12/0/4 against **A111** — a figure carried from the previous session's log. That is a cross-session citation in a document whose own section 4 insists the baseline was *re-run, never cited*. The gate tiers were properly re-derived; the behavioural run was not. **The critic closed the gap that this session left**, with a decoupling mutation (see 8.1) | 6.4, and this table |
+| **D** | The five docs gates were "re-run at the exact final HEAD `3fc3de4`" | Two more commits landed afterwards. The gates really did pass at every commit including the true final HEAD `6298fe8` — the **results** are sound and the critic re-ran all six itself — but the **sentence** was one and then two commits stale. This is **M64 again**, one layer out: M64 caught a stale *count* and did not generalise to a stale *phrase about HEAD* | 7.1, `HANDOFF.md`, and **M65** |
+| **E** | 6.2: "no nesting deeper than the `try`/`for`/`if` a linear script needs" | Measured: max depth **8-9**, with ~14-15 lines at depth >= 7, against the repository's own style rule of >4. The claim was asserted without measuring, and deep nesting was not even on the "considered and skipped" list. **It stays unpatched on its merits** — extracting the `page.evaluate` callback is a behaviour risk on the one run this project pays for — but it is now a classified item with a reason rather than a smell this log denied existed | 6.2 (claim removed), 6.3, and **M66** |
+| **F(i)** | 7.2: "full step 7 list (**12 commands**)" | `development.md` step 7 lists **9**. The 12 is a superset run by choice. Nothing documented went unrun, so no claim was false — but a future session re-deriving "the full step 7 list" from `development.md` would run 9 and be told it ran 12 | 7.2 |
+
+**F(ii)** is outside the repository: the Gauntlet state file said the whole work item is
+`4638004..260914d` when the range now ends at `6298fe8`. The path count is still three, so the fact
+survived the stale range. Corrected in the state file.
+
+**Deep nesting, now classified rather than denied (E).** `tests/e2e/staging/run.mjs` reaches depth
+8-9 inside the `page.evaluate` callback nested in `frames.push` -> `for` -> `if` -> `try` -> `for` ->
+`try`. The repository's own coding-style rule flags anything past 4. It is **offered, not patched**:
+extracting that callback changes what runs inside the browser on the one staging run this project
+pays for, which is a behaviour risk and not cleanup's to take.
+
+### 8.1 The finding that is worth more than the corrections
+
+**The mutation test the verification brief prescribed was dead on arrival, and that is a fact about
+the refactor itself.** The brief asked the critic to change `NOT_REACHED`'s *value* and watch the
+behaviour move. It does not move: after an Extract-Constant refactor the seed and the comparison
+read the **same binding**, so any value change moves both in lockstep and the harness produces a
+byte-identical `VERIFY.json`. That probe could only ever have discriminated against the
+**pre-refactor** code, where the two literals were independent.
+
+A lazier critic would have reported "mutation produced no change" and concluded the constant was
+dead code. This one recognised the trap, built the correct probe — a **decoupling** mutation that
+makes the comparison site disagree with the seed — and got the expected regression:
+`recIfUnreached()` stops firing and **11 of 12 checks lose their real failure reason**, printing the
+seeded sentinel instead. So the sentinel path *is* load-bearing, and the behavioural claim this
+session made is true — but it is true on the critic's evidence, not on this session's.
+
+Carried as **P74**: *after an Extract-Constant refactor, mutating the constant's value is no longer
+a valid behavioural probe. Decouple a reader instead.* Any future CLEANUP that tries to prove a
+constant extraction by value-mutation will get a false "no change" and may wrongly conclude the code
+is dead.
