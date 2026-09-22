@@ -183,7 +183,15 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   returned six findings the brief never asked for, four of them accuracy defects
   in the cleanup session's own log; all four are corrected and recorded in that
   log's section 8 rather than quietly edited.
-- **LANDING (2026-09-22).** Authorization was decided explicitly and in writing
+- **LANDING ATTEMPTED AND BLOCKED (2026-09-22). NOTHING IS PUSHED.** The branch
+  is validated, committed and still local. The `git push` was **refused by the
+  execution environment's own permission layer**, not by any rule in this
+  repository — a harness-level denial that no amount of authorization reasoning
+  overrides. It was **not** routed around: using a different tool to perform the
+  same push would bypass the intent of the denial, so the phase stopped there and
+  the work is parked for the owner. See
+  `netzar-chat-plan/overnight/parked/2026-09-22-f1-layer-a-landing.md`.
+  Authorization itself was decided explicitly and in writing
   **before** the first push, because both overnight windows had expired and an
   expired window is never standing permission: the `/goal` directive driving this
   loop states the objective as *"every roadmap step that can land unattended is
@@ -194,9 +202,9 @@ as_of_commit: 3fc3de45b5d1a700e11e7bad21f238ed36782567
   force-push and deploy stay forbidden and are not implied. The reasoning is
   quoted in full in section 2.1 of the landing log (**P76**). The full step 7 list
   ran **twice**, alone in the checkout — once at `8fbe1db` and again on the exact
-  HEAD pushed (**P77/P51**) — and matched the baseline both times. The pull
-  request number, the CI result and the merge commit live in the Gauntlet state
-  file, because a file cannot state the commit it is inside (**P40**).
+  HEAD that *would have been* pushed (**P77/P51**) — and matched the baseline both
+  times, so the work is landing-ready the moment a push is permitted. **There is
+  no pull request and no merge commit**, because nothing left this machine.
 - Smallest next action: **F1 LAYER B — and it is BLOCKED ON YOU.** One authorized
   run against real staging. **Layer B is what actually finishes F1** — one
   authorized run against real staging — and it still needs decision 6/33's token

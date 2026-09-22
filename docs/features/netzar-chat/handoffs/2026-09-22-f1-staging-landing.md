@@ -1320,17 +1320,25 @@ Short pointers only. The owning document has the detail; do not copy it here.
 | P76 | **An expired authorization window is never standing permission.** When a landing relies on a new directive instead, **quote the words you are relying on and record the reading in writing BEFORE the first push**, in the log that ships with the change. | Two windows had expired here, and the only live authorization was a general directive rather than a yes to this specific push. A reading like that is a judgement, and a judgement that is never written down is indistinguishable afterwards from an assumption nobody checked. Section 2.1 quotes the three phrases relied on and states the scope the reading does *not* extend to, so a reader who disagrees can see exactly what was decided and object to the decision rather than having to reconstruct it. |
 | P77 | **Run the full pre-push list on the commit you will actually push, which means committing the session log FIRST and running it again.** The log commit changes the HEAD, and the HEAD is what CI receives. | **P51.** A list that passed on the commit *before* the write-up is not a list that passed on what was pushed. This project has run it twice at every landing for that reason, and the second run is the one that matches the SHA in the pull request. |
 
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M67 | This landing log and the feature `HANDOFF.md` were written **in the past tense** — "Landed F1's staging tier into `development`" — and **committed before the push was attempted**. The push was then refused by the execution environment's permission layer, so for the life of one commit both documents asserted a landing that had not happened. | **Contained, and caught in the same session** — but it is exactly the failure this repository's honesty rules exist to prevent (**P2**: never record a command as passing unless it actually ran). A reader of `7f857e4` alone would have believed the work was on GitHub. Nothing downstream consumed the false claim. | Both documents corrected in the same session, in a follow-up commit that says plainly what happened; **6.4** records the blocked push and the decision not to route around it. | **The log has to be committed before the push — but it must not be written as though the push succeeded.** P77 is right that the write-up has to be inside the commit CI receives; the mistake was tense, not sequence. Write the pre-push state in the past tense and the landing itself in the *future* tense, then correct it afterwards with the outcome. "What I am about to do" and "what I did" are different sentences, and only one of them can be committed before the fact. |
+
 #### Standing assumptions (continued)
 
 | # | Assumption | Confidence and caveat |
 |---|---|---|
+| A124 | **A harness-level permission denial is not a Gauntlet gate and cannot be satisfied by better evidence.** The `git push` here was refused by the execution environment, outside this repository and outside the Gauntlet. Section 2.1's authorization reading may be entirely correct and the push is still refused. | Observed 2026-09-22. Two consequences worth carrying. First, **do not re-argue it** — a denial is not a failing test that a stronger proof turns green. Second, **do not route around it**: performing the same action through different tooling bypasses the denial's intent rather than finding a safer method, and that is a line this loop does not cross. The correct response is to park with a report and hand it to the owner. |
 | A122 | **The remote is `https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs.git`**, while `development.md:25` still names `emmanuelmadams4-lgtm/Netzer-Labs`. | Re-confirmed 2026-09-22 from `git remote -v`. This is **A77**'s third item and it remains **offered, not patched** — `development.md` may not be edited without the owner's approval for that specific change. Worth knowing before anyone follows that line to find the repository. |
 | A123 | At `8fbe1db`, alone in the checkout, the **FULL `development.md` step 7 list matches the baseline**: `npm test` 247 files / 3215 tests exit 0 with **0** `AWS_GUARD_VIOLATION` lines; integration 38 passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap **by name**; typecheck, build, web typecheck, web build exit 0; five docs gates exit 0 (docs-links 212 files / 3512 links); `git diff --check` exit 0; 0 changed paths. All three gate tiers unchanged, CONTROL FAIL in each. | Observed 2026-09-22, emulator identified as Floci **first** (**P50**), sole occupancy proved **first** (**P41**), every exit code captured unpiped. This is the pre-push run; the run that matters for the pull request is the one on the exact HEAD pushed, recorded in section 7. |
 
 ## 6. What this phase did
 
-**Landed F1's staging tier, Layer A, into `development` — and nothing else.** No promotion, no
-staging call, no deploy. The work being landed is the ported and repaired staging QA harness at
+**ATTEMPTED to land F1's staging tier, Layer A, into `development`. The push was BLOCKED and
+NOTHING WAS PUSHED.** See **6.4** — the phase ran every gate, passed every one, and then stopped at
+the push. No promotion, no staging call, no deploy, and no pull request. The work being landed is the ported and repaired staging QA harness at
 `tests/e2e/staging/run.mjs` plus its documentation: built in IMPLEMENTATION, tidied in CLEANUP, and
 **VERIFIED by a fresh critic that built none of it (12 of 12 criteria)**.
 
@@ -1368,10 +1376,34 @@ runs a full `cdk deploy --all`. After this merge `development` is still five-plu
 
 ### 6.3 Where the outcome is recorded
 
-**A file cannot state the commit it is inside (P40)**, so the pull request number, the CI result, the
-merge commit and the post-merge containment check are recorded in the **Gauntlet state file's
-STATUS** and in `netzar-chat-plan/overnight/ledger.txt`, not here. This section deliberately stops at
-what was true when it was written.
+**A file cannot state the commit it is inside (P40)**, so any pull request number, CI result and
+merge commit would be recorded in the **Gauntlet state file's STATUS** and in
+`netzar-chat-plan/overnight/ledger.txt`, not here.
+
+### 6.4 The outcome: BLOCKED at the push, and not routed around
+
+Steps 1 through 3 of 6.2 completed and passed. **Step 4 did not happen.** `git push -u origin
+feat/f1-staging-tier` was **refused by the execution environment's own permission layer**, which is
+a harness-level control sitting outside this repository and outside the Gauntlet. It is not a rule
+this project can satisfy with better evidence, and **no amount of authorization reasoning overrides
+it** — section 2.1's reading may be entirely correct and the push is still refused.
+
+**It was deliberately NOT routed around.** The same push could have been attempted through other
+available tooling, and that was rejected as the wrong thing to do: a different tool performing the
+identical action is a bypass of the denial's intent, not a safer method. The phase stopped at the
+refusal.
+
+**What that leaves.** The branch is committed, clean, fully validated twice on the exact HEAD, and
+**local**. Nothing is lost and nothing is half-done: the next session with push permission can land
+it with no rework, because the evidence in section 7 is attached to a commit that already exists. A
+parked report is filed at
+`netzar-chat-plan/overnight/parked/2026-09-22-f1-layer-a-landing.md` naming exactly what is needed
+and from whom.
+
+**Recorded as M67**, because the honest failure here is one of sequencing rather than judgement: the
+landing log and the feature `HANDOFF.md` were written and committed in the past tense *before* the
+push was attempted, so for one commit both documents asserted a landing that had not occurred. They
+are corrected in the same session that caused it.
 
 ## 7. Commands actually run, and their real results
 
@@ -1406,13 +1438,20 @@ A host that does not exist cannot answer 500 (**P52**).
 
 ### 7.2 The run that matters
 
-The full list was run **again on the exact HEAD this log commit creates** (**P77/P51**), because
-that is the commit pushed and the commit CI receives. Its result, the pull request and the merge are
-in the Gauntlet state file (**6.3**).
+The full list was run **again on the exact HEAD this log commit creates** (**P77/P51**), at
+`7f857e4`, and it **matched the baseline**: `npm test` 247 files / 3215 tests exit 0 with 0
+`AWS_GUARD_VIOLATION` lines; integration 38 passed / 25 skipped / 1 failed, the Floci `checkSecrets`
+gap **by name**; typecheck, build, web typecheck, web build exit 0; five docs gates exit 0
+(docs-links **213 files / 3550 links**); `git diff --check` exit 0; 0 changed paths. All three gate
+tiers re-run there: `staging-harness` `FAILS=0`/6, `local` `FAILS=0`/11, `staging` `FAILS=4`, CONTROL
+**FAIL** in each.
+
+**That is the run a pull request would have carried, and there is no pull request** — the push was
+refused (**6.4**). The evidence stands attached to `7f857e4` for whoever lands it.
 
 ### 7.3 What was NOT done
 
-No promotion. No push to `qa`, `staging` or `production`. No `cdk deploy`, no
+**No push, and therefore no pull request, no CI run and no merge.** No promotion. No push to `qa`, `staging` or `production`. No `cdk deploy`, no
 `npm run deploy:cloud`. No staging call and no token read. No AWS call. No force-push. No writer
 agent touched the branch — **LANDING is read-only reviewers only**. No edit to `development.md`,
 `CONTRIBUTING.md`, `CLAUDE.md`, `docs/features/README.md`, settings or skills.
