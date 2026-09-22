@@ -3,35 +3,47 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: 3393f6cee93f104cf7b09d169d3b538ade3aec87
+as_of_commit: 0391eacf3b2b0145fc4bfcef09628a22c71fa37c
 ---
 
 # Netzar Chat handoff
 
-- **CURRENT: P1 SPECIFICATION is complete — step 3 of 10, conversation identity
-  and durable transcript. Nothing is built.** Branch
-  `feature/p1-conversation-identity`, cut from `origin/development` @ `3393f6c`;
-  merge target `development`. **Pushed: no. PR: none. Deployment: none.** No AWS
-  call, no promotion. The phase produced one failing test, acceptance criteria
-  frozen as **AC-1.x**, and a two-tier gate at
-  `~/.claude/plans/netzar-chat-plan/p1-proof.sh` (outside the repository).
-- **The red state:** `src/adapters/dashboard/sessions-containment.test.ts` —
-  **1 failed, 1 passed**. The failure is that a per-agent `GET /sessions` returns
-  **2** rows when the agent partition holds a conversation row and one
-  `CHAT#…#MSG#…` row; the passing test is the control, the same route and fixture
-  with only the conversation row, which is what shows the red is about
-  containment and not about auth, routing or the harness.
-- **P1's gate at `3393f6c`:** `P1_TIER=containment` **`FAILS=5`, `ASSESSED=6`**
-  (only the no-CDK guard passes); `P1_TIER=storage` **`FAILS=8`, `ASSESSED=8`**.
-  **CONTROL reads `FAIL` in both.** Unlike F1's Layer A, this gate is mostly
-  **behavioural**: 5 of 6 containment rows and 5 of 8 storage rows RUN a test
-  rather than grep for a line, and the rows are marked `[B]` in the table itself.
-- **Two findings this phase produced by reading, both classified and NOT
-  patched** (constraint 4, decision 9's "no hotfix"). First, the WI-1.0
-  containment gate is **already violated**: four readers Scan or Query the
-  sessions table with no constraint on item type, while `jarvis-memory-repo.ts`
-  already writes a foreign item type (`PK=JARVIS#…`) into that same table.
-  Second, **sending a message into another user's conversation takes ownership of
+- **CURRENT: P1 WI-1.0 IMPLEMENTATION is complete — step 3 of 10, conversation
+  identity and durable transcript. The containment gate is CLOSED; CLEANUP is
+  next.** Branch `feature/p1-conversation-identity`, cut from
+  `origin/development` @ `3393f6c`; merge target `development`. **Pushed: no.
+  PR: none. Deployment: none.** No AWS call, no promotion. WI-1.0 only — no
+  storage change, no ownership change, no new item type, which owner decision 11
+  gates behind this work item.
+- **P1's gate at the final code commit:** `P1_TIER=containment` **`FAILS=0`,
+  `ASSESSED=6`, 6/6 PASS**; `P1_TIER=storage` **unmoved at `FAILS=8`,
+  `ASSESSED=8`** — a containment change that moved the storage tier would mean
+  the work leaked out of its work item. **CONTROL reads `FAIL` in both.** The
+  gate is mostly **behavioural**: 5 of 6 containment rows RUN a test rather than
+  grep for a line, and the rows are marked `[B]` in the table itself. The
+  incoming red — `sessions-containment.test.ts`, 1 failed / 1 passed — is green,
+  and the file now holds **6** tests.
+- **The fix, and the one defect it carries.** `isConversationRow` selects the
+  conversation key shape (`PK=AGENT#…`, `SK=CHAT#<chatId>` with no further `#`
+  segment) at all four readers. **It rests on chatIds carrying no `#`, and
+  nothing enforces that** — `safeDashboardChatId` returns an already-prefixed id
+  verbatim, and Paperclip's externally supplied `issueId` is never
+  character-filtered, so such a conversation is now silently invisible in the
+  Sessions list, the CSV export and the Jarvis view. Found because two
+  independent reviewers contradicted each other and the contradiction was
+  re-derived rather than adjudicated. **Classified, NOT patched** — both fixes
+  change something outside this work item — and put to the owner as the one open
+  fork. Whether any such row exists today is **Unknown**: it needs a read against
+  real data.
+- **The specification's inference is now a MEASUREMENT.** A Jarvis memory row
+  really did render as a conversation whose `agentId` was the principal's own
+  `JARVIS#<hashPrefix16>`, visible to any holder of `sessions:read`: the
+  cross-agent `GET /sessions` returned **3** rows before the fix and **1** after.
+  An independent security review confirmed the projection never requested the
+  row's `text`, so no memory **content** was reachable — only that id and the
+  turn's timestamp and uuid.
+- **Still open from the specification phase, unchanged here: sending a message
+  into another user's conversation takes ownership of
   it** — the list route hands every chat id to any `sessions:read` caller, the
   send route checks no ownership, and `appendTurns` overwrites the stored owner
   with the caller's identity on every turn, after which `DELETE /sessions` agrees
@@ -266,15 +278,31 @@ as_of_commit: 3393f6cee93f104cf7b09d169d3b538ade3aec87
   real verdict, **zero** left `not reached`, conversation screenshots on all four
   surfaces, and the two turn checks failing for the correct local reason, which
   is a free negative control. Full detail in the Layer B session log.
-- **Smallest next action: IMPLEMENTATION of WI-1.0, in a fresh session, on
-  `feature/p1-conversation-identity`.** Make the containment tier green: the four
-  unconstrained readers select conversation rows only, and the containment suite
-  grows the three tests the gate names as *not yet written* (the cross-agent
-  scan, the CSV export, the jarvis `sessions` action). **No storage change in
-  that work item** — owner decision 11 gates per-message records behind WI-1.0
-  passing. Nothing is pushed; a push, a PR and any promotion each need their own
-  authorization in the conversation that performs them.
-- **Three things awaiting the owner, none of them blocking WI-1.0:** decision 8's
+- **Last required checks, on the exact final code commit**, with fake
+  credentials planted: the full `development.md` step 7 list carries **no
+  failure but the known Floci gap** — `npm test` **248 files / 3221 tests, all
+  passing**, `guard-violations: 0`; integration 38 passed / 25 skipped / 1
+  failed, the Floci `checkSecrets … schedule-deleted` gap **by name** on an
+  emulator identified as `floci/floci:1.6.0` first; typecheck, build, both web
+  gates, `local:verify` and all five docs gates exit 0; `git diff --check` 0; 0
+  changed paths. It does **not** "match the baseline" and is not claimed to: the
+  baseline is 247 files / 3215 tests and the arithmetic closes as +1 file and +6
+  tests. **Sole occupancy did NOT hold and is not claimed:** two orphaned
+  `tsx watch` trees were live in the checkout throughout and the execution
+  environment refused the `kill`; they then recompiled and restarted the
+  orchestrator on port 3000 in response to this session's edits.
+- **Smallest next action: CLEANUP of WI-1.0, in a fresh session, on
+  `feature/p1-conversation-identity`**, scope-locked to the four touched files.
+  The two carried review findings — filtering after a bounded read can
+  under-report, and nothing signals a dropped row — are **not** cleanup; they
+  belong to WI-1.2's specification, because WI-1.2's per-message rows are what
+  make them consequential. Nothing is pushed; a push, a PR and any promotion each
+  need their own authorization in the conversation that performs them.
+- **Four things awaiting the owner, none of them blocking CLEANUP:** whether a
+  `#`-bearing chatId should be fixed at the write path, by relaxing the
+  predicate, or by giving WI-1.2 an unambiguous key shape (the recommendation,
+  because it is the only one still correct after P3 adds attachments);
+  decision 8's
   unmapped-row retention date (WI-1.4 cannot be specified without it); whether
   the ownership-takeover finding should be closed sooner than WI-1.1, which would
   mean reopening decision 9's "no hotfix"; and whether owner-scoped listing must
@@ -297,6 +325,7 @@ as_of_commit: 3393f6cee93f104cf7b09d169d3b538ade3aec87
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-p1-wi-1.0-implementation.md](handoffs/2026-09-22-p1-wi-1.0-implementation.md)
 - [2026-09-22-p1-specification.md](handoffs/2026-09-22-p1-specification.md)
 - [2026-09-22-f1-layer-b-first-run.md](handoffs/2026-09-22-f1-layer-b-first-run.md)
 - [2026-09-22-f1-staging-landing.md](handoffs/2026-09-22-f1-staging-landing.md)
