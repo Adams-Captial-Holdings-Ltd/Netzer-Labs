@@ -3,26 +3,32 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: 6ce1ca0c6c0fee5d5fd2eb1feb8f1bba38c06a56
+as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
 ---
 
 # Netzar Chat handoff
 
-- **CURRENT: P1 WI-1.0 CLEANUP is complete — step 3 of 10, conversation
-  identity and durable transcript. VERIFICATION is next.** Branch
+- **CURRENT: P1 WI-1.0 is VERIFIED — step 3 of 10, conversation identity and
+  durable transcript. The owner decides what comes next** (below). Branch
   `feature/p1-conversation-identity`, cut from `origin/development` @ `3393f6c`;
   merge target `development`. **Pushed: no. PR: none. Deployment: none.** No AWS
   call, no promotion. WI-1.0 only — no storage change, no ownership change, no
-  new item type, which owner decision 11 gates behind this work item. CLEANUP
-  changed **no executable line**: it corrected three statements the code had
-  stopped supporting — the predicate's own comment (it called a `#`-free chatId
-  an enforced invariant; nothing enforces it), the containment test's header (it
-  still described the pre-fix route in the present tense), and the security
-  diagram's two WI-1.0 notes (the Jarvis `sessions` action is gated by a
-  `viewer` role floor, not `sessions:read`, and the rule's `#` limit was
-  missing). Each `.ts` edit is proved comment-only by a byte-identical
-  comment-stripped transpile. Detail in the WI-1.0 cleanup log.
-- **P1's gate at the final code commit:** `P1_TIER=containment` **`FAILS=0`,
+  new item type, which owner decision 11 gates behind this work item. A fresh
+  critic that built none of it re-derived **every** criterion from the
+  repository — AC-1.0-1..7 and V-a..V-g, all **PASS**, nothing routed back: the
+  gate in both tiers, the three mutations re-run by hand, the scope, the diagram
+  gate's liveness, the comment-only proof of CLEANUP, each of CLEANUP's rewritten
+  sentences at its source line, the ledger carries by `diff`, and the full step 7
+  list, with the development baseline **re-measured** rather than quoted. It also
+  listed every user of the sessions table itself, independently of the
+  specification: exactly four readers turn rows into conversations, and all four
+  now filter. **Two findings, classified and not patched:** no test pins the
+  predicate's `PK` half — with it removed, all six tests and the release gate stay
+  green, because the `SK` half already rejects every fixture (a test gap, not a
+  code defect; one fixture closes it, in WI-1.2's specification); and the
+  implementation log's record of its third mutation was imprecise (all six tests
+  fail under it, not one). Detail in the WI-1.0 verification log.
+- **P1's gate, re-derived by the fresh critic at the frontmatter's commit:** `P1_TIER=containment` **`FAILS=0`,
   `ASSESSED=6`, 6/6 PASS**; `P1_TIER=storage` **unmoved at `FAILS=8`,
   `ASSESSED=8`** — a containment change that moved the storage tier would mean
   the work leaked out of its work item. **CONTROL reads `FAIL` in both.** The
@@ -286,40 +292,43 @@ as_of_commit: 6ce1ca0c6c0fee5d5fd2eb1feb8f1bba38c06a56
   real verdict, **zero** left `not reached`, conversation screenshots on all four
   surfaces, and the two turn checks failing for the correct local reason, which
   is a free negative control. Full detail in the Layer B session log.
-- **Last required checks, at the frontmatter's commit** (CLEANUP's last commit
-  before its log), with fake credentials planted: the full `development.md`
-  step 7 list carries **no failure but the known Floci gap** — `npm test`
-  **248 files / 3221 tests, all passing**, `guard-violations: 0`; integration 38
-  passed / 25 skipped / 1 failed, the Floci `checkSecrets … schedule-deleted`
-  gap **by name** on an emulator identified as `floci/floci:1.6.0` first;
-  typecheck, build, both web gates, `local:verify`, `docs-links`,
-  `feature-knowledge`, `docs-assets` and the PR-context drift gate exit 0;
-  `git diff --check` 0; 0 changed paths — gate for gate the same as the run at
-  CLEANUP's entry commit. It does **not** "match the baseline" and is not claimed
-  to: the baseline is 247 files / 3215 tests and the arithmetic closes as +1 file
-  and +6 tests. **Both P1 tiers were byte-identical to the entry run after every
-  CLEANUP commit**: containment `FAILS=0`, `ASSESSED=6`; storage `FAILS=8`;
-  CONTROL `FAIL` in both. **Sole occupancy did NOT hold and is not claimed:** two
-  orphaned `tsx watch` trees were live in the checkout throughout, the execution
-  environment refuses the `kill`, and they restarted the orchestrator on port
-  3000 again in response to CLEANUP's `handler.ts` edit.
-- **Smallest next action: VERIFICATION of WI-1.0, in a fresh session, by a
-  critic that built none of it**, on `feature/p1-conversation-identity`. The two
-  carried review findings — filtering after a bounded read can under-report, and
-  nothing signals a dropped row — are **not** verification failures; they belong
-  to WI-1.2's specification, because WI-1.2's per-message rows are what make them
-  consequential. Nothing is pushed; a push, a PR and any promotion each need
-  their own authorization in the conversation that performs them.
-- **Four things awaiting the owner, none of them blocking VERIFICATION:** whether a
-  `#`-bearing chatId should be fixed at the write path, by relaxing the
-  predicate, or by giving WI-1.2 an unambiguous key shape (the recommendation,
-  because it is the only one still correct after P3 adds attachments);
-  decision 8's
-  unmapped-row retention date (WI-1.4 cannot be specified without it); whether
-  the ownership-takeover finding should be closed sooner than WI-1.1, which would
-  mean reopening decision 9's "no hotfix"; and whether owner-scoped listing must
-  be fast, since the sessions table has **no GSI** and decision 11 forbids adding
-  one, so "show me only my conversations" stays a scan-and-filter.
+- **Last required checks, at the frontmatter's commit**, run by the fresh critic
+  with fake credentials planted and — **for the first time in P1 — alone in the
+  checkout**: the owner cleared the two orphaned `tsx watch` trees after CLEANUP,
+  and that was re-checked rather than assumed (no process names the checkout, none
+  has its working directory in it, nothing listens on port 3000). The full
+  `development.md` step 7 list carries **no failure but the known Floci gap** —
+  `npm test` **248 files / 3221 tests, all passing**, `guard-violations: 0`;
+  integration 38 passed / 25 skipped / 1 failed, the Floci `checkSecrets …
+  schedule-deleted` gap **by name** on an emulator identified as
+  `floci/floci:1.6.0` first; typecheck, build, both web gates, `local:verify`,
+  `docs-links`, `feature-knowledge`, `docs-assets` and the PR-context drift gate
+  exit 0; `git diff --check` 0; 0 changed paths. **The baseline was re-measured,
+  not quoted:** at `3393f6c`, `npm test` is 247 files / 3215 tests, and the two
+  commits' collected-file lists differ by exactly one file, the containment test
+  — so +1 file and +6 tests is measured, not arithmetic. Both P1 tiers:
+  containment `FAILS=0`, `ASSESSED=6`; storage `FAILS=8`; CONTROL `FAIL` in both.
+- **Smallest next action: the owner's one decision — land WI-1.0 now as its own
+  pull request into `development` (recommended), or keep building WI-1.1 on this
+  branch first.** Landing is its own session: it asks once more right before
+  pushing and runs the full step 7 list on the exact HEAD pushed. The carried
+  review findings — filtering after a bounded read can under-report, and nothing
+  signals a dropped row — plus the verification's untested `PK` half are **not**
+  verification failures; all three belong to WI-1.2's specification, because
+  WI-1.2's per-message rows are what make them consequential. Nothing is pushed;
+  a push, a PR and any promotion each need their own authorization in the
+  conversation that performs them.
+- **Awaiting the owner:** the landing decision above; whether a `#`-bearing
+  chatId should be fixed at the write path, by relaxing the predicate, or by
+  giving WI-1.2 an unambiguous key shape (the recommendation, because it is the
+  only one still correct after P3 adds attachments) — the silent drop is now
+  proved by running it through the real route, not only by reading the
+  predicate; decision 8's unmapped-row retention date (WI-1.4 cannot be specified
+  without it); whether the ownership-takeover finding should be closed sooner
+  than WI-1.1, which would mean reopening decision 9's "no hotfix"; and whether
+  owner-scoped listing must be fast, since the sessions table has **no GSI** and
+  decision 11 forbids adding one, so "show me only my conversations" stays a
+  scan-and-filter.
 - F1 status, unchanged by this phase: **Layer B has run and sits at 11 of 12**,
   with the twelfth a real product gap — the deployed dashboard does not stream
   replies to the browser — routed to **P2** and deliberately not fixed here.
@@ -337,6 +346,7 @@ as_of_commit: 6ce1ca0c6c0fee5d5fd2eb1feb8f1bba38c06a56
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-p1-wi-1.0-verification.md](handoffs/2026-09-22-p1-wi-1.0-verification.md)
 - [2026-09-22-p1-wi-1.0-cleanup.md](handoffs/2026-09-22-p1-wi-1.0-cleanup.md)
 - [2026-09-22-p1-wi-1.0-implementation.md](handoffs/2026-09-22-p1-wi-1.0-implementation.md)
 - [2026-09-22-p1-specification.md](handoffs/2026-09-22-p1-specification.md)
