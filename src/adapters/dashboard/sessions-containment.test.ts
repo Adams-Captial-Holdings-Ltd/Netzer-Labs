@@ -62,10 +62,12 @@ vi.mock('../../observability/logger.js', () => ({
 }));
 
 import { buildDashboardRouter } from './handler.js';
+import { executeQueryTool } from './jarvis.js';
 
 const AGENT = 'main';
 const CHAT = 'dashboard:1750000000000';
 const OWNER = 'dashboard:hash-operator';
+const SESSIONS_TABLE = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 
 /** The conversation row as `appendTurns` writes it today. */
 const CONVERSATION_ROW = {
@@ -92,7 +94,21 @@ const MESSAGE_ROW = {
   userId: OWNER,
 };
 
-/** Items the mocked sessions Query returns for this test. */
+/**
+ * A jarvis long-term-memory row, which `jarvis-memory-repo.ts:75-85` ALREADY
+ * writes into this same table today — P1 does not introduce the foreign type,
+ * it only multiplies it. Carries exactly the attributes the sessions
+ * projection would return for it: that row has no `updatedAt`, no
+ * `messageCount` and no `userId`, and its `createdAt` is an ISO string rather
+ * than the epoch seconds a conversation row carries.
+ */
+const JARVIS_MEMORY_ROW = {
+  PK: 'JARVIS#a1b2c3d4e5f60718',
+  SK: 'TURN#2026-09-22T00:00:00.000Z#8f14e45f-ceea-467a-9575-0e1b1c8b1e2d',
+  createdAt: '2026-09-22T00:00:00.000Z',
+};
+
+/** Items the mocked sessions read returns for this test. */
 let partition: Record<string, unknown>[] = [];
 
 function makeApp() {
@@ -103,6 +119,19 @@ function makeApp() {
 
 function listSessions(role = 'operator') {
   return makeApp().request(`/api/sessions?agentId=${AGENT}`, {
+    headers: { Authorization: `Bearer ${role}` },
+  });
+}
+
+/** No agentId — the cross-agent branch, which Scans instead of Querying. */
+function listAllSessions(role = 'operator') {
+  return makeApp().request('/api/sessions', {
+    headers: { Authorization: `Bearer ${role}` },
+  });
+}
+
+function exportSessions(role = 'operator') {
+  return makeApp().request('/api/sessions/export', {
     headers: { Authorization: `Bearer ${role}` },
   });
 }
@@ -120,6 +149,13 @@ beforeEach(() => {
   send.mockImplementation(async (cmd: { input?: Record<string, unknown> }) => {
     const input = cmd?.input ?? {};
     if (input.KeyConditionExpression === 'PK = :pk') return { Items: partition };
+    // The cross-agent list, the CSV export and the jarvis `sessions` action all
+    // SCAN this table rather than querying one partition. Still discriminated on
+    // the table name, so the fixture cannot stand in for a Scan of any other
+    // table either.
+    if (input.TableName === SESSIONS_TABLE && !input.KeyConditionExpression) {
+      return { Items: partition };
+    }
     return {};
   });
 });
@@ -150,5 +186,54 @@ describe('GET /sessions — containment (WI-1.0)', () => {
     // by construction against a reader that returned nothing at all (M48/M41).
     expect(body.sessions).toHaveLength(1);
     expect(body.sessions[0]?.chatId).toBe(CHAT);
+  });
+
+  it('lists ONLY conversations when the table also holds a foreign item type', async () => {
+    // The cross-agent branch Scans the WHOLE table, so it sees every partition
+    // — including jarvis memory. This is the rendering consequence the
+    // specification could only INFER (A130); here it is measured.
+    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW];
+
+    const res = await listAllSessions();
+
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(body.sessions).toHaveLength(1);
+    expect(body.sessions[0]?.chatId).toBe(CHAT);
+    // Supporting evidence, never the proof: names what it used to render as, so
+    // a future regression is recognisable rather than just a count being wrong.
+    expect(body.sessions.map((s) => s.chatId)).not.toContain(JARVIS_MEMORY_ROW.SK);
+  });
+});
+
+describe('GET /sessions/export — containment (WI-1.0)', () => {
+  it('carries no row that is not a conversation', async () => {
+    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW];
+
+    const res = await exportSessions();
+
+    expect(res.status).toBe(200);
+    const lines = (await res.text()).split('\n').filter((l) => l !== '');
+    // Header plus exactly one data row, and that row is the conversation.
+    expect(lines).toHaveLength(2);
+    expect(lines[1]?.startsWith(`${AGENT},${CHAT},`)).toBe(true);
+    expect(res.headers.get('X-Export-Row-Count')).toBe('1');
+  });
+});
+
+describe('jarvis sessions action — containment (WI-1.0)', () => {
+  it('lists only conversations', async () => {
+    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW];
+    const principal = principalFor('viewer');
+    expect(principal).not.toBeNull();
+
+    const out = await executeQueryTool(principal!, 'sessions', {});
+
+    expect(out.ok).toBe(true);
+    const result = (out as { ok: true; result: { count: number; sessions: { chatId: string }[] } })
+      .result;
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.chatId).toBe(CHAT);
+    expect(result.count).toBe(1);
   });
 });

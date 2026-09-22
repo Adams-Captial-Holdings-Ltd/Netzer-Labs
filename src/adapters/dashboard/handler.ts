@@ -169,6 +169,32 @@ import { checkForUpdates } from '../../lib/updates/discovery.js';
 const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 
 /**
+ * WI-1.0, the containment gate owner decision 11 makes a release gate: every
+ * reader of the sessions table must accept solely `AGENT#…`/`CHAT#…`.
+ *
+ * The table is shared. `jarvis-memory-repo.ts` already writes `PK=JARVIS#…`,
+ * `SK=TURN#…` into it, and P1 adds one `SK=CHAT#<chatId>#MSG#…` record per
+ * message. Every reader below Scans or Queries it and maps whatever comes back
+ * into a conversation by stripping key prefixes, so without this an unrelated
+ * row renders as a phantom conversation.
+ *
+ * Written as an ALLOWLIST — this exact shape — rather than as a blocklist of
+ * the item types that exist today. A blocklist would have to be extended for
+ * every future type, and the one that got forgotten is precisely the failure
+ * this gate exists to prevent.
+ *
+ * A chatId carries no `#`: the repository's own memories key,
+ * `SK=MEM#<chatId>#<iso>#<uuid>` (`lib/tools/dynamodb-tools.ts:63`), already
+ * depends on that, so this reuses an existing invariant rather than inventing
+ * one. The agentId is left unconstrained beyond the prefix, because only the
+ * sort key distinguishes a conversation from its own messages.
+ */
+export function isConversationRow(item: Record<string, unknown>): boolean {
+  const sk = typeof item.SK === 'string' ? item.SK : '';
+  return /^AGENT#./.test(typeof item.PK === 'string' ? item.PK : '') && /^CHAT#[^#]+$/.test(sk);
+}
+
+/**
  * Constrain dashboard-initiated chatIds so a holder of the bearer
  * token can't write turns into another surface's session. Allowed
  * prefixes: dashboard:, system:, smoke:, test:. Everything else gets
@@ -2070,7 +2096,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       items = out.Items ?? [];
     }
 
-    const rows = items.map((i) => ({
+    const rows = items.filter(isConversationRow).map((i) => ({
       agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
       chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
       updatedAt: i.updatedAt as number,
@@ -3653,7 +3679,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const truncated = allItems.length >= 10_000;
     const today = new Date().toISOString().slice(0, 10);
     const headers = ['agentId', 'chatId', 'updatedAt', 'createdAt', 'surface', 'userId', 'messageCount', 'firstMessage', 'modelOverride'];
-    const csvRows = allItems.map((i) => [
+    const csvRows = allItems.filter(isConversationRow).map((i) => [
       String(i.PK ?? '').replace(/^AGENT#/, ''),
       String(i.SK ?? '').replace(/^CHAT#/, ''),
       String(i.updatedAt ?? ''), String(i.createdAt ?? ''),
