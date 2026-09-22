@@ -42,13 +42,31 @@ function sseWrite(res: ServerResponse, event: string, data: string): void {
   res.write(`event: ${event}\n${lines}\n\n`);
 }
 
-async function play(rawBody: string, res: ServerResponse): Promise<void> {
-  // Fixture selection: "/fixture <name>" picks one by name, anything else
-  // (including an unknown name or an unparseable body) plays "default".
-  let text = '';
+/**
+ * The turn request the SPA posts (`web/src/lib/chat/stream.ts`). Parsed in one
+ * place because two things now need it — the fixture choice and the transcript
+ * record — and a missing or unparseable body is still a valid request that
+ * plays "default".
+ */
+function parseTurn(rawBody: string): { text: string; chatId: string } {
   try {
-    text = String((JSON.parse(rawBody) as { text?: unknown }).text ?? '');
-  } catch { /* no body or not JSON — play the default fixture */ }
+    const body = JSON.parse(rawBody) as { text?: unknown; chatId?: unknown };
+    return { text: String(body.text ?? ''), chatId: String(body.chatId ?? '') };
+  } catch {
+    return { text: '', chatId: '' };
+  }
+}
+
+/**
+ * Play one fixture, and return the assistant text that actually reached the
+ * client. `chunk` and `reply` events carry the reply CUMULATIVELY (the client
+ * assigns, never appends — see web/src/lib/chat/stream.ts), so the last one
+ * written is the whole reply. A client that leaves mid-stream is returned what
+ * it had received, which is then exactly what its transcript replays.
+ */
+async function play(text: string, res: ServerResponse): Promise<string> {
+  // Fixture selection: "/fixture <name>" picks one by name, anything else
+  // (including an unknown name) plays "default".
   const name = text.startsWith('/fixture ') ? text.slice('/fixture '.length).trim() : 'default';
   const fixture = fixtures[name] ?? fixtures.default;
 
@@ -57,12 +75,15 @@ async function play(rawBody: string, res: ServerResponse): Promise<void> {
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
   });
+  let streamed = '';
   for (const ev of fixture) {
     await cadence(ev.delayMs);
-    if (res.destroyed || res.writableEnded) return; // client went away mid-stream
+    if (res.destroyed || res.writableEnded) return streamed; // client went away mid-stream
     sseWrite(res, ev.event, ev.data);
+    if (ev.event === 'chunk' || ev.event === 'reply') streamed = ev.data;
   }
   res.end();
+  return streamed;
 }
 
 /** Send a JSON body with the shape the real route returns. */
@@ -172,6 +193,53 @@ function mockSessions(): unknown {
   };
 }
 
+// Turns this dev server actually streamed, keyed by `chatId`, so REOPENING a
+// conversation replays it instead of coming back empty. In memory and per
+// process: a dev-server restart forgets every conversation, which is the same
+// lifetime the fixtures have and the same clean slate Floci gives on restart
+// (development.md, Floci integration → Startup, persistence and reset).
+//
+// UNITS: `ts` is EPOCH SECONDS, fractional — what `Chat.tsx` stamps its own
+// messages with (`Date.now() / 1000`) and what the real route's stored turns
+// carry. The milliseconds mistake this file made once for `updatedAt` is
+// written up above the sidebar fixture; it is not repeated here.
+const transcripts = new Map<string, Array<{ role: string; text: string; ts: number }>>();
+
+// The one bound on that Map. A dev server left running all day accumulates a
+// conversation per "New chat" click and never released one, which both reviews
+// raised. 200 is far above any real session (the sidebar fixture has 11 rows)
+// and still finite. A Map iterates in INSERTION order and `set` on an existing
+// key does not reorder it, so this evicts the oldest conversation created, not
+// the least recently used — good enough here, and LRU is the upgrade if a
+// session ever hits the cap for real.
+const MAX_CONVERSATIONS = 200;
+
+/** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
+function recordTurn(chatId: string, userText: string, replyText: string): void {
+  if (!chatId) {
+    // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
+    // either an unparseable body or a caller that is not the chat page.
+    // Dropping it in silence would present later as the transcript route
+    // losing turns, which is a much harder thing to work out from the outside.
+    console.warn('[chat-mock] turn carried no chatId: not recorded, so a reload will not replay it');
+    return;
+  }
+  const ts = Date.now() / 1000;
+  transcripts.set(chatId, [
+    ...(transcripts.get(chatId) ?? []),
+    { role: 'user', text: userText, ts },
+    ...(replyText ? [{ role: 'assistant', text: replyText, ts }] : []),
+  ]);
+  // Evicting in silence would be worse than not evicting at all: reopening a
+  // dropped conversation returns an empty transcript, which is exactly what the
+  // hard-coded `{ turns: [] }` this route replaced used to do. Say it happened.
+  while (transcripts.size > MAX_CONVERSATIONS) {
+    const oldest = transcripts.keys().next().value as string;
+    transcripts.delete(oldest);
+    console.warn(`[chat-mock] ${MAX_CONVERSATIONS} conversations held; forgetting the oldest (${oldest}). Reopening it will come back empty. Restart the dev server for a clean slate.`);
+  }
+}
+
 export function mockStreamPlugin(): Plugin {
   return {
     name: 'cce-chat-mock-stream',
@@ -181,16 +249,43 @@ export function mockStreamPlugin(): Plugin {
         if (req.method !== 'POST') return next();
         let raw = '';
         req.on('data', (c: Buffer) => { raw += c; });
-        req.on('end', () => { void play(raw, res); });
+        req.on('end', () => {
+          const turn = parseTurn(raw);
+          // The record lands in the microtask after `res.end()`, and node runs
+          // one thread, so it always completes before this server can accept
+          // the next request — including the reload's transcript read. There is
+          // no race to guard against here.
+          void play(turn.text, res)
+            .then((reply) => {
+              // A cut stream records what the client actually received, which is
+              // the honest transcript — but a mysteriously short reply on replay
+              // is worth a word here rather than a puzzle later.
+              if (res.destroyed) {
+                console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.length} chars)`);
+              }
+              recordTurn(turn.chatId, turn.text, reply);
+            })
+            // Without this, a throw anywhere above becomes an unhandled
+            // rejection that takes the whole dev server down and blames
+            // whatever ran next. Nothing is recorded, and it says so.
+            .catch((err: unknown) => {
+              console.error('[chat-mock] turn failed, nothing recorded:', err);
+            });
+        });
       });
 
       // Mounted BEFORE '/api/sessions' — connect matches on prefix, so the
       // longer path has to be registered first or the list route swallows it.
       server.middlewares.use('/api/sessions/transcript', (req, res, next) => {
         if (req.method !== 'GET') return next();
-        // Reopening a stored conversation replays turns; an empty array is the
-        // honest answer for a chat this process never persisted.
-        json(res, { turns: [] });
+        // Reopening a stored conversation replays the turns this process
+        // streamed for it. Same shape as the real route, which answers
+        // `{ turns: session?.turns ?? [] }` (handler.ts `/sessions/transcript`),
+        // so a chat this process never streamed is still an empty array — the
+        // honest answer, just no longer the ONLY answer.
+        // connect strips the mount path, so req.url is '/?agentId=…&chatId=…'.
+        const chatId = new URL(req.url ?? '/', 'http://localhost').searchParams.get('chatId') ?? '';
+        json(res, { turns: transcripts.get(chatId) ?? [] });
       });
 
       server.middlewares.use('/api/sessions', (req, res, next) => {

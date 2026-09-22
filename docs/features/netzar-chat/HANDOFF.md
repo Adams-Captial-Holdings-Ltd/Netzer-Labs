@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-21
-as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
+as_of_commit: e8a0d8cb0ccd93f314ab057182b483f756edeca6
 ---
 
 # Netzar Chat handoff
@@ -16,47 +16,127 @@ as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
 - Phases: CHATUI-000 through CHATUI-006 are built and blind-critic accepted.
   CHATUI-007 is superseded; CHATUI-008 owns the remaining authenticated staging
   verification and full-journey blind critic.
-- This documentation refresh lives on `docs/wi-0.4-chat-docs`, cut from
-  `development` at `eee0a83`; merge target `development`. Pushed: **yes**, on
-  2026-09-21, after the owner authorized it in the session that performed it.
-  **PR: `#182`.** Deployment: none — a `docs/*` branch reaches no AWS
-  environment. This frontmatter still stamps `eee0a83` deliberately: the work
-  item changes zero files under `web/` or `src/`, so the source its claims
-  describe is byte-identical at the base and at the branch head, and moving the
-  stamp would re-date every undated claim beneath it for no reason.
-- Last checks actually run, all on this branch: the WI-0.4 claim proof went
-  `FAILS=24` on the untouched baseline at `eee0a83` and `FAILS=0` after these
-  documents and their session logs, and `FAILS=0` again after the CLEANUP pass
-  that resolved F1, F2 and F3. A fresh critic then re-ran the proof at all four
-  commits — `FAILS=24` / `0` / `0` / `0`, the negative control reading `FAIL` at
-  every one — and re-derived every claim from the repository rather than from
-  the logs: **WI-0.4 is VERIFIED**. The landing session re-ran the proof at the
-  head it pushed (`d628359`): `FAILS=0`, exit 0, **39 rows PASS**, control
-  `FAIL`, 7 changed paths, all Markdown here. The five documentation gates all
-  exit 0 there (`docs-links` 201 files / 3122 links, `feature-knowledge` OK,
-  `docs-mermaid` OK, `docs-assets` 1.98 MB, `git diff --check` 0).
-- The **full `development.md` step 7 list has now run**, on 2026-09-21, on the
-  exact head pushed, alone in the checkout and with credentials stripped, and it
-  **matches the baseline**: `npm test` 247 files / 3215 tests exit 0,
-  `guard-violations: 0`; `npm run local:test:integration` 38 passed, 25 skipped,
-  1 failed — the known Floci `ListSecrets` gap
+- The documentation refresh merged as **PR `#182`** into `development`
+  (`08f85db9d264c925ea22272b1386fbaed266b852`, 2026-09-21); its head branch
+  `docs/wi-0.4-chat-docs` was deleted on `origin` and locally. That closed the
+  last P0 work item, and a fresh whole-goal critic then passed the six-line P0
+  exit gate at that commit.
+- Current work lives on `feat/f1-test-foundations`, cut from
+  `origin/development` at `08f85db`; merge target `development`. The
+  VERIFICATION below scored HEAD
+  `a7bdb13ea4a78e95d404cf339fd2835a6ec8d338`; its log added one docs-only
+  commit on top, `a88086ef4cc450e1e2e526380369c452d196789a`, and **this**
+  landing log adds one more. A file cannot state the commit it is inside
+  (P40), so that SHA, the PR number and the merge commit all live in the
+  Gauntlet state file. **This branch is being pushed and opened as a pull
+  request into `development` now**, under a fresh owner yes given in the
+  conversation that performs it (constraint 8; owner decision 32 recorded the
+  intent). It lands F1's **local** tier only.
+  Deployment: none. This frontmatter still stamps `e8a0d8c` rather than
+  `eee0a83`, because the earlier reason for holding the stamp back has expired:
+  F1 is the first work item since then to change source and configuration
+  files — `tests/e2e/chat/`, `web/dev/mock-stream-plugin.ts`, `package.json`,
+  the lockfile and `.github/workflows/ci.yml` — so the source these claims
+  describe is no longer byte-identical to `eee0a83` (P23). It does **not**
+  move to this log's commit, for the same reason in reverse: VERIFICATION
+  changed no source, configuration or test file at all, so the source is
+  byte-identical at `e8a0d8c` and here, and moving the stamp would re-date
+  every undated claim beneath it. The containment
+  statements above were re-derived against `origin/qa` `ac0cbcc`,
+  `origin/staging` `8299f04` and `origin/production` `de244e6`, all three
+  unmoved since they were last proved.
+- Baseline recorded before any change on this branch, on 2026-09-21 at
+  `08f85db`, alone in the checkout and with credentials stripped: the full
+  `development.md` step 7 list **matches the baseline** — `npm test` 247 files /
+  3215 tests exit 0, `guard-violations: 0`; `npm run local:test:integration` 38
+  passed, 25 skipped, 1 failed, the known Floci `ListSecrets` gap
   (`destroy.integration.test.ts > checkSecrets … schedule-deleted`), confirmed by
   name and documented under *Known local limitations* item 9; all 11 other gates
-  exit 0; 0 changed paths left behind. The three earlier phases correctly
-  declined this list as a pre-push gate and said so rather than recording it as
-  skipped.
-- Blockers: none for this documentation work. CHATUI-008 is blocked on **owner
-  decision 6** — a dedicated spend-capped staging token and agent, authorized
-  per run — before the authenticated staging QA and the dependent full-journey
-  blind critic can start.
-- Smallest next action: merge `#182` once every check is green on the exact head
-  pushed, then delete the head branch on `origin` and locally. That lands the
-  last P0 work item; what remains in P0 is a fresh whole-goal final verification
-  against the P0 exit gate. Promotion of `development` → `qa` → `staging` is
-  owner decision 18, is still due, and needs its own authorization — the
-  `qa` → `staging` merge runs a full `cdk deploy --all`.
+  exit 0; 0 changed paths left behind. The emulator answering on `4566` was
+  identified as `netzer-os-floci` / `floci/floci:1.6.0` **before** that
+  integration result was read — a stray LocalStack there turns the one expected
+  failure into a pass.
+- Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
+  spend-capped staging token and agent, authorized per run — before the
+  authenticated staging QA and the dependent full-journey blind critic can
+  start. That token is now on the **critical path**: under the accepted 9-step
+  roadmap, nothing after F1 can be verified against real Bedrock without it.
+  `bar/staging/VERIFY.json` still records 1 pass (HTTP 200) and 4 sign-in
+  failures, "no STAGING_TOKEN … cannot verify authed surfaces".
+- **The F1 gate's LOCAL tier is GREEN:** `f1-proof.sh` reads `FAILS=0`, exit 0,
+  with all 11 rows PASS and the negative control still reading `FAIL`, at
+  `e8a0d8c` — and at `2e06d4b` before CLEANUP. It read `FAILS=10` at `e7dc543`
+  before this work. The full step 7 list ran on `2e06d4b` and matched the
+  baseline above (18:40:16Z-18:40:53Z), because `package.json` and `ci.yml` are
+  configuration files; CLEANUP touched **neither**, so P36 did not fire again
+  and the list was not re-run. The gate is proved capable of failing: reverting
+  the mock's transcript route to its old hard-coded empty array makes the suite
+  fail at the post-reload assertion, checked now at **three** separate commits,
+  most recently at `e8a0d8c` where it fails at `chat.spec.ts:93`. The **staging
+  tier is untouched** and reads `FAILS=4`; it is blocked on decision 6's token.
+- **A86 is RESOLVED (`e8a0d8c`).** The spec used to call `page.reload()` as soon
+  as the reply became visible, several chunks before the stream ended, so the
+  mock recorded a fraction of the reply — 107 characters on the owner's run, 71
+  on CLEANUP's, out of **991** (A86's "1007" counted the source literal, whose
+  16 escape sequences are two characters each; M56). It now waits for the
+  product's own end-of-turn signal, the Send button returning from "Stop
+  generating" to "Send message", so the whole reply is stored and replayed, and
+  a new assertion on a phrase from the **last 33 characters** of the fixture
+  would catch the race returning. The `stream cut mid-turn` warning no longer
+  prints on a green run. The mutation control was re-run after the change and
+  still fails.
+- **VERIFICATION PASSED at `a7bdb13` (2026-09-21), by a fresh critic that did
+  not build it → F1's LOCAL tier is VERIFIED.** Everything was re-derived, not
+  carried: the proof (`FAILS=0`, exit 0, 11/11, CONTROL FAIL, at three
+  commits); the **mutation control re-run**, failing at `chat.spec.ts:93` — the
+  very assertion CLEANUP tightened — then restored to a clean tree; the suite
+  run **directly** four times, every run exit 0 with **zero** `[chat-mock]`
+  lines, which is also the first evidence it is not flaky; the fixture's
+  positional claims re-measured from a running process (991 characters, the
+  two phrases at indices **28** and **958**, each occurring exactly once);
+  scope; the ledger carry by `diff` (39 additions, 0 deletions, 0
+  modifications); and the five docs gates, all exit 0 at that exact commit.
+  **P36 was measured, not assumed** — 0 matches for `package.json`,
+  `package-lock.json` and `ci.yml` — so the full step 7 list was not required
+  and is **not** claimed. Two things were established beyond the brief: putting
+  the **pre-fix spec back** reproduces the race exactly (green run, `stream cut
+  mid-turn … (71 chars)`), which shows the fix is behavioural rather than
+  cosmetic; and with that broken spec in place the proof still reads `FAILS=0`
+  and never mentions the warning, which proves **P61** by measurement.
+- **LANDING gates, run in this session on the exact HEAD `a88086e` before
+  anything was pushed**, alone in the checkout and with credentials stripped:
+  the full step 7 list **matches the baseline** in 38 s — `npm test` 247 files /
+  3215 tests exit 0, `guard-violations: 0`; integration 38 passed, 25 skipped, 1
+  failed, the Floci `checkSecrets` gap confirmed **by name** on an emulator
+  identified as `floci/floci:1.6.0` first; all 11 other gates exit 0; 0 changed
+  paths. `f1-proof.sh` local tier reads `FAILS=0`, exit 0, 11/11 PASS, CONTROL
+  still `FAIL`. The five docs gates exit 0 (`docs-links` 207 files / 3337
+  links). Because the push is the trigger, step 7 runs **again** on the HEAD
+  this log commit creates (P51); that second result lives in the state file.
+- Smallest next action: **F1's STAGING tier (AC-F1-S1..S5)**, which is what
+  finishes F1. It cannot start until owner decision 6's spend-capped staging
+  token exists — the owner is creating it (decision 33) — and each staging run
+  is authorized separately. Landing the local tier does **not** finish F1 and
+  does **not** promote anything. CLEANUP is complete: all five
+  of its carried items are
+  closed — A86 fixed as above; the dev mock's transcript map capped at 200
+  conversations with a **loud** eviction (a silent one would return the empty
+  transcript this route was changed to stop returning); the prompt assertions
+  scoped to the message row's own `role="group"` + `aria-label` rather than the
+  whole page, which the mutation control confirms did not weaken them; comments
+  updated only where the code moved under them; nothing else. The
+  authenticated staging half of F1 cannot start until owner decision 6's token
+  exists. Promotion of `development` → `qa` → `staging` is owner decision 18, is
+  still due, and needs its own authorization — the `qa` → `staging` merge runs a
+  full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-21-f1-landing.md](handoffs/2026-09-21-f1-landing.md)
+- [2026-09-21-f1-verification.md](handoffs/2026-09-21-f1-verification.md)
+- [2026-09-21-f1-cleanup.md](handoffs/2026-09-21-f1-cleanup.md)
+- [2026-09-21-f1-implementation.md](handoffs/2026-09-21-f1-implementation.md)
+- [2026-09-21-f1-specification.md](handoffs/2026-09-21-f1-specification.md)
+- [2026-09-21-final-p0-verification.md](handoffs/2026-09-21-final-p0-verification.md)
 - [2026-09-21-wi-0.4-landing.md](handoffs/2026-09-21-wi-0.4-landing.md)
 - [2026-09-20-wi-0.4-verification.md](handoffs/2026-09-20-wi-0.4-verification.md)
 - [2026-09-20-wi-0.4-cleanup.md](handoffs/2026-09-20-wi-0.4-cleanup.md)
