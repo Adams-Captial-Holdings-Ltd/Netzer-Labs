@@ -48,8 +48,12 @@ const REQUIRED_CHECKS = [
   'live tool status',
   ...SURFACES.map(([, , tag]) => `theme renders (${tag})`),
 ];
+// The seeded verdict, carried by a check nothing has observed yet. recIfUnreached() tests for
+// exactly this string to decide whether a verdict is still up for grabs, so it must never be passed
+// to rec() as a real detail — naming it once is what keeps those two places from drifting apart.
+const NOT_REACHED = 'not reached';
 const results = new Map(
-  REQUIRED_CHECKS.map((name) => [name, { name, pass: false, detail: 'not reached' }]),
+  REQUIRED_CHECKS.map((name) => [name, { name, pass: false, detail: NOT_REACHED }]),
 );
 function rec(name, pass, detail) {
   if (!results.has(name)) throw new Error(`undeclared check: ${name}`);
@@ -59,7 +63,7 @@ function rec(name, pass, detail) {
 // Used when a surface throws: fill in the real reason for anything that never got a verdict,
 // without overwriting a verdict already reached honestly.
 function recIfUnreached(name, detail) {
-  if (results.get(name)?.detail === 'not reached') rec(name, false, detail);
+  if (results.get(name)?.detail === NOT_REACHED) rec(name, false, detail);
 }
 
 // The live tool line is an EDGE, not a level: StreamingRow renders it only while toolStatus is
@@ -200,9 +204,11 @@ try {
           // before the reply it measures even begins. The archived harness budgeted 20s for a
           // prompt that dispatched no tool at all. Only this surface is scored, so only this
           // surface pays for the long window.
+          const SAMPLE_MS = 500;
+          const WINDOW_MS = 60_000;
           const frames = [];
-          for (let i = 0; i < 120; i++) {
-            await page.waitForTimeout(500);
+          for (let i = 0; i < WINDOW_MS / SAMPLE_MS; i++) {
+            await page.waitForTimeout(SAMPLE_MS);
             frames.push(
               await page.evaluate(() => {
                 // Measure the streaming ANSWER node only. The transcript container
