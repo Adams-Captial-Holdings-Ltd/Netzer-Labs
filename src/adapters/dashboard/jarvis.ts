@@ -71,7 +71,7 @@ import { emitJarvisMetric } from '../../observability/emf-jarvis.js';
 // through HTTP; a removed import is a compile error, R8).
 import { listAgents } from '../../lib/state/agents-repo.js';
 import { listKnownAgentsAsync, loadAgent } from '../../lib/config/agent-loader.js';
-import { computeAgentHealth, collectAcrossDays } from './handler.js';
+import { computeAgentHealth, collectAcrossDays, isConversationRow } from './handler.js';
 import { getDailyCostUsd, getUsageByDay, recordUsage, JARVIS_USAGE_AGENT, SpendIndeterminateError } from '../../lib/usage/token-tracker.js';
 import {
   isKillSwitchActive,
@@ -1163,7 +1163,7 @@ async function runQuery(resource: JarvisResource, params: QueryParams): Promise<
           Limit: 100,
         }),
       );
-      const rows = (out.Items ?? []).map((i) => ({
+      const rows = (out.Items ?? []).filter(isConversationRow).map((i) => ({
         agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
         chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
         updatedAt: i.updatedAt as number,

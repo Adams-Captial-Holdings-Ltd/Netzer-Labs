@@ -3,11 +3,82 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
+as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
 ---
 
 # Netzar Chat handoff
 
+- **CURRENT: P1 WI-1.0 is VERIFIED, and this commit is the one its LANDING
+  pushes — step 3 of 10, conversation identity and durable transcript.** Owner
+  decision 44: land WI-1.0 now, as its own pull request into `development`.
+  Branch `feature/p1-conversation-identity`, cut from `origin/development` @
+  `3393f6c`; merge target `development`. **At this commit: pushed no, PR none,
+  deployment none.** After it, the landing session runs the full
+  `development.md` step 7 list on this exact commit and asks the owner once
+  more, with the numbers; only on a yes will it push, open one pull request into
+  `development`, and merge it when every check is green. The pull request number
+  and the merge commit will live in the Gauntlet state file, because a file
+  cannot state the commit it is inside (P40). The code being landed is
+  byte-identical to the commit the critic scored, `a5c377b`. Landing does not
+  finish P1, promotes nothing (decision 18) and makes no AWS call. WI-1.0
+  only — no storage change, no ownership change, no
+  new item type, which owner decision 11 gates behind this work item. A fresh
+  critic that built none of it re-derived **every** criterion from the
+  repository — AC-1.0-1..7 and V-a..V-g, all **PASS**, nothing routed back: the
+  gate in both tiers, the three mutations re-run by hand, the scope, the diagram
+  gate's liveness, the comment-only proof of CLEANUP, each of CLEANUP's rewritten
+  sentences at its source line, the ledger carries by `diff`, and the full step 7
+  list, with the development baseline **re-measured** rather than quoted. It also
+  listed every user of the sessions table itself, independently of the
+  specification: exactly four readers turn rows into conversations, and all four
+  now filter. **Two findings, classified and not patched:** no test pins the
+  predicate's `PK` half — with it removed, all six tests and the release gate stay
+  green, because the `SK` half already rejects every fixture (a test gap, not a
+  code defect; one fixture closes it, in WI-1.2's specification); and the
+  implementation log's record of its third mutation was imprecise (all six tests
+  fail under it, not one). Detail in the WI-1.0 verification log.
+- **P1's gate, re-derived by the fresh critic at the frontmatter's commit:** `P1_TIER=containment` **`FAILS=0`,
+  `ASSESSED=6`, 6/6 PASS**; `P1_TIER=storage` **unmoved at `FAILS=8`,
+  `ASSESSED=8`** — a containment change that moved the storage tier would mean
+  the work leaked out of its work item. **CONTROL reads `FAIL` in both.** The
+  gate is mostly **behavioural**: 5 of 6 containment rows RUN a test rather than
+  grep for a line, and the rows are marked `[B]` in the table itself. The
+  incoming red — `sessions-containment.test.ts`, 1 failed / 1 passed — is green,
+  and the file now holds **6** tests.
+- **The fix, and the one defect it carries.** `isConversationRow` selects the
+  conversation key shape (`PK=AGENT#…`, `SK=CHAT#<chatId>` with no further `#`
+  segment) at all four readers. **It rests on chatIds carrying no `#`, and
+  nothing enforces that** — `safeDashboardChatId` returns an already-prefixed id
+  verbatim, and Paperclip's externally supplied `issueId` is never
+  character-filtered, so such a conversation is now silently invisible in the
+  Sessions list, the CSV export and the Jarvis view. Found because two
+  independent reviewers contradicted each other and the contradiction was
+  re-derived rather than adjudicated. **Classified, NOT patched** — both fixes
+  change something outside this work item — and put to the owner as the one open
+  fork. Whether any such row exists today is **Unknown**: it needs a read against
+  real data.
+- **The specification's inference is now a MEASUREMENT.** A Jarvis memory row
+  really did render as a conversation whose `agentId` was the principal's own
+  `JARVIS#<hashPrefix16>`, visible to any holder of `sessions:read`: the
+  cross-agent `GET /sessions` returned **3** rows before the fix and **1** after.
+  An independent security review confirmed the projection never requested the
+  row's `text`, so no memory **content** was reachable — only that id and the
+  turn's timestamp and uuid.
+- **Still open from the specification phase, unchanged here: sending a message
+  into another user's conversation takes ownership of
+  it** — the list route hands every chat id to any `sessions:read` caller, the
+  send route checks no ownership, and `appendTurns` overwrites the stored owner
+  with the caller's identity on every turn, after which `DELETE /sessions` agrees
+  the chat is theirs. Every link was read at its line; the chain itself was not
+  executed. Detail in the P1 specification log, sections 3.5 and 3.6.
+- **Baseline recorded before any change on this branch**, at `3393f6c` with fake
+  credentials planted: the full `development.md` step 7 list **matches the
+  baseline** — 247 files / 3215 tests, `guard-violations: 0`; integration 38
+  passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap by name on an
+  emulator identified as `floci/floci:1.6.0` first; all other gates exit 0; 0
+  changed paths. **Sole occupancy did NOT hold and is not claimed:** two orphaned
+  `npm run dev` trees from earlier sessions were live in the checkout, binding no
+  port and writing nothing, and the execution environment refused the `kill`.
 - Branch state: the work was merged into `development` by PR #129 (merge
   `b3b427497d63d8f4d1faa147b46c9681c19bc460`, 2026-08-27). It is present on
   `origin/qa` and `origin/staging`, and is not present on `origin/production`.
@@ -31,13 +102,12 @@ as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
   count stated in it is stale the moment it is committed — the same reason P40
   keeps a merge SHA out of the file it describes. Re-derive it with
   `git rev-list --count origin/development..HEAD`. See **M64**.
-  The latest session is the **VERIFICATION** of **Layer A**; the CLEANUP before
-  it named two literals, and the IMPLEMENTATION before that added
+  Layer A's last session before it landed was its **VERIFICATION**; the CLEANUP
+  before it named two literals, and the IMPLEMENTATION before that added
   `tests/e2e/staging/`. None of the three made a **staging call, an AWS API call,
-  a deploy or a promotion**, and none read the token. Deployment: none. The
-  frontmatter stamp stays at **`3fc3de4`**: cleanup edited a test source file and
-  moved it there, and VERIFICATION changed no source at all, so the source these
-  claims describe is still byte-identical to that stamp (P23).
+  a deploy or a promotion**, and none read the token. Deployment: none. Those
+  three sessions checked their claims at **`3fc3de4`** (P23); the frontmatter
+  stamp has since moved with P1's work.
   The containment statements above were
   re-derived against `origin/qa` `ac0cbcc`, `origin/staging` `8299f04` and
   `origin/production` `de244e6`, all three unmoved since last proved.
@@ -52,7 +122,9 @@ as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
   identified as `netzer-os-floci` / `floci/floci:1.6.0` **before** that
   integration result was read — a stray LocalStack there turns the one expected
   failure into a pass.
-- Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
+- **Superseded 2026-09-22, kept for context** — owner decision 43 says the
+  staging token exists and staging testing is authorized, and Layer B has since
+  run (below). Original text: Blockers: CHATUI-008 is blocked on **owner decision 6** — a dedicated
   spend-capped staging token and agent, authorized per run — before the
   authenticated staging QA and the dependent full-journey blind critic can
   start. That token is now on the **critical path**: under the accepted
@@ -229,7 +301,49 @@ as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
   real verdict, **zero** left `not reached`, conversation screenshots on all four
   surfaces, and the two turn checks failing for the correct local reason, which
   is a free negative control. Full detail in the Layer B session log.
-- Smallest next action: **A SECOND authorized staging run, by the owner.** It is
+- **Last required checks, at the frontmatter's commit**, run by the fresh critic
+  with fake credentials planted and — **for the first time in P1 — alone in the
+  checkout**: the owner cleared the two orphaned `tsx watch` trees after CLEANUP,
+  and that was re-checked rather than assumed (no process names the checkout, none
+  has its working directory in it, nothing listens on port 3000). The full
+  `development.md` step 7 list carries **no failure but the known Floci gap** —
+  `npm test` **248 files / 3221 tests, all passing**, `guard-violations: 0`;
+  integration 38 passed / 25 skipped / 1 failed, the Floci `checkSecrets …
+  schedule-deleted` gap **by name** on an emulator identified as
+  `floci/floci:1.6.0` first; typecheck, build, both web gates, `local:verify`,
+  `docs-links`, `feature-knowledge`, `docs-assets` and the PR-context drift gate
+  exit 0; `git diff --check` 0; 0 changed paths. **The baseline was re-measured,
+  not quoted:** at `3393f6c`, `npm test` is 247 files / 3215 tests, and the two
+  commits' collected-file lists differ by exactly one file, the containment test
+  — so +1 file and +6 tests is measured, not arithmetic. Both P1 tiers:
+  containment `FAILS=0`, `ASSESSED=6`; storage `FAILS=8`; CONTROL `FAIL` in both.
+  The landing runs the same list again on the commit it pushes; that result
+  lives in the Gauntlet state file (P40).
+- **Smallest next action: the landing's gates on this commit, then the owner's
+  yes or no — push, open the pull request into `development`, and merge it when
+  every check is green.** After WI-1.0 lands, the next work item is **WI-1.1's
+  specification**: ownership binds to an immutable user, and the send route
+  enforces it. The carried review findings — filtering after a bounded read can
+  under-report, and nothing signals a dropped row — plus the verification's
+  untested `PK` half are **not** landing blockers; all three belong to WI-1.2's
+  specification, because WI-1.2's per-message rows are what make them
+  consequential. A push, a PR and any promotion each need their own
+  authorization in the conversation that performs them.
+- **Awaiting the owner:** the landing's yes or no, asked after its gates run; whether a `#`-bearing
+  chatId should be fixed at the write path, by relaxing the predicate, or by
+  giving WI-1.2 an unambiguous key shape (the recommendation, because it is the
+  only one still correct after P3 adds attachments) — the silent drop is now
+  proved by running it through the real route, not only by reading the
+  predicate; decision 8's unmapped-row retention date (WI-1.4 cannot be specified
+  without it); whether the ownership-takeover finding should be closed sooner
+  than WI-1.1, which would mean reopening decision 9's "no hotfix"; and whether
+  owner-scoped listing must be fast, since the sessions table has **no GSI** and
+  decision 11 forbids adding one, so "show me only my conversations" stays a
+  scan-and-filter.
+- F1 status, unchanged by this phase: **Layer B has run and sits at 11 of 12**,
+  with the twelfth a real product gap — the deployed dashboard does not stream
+  replies to the browser — routed to **P2** and deliberately not fixed here.
+- Superseded next action, kept for context: **a second authorized staging run.** It is
   the first that will actually spend, because the turn will now be sent. It tests
   what the first could not: **D2** (a prompt that really dispatches a tool) and
   **D3** (the subscribed tool observer), both still source-derived only, plus real
@@ -243,6 +357,11 @@ as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-p1-wi-1.0-landing.md](handoffs/2026-09-22-p1-wi-1.0-landing.md)
+- [2026-09-22-p1-wi-1.0-verification.md](handoffs/2026-09-22-p1-wi-1.0-verification.md)
+- [2026-09-22-p1-wi-1.0-cleanup.md](handoffs/2026-09-22-p1-wi-1.0-cleanup.md)
+- [2026-09-22-p1-wi-1.0-implementation.md](handoffs/2026-09-22-p1-wi-1.0-implementation.md)
+- [2026-09-22-p1-specification.md](handoffs/2026-09-22-p1-specification.md)
 - [2026-09-22-f1-layer-b-first-run.md](handoffs/2026-09-22-f1-layer-b-first-run.md)
 - [2026-09-22-f1-staging-landing.md](handoffs/2026-09-22-f1-staging-landing.md)
 - [2026-09-22-f1-staging-verification.md](handoffs/2026-09-22-f1-staging-verification.md)
