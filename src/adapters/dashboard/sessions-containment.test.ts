@@ -13,11 +13,12 @@ import type { TokenPrincipal } from '../../lib/auth/dashboard-auth.js';
  * partition as its conversation: PK=AGENT#<agentId>, SK=CHAT#<chatId>#MSG#…
  *
  * GET /api/sessions?agentId=… reads that partition with a bare
- * `KeyConditionExpression: 'PK = :pk'` (handler.ts:2048-2055) and maps EVERY
- * returned item into a conversation row by stripping the key prefixes
- * (handler.ts:2073-2083). Nothing selects conversation rows specifically. So the
- * moment P1 writes its first message record, the Chat sidebar and the Sessions
- * tab start listing one phantom conversation per message.
+ * `KeyConditionExpression: 'PK = :pk'`, and before WI-1.0 it mapped EVERY
+ * returned item into a conversation row by stripping the key prefixes, with
+ * nothing selecting conversation rows specifically. So the moment P1 wrote its
+ * first message record, the Chat sidebar and the Sessions tab would have listed
+ * one phantom conversation per message. `isConversationRow` (handler.ts) now
+ * does the selecting, in this branch and in the three other readers below.
  *
  * The gate is therefore a precondition, not a cleanup: it must hold BEFORE the
  * storage change lands, which is why it is WI-1.0 and not WI-1.4.
