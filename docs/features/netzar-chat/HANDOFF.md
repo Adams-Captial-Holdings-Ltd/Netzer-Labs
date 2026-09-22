@@ -3,11 +3,48 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
+as_of_commit: 3393f6cee93f104cf7b09d169d3b538ade3aec87
 ---
 
 # Netzar Chat handoff
 
+- **CURRENT: P1 SPECIFICATION is complete — step 3 of 10, conversation identity
+  and durable transcript. Nothing is built.** Branch
+  `feature/p1-conversation-identity`, cut from `origin/development` @ `3393f6c`;
+  merge target `development`. **Pushed: no. PR: none. Deployment: none.** No AWS
+  call, no promotion. The phase produced one failing test, acceptance criteria
+  frozen as **AC-1.x**, and a two-tier gate at
+  `~/.claude/plans/netzar-chat-plan/p1-proof.sh` (outside the repository).
+- **The red state:** `src/adapters/dashboard/sessions-containment.test.ts` —
+  **1 failed, 1 passed**. The failure is that a per-agent `GET /sessions` returns
+  **2** rows when the agent partition holds a conversation row and one
+  `CHAT#…#MSG#…` row; the passing test is the control, the same route and fixture
+  with only the conversation row, which is what shows the red is about
+  containment and not about auth, routing or the harness.
+- **P1's gate at `3393f6c`:** `P1_TIER=containment` **`FAILS=5`, `ASSESSED=6`**
+  (only the no-CDK guard passes); `P1_TIER=storage` **`FAILS=8`, `ASSESSED=8`**.
+  **CONTROL reads `FAIL` in both.** Unlike F1's Layer A, this gate is mostly
+  **behavioural**: 5 of 6 containment rows and 5 of 8 storage rows RUN a test
+  rather than grep for a line, and the rows are marked `[B]` in the table itself.
+- **Two findings this phase produced by reading, both classified and NOT
+  patched** (constraint 4, decision 9's "no hotfix"). First, the WI-1.0
+  containment gate is **already violated**: four readers Scan or Query the
+  sessions table with no constraint on item type, while `jarvis-memory-repo.ts`
+  already writes a foreign item type (`PK=JARVIS#…`) into that same table.
+  Second, **sending a message into another user's conversation takes ownership of
+  it** — the list route hands every chat id to any `sessions:read` caller, the
+  send route checks no ownership, and `appendTurns` overwrites the stored owner
+  with the caller's identity on every turn, after which `DELETE /sessions` agrees
+  the chat is theirs. Every link was read at its line; the chain itself was not
+  executed. Detail in the P1 specification log, sections 3.5 and 3.6.
+- **Baseline recorded before any change on this branch**, at `3393f6c` with fake
+  credentials planted: the full `development.md` step 7 list **matches the
+  baseline** — 247 files / 3215 tests, `guard-violations: 0`; integration 38
+  passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap by name on an
+  emulator identified as `floci/floci:1.6.0` first; all other gates exit 0; 0
+  changed paths. **Sole occupancy did NOT hold and is not claimed:** two orphaned
+  `npm run dev` trees from earlier sessions were live in the checkout, binding no
+  port and writing nothing, and the execution environment refused the `kill`.
 - Branch state: the work was merged into `development` by PR #129 (merge
   `b3b427497d63d8f4d1faa147b46c9681c19bc460`, 2026-08-27). It is present on
   `origin/qa` and `origin/staging`, and is not present on `origin/production`.
@@ -229,7 +266,24 @@ as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
   real verdict, **zero** left `not reached`, conversation screenshots on all four
   surfaces, and the two turn checks failing for the correct local reason, which
   is a free negative control. Full detail in the Layer B session log.
-- Smallest next action: **A SECOND authorized staging run, by the owner.** It is
+- **Smallest next action: IMPLEMENTATION of WI-1.0, in a fresh session, on
+  `feature/p1-conversation-identity`.** Make the containment tier green: the four
+  unconstrained readers select conversation rows only, and the containment suite
+  grows the three tests the gate names as *not yet written* (the cross-agent
+  scan, the CSV export, the jarvis `sessions` action). **No storage change in
+  that work item** — owner decision 11 gates per-message records behind WI-1.0
+  passing. Nothing is pushed; a push, a PR and any promotion each need their own
+  authorization in the conversation that performs them.
+- **Three things awaiting the owner, none of them blocking WI-1.0:** decision 8's
+  unmapped-row retention date (WI-1.4 cannot be specified without it); whether
+  the ownership-takeover finding should be closed sooner than WI-1.1, which would
+  mean reopening decision 9's "no hotfix"; and whether owner-scoped listing must
+  be fast, since the sessions table has **no GSI** and decision 11 forbids adding
+  one, so "show me only my conversations" stays a scan-and-filter.
+- F1 status, unchanged by this phase: **Layer B has run and sits at 11 of 12**,
+  with the twelfth a real product gap — the deployed dashboard does not stream
+  replies to the browser — routed to **P2** and deliberately not fixed here.
+- Superseded next action, kept for context: **a second authorized staging run.** It is
   the first that will actually spend, because the turn will now be sent. It tests
   what the first could not: **D2** (a prompt that really dispatches a tool) and
   **D3** (the subscribed tool observer), both still source-derived only, plus real
@@ -243,6 +297,7 @@ as_of_commit: a077be0f29778727a9ca5d32d3bec8f43dcc3811
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-p1-specification.md](handoffs/2026-09-22-p1-specification.md)
 - [2026-09-22-f1-layer-b-first-run.md](handoffs/2026-09-22-f1-layer-b-first-run.md)
 - [2026-09-22-f1-staging-landing.md](handoffs/2026-09-22-f1-staging-landing.md)
 - [2026-09-22-f1-staging-verification.md](handoffs/2026-09-22-f1-staging-verification.md)
