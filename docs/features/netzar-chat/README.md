@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-22
-as_of_commit: bbee525a135612abf89d5afa8c24ac0c72d8de06
+as_of_commit: 089aba4199a36a92123ff4bd6da6a08dba4257d6
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -76,7 +76,9 @@ backend.
   or for a token with no user of its own that an admin linked to one (owner
   decision 1; `POST /api/tokens/:hashPrefix/link`, one link per token, never
   moved, audited). A token with no person behind it can still chat, but its
-  conversations are not durable: they keep the 7-day TTL the other surfaces use.
+  conversations are not durable: they keep the 7-day TTL the other surfaces use,
+  and nothing makes one durable later — not a scheduled task, and not a link
+  made afterwards (only the chats a token starts once linked last).
 - Every dashboard and Jarvis conversation route enforces that owner (decision
   9): someone else's conversation is refused with a 404 when you send into it or
   export it, reads as empty in the transcript, and is left out of the list, the
@@ -157,10 +159,13 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 - A chat id never carries `#` into a key: the storage layer stores it as `_`
   (owner decision 47), so a chat can neither pose as another's message record nor
   vanish behind the containment rule.
-- The owner is stamped when a conversation is created and never overwritten,
-  and so is whether it expires: a principal with no person never makes a durable
-  conversation expire by continuing it. `/newchat` empties the model's window but
-  keeps the records.
+- The owner is stamped when a conversation is created and never overwritten
+  (a scheduled task that finds no conversation starts one with no owner, visible
+  only to an admin), and so is whether it lasts: a person's conversation lasts, and anyone else's
+  expires — a principal with no person, or a writer that cannot say who is
+  sending, like the scheduler — whoever continues it afterwards. An expiring
+  conversation's records each expire a week after they were written. `/newchat`
+  empties the model's window but keeps the records.
 
 ## 7. Known runtime risks and approved next work
 
