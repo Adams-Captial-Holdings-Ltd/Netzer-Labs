@@ -9,6 +9,17 @@
  *   updatedAt: epoch seconds
  *   ttl: epoch seconds (7 days from updatedAt; auto-deletes idle sessions)
  *
+ * P1 (owner decision 11: new item types in this table, no CDK): every message
+ * is ALSO its own record in the conversation's partition — there is no GSI, so
+ * it cannot live anywhere else (A132):
+ *   PK: AGENT#{agentId}
+ *   SK: CHAT#{chatId}#MSG#{seq, 10 digits}   seq = its place in the conversation
+ *   role, text, ts, surface?, userId (the conversation's owner), truncated?, ttl?
+ * The `turns` window above stays: it is what the model replays. The records are
+ * the durable transcript the user reads back (getFullHistory) and the delete
+ * removes (deleteSession). WI-1.0's containment rule keeps every reader that
+ * lists conversations off them.
+ *
  * Item-size budget: measured at 284-324KB worst case against DDB's 400KB cap,
  * NOT the ~50KB this comment claimed while the output ceiling was 1024 tokens.
  * TURN_MAX_TOKENS is now 8192, which multiplies every persisted assistant turn
@@ -18,8 +29,10 @@
  */
 
 import {
+  BatchWriteCommand,
   GetCommand,
-  PutCommand,
+  QueryCommand,
+  TransactWriteCommand,
   UpdateCommand,
   DeleteCommand,
 } from '@aws-sdk/lib-dynamodb';
@@ -32,9 +45,9 @@ const MAX_TURNS = 20;
 /**
  * Byte budget for the stored turn window, on top of the MAX_TURNS count cap.
  *
- * DynamoDB rejects an item over 400KB, and `appendTurns` only retries
- * ConditionalCheckFailedException — anything else throws, so an oversized item
- * fails the write and the turn is lost. That is the same class of bug as the
+ * DynamoDB rejects an item over 400KB, and `appendTurns` only retries a lost
+ * version fence — anything else throws, so an oversized item fails the write
+ * and the turn is lost. That is the same class of bug as the
  * empty-turn poisoning: a size problem in one turn breaking the whole chat.
  *
  * The count cap alone does not bound bytes. Measured at TURN_MAX_TOKENS 8192,
@@ -214,8 +227,43 @@ export interface Session {
 function pk(agentId: string): string {
   return `AGENT#${agentId}`;
 }
+/**
+ * Owner decision 47: a chat id never carries `#` into a key. A message record
+ * is keyed CHAT#<chatId>#MSG#<seq>, so a chat named like `x#MSG#1` would read as
+ * one of x's messages, and WI-1.0's containment rule (`^CHAT#[^#]+$`) would hide
+ * it from every list. Mapped here, where every read and write builds its key,
+ * so the id a caller already holds keeps working. None existed in production
+ * when this was decided (decision 46's count).
+ */
 function sk(chatId: string): string {
-  return `CHAT#${chatId}`;
+  return `CHAT#${chatId.replace(/#/g, '_')}`;
+}
+/** The key prefix every record belonging to a conversation shares. */
+function childPrefix(chatId: string): string {
+  return `${sk(chatId)}#`;
+}
+function msgPrefix(chatId: string): string {
+  return `${childPrefix(chatId)}MSG#`;
+}
+/** Zero-padded so the sort key orders messages exactly as the sequence does. */
+function msgSk(chatId: string, seq: number): string {
+  return `${msgPrefix(chatId)}${String(seq).padStart(10, '0')}`;
+}
+
+/**
+ * A message record is one DynamoDB item, and an item over 400KB fails the
+ * write — which would lose the turn that wanted recording. The window already
+ * drops a turn that big (MAX_TURN_WINDOW_BYTES); the record keeps its first
+ * 350,000 bytes and says so. ponytail: truncate, not split; chunk it across
+ * records if a single message ever needs to survive whole.
+ */
+const MAX_MESSAGE_BYTES = 350_000;
+
+function capMessageText(text: string): { text: string; truncated?: true } {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= MAX_MESSAGE_BYTES) return { text };
+  // A cut inside a multi-byte character decodes to U+FFFD; drop that remnant.
+  return { text: bytes.subarray(0, MAX_MESSAGE_BYTES).toString('utf8').replace(/�$/, ''), truncated: true };
 }
 
 export async function getSession(
@@ -330,9 +378,38 @@ export async function appendTurns(
     const existingCount = existing?.messageCount ?? 0;
     const userTurns = newTurns.filter((t) => t.role === 'user');
     const firstUserText = userTurns[0]?.text;
+    // The first owner stays the owner (see SessionEnrichment.userId).
+    const owner = existing?.userId ?? enrichment?.userId;
+    // Omitted entirely for durable dashboard chats — the conversation row is
+    // replaced whole, so this also strips the ttl off rows written before
+    // conversations became persistent. Records share the row's expiry.
+    const ttl = isPersistentChat(chatId) && !enrichment?.ephemeral ? undefined : now + TTL_SECONDS;
+    // WI-1.2: each new message ALSO becomes its own immutable record, numbered by
+    // its place in the whole conversation (prevTotal is the cumulative count the
+    // window cannot lose). Written in the same all-or-nothing transaction as the
+    // window, so a turn is never in one without the other, and the version fence
+    // below guards both. ponytail: callers append a user/assistant pair; a single
+    // call with more than 99 turns would exceed the 100-item transaction limit.
+    const records = newTurns.map((t, i) => ({
+      Put: {
+        TableName: TABLE,
+        Item: {
+          PK: pk(agentId),
+          SK: msgSk(chatId, prevTotal + i),
+          seq: prevTotal + i,
+          role: t.role,
+          ...capMessageText(String(t.text ?? '')),
+          ts: t.ts,
+          ...(t.surface ? { surface: t.surface } : {}),
+          ...(owner ? { userId: owner } : {}),
+          ...(ttl ? { ttl } : {}),
+        },
+        ConditionExpression: 'attribute_not_exists(SK)',
+      },
+    }));
     try {
-      await ddb().send(
-        new PutCommand({
+      await ddb().send(new TransactWriteCommand({ TransactItems: [{
+        Put: {
           TableName: TABLE,
           Item: {
             PK: pk(agentId),
@@ -353,15 +430,11 @@ export async function appendTurns(
                 : {}),
             createdAt: existing?.createdAt ?? now,
             ...(enrichment?.surface ? { surface: enrichment.surface } : existing?.surface ? { surface: existing.surface } : {}),
-            // The first owner stays the owner (see SessionEnrichment.userId).
-            ...(existing?.userId ? { userId: existing.userId } : enrichment?.userId ? { userId: enrichment.userId } : {}),
+            ...(owner ? { userId: owner } : {}),
             turnsTotal,
             turnsIngested,
             updatedAt: now,
-            // Omitted entirely for durable dashboard chats — a Put replaces the
-            // whole item, so this also strips the ttl off rows written before
-            // conversations became persistent.
-            ...(isPersistentChat(chatId) && !enrichment?.ephemeral ? {} : { ttl: now + TTL_SECONDS }),
+            ...(ttl ? { ttl } : {}),
             version: (existing?.version ?? 0) + 1,
           },
           // Fence on exactly what the read saw: a missing row must still be
@@ -379,11 +452,19 @@ export async function appendTurns(
                   ExpressionAttributeNames: { '#v': 'version' },
                 }
             : { ConditionExpression: 'attribute_not_exists(PK)' }),
-        }),
-      );
+        },
+      }, ...records] }));
     } catch (err) {
-      const name = (err as { name?: string }).name ?? '';
-      if (name === 'ConditionalCheckFailedException' && attempt < MAX_ATTEMPTS - 1) {
+      // Re-read only when the conversation's own fence (item 0) lost a race or
+      // another transaction was in flight. A record whose sequence number is
+      // already taken is NOT retried: re-reading cannot free the number, and
+      // overwriting durable history is exactly what the condition forbids.
+      const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
+      const reason = e.CancellationReasons?.[0]?.Code;
+      const fenced =
+        e.name === 'TransactionCanceledException' &&
+        (reason === 'ConditionalCheckFailed' || reason === 'TransactionConflict');
+      if (fenced && attempt < MAX_ATTEMPTS - 1) {
         continue;
       }
       throw err;
@@ -483,12 +564,16 @@ export async function clearSession(agentId: string, chatId: string): Promise<voi
     new UpdateCommand({
       TableName: TABLE,
       Key: { PK: pk(agentId), SK: sk(chatId) },
-      // Reset the ingest counters — /newchat starts a fresh conversation.
-      // Same TTL rule as everywhere else: refresh it on expiring chats, strip
-      // it on persistent ones.
+      // /newchat starts a fresh conversation for the MODEL: the window empties
+      // and nothing is pending ingest. turnsTotal is NOT reset — it numbers the
+      // durable per-message records (WI-1.2), which /newchat keeps, and a reset
+      // would hand the next message a sequence number that is already taken.
+      // Marking every turn so far as ingested gives the zero pending count the
+      // old reset gave. Same TTL rule as everywhere else: refresh it on expiring
+      // chats, strip it on persistent ones.
       UpdateExpression: persist
-        ? 'SET turns = :empty, turnsTotal = :z, turnsIngested = :z, updatedAt = :u REMOVE #t'
-        : 'SET turns = :empty, turnsTotal = :z, turnsIngested = :z, updatedAt = :u, #t = :t',
+        ? 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u REMOVE #t'
+        : 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u, #t = :t',
       ExpressionAttributeNames: { '#t': 'ttl' },
       ExpressionAttributeValues: {
         ':empty': [],
@@ -500,15 +585,107 @@ export async function clearSession(agentId: string, chatId: string): Promise<voi
   );
 }
 
-/** Delete the session entirely. */
+/**
+ * The most messages one history read returns. ponytail: a flag, not a cursor —
+ * page the transcript route if a conversation ever outgrows it.
+ */
+const MAX_HISTORY_MESSAGES = 2_000;
+
+/**
+ * The whole conversation, oldest first (WI-1.3): every per-message record, plus
+ * any window turn written before P1, which exists nowhere else. The window is
+ * always the newest suffix of the conversation (turns only ever leave from the
+ * front), so window turn i sits at sequence turnsTotal - window.length + i.
+ *
+ * Reads newest first so that, past MAX_HISTORY_MESSAGES, what is dropped is the
+ * OLDEST history — and says so in `truncated` rather than ending silently.
+ */
+export async function getFullHistory(
+  agentId: string,
+  chatId: string,
+  session: Session,
+): Promise<{ turns: Turn[]; truncated: boolean }> {
+  const bySeq = new Map<number, Turn>();
+  let startKey: Record<string, unknown> | undefined;
+  let truncated = false;
+  do {
+    const out = await ddb().send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': msgPrefix(chatId) },
+        ScanIndexForward: false,
+        ExclusiveStartKey: startKey,
+      }),
+    );
+    for (const r of out.Items ?? []) {
+      if (bySeq.size >= MAX_HISTORY_MESSAGES) {
+        truncated = true;
+        break;
+      }
+      bySeq.set(Number(r.seq), {
+        role: r.role as Turn['role'],
+        text: r.text as string,
+        ts: r.ts as number,
+        ...(r.surface ? { surface: r.surface as Turn['surface'] } : {}),
+      });
+    }
+    startKey = out.LastEvaluatedKey;
+    if (startKey && bySeq.size >= MAX_HISTORY_MESSAGES) truncated = true;
+  } while (startKey && !truncated);
+  const total = session.turnsTotal ?? session.turns.length;
+  session.turns.forEach((t, i) => {
+    const seq = total - session.turns.length + i;
+    if (!bySeq.has(seq)) bySeq.set(seq, t);
+  });
+  const turns = [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t);
+  return { turns: repairEmptyTurns(turns), truncated };
+}
+
+/**
+ * Delete a conversation and every record that belongs to it (WI-1.3). The
+ * records go FIRST: if the delete stops part-way, the conversation row is still
+ * there for the caller to retry — deleting it first would strand its messages
+ * with nothing left that finds them.
+ */
 export async function deleteSession(
   agentId: string,
   chatId: string,
 ): Promise<void> {
+  for (;;) {
+    // Re-query from the top each round: the rows just deleted are gone, so the
+    // next page is simply what is left.
+    const out = await ddb().send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': childPrefix(chatId) },
+        ProjectionExpression: 'PK, SK',
+      }),
+    );
+    const keys = (out.Items ?? []).map((i) => ({ PK: i.PK, SK: i.SK }));
+    for (let i = 0; i < keys.length; i += 25) {
+      await batchDelete(keys.slice(i, i + 25));
+    }
+    if (keys.length === 0 || !out.LastEvaluatedKey) break;
+  }
   await ddb().send(
     new DeleteCommand({
       TableName: TABLE,
       Key: { PK: pk(agentId), SK: sk(chatId) },
     }),
   );
+}
+
+/** BatchWriteItem, retrying what DynamoDB hands back unprocessed; throws if it never clears. */
+async function batchDelete(keys: Array<Record<string, unknown>>): Promise<void> {
+  let pending = keys.map((Key) => ({ DeleteRequest: { Key } }));
+  for (let attempt = 0; pending.length > 0; attempt++) {
+    if (attempt === 5) {
+      throw new Error(`deleteSession: ${pending.length} record(s) still unprocessed after 5 attempts`);
+    }
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+    const out = await ddb().send(new BatchWriteCommand({ RequestItems: { [TABLE]: pending } }));
+    pending = (out.UnprocessedItems?.[TABLE] ?? []) as typeof pending;
+  }
 }

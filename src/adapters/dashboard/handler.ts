@@ -90,6 +90,7 @@ import { InFlightGate } from '../../lib/concurrency/bounded.js';
 import {
   appendTurns,
   getSession,
+  getFullHistory,
   deleteSession,
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
@@ -194,6 +195,49 @@ const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 export function isConversationRow(item: Record<string, unknown>): boolean {
   const sk = typeof item.SK === 'string' ? item.SK : '';
   return /^AGENT#./.test(typeof item.PK === 'string' ? item.PK : '') && /^CHAT#[^#]+$/.test(sk);
+}
+
+/**
+ * The most items one listing reads before it stops and says `truncated`.
+ * ponytail: every message row is READ only to be skipped, because there is no
+ * index that selects conversation rows (A132); a GSI — decision 11 reopened —
+ * is the upgrade if listing ever gets slow.
+ */
+const LISTING_READ_CEILING = 100_000;
+
+/**
+ * WI-1.2: the conversation rows of the sessions table, or of one agent's
+ * partition, read to the END. P1 keeps a row per message beside every
+ * conversation, so a read bounded by a count of ITEMS undercounts conversations
+ * as soon as a partition fills with message rows — and said nothing when it did
+ * (the WI-1.0 review finding). This pages until DynamoDB has nothing more,
+ * keeps only conversation rows, and stops only at LISTING_READ_CEILING, which it
+ * reports as `truncated` instead of dropping rows silently.
+ */
+export async function readConversationRows(
+  projection: string,
+  agentId?: string,
+): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+  const rows: Record<string, unknown>[] = [];
+  let read = 0;
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const out = await ddb().send(
+      agentId
+        ? new QueryCommand({
+            TableName: TABLE_SESSIONS,
+            KeyConditionExpression: 'PK = :pk',
+            ExpressionAttributeValues: { ':pk': `AGENT#${agentId}` },
+            ProjectionExpression: projection,
+            ExclusiveStartKey: startKey,
+          })
+        : new ScanCommand({ TableName: TABLE_SESSIONS, ProjectionExpression: projection, ExclusiveStartKey: startKey }),
+    );
+    read += out.Items?.length ?? 0;
+    for (const item of out.Items ?? []) if (isConversationRow(item)) rows.push(item);
+    startKey = out.LastEvaluatedKey;
+  } while (startKey && read < LISTING_READ_CEILING);
+  return { rows, truncated: startKey !== undefined };
 }
 
 /**
@@ -2098,50 +2142,16 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId';
     const agentId = c.req.query('agentId')?.trim();
 
-    let items: Record<string, unknown>[] = [];
-    if (agentId) {
-      // Per-agent view (e.g. the Agent detail Sessions tab). Sessions are keyed
-      // PK=AGENT#<id>, so this is a single-partition QUERY — complete and cheap.
-      // The old code Scanned the whole table with a FilterExpression bounded to
-      // 10 pages / 50 items, which (a) could silently omit a busy agent's most
-      // recent sessions and (b) read the entire table on every load. A Query
-      // reads only this agent's partition; we page it to completion (with a sane
-      // guard) and the updatedAt sort below handles recency.
-      const pk = `AGENT#${agentId}`;
-      let exclusiveStartKey: Record<string, unknown> | undefined;
-      do {
-        const out = await ddb().send(
-          new QueryCommand({
-            TableName: TABLE_SESSIONS,
-            KeyConditionExpression: 'PK = :pk',
-            ExpressionAttributeValues: { ':pk': pk },
-            ProjectionExpression: projection,
-            ExclusiveStartKey: exclusiveStartKey,
-          }),
-        );
-        for (const item of out.Items ?? []) items.push(item);
-        exclusiveStartKey = out.LastEvaluatedKey;
-        // Guard against a pathological partition; one agent's chat count is small
-        // in practice, but never page unbounded.
-      } while (exclusiveStartKey && items.length < 1000);
-    } else {
-      // Cross-agent recent view (unchanged): a single 100-row scan, slice 50.
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: projection,
-          Limit: 100,
-        }),
-      );
-      items = out.Items ?? [];
-    }
+    // Per-agent (e.g. the Agent detail Sessions tab) is a Query of one
+    // partition; cross-agent Scans the table. Both read to the END — every
+    // message is a row since P1, so a read bounded by items would undercount
+    // conversations silently (readConversationRows).
+    const { rows: items, truncated } = await readConversationRows(projection, agentId || undefined);
 
     // Decision 1: conversations are author-private. A non-admin sees only their
     // own; an admin sees every one, and seeing someone else's is audited.
     const isAdmin = await hasCapability(c, 'security:write');
-    const conversations = items
-      .filter(isConversationRow)
-      .filter((i) => isAdmin || ownsConversation(c, i.userId));
+    const conversations = items.filter((i) => isAdmin || ownsConversation(c, i.userId));
     if (isAdmin && conversations.some((i) => !ownsConversation(c, i.userId))) {
       void writeAudit({
         action: 'session_read_override',
@@ -2162,7 +2172,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       userId: (i.userId as string | undefined) ?? null,
     }));
     rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    return c.json({ sessions: rows.slice(0, 50) });
+    return c.json({ sessions: rows.slice(0, 50), truncated });
   });
 
   router.get('/usage', async (c) => {
@@ -3270,10 +3280,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = c.req.query('chatId');
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
     const session = await getSession(agentId, chatId);
+    const none = { turns: [], truncated: false };
     // Decision 1: author-private. Someone else's conversation reads exactly like
     // one that does not exist; an admin may read it, and that read is audited.
     if (session && !ownsConversation(c, session.userId)) {
-      if (!(await hasCapability(c, 'security:write'))) return c.json({ turns: [] });
+      if (!(await hasCapability(c, 'security:write'))) return c.json(none);
       void writeAudit({
         action: 'session_read_override',
         agentId,
@@ -3282,7 +3293,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         result: 'ok',
       });
     }
-    return c.json({ turns: session?.turns ?? [] });
+    // WI-1.3: the whole conversation, not only the 20-turn replay window.
+    return c.json(session ? await getFullHistory(agentId, chatId, session) : none);
   });
 
   // War Room transcript PDF. Deliberately NOT under /api/warroom/* (that's
@@ -3357,10 +3369,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
 
   // Delete ONE conversation. Narrower than DELETE /export below, which is the
   // admin-only GDPR purge (memories + scheduled tasks + inbox + session); this
-  // removes exactly the session row the Chat sidebar lists. Because `turns` is
-  // an attribute ARRAY on that row rather than a child table, the single
-  // DeleteItem takes the conversation and every stored message atomically —
-  // there is no cascade to perform and no orphan to sweep.
+  // removes the conversation the Chat sidebar lists. Since P1 every message is
+  // also its own record beside the conversation row (WI-1.2), so deleteSession
+  // CASCADES: it removes the conversation's records first and the row last, so
+  // a delete that stops part-way leaves the row to retry, never stray messages.
   router.delete('/sessions', async (c) => {
     // Destructive mutation, so agents:write — the operator-tier capability this
     // repo already uses for every per-tab delete (scheduled-task delete, vector
@@ -3789,29 +3801,19 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'sessions:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
     }
-    const allItems: DDBRow[] = [];
-    let exclusiveStartKey: Record<string, unknown> | undefined;
-    do {
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: 'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId',
-          ExclusiveStartKey: exclusiveStartKey,
-        }),
-      );
-      for (const item of out.Items ?? []) allItems.push(item);
-      exclusiveStartKey = out.LastEvaluatedKey;
-      if (allItems.length >= 10_000) break;
-    } while (exclusiveStartKey);
-    const truncated = allItems.length >= 10_000;
+    // Read to the end and cap the FILE at 10,000 conversations — the cap used to
+    // count items, and since P1 message rows are items too (readConversationRows).
+    const EXPORT_CAP = 10_000;
+    const { rows: allItems, truncated: readTruncated } = await readConversationRows(
+      'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId',
+    );
     const today = new Date().toISOString().slice(0, 10);
     const headers = ['agentId', 'chatId', 'updatedAt', 'createdAt', 'surface', 'userId', 'messageCount', 'firstMessage', 'modelOverride'];
     // Decision 1, the same rule as GET /sessions: your own rows, or every row
     // for an admin with the override audited.
     const isAdmin = await hasCapability(c, 'security:write');
-    const conversations = allItems
-      .filter(isConversationRow)
-      .filter((i) => isAdmin || ownsConversation(c, i.userId));
+    const conversations = allItems.filter((i) => isAdmin || ownsConversation(c, i.userId));
+    const truncated = readTruncated || conversations.length > EXPORT_CAP;
     if (isAdmin && conversations.some((i) => !ownsConversation(c, i.userId))) {
       void writeAudit({
         action: 'session_read_override',
@@ -3819,7 +3821,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         result: 'ok',
       });
     }
-    const csvRows = conversations.map((i) => [
+    const csvRows = conversations.slice(0, EXPORT_CAP).map((i) => [
       String(i.PK ?? '').replace(/^AGENT#/, ''),
       String(i.SK ?? '').replace(/^CHAT#/, ''),
       String(i.updatedAt ?? ''), String(i.createdAt ?? ''),
@@ -3832,7 +3834,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     c.header('Content-Disposition', `attachment; filename="sessions-${today}.csv"`);
     c.header('X-Export-Row-Count', String(csvRows.length));
     c.header('X-Export-Truncated', String(truncated));
-    if (truncated) c.header('X-Export-Cap', '10000');
+    if (truncated) c.header('X-Export-Cap', String(EXPORT_CAP));
     return c.body(csv);
   });
 

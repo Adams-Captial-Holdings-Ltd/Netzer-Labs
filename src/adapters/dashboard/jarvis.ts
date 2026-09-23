@@ -27,7 +27,6 @@ import {
   type ToolResultContentBlock,
   type ToolUseBlock,
 } from '@aws-sdk/client-bedrock-runtime';
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 
 import { logger } from '../../observability/logger.js';
 import { writeAudit } from '../../lib/audit/audit-writer.js';
@@ -71,7 +70,7 @@ import { emitJarvisMetric } from '../../observability/emf-jarvis.js';
 // through HTTP; a removed import is a compile error, R8).
 import { listAgents } from '../../lib/state/agents-repo.js';
 import { listKnownAgentsAsync, loadAgent } from '../../lib/config/agent-loader.js';
-import { computeAgentHealth, collectAcrossDays, isConversationRow } from './handler.js';
+import { computeAgentHealth, collectAcrossDays, readConversationRows } from './handler.js';
 import { getDailyCostUsd, getUsageByDay, recordUsage, JARVIS_USAGE_AGENT, SpendIndeterminateError } from '../../lib/usage/token-tracker.js';
 import {
   isKillSwitchActive,
@@ -93,7 +92,6 @@ import { listAddons, addonConfigured } from '../../lib/addons/registry.js';
 import { getEffectiveCostCap, isCostCapEnforced } from '../../lib/state/cost-cap-repo.js';
 import { getConfig } from '../../lib/state/runtime-config-repo.js';
 import { assembleStatusData } from '../status/data.js';
-import { ddb } from '../../lib/state/ddb.js';
 
 // ── Phase 1 voice relay deps ────────────────────────────────────────
 import type { Server as HttpServer } from 'node:http';
@@ -135,7 +133,6 @@ import { checkAndConsume } from '../../lib/state/rate-limits-repo.js';
 import xray from 'aws-xray-sdk-core';
 import { isXrayEnabled } from '../../lib/observability/xray.js';
 
-const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 const TABLE_TOKEN_USAGE = process.env.TABLE_TOKEN_USAGE ?? 'claudeclaw-token-usage';
 const TABLE_AUDIT_LOG = process.env.TABLE_AUDIT_LOG ?? 'claudeclaw-audit-log';
 
@@ -1156,14 +1153,12 @@ async function runQuery(resource: JarvisResource, params: QueryParams): Promise<
     }
 
     case 'sessions': {
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: 'PK, SK, updatedAt, messageCount, surface, userId',
-          Limit: 100,
-        }),
+      // Read to the end (WI-1.2): a single 100-item scan undercounts once
+      // every message is a row of this table too.
+      const { rows: items, truncated } = await readConversationRows(
+        'PK, SK, updatedAt, messageCount, surface, userId',
       );
-      const rows = (out.Items ?? []).filter(isConversationRow).map((i) => ({
+      const rows = items.map((i) => ({
         agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
         chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
         updatedAt: i.updatedAt as number,
@@ -1171,7 +1166,7 @@ async function runQuery(resource: JarvisResource, params: QueryParams): Promise<
         surface: (i.surface as string | undefined) ?? null,
       }));
       rows.sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
-      return { count: rows.length, sessions: rows.slice(0, 50) };
+      return { count: rows.length, sessions: rows.slice(0, 50), ...(truncated ? { truncated } : {}) };
     }
 
     case 'usage': {
