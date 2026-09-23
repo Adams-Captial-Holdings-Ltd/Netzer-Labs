@@ -50,6 +50,54 @@ export interface TurnStreamOptions {
   endpoint?: string;
 }
 
+/** A `tool` event's data, as the server writes it. Legacy calls have only label/step. */
+interface WireTool { label: string; step: number; toolUseId?: string; input?: string; inputTruncated?: boolean }
+/** A `tool_result` event's data. */
+interface WireToolResult { toolUseId: string; output: string; isError: boolean; truncated: boolean }
+
+/**
+ * One event's JSON, or undefined when malformed. Parsing is the ONLY thing in
+ * the try, so a UI callback that throws is not swallowed as a bad event.
+ */
+function parseEvent<T>(data: string): T | undefined {
+  try {
+    return JSON.parse(data) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A positional delta, or null when it is not well formed: `i` an integer from 0
+ * to the current text length and `t` a string. One bad delta used to corrupt
+ * every later one.
+ */
+function wellFormedDelta(data: string, textLength: number): { i: number; t: string } | null {
+  const delta = parseEvent<{ i?: unknown; t?: unknown }>(data);
+  const i = delta?.i;
+  const t = delta?.t;
+  return Number.isInteger(i) && (i as number) >= 0 && (i as number) <= textLength && typeof t === 'string'
+    ? { i: i as number, t }
+    : null;
+}
+
+/**
+ * A refusal before the stream starts (`{error: code}` JSON: an unknown model or
+ * agent, a turn record that could not be written) keeps its code for the page's
+ * words; the message stays what the golden tests pin. Anything else is the bare
+ * failure it always was.
+ */
+async function streamFailure(res: Response): Promise<Error> {
+  const failure = new Error('Stream failed');
+  try {
+    const parsed: unknown = await res.json();
+    const code = (parsed as { error?: unknown } | null)?.error;
+    return typeof code === 'string' ? Object.assign(failure, { code }) : failure;
+  } catch {
+    return failure;
+  }
+}
+
 export async function streamTurn(
   body: TurnBody,
   token: string,
@@ -71,7 +119,8 @@ export async function streamTurn(
     }),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
-  if (!res.ok || !res.body) throw new Error('Stream failed');
+  if (!res.ok) throw await streamFailure(res);
+  if (!res.body) throw new Error('Stream failed');
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -108,16 +157,16 @@ export async function streamTurn(
       cb.onChunk(curData);
       cb.onToolStatus(''); // text resumed; drop the tool-status line
     } else if (curEvent === 'delta') {
-      try {
-        const { i, t } = JSON.parse(curData);
-        fullText = fullText.slice(0, i) + t;
+      const delta = wellFormedDelta(curData, fullText.length);
+      if (delta) {
+        fullText = fullText.slice(0, delta.i) + delta.t;
         cb.onChunk(fullText);
         cb.onToolStatus('');
-      } catch { /* ignore malformed delta event */ }
+      }
     } else if (curEvent === 'tool') {
       // Legacy calls have only label/step; P2 also carries live arguments.
-      try {
-        const t = JSON.parse(curData);
+      const t = parseEvent<WireTool>(curData);
+      if (t) {
         cb.onToolStatus(t.step > 1 ? `${t.label}… (step ${t.step})` : `${t.label}…`);
         tools.push({
           label: t.label,
@@ -126,23 +175,19 @@ export async function streamTurn(
           ...(t.input !== undefined ? { input: t.input, inputTruncated: t.inputTruncated } : {}),
         });
         publishTools();
-      } catch { /* ignore malformed tool event */ }
+      }
     } else if (curEvent === 'tool_result') {
-      try {
-        const result = JSON.parse(curData);
-        const index = tools.findIndex((tool) => tool.toolUseId !== undefined && tool.toolUseId === result.toolUseId);
-        if (index !== -1) {
-          tools[index] = { ...tools[index]!, output: result.output, isError: result.isError, truncated: result.truncated };
-          publishTools();
-        }
-      } catch { /* ignore malformed tool result */ }
+      const result = parseEvent<WireToolResult>(curData);
+      const index = result ? tools.findIndex((tool) => tool.toolUseId !== undefined && tool.toolUseId === result.toolUseId) : -1;
+      if (result && index !== -1) {
+        tools[index] = { ...tools[index]!, output: result.output, isError: result.isError, truncated: result.truncated };
+        publishTools();
+      }
     } else if (curEvent === 'media') {
       // { fileName, stage, label } — media pipeline progress (transcribe,
       // frames, indexing). Rides the same status row as tool events.
-      try {
-        const m = JSON.parse(curData);
-        cb.onToolStatus(m.label ?? `Processing ${m.fileName}…`);
-      } catch { /* ignore malformed media event */ }
+      const m = parseEvent<{ fileName?: string; label?: string }>(curData);
+      if (m) cb.onToolStatus(m.label ?? `Processing ${m.fileName}…`);
     } else if (curEvent === 'kb') {
       // { text } — knowledge-base confirmation chip for the final bubble.
       try {

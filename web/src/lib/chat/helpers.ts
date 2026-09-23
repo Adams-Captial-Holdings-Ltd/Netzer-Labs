@@ -111,3 +111,33 @@ export function friendlyStreamError(raw: string): string {
     ? `Something went wrong: ${code}`
     : 'The agent could not finish this response. Please try again.';
 }
+
+// A refusal before the stream starts says what to do about it. Every other typed
+// error is shown as the server wrote it: since P2 its message is plain English
+// already (src/agent/turn-errors.ts), and the sanitiser above, written for raw
+// codes, would prefix it with "Something went wrong:" and drop the cost cap's hint.
+const REFUSAL_WORDS: Record<string, string> = {
+  unknown_model: 'That model is no longer available. Pick another one.',
+  unknown_agent: 'This agent is no longer available.',
+  turn_record_unavailable: 'Could not start the reply. Try again.',
+  turn_duplicate: 'Could not start the reply. Try again.',
+  turn_conflict: 'Could not start the reply. Try again.',
+};
+
+/** The words a failed turn shows. No code means an older server, whose wire text still goes through friendlyStreamError. */
+export function friendlyTurnError(text: string, code?: string): string {
+  if (code === undefined) return friendlyStreamError(text);
+  return REFUSAL_WORDS[code] ?? text;
+}
+
+/**
+ * A message id the server accepts (`^[A-Za-z0-9._:-]{1,64}$`, handler.ts).
+ * `crypto.randomUUID` exists only on a secure page; served over plain HTTP the
+ * page has none, and Send used to die silently on it.
+ */
+export function newMessageId(): string {
+  const webCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return typeof webCrypto?.randomUUID === 'function'
+    ? webCrypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}

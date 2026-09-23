@@ -34,8 +34,11 @@ import {
   Wrench,
 } from 'lucide-preact';
 
+// The capped boxes scroll on their own, so each is a tab stop (with the page's
+// focus ring) and carries a name — a screen reader hears which payload it is on.
 const TOOL_PAYLOAD_CLASS =
-  'max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-elevated p-2 font-mono text-caption text-secondary';
+  'max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-elevated p-2 font-mono text-caption text-secondary ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary';
 
 type ToolKind = 'web' | 'knowledge' | 'code' | 'image' | 'document' | 'connector' | 'generic';
 
@@ -216,10 +219,20 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
                   {t.input !== undefined && (
                     <>
                       <div class="text-caption text-muted">Input</div>
-                      <pre class={TOOL_PAYLOAD_CLASS}>{t.input}</pre>
+                      <pre class={TOOL_PAYLOAD_CLASS} tabIndex={0} aria-label="Tool input">{t.input}</pre>
+                      {t.inputTruncated && <div class="text-caption text-muted">Input shortened</div>}
                     </>
                   )}
-                  {t.output !== undefined && <pre class={TOOL_PAYLOAD_CLASS}>{t.output}</pre>}
+                  {t.output !== undefined && (
+                    <>
+                      <div class="text-caption text-muted">Output</div>
+                      <pre class={TOOL_PAYLOAD_CLASS} tabIndex={0} aria-label="Tool output">{t.output}</pre>
+                    </>
+                  )}
+                  {/* A call that started but has no result: the Stop interrupted it. */}
+                  {t.toolUseId !== undefined && t.output === undefined && (
+                    <div class="text-caption text-muted">No result</div>
+                  )}
                   {t.truncated && <div class="text-caption text-muted">Output shortened</div>}
                   {t.isError && (
                     <span class="inline-flex rounded border border-danger-a/40 bg-danger-a/10 px-1.5 py-0.5 text-caption text-danger">

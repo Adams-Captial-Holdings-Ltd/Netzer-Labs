@@ -32,7 +32,10 @@ export interface ToolCall {
 // turn the reader cancelled with the composer's Stop control: the partial text
 // is kept and committed, but there is no `meta`, because the run never reached
 // its `final` event — so the footer says so instead of inventing numbers.
-export interface Message { role: 'user' | 'assistant'; text: string; ts: number; error?: boolean; stopped?: boolean; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; meta?: TurnMeta; tools?: ToolCall[] }
+// `notSaved` (P2) marks a reply that arrived but the server could not store
+// (`done: not_saved`): it is on screen now and gone after a reload, and the
+// reply says so.
+export interface Message { role: 'user' | 'assistant'; text: string; ts: number; error?: boolean; stopped?: boolean; notSaved?: true; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; meta?: TurnMeta; tools?: ToolCall[] }
 export interface Model { label: string; id: string; contextWindow: number; family: string; isDefault: boolean }
 
 // One row of the conversation sidebar. Mirrors the shape /sessions already

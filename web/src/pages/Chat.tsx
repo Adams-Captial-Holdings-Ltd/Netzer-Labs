@@ -8,7 +8,8 @@ import {
   storedChatId,
   rememberChatId,
   conversationTitle,
-  friendlyStreamError,
+  friendlyTurnError,
+  newMessageId,
   transcriptToMessages,
 } from '../lib/chat/helpers';
 import { installChatCodeCopy } from '../lib/chat/code-block';
@@ -55,6 +56,14 @@ export function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const draftsRef = useRef(new Map<string, string>());
+  // True while the chat on screen is a fresh one with nothing sent yet — an id
+  // nothing can reopen. Set when one is minted (`startNewChat`, the first
+  // mount), cleared by the first send in it or by opening a stored
+  // conversation. A ref, like `deletingRef`: handlers read it, nothing renders
+  // it. It is NOT `messages.length === 0` — a reopened conversation has no
+  // messages on screen until its transcript arrives, and none at all where the
+  // transcript is empty, yet its id is one the sidebar can reopen.
+  const unsentChatRef = useRef(true);
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
   // Epoch ms the in-flight turn was dispatched. The live row counts up from it,
@@ -174,9 +183,21 @@ export function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
-  function activateConversation(id: string, forAgent = agentId) {
-    draftsRef.current.set(`${agentId}/${chatId}`, input);
-    setInput(draftsRef.current.get(`${forAgent}/${id}`) ?? '');
+  // Where the chat on screen files its draft on the way out. A chat with nothing
+  // sent yet shares ONE slot: its fresh id is never reopened, so a draft filed
+  // under it was lost on New chat or on a look at another conversation. A
+  // stored conversation keeps its own.
+  const NEW_DRAFT = 'new';
+  const currentDraftKey = () => (unsentChatRef.current ? NEW_DRAFT : `${agentId}/${chatId}`);
+
+  // `fresh`: a new chat restores the `new` slot and clears it; a stored
+  // conversation restores its own draft, or nothing.
+  function activateConversation(id: string, forAgent = agentId, fresh = false) {
+    draftsRef.current.set(currentDraftKey(), input);
+    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`);
+    if (fresh) draftsRef.current.delete(NEW_DRAFT);
+    unsentChatRef.current = fresh;
+    setInput(restored ?? '');
     setChatId(id);
     rememberChatId(forAgent, id);
   }
@@ -201,7 +222,7 @@ export function Chat() {
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
   function startNewChat(forAgent = agentId) {
     const id = freshChatId();
-    activateConversation(id, forAgent);
+    activateConversation(id, forAgent, true);
     setMessages([]);
     setStreamText('');
   }
@@ -271,8 +292,12 @@ export function Chat() {
     const text = input.trim();
     const sendFiles = files;
     if ((!text && sendFiles.length === 0) || streaming || !agentId) return;
-    const clientMessageId = crypto.randomUUID();
+    const clientMessageId = newMessageId();
     draftsRef.current.delete(`${agentId}/${chatId}`);
+    // The first send in a fresh chat: its draft slot is spent, and from here on
+    // the chat has messages and an id the sidebar can reopen.
+    if (unsentChatRef.current) draftsRef.current.delete(NEW_DRAFT);
+    unsentChatRef.current = false;
     setInput('');
     setFiles([]);
     const fileNote = sendFiles.length > 0
@@ -328,7 +353,7 @@ export function Chat() {
         // Mid-stream failure. If text had already streamed, keep it and append a
         // clear error suffix; otherwise show the error on its own. Either way it
         // renders in a red bubble, never as a silent blank reply.
-        const msg = friendlyStreamError(outcome.errorText);
+        const msg = friendlyTurnError(outcome.errorText, outcome.errorCode);
         const partial = (!outcome.isReply && outcome.text) ? `${outcome.text}\n\n${msg}` : msg;
         setMessages((prev) => [...prev, { role: 'assistant', text: partial, ts: Date.now() / 1000, error: true }]);
         setStreamText('');
@@ -348,6 +373,8 @@ export function Chat() {
         ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
         ...(outcome.meta ? { meta: outcome.meta } : {}),
         ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
+        // `done: not_saved`: the answer arrived, the server could not store it.
+        ...(outcome.saved === false ? { notSaved: true as const } : {}),
       }]);
     } catch (e) {
       // Stop, not a failure. streamTurn rejects with an AbortError the moment
@@ -377,12 +404,13 @@ export function Chat() {
       }
       // Log the raw cause for debugging, but render only sanitized copy: the
       // transcript must never show raw exception text (backend response bodies,
-      // URLs). friendlyStreamError is the same sanitizer the mid-stream SSE
-      // error path uses, so both failure paths speak with one voice — short
-      // clean causes still surface ("Something went wrong: Upload failed"),
-      // anything long or token-like collapses to the generic line.
+      // URLs). friendlyTurnError is the same sanitizer the mid-stream SSE error
+      // path uses, so both failure paths speak with one voice — a refusal
+      // before the stream (its `code`) says what to do about it, short clean
+      // causes still surface ("Something went wrong: Upload failed"), anything
+      // long or token-like collapses to the generic line.
       console.error('Chat: send failed', e);
-      const msg = friendlyStreamError(e instanceof Error && e.message ? e.message : '');
+      const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', (e as { code?: string } | null)?.code);
       setMessages((prev) => [...prev, { role: 'assistant', text: msg, ts: Date.now() / 1000, error: true }]);
     }
     setStreamText('');
@@ -430,8 +458,11 @@ export function Chat() {
       onRequestDelete={(c) => setPendingDelete(c)}
       // The SAME handler the header's New chat uses, confirm dialog included:
       // two controls for one action must not disagree about whether an
-      // in-progress conversation is about to be abandoned.
-      onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
+      // in-progress conversation is about to be abandoned. Only a fresh chat
+      // with nothing sent yet is left without asking; a stored conversation is
+      // confirmed whether or not its transcript has arrived (an empty one
+      // reopens all the same).
+      onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
       collapsed={sidebarCollapsed}
       onToggleCollapse={() => {
         const next = !sidebarCollapsed;
@@ -535,7 +566,7 @@ export function Chat() {
               onSelectModel={setModelId}
               chatId={chatId}
               streaming={streaming}
-              onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
+              onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
             />
           }
           composer={composer}
