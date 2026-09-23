@@ -176,7 +176,7 @@ npm --prefix web run build
 npm run local:test:integration
 node scripts/ci/docs-links.mjs
 node scripts/ci/feature-knowledge.mjs
-git diff --check
+git diff --check origin/development...HEAD
 ```
 
 Note (ledger M6): run Vitest from a normal checkout, never a Windows linked
