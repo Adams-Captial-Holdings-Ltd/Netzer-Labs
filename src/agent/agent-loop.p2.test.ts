@@ -42,7 +42,7 @@ const {
   writeAudit: vi.fn(async () => {}),
   getConfig: vi.fn(async (_category: string, _key: string): Promise<string | undefined> => undefined),
   recordUsage: vi.fn(async () => true),
-  finalize: vi.fn(async () => {}),
+  finalize: vi.fn(async (_actuals: { costUsd: number; modelId: string; inputTokens: number; outputTokens: number }) => {}),
   abortHold: vi.fn(async () => {}),
   killState: { dispatchKilled: false },
 }));
@@ -191,6 +191,19 @@ describe('turn lifecycle (P2) — agent loop', () => {
     // A deliberate stop is not an error: the partial answer comes back, marked.
     expect(res).toMatchObject({ stopped: true, text: 'Partial ans' });
     expect(bedrockSend).not.toHaveBeenCalled();
+  });
+
+  it('gives a turn with no live viewer no chunk callback', async () => {
+    // The model-fallback wrapper decides whether a mid-stream failure may switch
+    // models by counting the chunks it forwarded through this callback (H2: two
+    // models are never spliced into one reply the person SAW). A scheduled or
+    // Paperclip turn has nobody watching, so before P2 it passed no callback and a
+    // mid-stream failure could still fall back. Stop tracking must not take that
+    // away: it only matters where there is a viewer to stop.
+    await runAgentTurn({ ...baseReq });
+
+    const callbacks = converseStreamTurnWithFallback.mock.calls[0]![1] as { onChunk?: unknown };
+    expect(callbacks.onChunk).toBeUndefined();
   });
 
   it('starts no tool round after the turn is aborted', async () => {
