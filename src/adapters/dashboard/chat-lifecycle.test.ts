@@ -44,6 +44,9 @@ const {
   writeAudit,
   send,
   loggerError,
+  loggerWarn,
+  listKnownAgents,
+  listKnownAgentsAsync,
 } = vi.hoisted(() => ({
   authenticateDashboardToken: vi.fn(),
   getSession: vi.fn(),
@@ -55,6 +58,9 @@ const {
   writeAudit: vi.fn(),
   send: vi.fn(),
   loggerError: vi.fn(),
+  loggerWarn: vi.fn(),
+  listKnownAgents: vi.fn(),
+  listKnownAgentsAsync: vi.fn(),
 }));
 
 const PRINCIPALS: Record<string, TokenPrincipal> = {
@@ -100,7 +106,11 @@ vi.mock('../../lib/audit/audit-writer.js', async (importActual) => {
 
 vi.mock('../../lib/config/agent-loader.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/config/agent-loader.js')>();
-  return { ...actual, listKnownAgentsAsync: vi.fn(async () => ['main']) };
+  return {
+    ...actual,
+    listKnownAgents: () => listKnownAgents(),
+    listKnownAgentsAsync: () => listKnownAgentsAsync(),
+  };
 });
 
 vi.mock('../../lib/state/kill-switches-repo.js', async (importActual) => {
@@ -119,12 +129,18 @@ vi.mock('../../lib/state/ddb.js', async (importActual) => {
 });
 
 vi.mock('../../observability/logger.js', () => ({
-  logger: { info: () => {}, warn: () => {}, error: (...a: unknown[]) => loggerError(...a), debug: () => {} },
+  logger: {
+    info: () => {},
+    warn: (...a: unknown[]) => loggerWarn(...a),
+    error: (...a: unknown[]) => loggerError(...a),
+    debug: () => {},
+  },
   truncateForLog: (s: string) => s,
 }));
 
 import { buildDashboardRouter } from './handler.js';
 import { CostCapExceededError } from '../../agent/agent-loop.js';
+import { KillSwitchActiveError } from '../../lib/state/kill-switches-repo.js';
 import { humanizeToolName } from '../../lib/tools/humanize.js';
 
 const AGENT = 'main';
@@ -241,6 +257,8 @@ describe('turn lifecycle (P2) — stream route', () => {
     runAgentTurn.mockResolvedValue(ok('Hi.'));
     writeAudit.mockResolvedValue(undefined);
     send.mockResolvedValue({});
+    listKnownAgents.mockReturnValue(['main']);
+    listKnownAgentsAsync.mockResolvedValue(['main']);
     vi.stubEnv('BEDROCK_DEFAULT_MODEL', SONNET);
     vi.stubEnv('BEDROCK_SONNET_MODEL', SONNET);
     vi.stubEnv('BEDROCK_HAIKU_MODEL', HAIKU);
@@ -535,5 +553,155 @@ describe('turn lifecycle (P2) — stream route', () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: 'turn_conflict' });
     expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The step 4 review (six read-only reviewers, 2026-09-23), written BEFORE the fix.
+ *
+ *   - Two reviewers reproduced it on the repo's own hono and node-server: a reader who
+ *     leaves BEFORE the response starts (Stop pressed right after Send, a closed tab)
+ *     never fires the stream's onAbort. The turn then runs and bills to the end, the
+ *     `final` write waits forever on a body nobody reads, the reply is never saved,
+ *     the turn record stays `streaming`, and the heartbeat timer leaks for the life of
+ *     the process. The request's own signal has already fired by then.
+ *   - An operator's refusal (the cost cap, a kill switch) is a state they chose and is
+ *     already audited: logging it at error level pages them in the middle of it.
+ *   - A turn record that cannot be written is a typed 503, logged with the turn's id,
+ *     not an anonymous "unhandled error".
+ *   - The known-agent check must not scan the agents table on every send.
+ */
+describe('turn lifecycle (P2) — stream route, review fixes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authenticateDashboardToken.mockImplementation(async (raw: string) => PRINCIPALS[raw] ?? null);
+    getSession.mockResolvedValue(undefined);
+    appendTurns.mockResolvedValue(undefined);
+    beginTurn.mockResolvedValue({ started: true });
+    endTurn.mockResolvedValue(true);
+    runCommand.mockResolvedValue(undefined);
+    runAgentTurn.mockResolvedValue(ok('Hi.'));
+    writeAudit.mockResolvedValue(undefined);
+    send.mockResolvedValue({});
+    listKnownAgents.mockReturnValue(['main']);
+    listKnownAgentsAsync.mockResolvedValue(['main']);
+    vi.stubEnv('BEDROCK_DEFAULT_MODEL', SONNET);
+    vi.stubEnv('BEDROCK_SONNET_MODEL', SONNET);
+    vi.stubEnv('BEDROCK_HAIKU_MODEL', HAIKU);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  it('stops the turn when the reader leaves before the stream starts', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }); // the heartbeat only
+    const ac = new AbortController();
+    const chat = 'dashboard:1750000000201';
+    // The person presses Stop, or closes the tab, while the route is still reading the
+    // conversation: the response has not begun.
+    getSession.mockImplementationOnce(async () => {
+      ac.abort();
+      return undefined;
+    });
+    let seen: AbortSignal | undefined;
+    runAgentTurn.mockImplementation(async (req: TurnReq) => {
+      seen = req.abortSignal;
+      await abortedOrTimeout(req.abortSignal, 1000);
+      return req.abortSignal?.aborted ? ok('', { stopped: true }) : ok('A whole answer nobody waited for.');
+    });
+
+    await request('member-a1', '/api/test-turn/stream', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'hello again', agentId: AGENT, chatId: chat, protocol: 2, clientMessageId: 'cm-gone' }),
+      signal: ac.signal,
+    });
+    // Nobody reads the response: the reader is gone.
+
+    await vi.waitFor(() => expect(seen?.aborted).toBe(true), { timeout: 2000 });
+    await vi.waitFor(() => expect(endTurn).toHaveBeenCalledWith(AGENT, chat, 'cm-gone', 'stopped'), { timeout: 2500 });
+    const reply = (savesFor(chat)[0]![2] as Array<Record<string, unknown>>)[1]!;
+    expect(reply).toMatchObject({ role: 'assistant', status: 'stopped' });
+    // The route finished: its heartbeat is gone.
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0), { timeout: 2000 });
+  });
+
+  it('leaves no timer behind when a turn ends', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+    await (await postStream('member-a1', { protocol: 2 })).text();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps the tool results of a stopped turn', async () => {
+    runAgentTurn.mockImplementation(async (req: TurnReq) => {
+      req.onToolEvent?.({ name: 'web_search', callIndex: 0, toolUseId: 'tu-1', input: '{"query":"x"}', inputTruncated: false });
+      req.onToolResult?.({ name: 'web_search', callIndex: 0, toolUseId: 'tu-1', output: '3 pages', isError: false, truncated: false });
+      req.onChunk?.('Partial');
+      await abortedOrTimeout(req.abortSignal);
+      return ok('Partial', { stopped: true, toolCallCount: 1 });
+    });
+
+    const chat = 'dashboard:1750000000202';
+    const res = await postStream('member-a1', { protocol: 2, chatId: chat });
+    const reader = res.body!.getReader();
+    await reader.read();
+    await reader.cancel();
+
+    await vi.waitFor(() => expect(savesFor(chat)).toHaveLength(1), { timeout: 2500 });
+    const reply = (savesFor(chat)[0]![2] as Array<Record<string, unknown>>)[1]!;
+    expect(reply).toMatchObject({
+      status: 'stopped',
+      tools: [expect.objectContaining({ toolUseId: 'tu-1', output: '3 pages' })],
+    });
+  });
+
+  it("logs an operator's refusal as a warning, not an error", async () => {
+    runAgentTurn.mockRejectedValueOnce(new CostCapExceededError(61.5, 50));
+    const cap = parseSse(await (await postStream('member-a1', { protocol: 2 })).text()).find((e) => e.event === 'error');
+    // The message keeps the hint the Chat tab gave before P2.
+    expect(JSON.parse(cap!.data).message).toMatch(/Raise it in Cost/);
+
+    runAgentTurn.mockRejectedValueOnce(new KillSwitchActiveError('maintenance window'));
+    const paused = parseSse(await (await postStream('member-a1', { protocol: 2 })).text()).find((e) => e.event === 'error');
+    expect(JSON.parse(paused!.data).code).toBe('kill_switch_active');
+
+    // Both are states an operator chose, and both are audited already.
+    expect(loggerError).not.toHaveBeenCalled();
+    expect(loggerWarn).toHaveBeenCalled();
+  });
+
+  it('answers 503 when the turn record cannot be written, and names the turn in the log', async () => {
+    beginTurn.mockRejectedValueOnce(
+      Object.assign(new Error('Throughput exceeds the current capacity'), { name: 'ProvisionedThroughputExceededException' }),
+    );
+
+    const res = await postStream('member-a1', { protocol: 2, clientMessageId: 'cm-503' });
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'turn_record_unavailable' });
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(JSON.stringify(loggerError.mock.calls)).toContain('cm-503');
+  });
+
+  it('logs a refused send as a warning', async () => {
+    expect((await postStream('member-a1', { agentId: 'ghost-agent' })).status).toBe(404);
+    expect((await postStream('member-a1', { modelOverride: 'us.anthropic.claude-imaginary-9' })).status).toBe(400);
+
+    const warned = JSON.stringify(loggerWarn.mock.calls);
+    expect(warned).toContain('unknown_agent');
+    expect(warned).toContain('unknown_model');
+    expect(loggerError).not.toHaveBeenCalled();
+  });
+
+  it('does not scan the agents table for an agent it already knows', async () => {
+    await (await postStream('member-a1', { agentId: 'main' })).text();
+    expect(listKnownAgentsAsync).not.toHaveBeenCalled();
+
+    // An agent it has not seen yet is still looked up before it is refused.
+    const res = await postStream('member-a1', { agentId: 'ghost-agent' });
+    expect(res.status).toBe(404);
+    expect(listKnownAgentsAsync).toHaveBeenCalledTimes(1);
   });
 });

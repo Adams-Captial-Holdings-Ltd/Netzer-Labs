@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { streamTurn } from '../../../web/src/lib/chat/stream.js';
 import type { TurnCallbacks } from '../../../web/src/lib/chat/stream.js';
-import { transcriptToMessages } from '../../../web/src/lib/chat/helpers.js';
+import { friendlyStreamError, friendlyTurnError, newMessageId, transcriptToMessages } from '../../../web/src/lib/chat/helpers.js';
 
 // P2 (step 4) — the web client's half of the turn lifecycle. Written BEFORE the
 // change, as the bar (netzar-chat-plan/p2-proof.sh rows B-11..B-18). The golden
@@ -175,5 +175,72 @@ describe('turn lifecycle (P2) — web client', () => {
       { role: 'user', text: 'and now?', ts: 3 },
       { role: 'assistant', text: 'Fixed.', ts: 4 },
     ]);
+  });
+});
+
+// The step 4 review, written BEFORE the fix:
+//   - the refusals P2 added before a stream starts (unknown model or agent, a turn
+//     record that could not be written) reached the page as a bare "Stream failed";
+//   - a typed error's message is plain English already, and the old sanitiser, written
+//     for raw codes, prefixed it with "Something went wrong:" and dropped the cost cap's
+//     hint;
+//   - one malformed positional delta corrupted every later one;
+//   - `crypto.randomUUID` exists only on a secure page, and Send died silently without it.
+describe('turn lifecycle (P2) — web client, review fixes', () => {
+  it('carries the reason when the server refuses a turn before it starts', async () => {
+    const impl = (() =>
+      Promise.resolve(new Response(JSON.stringify({ error: 'unknown_model' }), { status: 400 }))) as unknown as typeof fetch;
+
+    const err = await streamTurn(body, 'tok', recorder().cb, { fetchImpl: impl }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('Stream failed'); // what the golden tests pin
+    expect((err as { code?: string }).code).toBe('unknown_model');
+  });
+
+  it('ignores a delta that is not well formed', async () => {
+    const { impl } = sseFetch([
+      'event: delta\ndata: {"i":0,"t":"Hel"}\n\n',
+      'event: delta\ndata: {"i":3}\n\n',
+      'event: delta\ndata: {"i":"x","t":"??"}\n\n',
+      'event: delta\ndata: {"i":3,"t":"lo"}\n\n',
+    ]);
+    const r = recorder();
+
+    const out = await streamTurn(body, 'tok', r.cb, { fetchImpl: impl });
+
+    expect(out.text).toBe('Hello');
+    expect(r.chunks.at(-1)).toBe('Hello');
+  });
+
+  it('shows a typed error in the words the server chose, and an old one as before', () => {
+    expect(friendlyTurnError('Something went wrong on our side. Try again.', 'internal_error'))
+      .toBe('Something went wrong on our side. Try again.');
+    expect(friendlyTurnError('An operator has paused this: maintenance window', 'kill_switch_active'))
+      .toBe('An operator has paused this: maintenance window');
+    // No code: an older server's wire text still goes through the old sanitiser.
+    expect(friendlyTurnError('kill_switch_active: tool_use')).toBe(friendlyStreamError('kill_switch_active: tool_use'));
+    // A refusal before the stream says what to do about it.
+    expect(friendlyTurnError('Stream failed', 'unknown_model')).toMatch(/model/i);
+    expect(friendlyTurnError('Stream failed', 'unknown_agent')).toMatch(/agent/i);
+    expect(friendlyTurnError('Stream failed', 'turn_record_unavailable')).toMatch(/try again/i);
+    for (const code of ['unknown_model', 'unknown_agent', 'turn_record_unavailable']) {
+      expect(friendlyTurnError('Stream failed', code)).not.toMatch(/Stream failed/);
+    }
+  });
+
+  it('makes a message id the server accepts, even where randomUUID is missing', () => {
+    const accepted = /^[A-Za-z0-9._:-]{1,64}$/; // src/adapters/dashboard/handler.ts
+    expect(newMessageId()).toMatch(accepted);
+
+    vi.stubGlobal('crypto', {}); // a page served over plain HTTP
+    try {
+      const a = newMessageId();
+      const b = newMessageId();
+      expect(a).toMatch(accepted);
+      expect(a).not.toBe(b);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

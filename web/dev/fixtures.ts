@@ -261,6 +261,37 @@ const longstreamFixture: Fixture = (() => {
   return events;
 })();
 
+// ── P2 review fixtures (test data for tests/e2e/chat/lifecycle.spec.ts) ─────────
+
+// notsaved: the answer arrives, then the server reports it could not store it.
+const notSavedText = 'This answer arrived, but the server could not store it.';
+const notSavedFixture: Fixture = [
+  ...cumulativeChunks(notSavedText, 4),
+  finalEvent(notSavedText, { latencyMs: 1200, costUsd: 0.004, toolCallCount: 0 }),
+  { event: 'done', data: 'not_saved' },
+];
+
+// typed-error: a protocol-2 error, {code, message}, the message already plain English.
+const typedErrorFixture: Fixture = [
+  { event: 'error', data: JSON.stringify({ code: 'internal_error', message: 'Something went wrong on our side. Try again.' }) },
+];
+
+// tool-capped: one call whose arguments were cut at 1 KB before they were sent.
+const toolCappedText = 'Drafted the long note you asked for.';
+const toolCappedFixture: Fixture = [
+  {
+    event: 'tool',
+    data: JSON.stringify({
+      label: 'document generator', step: 1, toolUseId: 'tu-1',
+      input: `{"body":"${'A long paragraph of the note. '.repeat(40)}`.slice(0, 1024), inputTruncated: true,
+    }),
+    delayMs: 200,
+  },
+  { event: 'tool_result', data: JSON.stringify({ toolUseId: 'tu-1', output: 'Created the note.', isError: false, truncated: false }), delayMs: 300 },
+  ...cumulativeChunks(toolCappedText, 3),
+  finalEvent(toolCappedText, { latencyMs: 1900, costUsd: 0.006, toolCallCount: 1 }),
+];
+
 export const fixtures: Record<string, Fixture> = {
   default: defaultFixture,
   code: codeFixture,
@@ -270,4 +301,7 @@ export const fixtures: Record<string, Fixture> = {
   media: mediaFixture,
   reply: replyFixture,
   longstream: longstreamFixture,
+  notsaved: notSavedFixture,
+  'typed-error': typedErrorFixture,
+  'tool-capped': toolCappedFixture,
 };

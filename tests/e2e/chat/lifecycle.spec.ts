@@ -18,7 +18,9 @@ import { test, expect, type Page } from '@playwright/test';
 // is not an authorization bypass.
 const CAPS = ['overview:read', 'chat:read', 'agents:read', 'sessions:read'];
 
-const STOPPED = 'stopped — partial reply, no run recorded';
+// Since P2 a stopped turn's usage IS recorded, settled from an estimate (the step 4
+// review): the footer says so instead of "no run recorded".
+const STOPPED = 'stopped — partial reply, cost estimated';
 const REPLY = 'Here is the summary you asked for'; // web/dev/fixtures.ts, the default reply
 const TOOLS_REPLY = 'Here is what the failed staging rollout came down to.'; // the tools fixture
 const FOUND = 'Found 3 pages about the failed rollout.'; // the tools fixture: call 1's result
@@ -141,4 +143,122 @@ test('keeps a stopped reply stopped after a reload', async ({ page }) => {
   await page.reload();
   await expect(page.getByText('Line 1: the quick brown fox').first()).toBeVisible();
   await expect(page.getByText(STOPPED)).toBeVisible();
+});
+
+// The step 4 review (six read-only reviewers, 2026-09-23), written BEFORE the fix:
+//   - a draft typed in a new chat, before anything was sent, vanished on New chat or
+//     on a look at another conversation (it was filed under an id nothing reopens);
+//   - `done: not_saved` reached the parser and stopped there;
+//   - the Escape that closes a Japanese or Chinese input method also stopped the paid
+//     reply; Escape did nothing while the Stop button had focus;
+//   - the tool panel's output had no label, its capped boxes could not be reached from
+//     the keyboard, a shortened input was not marked, and a call the Stop interrupted
+//     looked like one that returned nothing;
+//   - a typed error came out as "Something went wrong: Something went wrong on our side".
+const NOT_SAVED_REPLY = 'This answer arrived, but the server could not store it.'; // the notsaved fixture
+
+test('keeps a draft typed in a new chat', async ({ page }) => {
+  await page.goto('/dashboard/chat');
+  const composer = composerOf(page);
+  await expect(composer).toBeVisible();
+  await page.getByRole('button', { name: 'New chat' }).first().click();
+  await composer.fill('a question for a brand-new chat');
+
+  // New chat again, from a chat with nothing sent yet: the words stay.
+  await page.getByRole('button', { name: 'New chat' }).first().click();
+  await expect(composer).toHaveValue('a question for a brand-new chat');
+
+  // A look at an older conversation, then back to a new chat: the words come back.
+  await page.locator('button[title="Wiring the turn stream"]:visible').click();
+  await expect(composer).toHaveValue('');
+  await page.getByRole('button', { name: 'New chat' }).first().click();
+  await page.getByPlaceholder('NEW CHAT').fill('NEW CHAT');
+  await page.getByRole('button', { name: 'Start new chat' }).click();
+  await expect(composer).toHaveValue('a question for a brand-new chat');
+});
+
+test('tells the reader when a reply was not saved', async ({ page }) => {
+  await newChat(page);
+  await sendText(page, '/fixture notsaved');
+  await expect(page.getByText(NOT_SAVED_REPLY).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/wasn.t saved/i)).toBeVisible();
+});
+
+test('does not stop the reply when Escape only closes the input method', async ({ page }) => {
+  await newChat(page);
+  await sendText(page, '/fixture longstream');
+  await expect(stopOf(page)).toBeVisible();
+
+  // The keydown a Japanese or Chinese input method sends when it closes its candidates.
+  await composerOf(page).evaluate((el) => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true }));
+  });
+
+  await page.waitForTimeout(500);
+  await expect(stopOf(page)).toBeVisible();
+  await expect(page.getByText(STOPPED)).toHaveCount(0);
+});
+
+test('stops the reply with Escape while the Stop button has focus', async ({ page }) => {
+  await newChat(page);
+  await sendText(page, '/fixture longstream');
+  await expect(page.getByText('Line 3:').first()).toBeVisible();
+
+  await stopOf(page).focus();
+  await page.keyboard.press('Escape');
+
+  await expect(sendOf(page)).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText(STOPPED)).toBeVisible();
+});
+
+test("labels each tool's output and lets the keyboard reach it", async ({ page }) => {
+  await newChat(page);
+  await sendText(page, '/fixture tools');
+  await expect(sendOf(page)).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /Used 5 tools/ }).click();
+
+  await expect(page.getByText('Output', { exact: true }).first()).toBeVisible();
+  // The capped boxes scroll on their own, so the keyboard has to be able to reach them.
+  const found = page.locator('pre', { hasText: FOUND });
+  await expect(found).toHaveAttribute('tabindex', '0');
+  await expect(found).toHaveAttribute('aria-label', /output/i);
+});
+
+test("says when a tool's input was shortened", async ({ page }) => {
+  await newChat(page);
+  await sendText(page, '/fixture tool-capped');
+  await expect(sendOf(page)).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /Used 1 tool/ }).click();
+
+  await expect(page.getByText('Input shortened')).toBeVisible();
+});
+
+test('marks a tool call the Stop interrupted', async ({ page }) => {
+  await newChat(page);
+  await sendText(page, '/fixture tools');
+  // The status line shows while call 1 runs; its result is a second away.
+  await expect(page.getByText('web search…').first()).toBeVisible();
+  await composerOf(page).press('Escape');
+  await expect(sendOf(page)).toBeVisible({ timeout: 5_000 });
+
+  await page.getByRole('button', { name: /Used 1 tool/ }).click();
+  await expect(page.getByText('No result')).toBeVisible();
+});
+
+test('sends each message with its own id and asks for protocol 2', async ({ page }) => {
+  await newChat(page);
+  const sent = page.waitForRequest((r) => r.url().includes('/api/test-turn/stream') && r.method() === 'POST');
+  await sendText(page, 'which body does the page send?');
+
+  const body = (await sent).postDataJSON() as { clientMessageId?: string; protocol?: number };
+  expect(body.protocol).toBe(2);
+  expect(body.clientMessageId).toMatch(/^[A-Za-z0-9._:-]{1,64}$/);
+});
+
+test('shows a typed error in the words the server chose', async ({ page }) => {
+  await newChat(page);
+  await sendText(page, '/fixture typed-error');
+
+  await expect(page.getByText('Something went wrong on our side. Try again.', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Something went wrong: Something went wrong/)).toHaveCount(0);
 });

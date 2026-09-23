@@ -13,14 +13,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 
 const { send } = vi.hoisted(() => ({ send: vi.fn() }));
 vi.mock('./ddb.js', () => ({ ddb: () => ({ send }) }));
 vi.mock('../../agent/memory-ingest.js', () => ({ ingestEvictedTurns: vi.fn() }));
 vi.mock('./runtime-config-repo.js', () => ({ getConfig: vi.fn(async () => undefined) }));
 
-import { appendTurns, trimTurnsToBudget } from './sessions-repo.js';
+import { appendTurns, getFullHistory, trimTurnsToBudget } from './sessions-repo.js';
 
 const OUTPUT = 'o'.repeat(2000);
 
@@ -94,5 +94,60 @@ describe('turn lifecycle (P2) — sessions repo', () => {
       expect((reply.tools as unknown[]).length).toBe(40);
       expect(reply.truncated).toBe(true);
     });
+
+    it('stays under the item limit however many tool results a reply carries', async () => {
+      // The step 4 review: 70 results of 2,048 characters that take three bytes each in
+      // UTF-8 are about 430 KB of tools alone, so giving way on the text cannot save the
+      // record, and the whole append fails. The oldest outputs give way first, as they
+      // do in the replay window (decision 41); every call stays listed.
+      const tools = Array.from({ length: 70 }, (_, i) => ({
+        label: 'web search', step: i + 1, toolUseId: `tu-${i}`, output: '\u754c'.repeat(2048), isError: false, truncated: false,
+      }));
+
+      await appendTurns('main', 'dashboard:p2-many', [
+        { role: 'user', text: 'run everything', ts: 1 },
+        { role: 'assistant', text: 'done', ts: 1, tools },
+      ], undefined, { surface: 'dashboard', userId: 'dashboard:user:user-a', ephemeral: false });
+
+      const reply = records[1]!;
+      expect(Buffer.byteLength(JSON.stringify(reply), 'utf8')).toBeLessThan(400 * 1024);
+      const kept = reply.tools as Array<{ toolUseId: string; output: string; truncated: boolean }>;
+      expect(kept).toHaveLength(70);
+      expect(kept[69]!.output).toBe('\u754c'.repeat(2048)); // the newest result survives
+      expect(kept[0]!.output).toBe(''); // the oldest gave way
+      expect(kept[0]!.truncated).toBe(true);
+    });
+
+    it('writes the stopped mark on the message record', async () => {
+      await appendTurns('main', 'dashboard:p2-stop', [
+        { role: 'user', text: 'tell me everything', ts: 1 },
+        { role: 'assistant', text: 'Partial', ts: 1, status: 'stopped' },
+      ], undefined, { surface: 'dashboard', userId: 'dashboard:user:user-a', ephemeral: false });
+
+      expect(records[1]).toMatchObject({ role: 'assistant', text: 'Partial', status: 'stopped' });
+    });
+  });
+
+  it('brings back the stopped mark and the tool results when a conversation is reopened', async () => {
+    // The step 4 review: the browser suite reloads against the dev mock, whose own
+    // store keeps both fields, so nothing proved the REAL read path returns them.
+    const tools = [{ label: 'web search', step: 1, toolUseId: 'tu-1', output: '3 pages', isError: false, truncated: false }];
+    send.mockReset();
+    send.mockImplementation(async (cmd: unknown) => {
+      if (cmd instanceof QueryCommand) {
+        return {
+          Items: [
+            { PK: 'AGENT#main', SK: 'CHAT#dashboard:p2-reload#MSG#1', seq: 1, role: 'assistant', text: 'Partial', ts: 2, status: 'stopped', tools },
+            { PK: 'AGENT#main', SK: 'CHAT#dashboard:p2-reload#MSG#0', seq: 0, role: 'user', text: 'tell me everything', ts: 1 },
+          ],
+        };
+      }
+      throw new Error('unexpected DynamoDB command');
+    });
+
+    const { turns } = await getFullHistory('main', 'dashboard:p2-reload', { turns: [], turnsTotal: 2 } as never);
+
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toMatchObject({ role: 'assistant', text: 'Partial', status: 'stopped', tools });
   });
 });

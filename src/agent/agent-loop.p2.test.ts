@@ -34,6 +34,8 @@ const {
   finalize,
   abortHold,
   killState,
+  buildStreamingRedactor,
+  registryState,
 } = vi.hoisted(() => ({
   tryAcquirePanic: vi.fn(),
   converseStreamTurnWithFallback: vi.fn(),
@@ -45,6 +47,8 @@ const {
   finalize: vi.fn(async (_actuals: { costUsd: number; modelId: string; inputTokens: number; outputTokens: number }) => {}),
   abortHold: vi.fn(async () => {}),
   killState: { dispatchKilled: false },
+  buildStreamingRedactor: vi.fn(async () => (t: string) => t),
+  registryState: { description: 'search the web' },
 }));
 
 vi.mock('../lib/bedrock/client.js', () => ({
@@ -58,7 +62,7 @@ vi.mock('../lib/bedrock/client.js', () => ({
 vi.mock('../lib/tools/registry.js', () => ({
   tools: {
     listFor: () => [
-      { toolSpec: { name: 'web_search', description: 'search the web', inputSchema: { json: { type: 'object' } } } },
+      { toolSpec: { name: 'web_search', description: registryState.description, inputSchema: { json: { type: 'object' } } } },
     ],
     invoke: toolsInvoke,
   },
@@ -95,7 +99,7 @@ vi.mock('../lib/safety/exfil-guard.js', () => ({
   scanForExfil: vi.fn(async () => ({ matches: [] })),
   redactMatches: (t: string) => t,
   getActivePatterns: vi.fn(async () => []),
-  buildStreamingRedactor: vi.fn(async () => (t: string) => t),
+  buildStreamingRedactor,
 }));
 vi.mock('../lib/config/agent-loader.js', () => ({
   loadAgent: vi.fn(async () => ({
@@ -112,6 +116,7 @@ vi.mock('../lib/cost/ledger-gate.js', () => ({
 vi.mock('../lib/state/panic-state-repo.js', () => ({ tryAcquirePanic }));
 
 import { runAgentTurn } from './agent-loop.js';
+import { admitTurnSpend } from '../lib/cost/ledger-gate.js';
 
 const MODEL = 'us.anthropic.claude-sonnet-4-6';
 
@@ -131,10 +136,10 @@ function streamed(stopReason: string, text = '') {
 }
 
 /** One non-streamed tool-loop response carrying a single tool call. */
-function toolRound(input: Record<string, unknown>, toolUseId = 'tu-1') {
+function toolRound(input: Record<string, unknown>, toolUseId = 'tu-1', name = 'web_search') {
   return {
     stopReason: 'tool_use',
-    output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId, name: 'web_search', input } }] } },
+    output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId, name, input } }] } },
     usage: { inputTokens: 5, outputTokens: 5 },
   };
 }
@@ -166,6 +171,8 @@ describe('turn lifecycle (P2) — agent loop', () => {
     getConfig.mockResolvedValue(undefined);
     tryAcquirePanic.mockResolvedValue({ acquired: false, state: { active: false, generation: 0 } });
     converseStreamTurnWithFallback.mockResolvedValue(streamed('end_turn', 'hello'));
+    buildStreamingRedactor.mockResolvedValue((t: string) => t);
+    registryState.description = 'search the web';
     delete process.env.BEDROCK_GUARDRAIL_ID;
     delete process.env.BEDROCK_GUARDRAIL_VERSION;
   });
@@ -338,5 +345,266 @@ describe('turn lifecycle (P2) — agent loop', () => {
 
     const input = converseStreamTurnWithFallback.mock.calls[0]![0] as { guardrail?: unknown };
     expect(input.guardrail).toEqual({ id: 'gr-test', version: 'DRAFT', streamMode: 'sync' });
+  });
+});
+
+/**
+ * The step 4 review (six read-only reviewers, 2026-09-23), written BEFORE the fix.
+ *
+ *   - The real SDK does not always throw on a Stop: over HTTP/2 an abort after the
+ *     response headers ends the event stream cleanly, so the call RETURNS what had
+ *     streamed with no usage (reproduced by two reviewers against the repo's own
+ *     SDK). The turn must still count as stopped and settle a real estimate.
+ *   - A stopped turn's estimate must err on the safe side (the ledger's own rule):
+ *     the files and the tool list the prompt carried, the tool arguments it re-sent,
+ *     the real usage of every call before the Stop, and the ceiling of a cut call
+ *     that shows no output while it runs.
+ *   - Tool inputs and results now reach the browser and the transcript, so they pass
+ *     the same block-severity redactor as the reply; the database lookup tool's raw
+ *     result is not passed on at all (owner decision 53); a failed tool's text loses
+ *     its account ids and ARNs. The model still receives every raw result.
+ *   - A Stop inside a tool round starts nothing more, and a turn stopped before it
+ *     began reserves no spend at all.
+ */
+describe('turn lifecycle (P2) — agent loop, review fixes', () => {
+  const KEY = 'AKIAIOSFODNN7EXAMPLE';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    killState.dispatchKilled = false;
+    getConfig.mockResolvedValue(undefined);
+    tryAcquirePanic.mockResolvedValue({ acquired: false, state: { active: false, generation: 0 } });
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('end_turn', 'hello'));
+    buildStreamingRedactor.mockResolvedValue((t: string) => t);
+    registryState.description = 'search the web';
+    delete process.env.BEDROCK_GUARDRAIL_ID;
+    delete process.env.BEDROCK_GUARDRAIL_VERSION;
+  });
+  afterEach(() => {
+    delete process.env.BEDROCK_GUARDRAIL_ID;
+  });
+
+  /** What the second model call (the one after a tool round) was sent. */
+  const secondCallMessages = () =>
+    JSON.stringify((bedrockSend.mock.calls[1]![0] as { input: { messages: unknown } }).input.messages);
+
+  it('treats a stream that ended quietly after a Stop as stopped, and settles its spend', async () => {
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockImplementation(
+      async (_input: unknown, callbacks: { onChunk?: (t: string) => void }) => {
+        callbacks.onChunk?.('Partial answer text, several words long.');
+        ac.abort();
+        // No throw: the stream just ended, and Bedrock never sent its usage.
+        return { ...streamed('unknown', 'Partial answer text, several words long.'), inputTokens: 0, outputTokens: 0 };
+      },
+    );
+
+    const res = await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    expect(res).toMatchObject({ stopped: true });
+    expect(finalize).toHaveBeenCalledTimes(1);
+    const settled = finalize.mock.calls[0]![0];
+    expect(settled.inputTokens).toBeGreaterThan(0);
+    expect(settled.outputTokens).toBeGreaterThan(0);
+    expect(settled.costUsd).toBeGreaterThan(0);
+  });
+
+  it('counts the attached files when it settles a stopped turn', async () => {
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockImplementation(
+      async (_input: unknown, callbacks: { onChunk?: (t: string) => void }) => {
+        callbacks.onChunk?.('Partial');
+        ac.abort();
+        throw abortError();
+      },
+    );
+    const pdf = new Uint8Array(400_000);
+
+    await runAgentTurn({
+      ...baseReq,
+      onChunk: vi.fn(),
+      abortSignal: ac.signal,
+      attachments: [
+        { kind: 'image', format: 'png', bytes: new Uint8Array(1_000) },
+        { kind: 'document', format: 'pdf', name: 'deck.pdf', bytes: pdf },
+      ],
+    });
+
+    // The billed prompt carried both files. At least 1,600 tokens for an image (the
+    // most one image costs after Bedrock scales it down) and a document by its size.
+    const settled = finalize.mock.calls[0]![0];
+    expect(settled.inputTokens).toBeGreaterThanOrEqual(1_600 + pdf.byteLength / 4);
+  });
+
+  it('counts the tool list the model was sent when it settles a stopped turn', async () => {
+    registryState.description = 'd'.repeat(40_000);
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockImplementation(async () => {
+      ac.abort();
+      throw abortError();
+    });
+
+    await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    // The tool specs ride on every call; here they are 40,000 characters.
+    expect(finalize.mock.calls[0]![0].inputTokens).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it('settles a Stop in a later tool round in the safe direction', async () => {
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockResolvedValue({ ...streamed('tool_use'), inputTokens: 50_000, outputTokens: 5 });
+    bedrockSend
+      .mockResolvedValueOnce(toolRound({ query: 'q'.repeat(40_000) })) // round 1: 5 in, 5 out
+      .mockImplementationOnce(async () => {
+        ac.abort(); // round 2 is cut while it runs
+        throw abortError();
+      });
+    toolsInvoke.mockResolvedValue({ text: 'ok', isError: false });
+
+    const res = await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    expect(res).toMatchObject({ stopped: true });
+    const settled = finalize.mock.calls[0]![0];
+    // Every call before the Stop keeps its real usage; the cut call adds an estimate
+    // that includes the tool arguments it re-sent (10,000 tokens here).
+    expect(settled.inputTokens).toBeGreaterThanOrEqual(50_000 + 5 + 10_000);
+    // A call that does not stream shows none of its output before the cut, so what it
+    // may have generated counts at its ceiling (TURN_MAX_TOKENS, 8,192).
+    expect(settled.outputTokens).toBeGreaterThanOrEqual(5 + 5 + 8_192);
+  });
+
+  it('starts no further tool once the turn is stopped mid-round', async () => {
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
+    bedrockSend
+      .mockResolvedValueOnce({
+        stopReason: 'tool_use',
+        output: { message: { role: 'assistant', content: [
+          { toolUse: { toolUseId: 'tu-1', name: 'web_search', input: { query: 'a' } } },
+          { toolUse: { toolUseId: 'tu-2', name: 'web_search', input: { query: 'b' } } },
+        ] } },
+        usage: { inputTokens: 5, outputTokens: 5 },
+      })
+      .mockResolvedValue(finalRound);
+    toolsInvoke.mockImplementationOnce(async () => {
+      ac.abort(); // the person presses Stop while tool 1 runs
+      return { text: 'first result', isError: false };
+    });
+
+    const res = await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    expect(toolsInvoke).toHaveBeenCalledTimes(1);
+    expect(bedrockSend).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ stopped: true });
+  });
+
+  it('stops during the synthesis that follows the last tool round', async () => {
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
+    let calls = 0;
+    bedrockSend.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 8) return toolRound({ query: `round ${calls}` }, `tu-${calls}`); // the tool budget
+      ac.abort();
+      throw abortError();
+    });
+    toolsInvoke.mockResolvedValue({ text: 'found', isError: false });
+
+    const res = await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    expect(calls).toBe(9);
+    expect(res).toMatchObject({ stopped: true });
+  });
+
+  it('starts no paid work for a turn stopped before it began', async () => {
+    const ac = new AbortController();
+    ac.abort();
+
+    const res = await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    expect(res).toMatchObject({ stopped: true, text: '' });
+    expect(admitTurnSpend).not.toHaveBeenCalled();
+    expect(converseStreamTurnWithFallback).not.toHaveBeenCalled();
+  });
+
+  it("hides a secret in a tool's input and result before they leave the loop", async () => {
+    buildStreamingRedactor.mockResolvedValue((t: string) => t.split(KEY).join('[REDACTED]'));
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
+    bedrockSend.mockResolvedValueOnce(toolRound({ query: `key ${KEY}` })).mockResolvedValueOnce(finalRound);
+    toolsInvoke.mockResolvedValue({ text: `found ${KEY} in the config`, isError: false });
+    const onToolEvent = vi.fn();
+    const onToolResult = vi.fn();
+
+    // No onChunk: a surface that shows tool payloads without streaming text is covered too.
+    await runAgentTurn({ ...baseReq, onToolEvent, onToolResult });
+
+    const started = onToolEvent.mock.calls[0]![0] as { input: string };
+    const ended = onToolResult.mock.calls[0]![0] as { output: string };
+    expect(started.input).not.toContain(KEY);
+    expect(started.input).toContain('[REDACTED]');
+    expect(ended.output).not.toContain(KEY);
+    expect(ended.output).toContain('[REDACTED]');
+    // The model still receives the raw result, exactly as before P2.
+    expect(secondCallMessages()).toContain(`found ${KEY}`);
+    // And a turn nobody watches still gets no chunk callback (H2, correction C1).
+    const callbacks = converseStreamTurnWithFallback.mock.calls[0]![1] as { onChunk?: unknown };
+    expect(callbacks.onChunk).toBeUndefined();
+  });
+
+  it("does not pass on the database lookup tool's raw result (decision 53)", async () => {
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
+    bedrockSend
+      .mockResolvedValueOnce(toolRound({ table: 'sessions' }, 'tu-1', 'dynamodb_query'))
+      .mockResolvedValueOnce(finalRound);
+    toolsInvoke.mockResolvedValue({ text: 'user-b wrote: my salary is 90k', isError: false });
+    const onToolResult = vi.fn();
+
+    await runAgentTurn({ ...baseReq, onToolEvent: vi.fn(), onToolResult });
+
+    const ended = onToolResult.mock.calls[0]![0] as { output: string; isError: boolean; toolUseId: string };
+    expect(ended.toolUseId).toBe('tu-1');
+    expect(ended.isError).toBe(false);
+    expect(ended.output).not.toContain('salary');
+    expect(ended.output).toMatch(/not shown/i);
+    // The model still receives it (who that tool may read is the owner's open question A172).
+    expect(secondCallMessages()).toContain('my salary is 90k');
+  });
+
+  it("scrubs account ids and ARNs from a failed tool's result", async () => {
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
+    bedrockSend.mockResolvedValueOnce(toolRound({ query: 'x' })).mockResolvedValueOnce(finalRound);
+    toolsInvoke.mockResolvedValue({
+      text: "Tool 'web_search' failed: AccessDeniedException: User: arn:aws:sts::123456789012:assumed-role/task-role/abc is not authorized",
+      isError: true,
+    });
+    const onToolResult = vi.fn();
+
+    await runAgentTurn({ ...baseReq, onToolEvent: vi.fn(), onToolResult });
+
+    const ended = onToolResult.mock.calls[0]![0] as { output: string; isError: boolean };
+    expect(ended.isError).toBe(true);
+    expect(ended.output).not.toMatch(/123456789012|arn:aws/);
+    expect(ended.output).toMatch(/not authorized/); // what went wrong survives
+    // The model keeps the raw text, which is what it recovers from.
+    expect(secondCallMessages()).toContain('123456789012');
+  });
+
+  it('reads the guardrail stream switch regardless of case and spaces', async () => {
+    process.env.BEDROCK_GUARDRAIL_ID = 'gr-test';
+    const modeFor = async (value: unknown): Promise<string | undefined> => {
+      converseStreamTurnWithFallback.mockClear();
+      getConfig.mockImplementation(async (category: string, key: string) =>
+        category === 'bedrock' && key === 'guardrail_stream_mode' ? (value as string) : undefined,
+      );
+      await runAgentTurn({ ...baseReq, onChunk: vi.fn() });
+      return (converseStreamTurnWithFallback.mock.calls[0]![0] as { guardrail?: { streamMode?: string } })
+        .guardrail?.streamMode;
+    };
+
+    expect(await modeFor(' SYNC ')).toBe('sync');
+    expect(await modeFor('Sync')).toBe('sync');
+    expect(await modeFor('async')).toBe('async');
+    expect(await modeFor(1)).toBe('async');
+    expect(await modeFor(true)).toBe('async');
   });
 });
