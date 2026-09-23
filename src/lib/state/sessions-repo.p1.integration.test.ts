@@ -157,7 +157,10 @@ describe('P1 owner and expiry, set once and kept (real DynamoDB; the first criti
   // migration below sweeps from the whole table, so none may outlive this block.
   afterAll(async () => {
     const r = await repo();
-    for (const id of ['never', 'room-person', 'room-root', 'room-kept', 'legacy-kept', 'root-chat', 'reown', 'sched', 'linked-later', 'sched-new']) {
+    for (const id of [
+      'never', 'room-person', 'room-root', 'room-kept', 'legacy-kept', 'root-chat', 'reown', 'sched', 'linked-later',
+      'sched-new', 'sched-first', ...Array.from({ length: 6 }, (_, i) => `race-${i}`),
+    ]) {
       await r.deleteSession('p1', `dashboard:${id}`);
     }
   });
@@ -244,6 +247,44 @@ describe('P1 owner and expiry, set once and kept (real DynamoDB; the first criti
     expect(conv?.turns).toHaveLength(2);
     expect(conv).not.toHaveProperty('userId');
     expect(conv?.ttl).toEqual(expect.any(Number));
+  });
+
+  it('a person\'s first turn saved after a scheduled reply makes the conversation theirs and lasting, records and all', async () => {
+    // The first message of a new chat scheduled a task for right away, and its
+    // reply was saved first (the third critic's C3-1).
+    const r = await repo();
+    await r.appendTurns('p1', 'dashboard:sched-first', [u('[scheduled] q'), a('a')]);
+
+    await r.appendTurns('p1', 'dashboard:sched-first', [u('q'), a('a')], undefined, PERSON);
+
+    const conv = await row('p1', 'dashboard:sched-first');
+    expect(conv?.userId).toBe(PERSON.userId);
+    expect(conv).not.toHaveProperty('ttl');
+    const recs = await records('p1', 'dashboard:sched-first');
+    expect(recs).toHaveLength(4);
+    for (const x of recs) {
+      expect(x).not.toHaveProperty('ttl');
+      expect(x.userId).toBe(PERSON.userId);
+    }
+  });
+
+  it('a scheduled reply racing a person\'s first turn always leaves the person\'s conversation, lasting', async () => {
+    const r = await repo();
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) => `dashboard:race-${i}`).flatMap((chat) => [
+        r.appendTurns('p1', chat, [u('[scheduled] q'), a('a')]),
+        r.appendTurns('p1', chat, [u('q'), a('a')], undefined, PERSON),
+      ]),
+    );
+
+    for (let i = 0; i < 6; i++) {
+      const conv = await row('p1', `dashboard:race-${i}`);
+      expect(conv?.userId).toBe(PERSON.userId);
+      expect(conv).not.toHaveProperty('ttl');
+      const recs = await records('p1', `dashboard:race-${i}`);
+      expect(recs).toHaveLength(4);
+      for (const x of recs) expect(x).not.toHaveProperty('ttl');
+    }
   });
 
   it('a person continuing a conversation that began with no person keeps it, and every record, expiring', async () => {

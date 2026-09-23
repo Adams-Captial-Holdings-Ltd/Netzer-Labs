@@ -40,6 +40,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './ddb.js';
 import { ingestEvictedTurns } from '../../agent/memory-ingest.js';
+import { logger } from '../../observability/logger.js';
 import { getConfig } from './runtime-config-repo.js';
 
 const TABLE = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
@@ -385,19 +386,28 @@ export async function appendTurns(
     const firstUserText = userTurns[0]?.text;
     // The first owner stays the owner (see SessionEnrichment.userId).
     const owner = existing?.userId ?? enrichment?.userId;
-    // Whether a dashboard conversation lasts is settled ONCE, by whoever creates
-    // it (owner decisions 1 and 46): a person's lasts; anyone else's expires — a
-    // principal with no person, or a writer that cannot say who is sending, like
-    // the scheduler. Nothing changes it afterwards: an expiring conversation is
-    // refreshed and a lasting one never gains a ttl, whoever continues it. So a
-    // principal with no person cannot drop a legacy chat out of the migration
-    // (the first critic's F3), a scheduled turn cannot make its chat permanent
-    // (the second critic's NEW-3), and no lasting conversation keeps records that
-    // expire under it (NEW-2). Bot chats always expire. Each record carries the
-    // expiry its conversation had when the record was written.
-    const expires =
-      !isPersistentChat(chatId) || (existing ? existing.ttl !== undefined : !(enrichment?.ephemeral === false && owner));
+    // Whether a dashboard conversation lasts is settled ONCE, when it first has
+    // an owner (owner decisions 1 and 46): a person's lasts; anyone else's
+    // expires. Until then — a scheduled reply saved before the first turn of its
+    // chat, say — it expires, and the first write that stamps an owner settles it
+    // by the rule for a new conversation (the third critic's C3-1). After that
+    // nothing changes it, whoever continues it: an expiring conversation is
+    // refreshed and a lasting one never gains a ttl. So a principal with no person
+    // cannot drop a legacy chat out of the migration (the first critic's F3), a
+    // scheduled turn cannot make a chat permanent (the second critic's NEW-3), and
+    // no lasting conversation keeps records that expire under it (NEW-2). Bot chats
+    // always expire. Each record carries the expiry its conversation had when the
+    // record was written.
+    const settled = existing?.userId !== undefined;
+    const expires = settled
+      ? !isPersistentChat(chatId) || existing!.ttl !== undefined
+      : newConversationExpires(chatId, enrichment);
     const ttl = expires ? now + TTL_SECONDS : undefined;
+    // Settling a conversation that already has records — the scheduled reply's —
+    // gives them its owner and, when it now lasts, takes their expiry away first.
+    if (existing && !settled && owner !== undefined && isPersistentChat(chatId)) {
+      await adoptRecords(pk(agentId), chatId, owner, !expires);
+    }
     // WI-1.2: each new message ALSO becomes its own immutable record, numbered by
     // its place in the whole conversation (prevTotal is the cumulative count the
     // window cannot lose). Written in the same all-or-nothing transaction as the
@@ -483,16 +493,25 @@ export async function appendTurns(
       // retry a cancelled transaction (it did retry the single Put this
       // replaced), so back off and try again rather than lose the turn.
       const throttled = cancelled && reasons.some((r) => r.Code === 'ThrottlingError');
-      // Numbers held by records already past their own expiry: an earlier
-      // conversation under this id expired, and DynamoDB's TTL swept its row
-      // before its records — it deletes in no set order, and a Telegram or Slack
-      // chat keeps its id for good. Clear them and write again (the second
-      // critic's NEW-1). A record that has not expired is never cleared.
-      const staleNumbers =
-        cancelled &&
-        attempt < MAX_ATTEMPTS - 1 &&
-        reasons.slice(1).some((r) => r.Code === 'ConditionalCheckFailed') &&
-        (await deleteExpiredRecords(agentId, chatId)) > 0;
+      // Numbers held by records already past their own expiry, while the
+      // conversation itself is as it was read: an earlier conversation under this
+      // id expired, and DynamoDB's TTL swept its row before its records — it
+      // deletes in no set order, and a Telegram or Slack chat keeps its id for
+      // good. Clear them and write again (the second critic's NEW-1). A record that
+      // has not expired is never cleared. A lost race (the fence) just re-reads:
+      // the records it collided with are the winner's (the third critic's C3-4).
+      let staleNumbers = false;
+      if (cancelled && !fenced && attempt < MAX_ATTEMPTS - 1 && reasons.slice(1).some((r) => r.Code === 'ConditionalCheckFailed')) {
+        try {
+          staleNumbers = (await deleteExpiredRecords(agentId, chatId)) > 0;
+        } catch (sweepErr) {
+          // The write's own error is the one to report.
+          logger.warn(
+            { agentId, chatId, errMessage: sweepErr instanceof Error ? sweepErr.message : String(sweepErr) },
+            'sessions: clearing expired records failed',
+          );
+        }
+      }
       if ((fenced || throttled || staleNumbers) && attempt < MAX_ATTEMPTS - 1) {
         if (throttled) await new Promise((r) => setTimeout(r, 50 * 2 ** attempt));
         continue;
@@ -507,6 +526,52 @@ export async function appendTurns(
     }
     return;
   }
+  // Unreachable while every retry above is bounded: never resolve without writing.
+  throw new Error(`appendTurns: gave up after ${MAX_ATTEMPTS} attempts`);
+}
+
+/**
+ * Whether a NEW conversation expires — or one nobody owns yet, when its first
+ * owner arrives: a person's dashboard conversation lasts; anything else expires.
+ */
+function newConversationExpires(chatId: string, who?: SessionEnrichment): boolean {
+  return !isPersistentChat(chatId) || !(who?.ephemeral === false && who.userId);
+}
+
+/**
+ * Give every record a conversation already has its owner and, when the
+ * conversation lasts, no expiry — so a conversation that has just been settled
+ * never keeps a record that expires under it. One idempotent update per record;
+ * a record that expired meanwhile is not brought back. Returns the sequence
+ * numbers it found.
+ */
+async function adoptRecords(conversationPk: string, chatId: string, owner: string, lasts: boolean): Promise<Set<number>> {
+  const recorded = new Set<number>();
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const out = await ddb().send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': conversationPk, ':prefix': msgPrefix(chatId) },
+        ProjectionExpression: '#s',
+        ExpressionAttributeNames: { '#s': 'seq' },
+        ConsistentRead: true,
+        ExclusiveStartKey: startKey,
+      }),
+    );
+    for (const r of out.Items ?? []) recorded.add(Number(r.seq));
+    startKey = out.LastEvaluatedKey;
+  } while (startKey);
+  for (const seq of recorded) {
+    await updateIfExists(
+      { PK: conversationPk, SK: msgSk(chatId, seq) },
+      lasts
+        ? { UpdateExpression: 'SET userId = :o REMOVE #t', ExpressionAttributeNames: { '#t': 'ttl' }, ExpressionAttributeValues: { ':o': owner } }
+        : { UpdateExpression: 'SET userId = :o', ExpressionAttributeValues: { ':o': owner } },
+    );
+  }
+  return recorded;
 }
 
 /**
@@ -577,7 +642,7 @@ export async function setWarroomMode(
     ExpressionAttributeValues: { ':w': meetingId, ':u': now },
   });
   if (entered) return;
-  const expires = !isPersistentChat(chatId) || owner?.ephemeral === true;
+  const expires = newConversationExpires(chatId, owner);
   await ddb().send(
     new PutCommand({
       TableName: TABLE,
@@ -711,35 +776,12 @@ export async function reownLegacyConversation(
   }
   const turns = (item.turns as Turn[] | undefined) ?? [];
   const total = (item.turnsTotal as number | undefined) ?? turns.length;
-  const recorded = new Set<number>();
-  let startKey: Record<string, unknown> | undefined;
-  do {
-    const out = await ddb().send(
-      new QueryCommand({
-        TableName: TABLE,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-        ExpressionAttributeValues: { ':pk': key.PK, ':prefix': msgPrefix(chatId) },
-        ProjectionExpression: '#s',
-        ExpressionAttributeNames: { '#s': 'seq' },
-        ExclusiveStartKey: startKey,
-      }),
-    );
-    for (const r of out.Items ?? []) recorded.add(Number(r.seq));
-    startKey = out.LastEvaluatedKey;
-  } while (startKey);
   // A record written before the re-own carries the old owner, so each is
   // re-owned, and any expiry on it stripped: none should carry one under a
-  // durable conversation — expiry is settled when a conversation is created —
-  // but a durable conversation must never lose a message to a stray one (the
-  // first critic's F3). Updated one by one and FIRST, so a failure leaves the
-  // conversation legacy for a re-run to finish; a record that expired meanwhile
-  // is not brought back.
-  for (const seq of recorded) {
-    await updateIfExists(
-      { PK: key.PK, SK: msgSk(chatId, seq) },
-      { UpdateExpression: 'SET userId = :o REMOVE #t', ExpressionAttributeNames: { '#t': 'ttl' }, ExpressionAttributeValues: { ':o': newOwner } },
-    );
-  }
+  // durable conversation, but a durable conversation must never lose a message
+  // to a stray one (the first critic's F3). Done FIRST, so a failure leaves the
+  // conversation legacy for a re-run to finish.
+  const recorded = await adoptRecords(key.PK, chatId, newOwner, true);
   const backfill = turns.flatMap((t, i) => {
     const seq = total - turns.length + i;
     if (recorded.has(seq)) return [];
@@ -856,7 +898,7 @@ async function batchDelete(keys: Array<Record<string, unknown>>): Promise<void> 
   let pending = keys.map((Key) => ({ DeleteRequest: { Key } }));
   for (let attempt = 0; pending.length > 0; attempt++) {
     if (attempt === 5) {
-      throw new Error(`deleteSession: ${pending.length} record(s) still unprocessed after 5 attempts`);
+      throw new Error(`sessions: ${pending.length} record(s) still unprocessed after 5 attempts`);
     }
     if (attempt > 0) await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
     const out = await ddb().send(new BatchWriteCommand({ RequestItems: { [TABLE]: pending } }));

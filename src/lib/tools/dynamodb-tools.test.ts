@@ -194,6 +194,17 @@ describe('dynamodb_query — a table with hidden rows still finds the rows it ma
 
     expect(out.text).toMatch(/^0 rows in sessions/);
     expect(out.text).toMatch(/more may exist/i);
-    expect(sendMock.mock.calls.length).toBeGreaterThan(1);
+    // The ceiling is 5,000 items: five pages of 1,000 (the third critic's C3-7).
+    expect(sendMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('says nothing about more when it found as many rows as it was asked for', async () => {
+    sendMock.mockResolvedValueOnce({ Items: [conv(1), conv(2)], LastEvaluatedKey: { PK: 'p', SK: 's' } });
+
+    const out = await tools.invoke('dynamodb_query', { table: 'sessions', pk: 'AGENT#research', limit: 2 }, ctx);
+
+    expect(out.text).toMatch(/^2 rows from sessions/);
+    expect(out.text).not.toMatch(/more may exist/i);
+    expect(sendMock).toHaveBeenCalledTimes(1);
   });
 });

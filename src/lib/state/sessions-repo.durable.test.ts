@@ -181,6 +181,39 @@ describe('appendTurns — durable or not (owner decision 1)', () => {
     expect(conversation()?.ttl).toEqual(expect.any(Number));
   });
 
+  it('lets a person\'s first turn settle a conversation a scheduled reply started: theirs, and lasting, records and all', async () => {
+    // The first message of a new chat can schedule a task for right away. If that
+    // reply is saved first, the conversation starts with no owner and an expiry;
+    // the person's own turn, saved a moment later, must settle it as theirs (the
+    // third critic's C3-1).
+    await appendTurns(AGENT, CHAT, [turn('user', '[scheduled] q'), turn('assistant', 'a')]);
+
+    await appendTurns(AGENT, CHAT, [turn('user', 'q'), turn('assistant', 'a')], undefined, PERSON);
+
+    expect(conversation()?.userId).toBe('dashboard:user:user-a');
+    expect(conversation()).not.toHaveProperty('ttl');
+    expect(records()).toHaveLength(4);
+    for (const r of records().slice(2)) expect(r).not.toHaveProperty('ttl');
+    // The scheduled reply's records 0-1 take the owner and lose their expiry. The
+    // fake does not apply updates, so the commands are pinned here; Floci runs it.
+    const adopted = send.mock.calls.map((c) => c[0]).filter((c) => c.constructor.name === 'UpdateCommand');
+    expect(adopted.map((u) => u.input.Key.SK)).toEqual([`CHAT#${CHAT}#MSG#0000000000`, `CHAT#${CHAT}#MSG#0000000001`]);
+    for (const u of adopted) {
+      expect(u.input).toMatchObject({ UpdateExpression: 'SET userId = :o REMOVE #t', ExpressionAttributeValues: { ':o': 'dashboard:user:user-a' } });
+    }
+  });
+
+  it('lets a principal with no person settle such a conversation as its own, still expiring', async () => {
+    await appendTurns(AGENT, CHAT, [turn('user', '[scheduled] q'), turn('assistant', 'a')]);
+
+    await appendTurns(AGENT, CHAT, [turn('user', 'q'), turn('assistant', 'a')], undefined, NO_PERSON);
+
+    expect(conversation()).toMatchObject({ userId: 'dashboard:hash-root', ttl: expect.any(Number) });
+    const adopted = send.mock.calls.map((c) => c[0]).filter((c) => c.constructor.name === 'UpdateCommand');
+    expect(adopted).toHaveLength(2);
+    for (const u of adopted) expect(u.input.UpdateExpression).toBe('SET userId = :o');
+  });
+
   it('keeps a conversation with no person behind it expiring as it continues', async () => {
     await appendTurns(AGENT, CHAT, [turn('user', 'q1'), turn('assistant', 'a1')], undefined, NO_PERSON);
     await appendTurns(AGENT, CHAT, [turn('user', 'q2'), turn('assistant', 'a2')], undefined, NO_PERSON);
@@ -225,6 +258,15 @@ describe('a slash command never leaves a conversation nobody owns (decision 9, t
     await setWarroomMode(AGENT, CHAT, 'meeting-1', NO_PERSON);
 
     expect(conversation()).toMatchObject({ userId: 'dashboard:hash-root', ttl: expect.any(Number) });
+  });
+
+  it('/warroom in a new chat with no caller to name starts it expiring, like any conversation nobody owns', async () => {
+    // Every route that reaches this names its caller today; the rule is the same
+    // as appendTurns' for a new conversation (the third critic's C3-5).
+    await setWarroomMode(AGENT, CHAT, 'meeting-1');
+
+    expect(conversation()).not.toHaveProperty('userId');
+    expect(conversation()?.ttl).toEqual(expect.any(Number));
   });
 
   it('/warroom in an existing conversation changes neither its owner nor its expiry', async () => {
@@ -277,6 +319,25 @@ describe('a chat id whose earlier conversation expired (the second critic\'s NEW
     expect(records(BOT).map((r) => r.text)).toEqual(['new q', 'new a']);
   });
 
+  it('reports the write\'s own error when the sweep itself fails', async () => {
+    // A failing sweep used to replace the error it was handling (the third
+    // critic's C3-4).
+    leftover(0, now() - 60);
+    leftover(1, now() - 60);
+    takenNumbersFail();
+    const inner = send.getMockImplementation()!;
+    send.mockImplementation(async (cmd: { constructor: { name: string }; input: Record<string, unknown> }) => {
+      if (cmd.constructor.name === 'QueryCommand' && cmd.input.ProjectionExpression === 'PK, SK, #t') {
+        throw new Error('sweep failed');
+      }
+      return inner(cmd);
+    });
+
+    await expect(
+      appendTurns(AGENT, BOT, [turn('user', 'q'), turn('assistant', 'a')], undefined, { surface: 'slack' }),
+    ).rejects.toThrow('Transaction cancelled');
+  });
+
   it('never clears a record that has not expired: the write fails and the record stays', async () => {
     leftover(0);
     leftover(1, now() + 3600);
@@ -286,6 +347,46 @@ describe('a chat id whose earlier conversation expired (the second critic\'s NEW
       appendTurns(AGENT, BOT, [turn('user', 'q'), turn('assistant', 'a')], undefined, { surface: 'slack' }),
     ).rejects.toThrow('Transaction cancelled');
     expect(records(BOT).map((r) => r.text)).toEqual(['old 0', 'old 1']);
+  });
+});
+
+describe('appendTurns — a lost race, and the last attempt (the third critic\'s C3-4 and C3-7)', () => {
+  const cancelled = (codes: string[]) =>
+    Object.assign(new Error('Transaction cancelled'), {
+      name: 'TransactionCanceledException',
+      CancellationReasons: codes.map((Code) => ({ Code })),
+    });
+  const sweeps = () =>
+    send.mock.calls.map((c) => c[0]).filter((c) => c.constructor.name === 'QueryCommand' && c.input.ProjectionExpression === 'PK, SK, #t');
+
+  it('re-reads after losing a race to another turn, without sweeping records', async () => {
+    // Losing the fence also collides on the records the winner wrote. Those are
+    // live, so there is nothing to sweep: re-read and number after them.
+    await exchanges(1);
+    let lost = false;
+    send.mockImplementation(async (cmd: { constructor: { name: string } }) => {
+      if (cmd.constructor.name === 'TransactWriteCommand' && !lost) {
+        lost = true;
+        throw cancelled(['ConditionalCheckFailed', 'ConditionalCheckFailed', 'ConditionalCheckFailed']);
+      }
+      return table.send(cmd as Parameters<typeof table.send>[0]);
+    });
+
+    await exchanges(1, CHAT, 2);
+
+    expect(lost).toBe(true);
+    expect(sweeps()).toHaveLength(0);
+    expect(records()).toHaveLength(4);
+  });
+
+  it('throws after its last attempt rather than resolve without having written', async () => {
+    send.mockImplementation(async (cmd: { constructor: { name: string } }) => {
+      if (cmd.constructor.name === 'TransactWriteCommand') throw cancelled(['ConditionalCheckFailed']);
+      return table.send(cmd as Parameters<typeof table.send>[0]);
+    });
+
+    await expect(exchanges(1)).rejects.toThrow();
+    expect(send.mock.calls.filter((c) => c[0].constructor.name === 'TransactWriteCommand')).toHaveLength(3);
   });
 });
 

@@ -87,10 +87,11 @@ describe('conversation persistence (real DynamoDB)', () => {
     // This used to strip a ttl left on a dashboard row by the code that ran before
     // dashboard conversations persisted (f132a9c). That code left staging and
     // production on 2026-08-13 and 2026-08-14, so every such ttl has long since
-    // expired or been stripped. Since P1 a dashboard row carries a ttl only because
-    // a principal with no person started it, and that is settled when it is
-    // created: turning it durable later would also leave its first records to
-    // expire under it (the P1 critic's NEW-2).
+    // expired or been stripped. Since P1 an OWNED dashboard row carries a ttl
+    // because a principal with no person owns it, settled when it first had an
+    // owner: turning it durable later would also leave its first records to
+    // expire under it (the P1 critics' NEW-2). A row nobody owns yet is settled by
+    // its first owner instead (sessions-repo.p1.integration.test.ts, C3-1).
     const { ddb } = await import('./ddb.js');
     const { PutCommand } = await import('@aws-sdk/lib-dynamodb');
     await ddb().send(
@@ -100,6 +101,7 @@ describe('conversation persistence (real DynamoDB)', () => {
           PK: 'AGENT#a2',
           SK: 'CHAT#dashboard:2002',
           turns: [],
+          userId: `dashboard:${'e'.repeat(64)}`,
           ttl: Math.floor(Date.now() / 1000) + 999,
         },
       }),
