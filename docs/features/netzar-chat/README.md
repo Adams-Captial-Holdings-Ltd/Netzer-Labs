@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-22
-as_of_commit: 089aba4199a36a92123ff4bd6da6a08dba4257d6
+as_of_commit: ea6c809b7c9139d69179e62b2965c16fe90a2a57
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -159,13 +159,15 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 - A chat id never carries `#` into a key: the storage layer stores it as `_`
   (owner decision 47), so a chat can neither pose as another's message record nor
   vanish behind the containment rule.
-- The owner is stamped when a conversation is created and never overwritten
-  (a scheduled task that finds no conversation starts one with no owner, visible
-  only to an admin), and so is whether it lasts: a person's conversation lasts, and anyone else's
-  expires — a principal with no person, or a writer that cannot say who is
-  sending, like the scheduler — whoever continues it afterwards. An expiring
-  conversation's records each expire a week after they were written. `/newchat`
-  empties the model's window but keeps the records.
+- A conversation's owner is stamped when it first has one and never
+  overwritten, and whether it lasts is settled at that moment: a person's
+  lasts, a principal with no person's expires, and nothing changes that
+  afterwards, whoever continues it. A conversation nobody owns yet — a scheduled
+  task's reply saved before its chat's first turn — expires until its first
+  owner saves in it; a person's arrival makes it, and the messages already in
+  it, last. One nobody ever claims keeps expiring and only an admin can see it.
+  An expiring conversation's records each expire a week after they were
+  written. `/newchat` empties the model's window but keeps the records.
 
 ## 7. Known runtime risks and approved next work
 
