@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-22
-as_of_commit: cc5356dd5f91cc7f934888b69fbbcf5d937bfc9d
+as_of_commit: bbee525a135612abf89d5afa8c24ac0c72d8de06
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -11,6 +11,8 @@ implemented_by:
   - web/src/lib/theme.ts
   - src/lib/state/sessions-repo.ts
   - src/adapters/dashboard/handler.ts
+  - src/adapters/dashboard/jarvis.ts
+  - src/lib/tools/dynamodb-tools.ts
   - src/lib/state/legacy-chat-migration.ts
 tested_by:
   - src/adapters/dashboard/chat-stream.test.ts
@@ -23,6 +25,7 @@ tested_by:
   - src/lib/state/sessions-repo.durable.test.ts
   - src/lib/state/legacy-chat-migration.test.ts
   - src/lib/state/sessions-repo.p1.integration.test.ts
+  - src/lib/tools/dynamodb-tools.test.ts
 approved_work:
   - docs/features/netzar-chat/plan.md
 ---
@@ -74,10 +77,17 @@ backend.
   decision 1; `POST /api/tokens/:hashPrefix/link`, one link per token, never
   moved, audited). A token with no person behind it can still chat, but its
   conversations are not durable: they keep the 7-day TTL the other surfaces use.
-- Every conversation route enforces that owner (decision 9): sending into,
-  reading, listing or exporting a conversation that is not yours reads exactly
-  like one that does not exist; an admin (`security:write`) may read or delete
-  anyone's, and every such read is audited as `session_read_override`.
+- Every dashboard and Jarvis conversation route enforces that owner (decision
+  9): someone else's conversation is refused with a 404 when you send into it or
+  export it, reads as empty in the transcript, and is left out of the list, the
+  CSV export and Jarvis's `sessions` answer. An admin (`security:write`) may read
+  or delete anyone's; every such read is audited as `session_read_override`
+  BEFORE anything is returned, and returns nothing if it cannot be. A slash
+  command never leaves a conversation nobody owns: `/newchat` and `/model` touch
+  only one that exists, and `/warroom` in a new chat creates it for its caller.
+  Not owner-scoped, and older than P1: an agent's `dynamodb_query` tool still
+  reads the conversation rows of its own partition (never the message records),
+  and the memories routes answer for any chat.
 - Every message is **also its own record** beside its conversation (owner
   decision 11: a new item type in the existing sessions table, no CDK). The
   20-turn window stays what the model replays; the records are what reopening a
@@ -147,8 +157,10 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 - A chat id never carries `#` into a key: the storage layer stores it as `_`
   (owner decision 47), so a chat can neither pose as another's message record nor
   vanish behind the containment rule.
-- The owner is stamped when a conversation is created and never overwritten;
-  `/newchat` empties the model's window but keeps the records.
+- The owner is stamped when a conversation is created and never overwritten,
+  and so is whether it expires: a principal with no person never makes a durable
+  conversation expire by continuing it. `/newchat` empties the model's window but
+  keeps the records.
 
 ## 7. Known runtime risks and approved next work
 
@@ -156,7 +168,7 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 |---|---|---|
 | Authenticated staging UI is not yet verified | Floci Bedrock stub: one chunk, no tool events; staging verification needs an owner-authorized spend-capped token | [CHATUI-008](plan.md) |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |
-| Conversations written before P1 still carry a token-hash owner until the migration runs | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token, dry run, then `--apply` |
+| Conversations written before P1 still carry a token-hash owner until the migration runs, and a pre-P1 turn that leaves the 20-turn window before then has no record anywhere | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token and run the migration (dry run, then `--apply`) straight after the deploy, before anyone chats |
 | An opacity modifier on a plain semantic token still emits no CSS, so `bg-primary/10` is silently a no-op | the semantic keys in [web/tailwind.config.ts](../../../web/tailwind.config.ts) are raw `var()` strings with nowhere to inject an alpha channel; the alpha-capable `-a` siblings added by CHATUI-001 sit beside them rather than replacing them | none open — the mitigation landed in [CHATUI-001](plan.md); the standing rule is the appendix mapping (`any <color>/<opacity>` → `-a` triplet keys or `*-dim` vars only). The chat subtree observed 2026-09-20 has zero occurrences; the rest of `web/src` still has them |
 
 ## 8. Exact focused and full validation commands
