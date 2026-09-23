@@ -148,7 +148,11 @@ export interface AttachmentBlock {
  */
 export type TurnOrigin = 'human_chat' | 'machine';
 
+export const TOOL_INPUT_CAP = 1024;
+export const TOOL_OUTPUT_CAP = 2048;
+
 export interface AgentTurnRequest {
+  abortSignal?: AbortSignal;
   agentId: string;
   chatId: string;
   /** Genuine caller-held Paperclip run id. Chat turns leave this absent. */
@@ -166,7 +170,8 @@ export interface AgentTurnRequest {
    * and number the rest by their 1-based ordinal (see toolStepSuffix). Errors in
    * the callback are swallowed — status UX must never break a turn.
    */
-  onToolEvent?: (event: { name: string; callIndex: number }) => void;
+  onToolEvent?: (event: { name: string; callIndex: number; toolUseId: string; input: string; inputTruncated: boolean }) => void;
+  onToolResult?: (event: { name: string; callIndex: number; toolUseId: string; output: string; isError: boolean; truncated: boolean }) => void;
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
   /**
    * Who authored `userText`. Absent means 'machine' — see `TurnOrigin` for why
@@ -436,6 +441,7 @@ export interface TurnRefusal {
 }
 
 export interface AgentTurnResponse {
+  stopped?: true;
   text: string;
   modelId: string;
   costUsd: number;
@@ -934,6 +940,8 @@ async function runAdmittedTurn(
   modelId = getAffinityModel(req.agentId, req.chatId, modelId);
   const guardrailId = process.env.BEDROCK_GUARDRAIL_ID;
   const guardrailVersion = process.env.BEDROCK_GUARDRAIL_VERSION ?? 'DRAFT';
+  const rawStreamMode = await getConfig('bedrock', 'guardrail_stream_mode').catch(() => undefined);
+  const streamMode = typeof rawStreamMode === 'string' && rawStreamMode.trim() === 'sync' ? 'sync' : 'async';
 
   // Global kill switch check — short-circuits before we burn any Bedrock spend.
   const killed = await isKillSwitchActive('bedrock_global');
@@ -1029,24 +1037,71 @@ async function runAdmittedTurn(
   // before the post-hoc scan would have caught it. Built once per turn (one
   // config read) and reused for the initial stream, tool-loop re-emits, and the
   // synthesis emit below. Passthrough when the guard is off / no block patterns.
-  const emitModelChunk = req.onChunk
-    ? await (async () => {
-        const redact = await buildStreamingRedactor();
-        const sink = req.onChunk!;
-        return (text: string): void => sink(redact(text));
-      })()
-    : undefined;
-
-  const streamCallbacks: ConverseStreamCallbacks = {};
-  if (emitModelChunk) streamCallbacks.onChunk = emitModelChunk;
+  let lastEmitted = '';
+  let partialText = '';
+  const redact = await buildStreamingRedactor();
+  const emitModelChunk = (text: string): void => {
+    partialText = text;
+    lastEmitted = redact(text);
+    req.onChunk?.(lastEmitted);
+  };
+  const streamCallbacks: ConverseStreamCallbacks = { onChunk: emitModelChunk };
+  let totalIn = 0;
+  let totalOut = 0;
+  let totalCacheRead = 0;
+  let totalCacheWrite = 0;
+  let toolCallCount = 0;
+  let pendingInput = 0;
+  // Count text blocks recursively, including prior tool results, but not arguments.
+  const messageChars = (blocks: ContentBlock[]): number => blocks.reduce((sum, b) =>
+    sum + (b.text?.length ?? 0) +
+      (b.toolResult?.content?.reduce((n, c) => n + (c.text?.length ?? 0), 0) ?? 0), 0);
+  const checkStopped = (): void => {
+    if (req.abortSignal?.aborted) throw Object.assign(new Error('Turn stopped'), { name: 'AbortError' });
+  };
+  const modelCall = async <T>(sent: Message[], call: () => Promise<T>): Promise<T | undefined> => {
+    if (req.abortSignal?.aborted) return undefined;
+    pendingInput = Math.ceil((systemPromptWithMemories.length + sent.reduce((n, m) => n + messageChars(m.content ?? []), 0)) / 4);
+    partialText = '';
+    try {
+      const result = await call();
+      pendingInput = 0;
+      return result;
+    } catch (err) {
+      if (req.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') return undefined;
+      throw err;
+    }
+  };
+  const stoppedTurn = async (): Promise<AgentTurnResponse> => {
+    totalIn += pendingInput;
+    if (pendingInput > 0) totalOut += Math.ceil(partialText.length / 4);
+    const costUsd = turnCost(modelId, totalIn, totalOut, totalCacheRead, totalCacheWrite);
+    const latencyMs = Date.now() - t0;
+    const usage = {
+      agentId: req.agentId, chatId: req.chatId, surface, modelId,
+      inputTokens: totalIn, outputTokens: totalOut,
+      cacheReadInputTokens: totalCacheRead, cacheWriteInputTokens: totalCacheWrite,
+      costUsd, latencyMs, toolCallCount, ...(req.userId ? { userId: req.userId } : {}),
+    };
+    await recordUsage(usage);
+    await spendAdmission.finalize({ costUsd, modelId, inputTokens: totalIn, outputTokens: totalOut });
+    await writeAudit({
+      ...usage, action: 'agent_turn', result: 'ok',
+      detail: { stopped: true, toolCallCount, cacheReadInputTokens: totalCacheRead,
+        cacheWriteInputTokens: totalCacheWrite, ...(req.runId ? { runId: req.runId } : {}) },
+    });
+    const text = lastEmitted ? await scanOutboundReply(lastEmitted, { agentId: req.agentId, chatId: req.chatId }) : '';
+    return { text, stopped: true, modelId, costUsd, latencyMs, inputTokens: totalIn, outputTokens: totalOut, toolCallCount, blocked: false };
+  };
 
   // Resolved ONCE per turn, then reused by the initial call and every tool
   // round, so a mid-turn config change cannot make rounds disagree.
   const turnMaxTokens = await resolveTurnMaxTokens();
 
-  const initial = await converseStreamTurnWithFallback(
+  const initial = await modelCall(messages, () => converseStreamTurnWithFallback(
     {
       modelId,
+      abortSignal: req.abortSignal,
       systemPrompt: systemPromptWithMemories,
       userText: req.userText,
       userContent,
@@ -1054,16 +1109,22 @@ async function runAdmittedTurn(
       maxTokens: turnMaxTokens,
       guardrail:
         effectiveGuardrailId && effectiveGuardrailId !== 'REPLACE_ME'
-          ? { id: effectiveGuardrailId, version: guardrailVersion }
+          ? { id: effectiveGuardrailId, version: guardrailVersion, streamMode }
           : undefined,
       tools: toolList.length > 0 ? toolList : undefined,
     },
     streamCallbacks,
     { agentId: req.agentId, chatId: req.chatId },
-  );
+  ));
+  if (!initial) return stoppedTurn();
   // The wrapper may have fallen back pre-chunk; keep the tool loop, cost
   // records and audits on the model that actually answered.
   modelId = initial.modelId;
+  totalIn = initial.inputTokens;
+  totalOut = initial.outputTokens;
+  totalCacheRead = initial.cacheReadInputTokens;
+  totalCacheWrite = initial.cacheWriteInputTokens;
+  if (req.abortSignal?.aborted) return stoppedTurn();
 
   // If the stream stopped naturally without tool use, we're done.
   if (initial.stopReason !== 'tool_use') {
@@ -1152,11 +1213,6 @@ async function runAdmittedTurn(
     'tool-use detected, switching to non-streaming dispatch',
   );
 
-  let totalIn = initial.inputTokens;
-  let totalOut = initial.outputTokens;
-  let totalCacheRead = initial.cacheReadInputTokens;
-  let totalCacheWrite = initial.cacheWriteInputTokens;
-  let toolCallCount = 0;
   let lastText = '';
   let lastStopReason = 'unknown';
   // Binary artifacts (generated images) tools produce; delivered natively by
@@ -1185,12 +1241,14 @@ async function runAdmittedTurn(
   for (let turn = 0; turn < TOOL_TURN_LIMIT; turn++) {
     // Hard stop: re-check bedrock_global before every tool-loop model call so a
     // mid-loop pause halts paid calls, not just the start-of-turn check.
+    if (req.abortSignal?.aborted) return stoppedTurn();
     await assertBedrockAllowed();
     // withRetry gives the tool-loop rounds the same throttle/timeout backoff
     // as the initial streamed call; without it, one transient error mid-loop
     // discarded every tool result the turn had already paid for.
-    const resp = await withRetry(invocation.modelId, 3, () =>
-      bedrockClient().send(
+    const resp = await modelCall(messages, () => withRetry(invocation.modelId, 3, () => {
+      checkStopped();
+      return bedrockClient().send(
         new ConverseCommand({
           modelId: invocation.modelId,
           system: cachedSystem,
@@ -1214,14 +1272,17 @@ async function runAdmittedTurn(
               }
             : {}),
         }),
-      ),
-    );
+        ...(req.abortSignal ? [{ abortSignal: req.abortSignal }] : []),
+      );
+    }));
 
+    if (!resp) return stoppedTurn();
     totalIn += resp.usage?.inputTokens ?? 0;
     totalOut += resp.usage?.outputTokens ?? 0;
     totalCacheRead += resp.usage?.cacheReadInputTokens ?? 0;
     totalCacheWrite += resp.usage?.cacheWriteInputTokens ?? 0;
 
+    if (req.abortSignal?.aborted) return stoppedTurn();
     lastStopReason = resp.stopReason ?? 'unknown';
     const assistantContent: ContentBlock[] = resp.output?.message?.content ?? [];
     messages.push({ role: 'assistant', content: assistantContent });
@@ -1251,11 +1312,12 @@ async function runAdmittedTurn(
 
     const toolResults: ContentBlock[] = [];
     for (const block of toolUses) {
+      if (req.abortSignal?.aborted) return stoppedTurn();
       toolCallCount++;
       const tu = block.toolUse;
       const args = (tu.input as Record<string, unknown> | undefined) ?? {};
       logger.info(
-        { agentId: req.agentId, chatId: req.chatId, tool: tu.name, args },
+        { agentId: req.agentId, chatId: req.chatId, tool: tu.name },
         'invoking tool',
       );
       try {
@@ -1263,7 +1325,9 @@ async function runAdmittedTurn(
         // just incremented to the 1-based ordinal, so subtract 1. Emitting the
         // 1-based value here was the off-by-one that made every surface render
         // the first tool as "(step 2)".
-        req.onToolEvent?.({ name: tu.name ?? '', callIndex: toolCallCount - 1 });
+        const input = JSON.stringify(args);
+        req.onToolEvent?.({ name: tu.name ?? '', callIndex: toolCallCount - 1, toolUseId: tu.toolUseId ?? '',
+          input: input.slice(0, TOOL_INPUT_CAP), inputTruncated: input.length > TOOL_INPUT_CAP });
       } catch {
         // Status callbacks are best-effort; a surface bug must not kill the turn.
       }
@@ -1277,6 +1341,7 @@ async function runAdmittedTurn(
         ...(req.boardAgentId ? { boardAgentId: req.boardAgentId } : {}),
         ...(req.delegationDepth !== undefined ? { delegationDepth: req.delegationDepth } : {}),
       };
+      if (req.abortSignal?.aborted) return stoppedTurn();
       const result: ToolResult = dispatchKilledMidTurn
         ? {
             text: 'Tool use was disabled by a kill switch mid-turn; the call was not executed.',
@@ -1290,6 +1355,12 @@ async function runAdmittedTurn(
           : isMcpToolName(tu.name ?? '')
             ? await invokeMcpTool(tu.name ?? '', args, toolCtx)
             : await tools.invoke(tu.name ?? '', args, toolCtx);
+      try {
+        req.onToolResult?.({ name: tu.name ?? '', callIndex: toolCallCount - 1, toolUseId: tu.toolUseId ?? '',
+          output: result.text.slice(0, TOOL_OUTPUT_CAP), isError: !!result.isError, truncated: result.text.length > TOOL_OUTPUT_CAP });
+      } catch {
+        // Status callbacks are best-effort; a surface bug must not kill the turn.
+      }
       if (result.media?.length) {
         turnMedia.push(...result.media.slice(0, MAX_TURN_MEDIA - turnMedia.length));
       }
@@ -1310,6 +1381,7 @@ async function runAdmittedTurn(
   // ONE final synthesis call with NO tools so the model must answer in words
   // from what it already gathered. This is the difference between "(no
   // response)" and a real answer when an agent fumbles a few tool calls.
+  if (req.abortSignal?.aborted) return stoppedTurn();
   if (!lastText && lastStopReason === 'tool_use') {
     try {
       await assertBedrockAllowed();
@@ -1330,8 +1402,9 @@ async function runAdmittedTurn(
               { role: 'user' as const, content: [...(tail.content ?? []), instruction] },
             ]
           : [...messages, { role: 'user' as const, content: [instruction] }];
-      const synth = await withRetry(invocation.modelId, 3, () =>
-        bedrockClient().send(
+      const synth = await modelCall(synthMessages, () => withRetry(invocation.modelId, 3, () => {
+        checkStopped();
+        return bedrockClient().send(
           new ConverseCommand({
             modelId: invocation.modelId,
             system: cachedSystem,
@@ -1346,12 +1419,15 @@ async function runAdmittedTurn(
               ? { guardrailConfig: { guardrailIdentifier: effectiveGuardrailId, guardrailVersion } }
               : {}),
           }),
-        ),
-      );
+          ...(req.abortSignal ? [{ abortSignal: req.abortSignal }] : []),
+        );
+      }));
+      if (!synth) return stoppedTurn();
       totalIn += synth.usage?.inputTokens ?? 0;
       totalOut += synth.usage?.outputTokens ?? 0;
       totalCacheRead += synth.usage?.cacheReadInputTokens ?? 0;
       totalCacheWrite += synth.usage?.cacheWriteInputTokens ?? 0;
+      if (req.abortSignal?.aborted) return stoppedTurn();
       const synthText = (synth.output?.message?.content ?? [])
         .filter((b): b is { text: string } => 'text' in b)
         .map((b) => b.text)
@@ -1366,12 +1442,15 @@ async function runAdmittedTurn(
         );
       }
     } catch (err) {
+      if (req.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') return stoppedTurn();
       logger.warn(
         { agentId: req.agentId, chatId: req.chatId, err: err instanceof Error ? err.message : String(err) },
         'forced-synthesis call failed; falling back to placeholder text',
       );
     }
   }
+
+  if (req.abortSignal?.aborted) return stoppedTurn();
 
   // Same reasoning as the non-tool return: never empty, and on `max_tokens`
   // say the reply was cut off rather than "(no response)". This is the path a

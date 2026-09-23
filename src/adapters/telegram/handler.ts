@@ -420,6 +420,7 @@ async function handleMessage(
       history,
       modelOverride,
       onChunk,
+      // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
       onToolEvent,
       surface: 'telegram',
       // A person typed this in a chat window. `origin` is the ONLY thing that

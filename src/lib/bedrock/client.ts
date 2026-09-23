@@ -40,6 +40,7 @@ export function bedrockClient(): BedrockRuntimeClient {
 
 export interface ConverseTurnInput {
   modelId: string;
+  abortSignal?: AbortSignal;
   systemPrompt: string;
   userText: string;
   /**
@@ -52,7 +53,7 @@ export interface ConverseTurnInput {
   maxTokens?: number;
   temperature?: number;
   /** Optional Bedrock Guardrail. Off when guardrail.id is empty or 'REPLACE_ME'. */
-  guardrail?: { id: string; version: string };
+  guardrail?: { id: string; version: string; streamMode?: 'sync' | 'async' };
   /** Retry budget. Default 3. */
   maxRetries?: number;
   /** Optional tool config. When set, Bedrock may emit toolUse blocks. */
@@ -207,6 +208,7 @@ export async function converseStreamTurnWithFallback(
       }
       return out;
     } catch (err) {
+      if (input.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') throw err;
       const next = chain[i + 1];
       if (!isFallbackTrigger(err) || emitted > 0 || !next) throw err;
       lastErr = err;
@@ -342,14 +344,21 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
   const maxRetries = input.maxRetries ?? 3;
   const t0 = Date.now();
 
+  const sendConverse = (command: ConverseCommand) => {
+    input.abortSignal?.throwIfAborted();
+    return input.abortSignal
+      ? bedrockClient().send(command, { abortSignal: input.abortSignal })
+      : bedrockClient().send(command);
+  };
   let out: ConverseCommandOutput;
   try {
     out = await withRetry<ConverseCommandOutput>(
       input.modelId,
       maxRetries,
-      () => bedrockClient().send(new ConverseCommand(buildParams(input))),
+      () => sendConverse(new ConverseCommand(buildParams(input))),
     );
   } catch (err) {
+    if (input.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') throw err;
     // First time a model rejects `temperature`, remember it and retry without —
     // buildParams now omits it for this model for the rest of the process.
     if (isTemperatureRejection(err) && !temperatureRejectingModels.has(input.modelId)) {
@@ -358,7 +367,7 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
       out = await withRetry<ConverseCommandOutput>(
         input.modelId,
         maxRetries,
-        () => bedrockClient().send(new ConverseCommand(buildParams(input))),
+        () => sendConverse(new ConverseCommand(buildParams(input))),
       );
     } else {
       throw err;
@@ -421,18 +430,28 @@ export async function converseStreamTurn(
   const maxRetries = input.maxRetries ?? 3;
   const t0 = Date.now();
 
+  const sendStream = () => {
+    input.abortSignal?.throwIfAborted();
+    const params = buildParams(input);
+    const command = new ConverseStreamCommand({
+      ...params,
+      ...(params.guardrailConfig && input.guardrail?.streamMode
+        ? { guardrailConfig: { ...params.guardrailConfig, streamProcessingMode: input.guardrail.streamMode } }
+        : {}),
+    });
+    return input.abortSignal
+      ? bedrockClient().send(command, { abortSignal: input.abortSignal })
+      : bedrockClient().send(command);
+  };
   let stream;
   try {
-    stream = await withRetry(input.modelId, maxRetries, () =>
-      bedrockClient().send(new ConverseStreamCommand(buildParams(input))),
-    );
+    stream = await withRetry(input.modelId, maxRetries, sendStream);
   } catch (err) {
+    if (input.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') throw err;
     if (isTemperatureRejection(err) && !temperatureRejectingModels.has(input.modelId)) {
       temperatureRejectingModels.add(input.modelId);
       logger.warn({ modelId: input.modelId }, 'model rejected temperature; retrying without it');
-      stream = await withRetry(input.modelId, maxRetries, () =>
-        bedrockClient().send(new ConverseStreamCommand(buildParams(input))),
-      );
+      stream = await withRetry(input.modelId, maxRetries, sendStream);
     } else if (isLocalUnsupportedStream(err)) {
       // Replay the identical request as a single non-streaming Converse and
       // hand the whole body back through onChunk, so callers that render

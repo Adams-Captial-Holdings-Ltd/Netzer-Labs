@@ -475,6 +475,7 @@ async function handlePerAgentSlackEvent(
       history,
       modelOverride,
       onChunk,
+      // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
       onToolEvent,
       surface: 'slack',
       // A person typed this in a chat window. `origin` is the ONLY thing that
@@ -743,6 +744,7 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
       history,
       modelOverride,
       onChunk,
+      // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
       onToolEvent,
       surface: 'slack',
       // A person typed this in a chat window. `origin` is the ONLY thing that
