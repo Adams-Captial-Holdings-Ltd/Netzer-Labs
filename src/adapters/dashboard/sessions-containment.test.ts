@@ -200,12 +200,11 @@ describe('GET /sessions — containment (WI-1.0)', () => {
     // deliberately absent: its producer was not located this session, so
     // asserting a shape for it would be a guess.
     //
-    // KNOWN LIMIT, deliberately NOT asserted here because asserting it would
-    // enshrine it: a chatId containing '#' is rejected by this rule. Two
-    // producers can emit one — safeDashboardChatId returns an
-    // already-prefixed id verbatim, and the Paperclip issueId is never
-    // character-filtered. That is an open question for the owner, recorded in
-    // the session log; it is not settled by this test.
+    // A chatId containing '#' would be rejected by this rule, and two producers
+    // can emit one (safeDashboardChatId passes an already-prefixed id verbatim;
+    // a Paperclip issueId is never character-filtered). Owner decision 47 (P1)
+    // settled it where keys are built: sessions-repo stores a '#' as '_', so no
+    // stored conversation carries one (sessions-repo.durable.test.ts).
     const shapes = [
       'dashboard:1750000000000',
       'slack:C01234ABCD:U09876ZYXW',

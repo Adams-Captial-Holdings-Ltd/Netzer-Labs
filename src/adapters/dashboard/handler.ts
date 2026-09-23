@@ -185,10 +185,10 @@ const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
  * every future type, and the one that got forgotten is precisely the failure
  * this gate exists to prevent.
  *
- * It assumes a chatId carries no `#`, and nothing enforces that: an
- * already-prefixed id passes `safeDashboardChatId` verbatim, and a Paperclip
- * chatId embeds an externally supplied issueId unfiltered. A conversation whose
- * chatId contains `#` is therefore excluded, silently. The agentId is left
+ * It relies on a chatId carrying no `#` into a key. Since P1 that is enforced
+ * where every key is built: sessions-repo stores a `#` as `_` (owner decision
+ * 47), so neither an already-prefixed id from `safeDashboardChatId` nor a
+ * Paperclip issueId can hide a conversation from this rule. The agentId is left
  * unconstrained beyond the prefix, because only the sort key distinguishes a
  * conversation from its own messages.
  */
