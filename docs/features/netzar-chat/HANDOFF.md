@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: 06dd6479cc940217a223ff388e1d3f3624215ff5
+as_of_commit: e42c707e6dfa085be439e0b6086837e64755bc98
 ---
 
 # Netzar Chat handoff
@@ -25,8 +25,8 @@ as_of_commit: 06dd6479cc940217a223ff388e1d3f3624215ff5
   conversation route enforces it; an admin's read of someone else's conversation
   is audited before anything is returned, and returns nothing if it cannot be;
   a slash command never leaves a conversation nobody owns; whether a
-  conversation lasts is settled once, by whoever starts it — a person's lasts,
-  anyone else's expires, and nothing changes that afterwards;
+  conversation lasts is settled once, when it first has an owner — a person's
+  lasts, anyone else's expires, and nothing changes that afterwards;
   `POST /api/tokens/:hashPrefix/link` links a token with no user to one person,
   once. **WI-1.2** — every message is its own record, written with the window in
   one transaction; a `#` in a chat id is stored as `_` (decision 47); the four
@@ -38,15 +38,18 @@ as_of_commit: 06dd6479cc940217a223ff388e1d3f3624215ff5
   frozen in the P1 specification log 4.2, S-i..S-l (WI-1.4) frozen in this
   session before WI-1.4 was built; `P1_TIER=containment` **`FAILS=0`,
   `ASSESSED=6`**; CONTROL reads `FAIL` in both.
-- **Three fresh critics.** The first FAILED an earlier head on owner decisions 1
+- **Four fresh critics.** The first FAILED an earlier head on owner decisions 1
   and 9 although every gate was green: Jarvis still listed everyone's
   conversations, a slash command typed first into a new chat locked its author
   out, the master token's old chats could drop out of the migration, the admin
   override's audit did not wait, and the docs overclaimed. The second confirmed
   all five fixed and FAILED the next head on one more: a scheduled task could make
-  a person-less chat permanent (decisions 1 and 46). Each was fixed test-first
-  (session log, section 6.6); the third critic's verdict, on the commit that
-  carries this file, lives in the Gauntlet state file (P40).
+  a person-less chat permanent (decisions 1 and 46). The third FAILED the fix for
+  that: a scheduled reply saved before a person's first message left the person's
+  new chat expiring. Three FAILs in a row stopped the session (the Three-Strike
+  Breaker); the owner chose to fix it and have a fourth critic look. Every fix is
+  test-first (session log, section 6.6); the fourth critic's verdict, on the commit
+  that carries this file, lives in the Gauntlet state file (P40).
 - **The owner's decisions this session.** 46: decision 40's count found 9
   dashboard conversations in production — 4 provable through a member login and
   5 made with the master token, all from the last month, none with `#` — so the
@@ -287,45 +290,26 @@ as_of_commit: 06dd6479cc940217a223ff388e1d3f3624215ff5
   real verdict, **zero** left `not reached`, conversation screenshots on all four
   surfaces, and the two turn checks failing for the correct local reason, which
   is a free negative control. Full detail in the Layer B session log.
-- **Last required checks, at the frontmatter's commit**, run by the fresh critic
-  with fake credentials planted and — **for the first time in P1 — alone in the
-  checkout**: the owner cleared the two orphaned `tsx watch` trees after CLEANUP,
-  and that was re-checked rather than assumed (no process names the checkout, none
-  has its working directory in it, nothing listens on port 3000). The full
-  `development.md` step 7 list carries **no failure but the known Floci gap** —
-  `npm test` **248 files / 3221 tests, all passing**, `guard-violations: 0`;
-  integration 38 passed / 25 skipped / 1 failed, the Floci `checkSecrets …
-  schedule-deleted` gap **by name** on an emulator identified as
-  `floci/floci:1.6.0` first; typecheck, build, both web gates, `local:verify`,
-  `docs-links`, `feature-knowledge`, `docs-assets` and the PR-context drift gate
-  exit 0; `git diff --check` 0; 0 changed paths. **The baseline was re-measured,
-  not quoted:** at `3393f6c`, `npm test` is 247 files / 3215 tests, and the two
-  commits' collected-file lists differ by exactly one file, the containment test
-  — so +1 file and +6 tests is measured, not arithmetic. Both P1 tiers:
-  containment `FAILS=0`, `ASSESSED=6`; storage `FAILS=8`; CONTROL `FAIL` in both.
-  The landing runs the same list again on the commit it pushes; that result
-  lives in the Gauntlet state file (P40).
-- **Smallest next action: the landing's gates on this commit, then the owner's
-  yes or no — push, open the pull request into `development`, and merge it when
-  every check is green.** After WI-1.0 lands, the next work item is **WI-1.1's
-  specification**: ownership binds to an immutable user, and the send route
-  enforces it. The carried review findings — filtering after a bounded read can
-  under-report, and nothing signals a dropped row — plus the verification's
-  untested `PK` half are **not** landing blockers; all three belong to WI-1.2's
-  specification, because WI-1.2's per-message rows are what make them
-  consequential. A push, a PR and any promotion each need their own
-  authorization in the conversation that performs them.
-- **Awaiting the owner:** the landing's yes or no, asked after its gates run; whether a `#`-bearing
-  chatId should be fixed at the write path, by relaxing the predicate, or by
-  giving WI-1.2 an unambiguous key shape (the recommendation, because it is the
-  only one still correct after P3 adds attachments) — the silent drop is now
-  proved by running it through the real route, not only by reading the
-  predicate; decision 8's unmapped-row retention date (WI-1.4 cannot be specified
-  without it); whether the ownership-takeover finding should be closed sooner
-  than WI-1.1, which would mean reopening decision 9's "no hotfix"; and whether
-  owner-scoped listing must be fast, since the sessions table has **no GSI** and
-  decision 11 forbids adding one, so "show me only my conversations" stays a
-  scan-and-filter.
+- **Last required checks, at the frontmatter's commit**, by the builder: both P1
+  tiers — storage `FAILS=0`, `ASSESSED=12`; containment `FAILS=0`, `ASSESSED=6`;
+  CONTROL `FAIL` in both — and `npm test` 254 files / 3331 tests with fake
+  credentials planted, `guard-violations: 0`. The full `development.md` step 7
+  list runs on the commit that carries this file — by the fourth critic, and by
+  the landing on the exact commit it pushes; both results live in the Gauntlet
+  state file (P40).
+- **Smallest next action: the fourth fresh critic's verdict.** On a PASS, the
+  full step 7 list on the exact commit to push, then the owner's yes or no —
+  push, one pull request into `development`, merge when every check is green,
+  delete the branch. Then step 4 of 10, P2 (turn lifecycle). A push, a PR and any
+  promotion each need their own authorization in the conversation that performs
+  them.
+- **Awaiting the owner:** the landing's yes or no, asked after its gates run; and
+  two questions for a later step, neither blocking P1 — whether owner decisions 1
+  and 9 reach agent tools (an agent's `dynamodb_query` tool still reads its own
+  partition's conversation rows, and the memories routes answer for any chat),
+  and whether an admin deleting someone else's conversation should be audited the
+  way an admin's read of one now is (awaited, never suppressible) rather than as
+  today's fire-and-forget `data_purged`.
 - F1 status, unchanged by this phase: **Layer B has run and sits at 11 of 12**,
   with the twelfth a real product gap — the deployed dashboard does not stream
   replies to the browser — routed to **P2** and deliberately not fixed here.
