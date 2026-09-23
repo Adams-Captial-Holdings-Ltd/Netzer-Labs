@@ -483,14 +483,13 @@ export async function appendTurns(
       // retry a cancelled transaction (it did retry the single Put this
       // replaced), so back off and try again rather than lose the turn.
       const throttled = cancelled && reasons.some((r) => r.Code === 'ThrottlingError');
-      // A NEW conversation whose numbers are taken: an earlier one under this id
-      // expired, and DynamoDB's TTL swept its row before its records — it deletes
-      // in no set order, and a Telegram or Slack chat keeps its id for good. Those
-      // records are past their own expiry, so clear them and write again (the
-      // second critic's NEW-1). One that has not expired is never cleared.
+      // Numbers held by records already past their own expiry: an earlier
+      // conversation under this id expired, and DynamoDB's TTL swept its row
+      // before its records — it deletes in no set order, and a Telegram or Slack
+      // chat keeps its id for good. Clear them and write again (the second
+      // critic's NEW-1). A record that has not expired is never cleared.
       const staleNumbers =
         cancelled &&
-        !existing &&
         attempt < MAX_ATTEMPTS - 1 &&
         reasons.slice(1).some((r) => r.Code === 'ConditionalCheckFailed') &&
         (await deleteExpiredRecords(agentId, chatId)) > 0;

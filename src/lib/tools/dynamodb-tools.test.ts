@@ -180,6 +180,8 @@ describe('dynamodb_query — a table with hidden rows still finds the rows it ma
     expect(out.text).toMatch(/^2 rows from sessions/);
     expect(out.text).toContain('conversation 2');
     expect(sendMock).toHaveBeenCalledTimes(2);
+    // Whole pages, not `limit`-item ones: the hidden rows would make those tiny.
+    expect(sendMock.mock.calls[0]?.[0].input.Limit).toBeUndefined();
   });
 
   it('says so when it stops reading before it found them all', async () => {
