@@ -90,6 +90,9 @@ describe('provable owners are moved over (WI-1.4, decision 46)', () => {
     await migrateLegacyConversations({ apply: true });
 
     expect(row('dashboard:1')?.userId).toBe('dashboard:user:user-a');
+    // The version bump is what makes a turn racing the migration re-read, so it
+    // cannot write the old owner back (appendTurns' version fence).
+    expect(row('dashboard:1')?.version).toBe(1);
     const src = children('dashboard:1').find((r) => String(r.SK).endsWith('#SRC'));
     expect(src).toMatchObject({ legacyOwner: `dashboard:${HASH.session}`, owner: 'dashboard:user:user-a', provenBy: 'session' });
   });
