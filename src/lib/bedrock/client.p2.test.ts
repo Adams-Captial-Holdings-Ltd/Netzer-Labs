@@ -25,7 +25,7 @@ vi.mock('../../observability/logger.js', () => ({
   truncateForLog: (s: string) => s,
 }));
 
-import { converseStreamTurn, converseTurn, withRetry } from './client.js';
+import { converseStreamTurn, converseStreamTurnWithFallback, converseTurn, withRetry } from './client.js';
 
 const MODEL = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
@@ -105,6 +105,47 @@ describe('turn lifecycle (P2) — bedrock client, review fixes', () => {
     await expect(
       converseStreamTurn({ modelId: MODEL, systemPrompt: 's', userText: 'u', abortSignal: ac.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('reports how much tool input a streamed call has written', async () => {
+    // Codex's inspection: tool arguments are output too, and a Stop must be able
+    // to count them (a person sees none of it, so it is not a chunk).
+    const seen: number[] = [];
+    send.mockResolvedValueOnce({
+      stream: (async function* () {
+        yield { contentBlockDelta: { delta: { toolUse: { input: '{"title":' } } } };
+        yield { contentBlockDelta: { delta: { toolUse: { input: '"Q3 report"}' } } } };
+        yield { messageStop: { stopReason: 'tool_use' } };
+        yield { metadata: { usage: { inputTokens: 3, outputTokens: 9 } } };
+      })(),
+    });
+
+    await converseStreamTurn(
+      { modelId: MODEL, systemPrompt: 's', userText: 'u' },
+      { onToolInput: (chars: number) => seen.push(chars) } as never,
+    );
+
+    expect(seen).toEqual([9, 21]);
+  });
+
+  it('passes tool-input progress through the model fallback', async () => {
+    const onToolInput = vi.fn();
+    const streamFn = vi.fn(async (_input: unknown, callbacks: { onToolInput?: (chars: number) => void }) => {
+      callbacks.onToolInput?.(12);
+      return {
+        text: '', modelId: MODEL, inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0, costUsd: 0, stopReason: 'tool_use', latencyMs: 1,
+      };
+    });
+
+    await converseStreamTurnWithFallback(
+      { modelId: MODEL, systemPrompt: 's', userText: 'u' },
+      { onToolInput } as never,
+      { agentId: 'main', chatId: 'dashboard:p2-fallback' },
+      streamFn as never,
+    );
+
+    expect(onToolInput).toHaveBeenCalledWith(12);
   });
 
   it('does not log a Stop as a failed Bedrock call', async () => {

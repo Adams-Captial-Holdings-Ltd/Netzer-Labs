@@ -626,6 +626,43 @@ describe('turn lifecycle (P2) — stream route, review fixes', () => {
     await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0), { timeout: 2000 });
   });
 
+  it("never shows the operator's kill-switch reason", async () => {
+    // Codex's inspection of the review fixes: the reason is free text an operator
+    // typed (it can name an incident, an ARN, an account id), and it reached every
+    // chat surface. The operator keeps it in the audit and the logs.
+    runAgentTurn.mockRejectedValueOnce(new KillSwitchActiveError('incident 42: arn:aws:iam::123456789012:role/ops-break-glass'));
+
+    const typed = parseSse(await (await postStream('member-a1', { protocol: 2 })).text()).find((e) => e.event === 'error');
+
+    const body = JSON.parse(typed!.data) as { code: string; message: string };
+    expect(body.code).toBe('kill_switch_active');
+    expect(body.message.trim().length).toBeGreaterThan(0);
+    expect(body.message).not.toMatch(/incident|arn:aws|123456789012/);
+  });
+
+  it('finishes a slash command whose reader left before the stream started', async () => {
+    // Codex's inspection: only the model branch saved before writing. A command (and
+    // a media-only turn) still awaited a second write to a body nobody reads, so the
+    // route never finished and its heartbeat leaked.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const ac = new AbortController();
+    const chat = 'dashboard:1750000000203';
+    getSession.mockImplementationOnce(async () => {
+      ac.abort();
+      return undefined;
+    });
+    runCommand.mockResolvedValueOnce({ reply: 'pong' });
+
+    await request('member-a1', '/api/test-turn/stream', {
+      method: 'POST',
+      body: JSON.stringify({ text: '/ping', agentId: AGENT, chatId: chat, protocol: 2, clientMessageId: 'cm-cmd-gone' }),
+      signal: ac.signal,
+    });
+
+    await vi.waitFor(() => expect(endTurn).toHaveBeenCalledWith(AGENT, chat, 'cm-cmd-gone', 'complete'), { timeout: 2000 });
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0), { timeout: 2000 });
+  });
+
   it('leaves no timer behind when a turn ends', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
 

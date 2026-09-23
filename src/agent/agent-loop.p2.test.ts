@@ -513,6 +513,24 @@ describe('turn lifecycle (P2) — agent loop, review fixes', () => {
     expect(settled.outputTokens).toBeLessThan(8_192);
   });
 
+  it('counts the tool input a first call was writing when it was stopped', async () => {
+    // Codex's inspection: a first call can spend its whole output writing a tool's
+    // arguments (a long document spec) with no text a person sees, and a Stop then
+    // settled 0 output tokens.
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockImplementation(
+      async (_input: unknown, callbacks: { onToolInput?: (chars: number) => void }) => {
+        callbacks.onToolInput?.(40_000);
+        ac.abort();
+        throw abortError();
+      },
+    );
+
+    await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    expect(finalize.mock.calls[0]![0].outputTokens).toBeGreaterThanOrEqual(10_000);
+  });
+
   it('starts no further tool once the turn is stopped mid-round', async () => {
     const ac = new AbortController();
     converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
