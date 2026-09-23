@@ -260,7 +260,19 @@ export interface ContextUsage {
 
 export interface SessionEnrichment {
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
+  /**
+   * The conversation's owner. Stamped when the row is CREATED and never changed
+   * afterwards (owner decision 1): the dashboard used to overwrite it with
+   * whoever sent last, which let one message into someone else's conversation
+   * take it (A131).
+   */
   userId?: string;
+  /**
+   * Owner decision 1: a dashboard principal with no person behind it (a token
+   * with no user and no link) gets no durable chat, so its conversation keeps
+   * the expiring TTL every other surface uses instead of persisting.
+   */
+  ephemeral?: boolean;
 }
 
 /**
@@ -341,14 +353,15 @@ export async function appendTurns(
                 : {}),
             createdAt: existing?.createdAt ?? now,
             ...(enrichment?.surface ? { surface: enrichment.surface } : existing?.surface ? { surface: existing.surface } : {}),
-            ...(enrichment?.userId ? { userId: enrichment.userId } : existing?.userId ? { userId: existing.userId } : {}),
+            // The first owner stays the owner (see SessionEnrichment.userId).
+            ...(existing?.userId ? { userId: existing.userId } : enrichment?.userId ? { userId: enrichment.userId } : {}),
             turnsTotal,
             turnsIngested,
             updatedAt: now,
-            // Omitted entirely for dashboard chats — a Put replaces the whole
-            // item, so this also strips the ttl off rows written before
+            // Omitted entirely for durable dashboard chats — a Put replaces the
+            // whole item, so this also strips the ttl off rows written before
             // conversations became persistent.
-            ...(isPersistentChat(chatId) ? {} : { ttl: now + TTL_SECONDS }),
+            ...(isPersistentChat(chatId) && !enrichment?.ephemeral ? {} : { ttl: now + TTL_SECONDS }),
             version: (existing?.version ?? 0) + 1,
           },
           // Fence on exactly what the read saw: a missing row must still be

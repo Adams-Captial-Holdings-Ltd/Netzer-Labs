@@ -41,6 +41,7 @@ import {
 } from '../../lib/auth/permissions.js';
 import {
   createToken,
+  linkTokenToUser,
   listTokens,
   revokeToken,
   revokeTokensForUser,
@@ -220,14 +221,45 @@ function operatorIdentity(c: { req: { header: (name: string) => string | undefin
   return `dashboard:${raw.replace(/[^A-Za-z0-9_.@-]/g, '_').slice(0, 64)}`;
 }
 
+/**
+ * The owner stamped on the principal's conversations (WI-1.1). A PERSON owns
+ * them, whichever token they signed in with: a magic-link session carries its
+ * `userId`, and a token with no user of its own may be linked to one by an
+ * audited admin action (owner decision 1). Before WI-1.1 this was the token
+ * hash, and a member session mints a new token per login, so the next login
+ * orphaned everything the last one wrote (A133). A token with no person keeps
+ * its own hash, which is stable for the env root token and legacy tokens; its
+ * conversations are not durable (decision 1, see personOf in the send routes).
+ */
 function dashboardIdentity(c: DashboardCtx): string {
   const p = getPrincipal(c);
+  const person = p?.userId ?? p?.linkedUserId;
+  if (person) return `dashboard:user:${person}`;
   if (p) return `dashboard:${p.tokenHash}`;
   const auth = c.req.header('authorization') ?? '';
   const token = auth.replace(/^Bearer\s+/i, '');
   if (!token) return 'dashboard:unknown';
   const hash = createHash('sha256').update(token).digest('hex');
   return `dashboard:${hash}`;
+}
+
+/** Decision 1: the person behind the principal, if there is one. */
+function personOf(c: DashboardCtx): string | undefined {
+  const p = getPrincipal(c);
+  return p?.userId ?? p?.linkedUserId;
+}
+
+/**
+ * Whether the caller owns a stored conversation (decisions 1 and 9). Also true
+ * for a row the caller's OWN token wrote before WI-1.1, which carries
+ * `dashboard:<tokenHash>`: stable for a token with no person, so that history
+ * stays reachable until the legacy migration (WI-1.4) re-keys it. A row with no
+ * owner belongs to nobody — only the audited admin override reaches it.
+ */
+function ownsConversation(c: DashboardCtx, owner: unknown): boolean {
+  if (typeof owner !== 'string' || owner === '') return false;
+  const p = getPrincipal(c);
+  return owner === dashboardIdentity(c) || (p !== null && owner === `dashboard:${p.tokenHash}`);
 }
 
 export const ROLE_RANK: Record<TokenRole, number> = { viewer: 0, operator: 1, admin: 2 };
@@ -1819,6 +1851,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         return c.json({ error: 'invalid_upload_key' }, 400);
       }
     }
+    // WI-1.1 (decision 9): refuse a conversation the caller does not own before
+    // anything touches it — slash commands included, since /newchat wipes a
+    // history. The same 404 DELETE /sessions gives, so a chat id cannot be probed.
+    const stored = await getSession(agentId, chatId);
+    if (stored && !ownsConversation(c, stored.userId)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
     return streamSSE(c, async (stream) => {
       // Command? send the reply as a single event and close. Skipped for
       // attachment turns — a caption starting with '/' is data, not a command
@@ -2029,7 +2068,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           await appendTurns(agentId, chatId, [
             { role: 'user', text: userText, ts: now },
             { role: 'assistant', text: result.text, ts: now },
-          ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c) });
+          ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c), ephemeral: !personOf(c) });
         }
         await stream.writeSSE({ event: 'done', data: 'ok' });
       } catch (err) {
@@ -2097,7 +2136,21 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       items = out.Items ?? [];
     }
 
-    const rows = items.filter(isConversationRow).map((i) => ({
+    // Decision 1: conversations are author-private. A non-admin sees only their
+    // own; an admin sees every one, and seeing someone else's is audited.
+    const isAdmin = await hasCapability(c, 'security:write');
+    const conversations = items
+      .filter(isConversationRow)
+      .filter((i) => isAdmin || ownsConversation(c, i.userId));
+    if (isAdmin && conversations.some((i) => !ownsConversation(c, i.userId))) {
+      void writeAudit({
+        action: 'session_read_override',
+        ...(agentId ? { agentId } : {}),
+        detail: { scope: 'list', requestedBy: dashboardIdentity(c) },
+        result: 'ok',
+      });
+    }
+    const rows = conversations.map((i) => ({
       agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
       chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
       updatedAt: i.updatedAt as number,
@@ -2275,13 +2328,19 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = safeDashboardChatId(body.chatId);
     const persist = body.persistTurns ?? true;
 
+    // WI-1.1: the same owner check as the streamed route, before the command
+    // path. persistTurns:false still replays the stored history to the model.
+    const session = await getSession(agentId, chatId);
+    if (session && !ownsConversation(c, session.userId)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+
     // Slash command path — handled inline.
     const cmd = await runCommand(agentId, chatId, body.text);
     if (cmd?.reply) {
       return c.json({ kind: 'command', agentId, chatId, reply: cmd.reply });
     }
 
-    const session = await getSession(agentId, chatId);
     const history = session?.turns ?? [];
     const modelOverride = body.modelOverride ?? session?.modelOverride;
 
@@ -2309,7 +2368,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         await appendTurns(agentId, chatId, [
           { role: 'user', text: body.text, ts: now },
           { role: 'assistant', text: result.text, ts: now },
-        ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c) });
+        ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c), ephemeral: !personOf(c) });
       }
       logger.info(
         {
@@ -3211,6 +3270,18 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = c.req.query('chatId');
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
     const session = await getSession(agentId, chatId);
+    // Decision 1: author-private. Someone else's conversation reads exactly like
+    // one that does not exist; an admin may read it, and that read is audited.
+    if (session && !ownsConversation(c, session.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json({ turns: [] });
+      void writeAudit({
+        action: 'session_read_override',
+        agentId,
+        chatId,
+        detail: { scope: 'transcript', requestedBy: dashboardIdentity(c) },
+        result: 'ok',
+      });
+    }
     return c.json({ turns: session?.turns ?? [] });
   });
 
@@ -3314,7 +3385,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // reasoning validateMagicToken applies to magic-link lookups above).
     const session = await getSession(agentId, chatId);
     const me = dashboardIdentity(c);
-    const owned = session?.userId !== undefined && session.userId === me;
+    const owned = ownsConversation(c, session?.userId);
     // Admin/owner-tier principals may remove any conversation on the agent —
     // the same tier that already holds the GDPR purge. Rows written before the
     // dashboard stamped `userId` (or by Telegram/Slack) have no owner to match,
@@ -3348,6 +3419,18 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const agentId = c.req.query('agentId') ?? 'main';
     const chatId = c.req.query('chatId');
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
+    // Decision 1: one chat's full export is its author's, or an audited admin's.
+    const session = await getSession(agentId, chatId);
+    if (!ownsConversation(c, session?.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json({ error: 'not_found' }, 404);
+      void writeAudit({
+        action: 'session_read_override',
+        agentId,
+        chatId,
+        detail: { scope: 'chat-export', requestedBy: dashboardIdentity(c) },
+        result: 'ok',
+      });
+    }
     const payload = await exportChatData(agentId, chatId);
     return c.json(payload);
   });
@@ -3547,6 +3630,49 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     }, 201);
   });
 
+  // Owner decision 1: link a token that has no person of its own — the env root
+  // token, a legacy per-operator token — to exactly ONE user, once. Until it is
+  // linked its conversations are not durable (see personOf); once linked, the
+  // user owns them. Addressed by the hashPrefix GET /tokens hands out, like
+  // DELETE /tokens/:hashPrefix, but it must name exactly one token: a link is
+  // never moved, so an ambiguous prefix must not pick one.
+  router.post('/tokens/:hashPrefix/link', async (c) => {
+    if (!(await hasCapability(c, 'tokens:write'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'tokens:write' }, 403);
+    }
+    const prefix = c.req.param('hashPrefix');
+    const body = await c.req.json<{ userId?: unknown }>().catch(() => null);
+    const userId = typeof body?.userId === 'string' ? body.userId.trim() : '';
+    if (!/^[0-9a-f]{16,64}$/.test(prefix)) return c.json({ error: 'invalid_hash_prefix' }, 400);
+    if (!userId) return c.json({ error: 'userId_required' }, 400);
+    const user = await getUser(userId);
+    if (!user || user.status === 'disabled') return c.json({ error: 'unknown_user' }, 400);
+    const matches = (await listTokens()).filter((t) => t.tokenHash.startsWith(prefix));
+    if (matches.length !== 1) return c.json({ error: 'token_not_found' }, 404);
+    const tokenHash = matches[0]!.tokenHash;
+    const requestedBy = dashboardIdentity(c);
+    const outcome = await linkTokenToUser(tokenHash, userId, requestedBy);
+    if (outcome === 'not_found') return c.json({ error: 'token_not_found' }, 404);
+    if (outcome === 'session_token') return c.json({ error: 'token_has_its_own_user' }, 409);
+    if (outcome === 'already_linked') return c.json({ error: 'already_linked' }, 409);
+    // C5c, as for a token mint: awaited and non-suppressible. An unauditable
+    // link returns 500 — the link exists, and nobody should rely on it unseen.
+    const principal = getPrincipal(c);
+    try {
+      await writeAuditOrThrow({
+        action: 'token_linked',
+        surface: 'dashboard',
+        result: 'ok',
+        userId: principal?.hashPrefix16 ?? 'dashboard',
+        operatorLabel: principal?.label ?? 'dashboard',
+        detail: { hashPrefix: tokenHash.slice(0, 16), userId, requestedBy },
+      });
+    } catch {
+      return c.json({ error: 'token linked but the audit write failed; investigate before relying on it' }, 500);
+    }
+    return c.json({ linked: true, hashPrefix: tokenHash.slice(0, 16), userId });
+  });
+
   router.delete('/tokens/:hashPrefix', async (c) => {
     const prefix = c.req.param('hashPrefix');
     const tokens = await listTokens();
@@ -3680,7 +3806,20 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const truncated = allItems.length >= 10_000;
     const today = new Date().toISOString().slice(0, 10);
     const headers = ['agentId', 'chatId', 'updatedAt', 'createdAt', 'surface', 'userId', 'messageCount', 'firstMessage', 'modelOverride'];
-    const csvRows = allItems.filter(isConversationRow).map((i) => [
+    // Decision 1, the same rule as GET /sessions: your own rows, or every row
+    // for an admin with the override audited.
+    const isAdmin = await hasCapability(c, 'security:write');
+    const conversations = allItems
+      .filter(isConversationRow)
+      .filter((i) => isAdmin || ownsConversation(c, i.userId));
+    if (isAdmin && conversations.some((i) => !ownsConversation(c, i.userId))) {
+      void writeAudit({
+        action: 'session_read_override',
+        detail: { scope: 'export', requestedBy: dashboardIdentity(c) },
+        result: 'ok',
+      });
+    }
+    const csvRows = conversations.map((i) => [
       String(i.PK ?? '').replace(/^AGENT#/, ''),
       String(i.SK ?? '').replace(/^CHAT#/, ''),
       String(i.updatedAt ?? ''), String(i.createdAt ?? ''),

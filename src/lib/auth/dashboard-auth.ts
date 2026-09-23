@@ -95,11 +95,15 @@ export async function authenticateDashboardToken(
         // where the table does not exist yet (ResourceNotFoundException): there
         // is no revoke list to consult, so allow. Recovery from an accidental
         // revoke is rotating DASHBOARD_TOKEN.
+        let linkedUserId: string | undefined;
         try {
           const record = await lookupToken(hash);
           if (record && (!record.active || isExpired(record))) {
             return null;
           }
+          // Decision 1: the root token owns durable conversations only once an
+          // admin has linked it to a person.
+          linkedUserId = record?.linkedUserId;
         } catch (err) {
           const name = err instanceof Error ? err.name : '';
           if (name !== 'ResourceNotFoundException') {
@@ -126,6 +130,7 @@ export async function authenticateDashboardToken(
           // compatibility with any remaining role-rank readers during cutover.
           role: ROOT_ROLE,
           profileId: ROOT_PROFILE_ID,
+          ...(linkedUserId ? { linkedUserId } : {}),
         };
       }
     } catch {
@@ -150,6 +155,7 @@ export async function authenticateDashboardToken(
         // neither field and fall back to role→profile in profileIdForPrincipal.
         ...(record.userId ? { userId: record.userId } : {}),
         ...(record.profileId ? { profileId: record.profileId } : {}),
+        ...(record.linkedUserId ? { linkedUserId: record.linkedUserId } : {}),
       };
     }
   } catch {
