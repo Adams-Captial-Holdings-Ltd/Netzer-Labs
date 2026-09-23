@@ -4,7 +4,25 @@
 // under src/, so it enters the ROOT tsc program: keep it DOM-light and keep
 // relative imports `.js`-suffixed (NodeNext).
 
-import type { Conversation, Model } from './types.js';
+import type { Conversation, Message, Model, ToolCall } from './types.js';
+
+/** Restore transcript results and stopped state; arguments belong only to the live tab. */
+export function transcriptToMessages(
+  turns: Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[] }>,
+): Message[] {
+  return turns.map((turn) => {
+    if (turn.role === 'user') return { role: 'user', text: turn.text, ts: turn.ts };
+    return {
+      role: 'assistant',
+      text: turn.text,
+      ts: turn.ts,
+      ...(turn.status === 'stopped' ? { stopped: true } : {}),
+      ...(turn.tools?.length ? {
+        tools: turn.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
+      } : {}),
+    };
+  });
+}
 
 // Friendly names for the env-driven model labels the backend returns.
 export const MODEL_NAMES: Record<string, string> = {

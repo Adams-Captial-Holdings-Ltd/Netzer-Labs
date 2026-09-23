@@ -225,6 +225,12 @@ export function Composer({
   const area = textareaRef ?? ownRef;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const maxRows = useMaxRows();
+  const wasStreaming = useRef(streaming);
+
+  useEffect(() => {
+    if (wasStreaming.current && !streaming) area.current?.focus();
+    wasStreaming.current = streaming;
+  }, [streaming]);
 
   // No sizing effect of our own any more. TextareaAutosize re-measures in a
   // layout effect on every render — which is every keystroke, paste, starter
@@ -244,6 +250,11 @@ export function Composer({
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && streaming) {
+      e.preventDefault();
+      onStop();
+      return;
+    }
     if (e.key !== 'Enter' || e.shiftKey) return;
     // An IME is mid-candidate: this Enter picks a character, it does not send.
     if (e.isComposing || e.keyCode === 229) return;
@@ -336,9 +347,7 @@ export function Composer({
           onKeyDown={handleKeyDown}
           placeholder={`Message ${agentName}...`}
           aria-label={`Message ${agentName}`}
-          // Unchanged from the single-line composer: a second turn cannot be
-          // composed on top of the one in flight.
-          disabled={streaming}
+          // The next turn can be composed during a run; canSend waits for it to end.
           autoFocus
           // `chat-composer__input` is where the CAPPED state is finished (see
           // index.css): no scrollbar furniture, and a fade at both ends so a

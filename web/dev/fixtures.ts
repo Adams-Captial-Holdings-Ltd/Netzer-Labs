@@ -177,21 +177,28 @@ const toolsText = `Here is what the failed staging rollout came down to.
 // tidy full stop when the second tool window opens over it.
 const TOOLS_TEXT_BREAK = 210;
 
+/** Pair each live call with its result, preserving the fixture's status windows. */
+function toolEvents(label: string, step: number, input: string, output: string, delayMs: number, resultDelayMs: number, isError = false, truncated = false): MockSseEvent[] {
+  const toolUseId = `tu-${step}`;
+  return [
+    { event: 'tool', data: JSON.stringify({ label, step, toolUseId, input, inputTruncated: false }), delayMs },
+    { event: 'tool_result', data: JSON.stringify({ toolUseId, output, isError, truncated }), delayMs: resultDelayMs },
+  ];
+}
+
 const toolsFixture: Fixture = [
-  { event: 'tool', data: JSON.stringify({ label: 'web search', step: 1 }), delayMs: 260 },
-  { event: 'tool', data: JSON.stringify({ label: 'Knowledge: search', step: 2 }), delayMs: 1000 },
-  { event: 'tool', data: JSON.stringify({ label: 'Slack: search public', step: 3 }), delayMs: 1000 },
+  ...toolEvents('web search', 1, '{"query":"failed staging rollout"}', 'Found 3 pages about the failed rollout.', 260, 1000),
+  ...toolEvents('Knowledge: search', 2, '{"query":"staging rollout incident"}', 'The staging task used an outdated image tag and failed its health check. '.repeat(40).slice(0, 2048), 0, 1000, false, true),
+  ...toolEvents('Slack: search public', 3, '{"query":"rollout in:deploys"}', 'Slack search is not connected for this agent.', 0, 55, true),
   // Text resumes: streamTurn's chunk branch clears the status line.
   ...cumulativeRange(toolsText, 0, TOOLS_TEXT_BREAK, 12, 55),
   // …and a mid-answer tool call brings it back, over prose that is already on
   // screen. This is the captured frame.
-  { event: 'tool', data: JSON.stringify({ label: 'code interpreter', step: 4 }), delayMs: 900 },
-  { event: 'tool', data: JSON.stringify({ label: 'document generator', step: 5 }), delayMs: 1400 },
-  // The tail's FIRST chunk is what closes the second status window (the chunk
-  // branch clears the line), so it waits too — otherwise step 5 would flash for
-  // 55ms and the window would only ever be step 4's.
+  ...toolEvents('code interpreter', 4, '{"code":"compare_image_tags()"}', 'The deployed image tag differs from the latest push.', 900, 1400),
+  ...toolEvents('document generator', 5, '{"title":"Staging rollout incident"}', 'Created the staging rollout incident note.', 0, 1400),
+  // The result already held step 5's status window; the tail can resume now.
   ...cumulativeRange(toolsText, TOOLS_TEXT_BREAK, toolsText.length, 16, 55).map((ev, i) =>
-    i === 0 ? { ...ev, delayMs: 1400 } : ev,
+    i === 0 ? { ...ev, delayMs: 0 } : ev,
   ),
   finalEvent(toolsText, { latencyMs: 8320, costUsd: 0.0409, toolCallCount: 5 }),
 ];

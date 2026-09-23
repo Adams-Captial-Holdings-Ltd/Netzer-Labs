@@ -9,7 +9,7 @@
 // program: keep it DOM-free and keep relative imports `.js`-suffixed
 // (NodeNext).
 
-import type { TurnMeta } from './types.js';
+import type { ToolCall, TurnMeta } from './types.js';
 
 export interface TurnAttachment { s3Key: string; fileName: string; mimeType?: string }
 
@@ -18,6 +18,8 @@ export interface TurnBody {
   agentId: string;
   chatId: string;
   modelOverride?: string;
+  clientMessageId?: string;
+  protocol?: 2;
   attachments?: TurnAttachment[];
 }
 
@@ -26,17 +28,20 @@ export interface TurnCallbacks {
   onChunk: (cumulativeText: string) => void;
   /** Live tool/media status line; '' clears it (text resumed). */
   onToolStatus: (status: string) => void;
+  onTools?: (tools: ToolCall[]) => void;
 }
 
 export interface TurnOutcome {
   text: string;
   isReply: boolean;
   errorText: string;
+  errorCode?: string;
+  saved?: boolean;
   meta?: TurnMeta;
   kb: string[];
   images: Array<{ url: string; caption: string }>;
   artifacts: Array<{ url: string; name: string }>;
-  tools: Array<{ label: string; step: number }>;
+  tools: ToolCall[];
 }
 
 export interface TurnStreamOptions {
@@ -60,6 +65,8 @@ export async function streamTurn(
       agentId: body.agentId,
       chatId: body.chatId,
       ...(body.modelOverride ? { modelOverride: body.modelOverride } : {}),
+      ...(body.clientMessageId !== undefined ? { clientMessageId: body.clientMessageId } : {}),
+      ...(body.protocol !== undefined ? { protocol: body.protocol } : {}),
       ...(body.attachments && body.attachments.length > 0 ? { attachments: body.attachments } : {}),
     }),
     ...(opts.signal ? { signal: opts.signal } : {}),
@@ -74,16 +81,20 @@ export async function streamTurn(
   // turn fails mid-stream. We capture it here and surface it as a red bubble
   // after the loop instead of pushing an empty assistant reply.
   let errorText = '';
+  let errorCode: string | undefined;
+  let saved: boolean | undefined;
   const kbChips: string[] = [];
   const images: Array<{ url: string; caption: string }> = [];
   const artifacts: Array<{ url: string; name: string }> = [];
-  const tools: Array<{ label: string; step: number }> = [];
+  const tools: ToolCall[] = [];
+  const publishTools = () => cb.onTools?.(tools.map((tool) => ({ ...tool })));
   let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
   let curData = '';
   let buffer = '';
 
   // Flush one fully-received SSE event (event + its accumulated data lines).
   const flushEvent = () => {
+    if (curEvent === 'done') saved = curData !== 'not_saved';
     if (curData === '') return;
     if (curEvent === 'reply') {
       // Slash-command reply: plain text, surfaced directly (not JSON).
@@ -96,13 +107,35 @@ export async function streamTurn(
       fullText = curData; // cumulative plain text for the live preview
       cb.onChunk(curData);
       cb.onToolStatus(''); // text resumed; drop the tool-status line
+    } else if (curEvent === 'delta') {
+      try {
+        const { i, t } = JSON.parse(curData);
+        fullText = fullText.slice(0, i) + t;
+        cb.onChunk(fullText);
+        cb.onToolStatus('');
+      } catch { /* ignore malformed delta event */ }
     } else if (curEvent === 'tool') {
-      // { label, step } — show what the agent is doing during tool dispatch.
+      // Legacy calls have only label/step; P2 also carries live arguments.
       try {
         const t = JSON.parse(curData);
         cb.onToolStatus(t.step > 1 ? `${t.label}… (step ${t.step})` : `${t.label}…`);
-        tools.push({ label: t.label, step: t.step });
+        tools.push({
+          label: t.label,
+          step: t.step,
+          ...(t.toolUseId !== undefined ? { toolUseId: t.toolUseId } : {}),
+          ...(t.input !== undefined ? { input: t.input, inputTruncated: t.inputTruncated } : {}),
+        });
+        publishTools();
       } catch { /* ignore malformed tool event */ }
+    } else if (curEvent === 'tool_result') {
+      try {
+        const result = JSON.parse(curData);
+        const index = tools.findIndex((tool) => tool.toolUseId !== undefined && tool.toolUseId === result.toolUseId);
+        if (index !== -1) {
+          tools[index] = { ...tools[index]!, output: result.output, isError: result.isError, truncated: result.truncated };
+          publishTools();
+        }
+      } catch { /* ignore malformed tool result */ }
     } else if (curEvent === 'media') {
       // { fileName, stage, label } — media pipeline progress (transcribe,
       // frames, indexing). Rides the same status row as tool events.
@@ -131,8 +164,15 @@ export async function streamTurn(
         if (a.url) artifacts.push({ url: a.url, name: a.name || a.caption || 'document' });
       } catch { /* ignore malformed artifact event */ }
     } else if (curEvent === 'error') {
-      // Plain-text error message from the SSE writer; surfaced as an error bubble.
       errorText = curData;
+      errorCode = undefined;
+      try {
+        const error = JSON.parse(curData);
+        if (error && typeof error.code === 'string' && typeof error.message === 'string') {
+          errorText = error.message;
+          errorCode = error.code;
+        }
+      } catch { /* legacy errors are plain text */ }
     }
     // done / unknown events carry no assistant text we surface here.
     curData = '';
@@ -178,5 +218,5 @@ export async function streamTurn(
     } catch { /* not JSON (e.g. a raw chunk); use raw text */ }
   }
 
-  return { text: fullText, isReply, errorText, meta, kb: kbChips, images, artifacts, tools };
+  return { text: fullText, isReply, errorText, errorCode, saved, meta, kb: kbChips, images, artifacts, tools };
 }

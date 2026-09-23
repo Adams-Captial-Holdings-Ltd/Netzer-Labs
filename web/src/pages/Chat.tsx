@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
-import type { Agent, Conversation, Message, Model } from '../lib/chat/types';
+import type { Agent, Conversation, Message, Model, ToolCall } from '../lib/chat/types';
 import {
   MODEL_NAMES,
   freshChatId,
@@ -9,6 +9,7 @@ import {
   rememberChatId,
   conversationTitle,
   friendlyStreamError,
+  transcriptToMessages,
 } from '../lib/chat/helpers';
 import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
@@ -53,6 +54,7 @@ export function Chat() {
   const [chatId, setChatId] = useState(freshChatId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const draftsRef = useRef(new Map<string, string>());
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
   // Epoch ms the in-flight turn was dispatched. The live row counts up from it,
@@ -64,6 +66,7 @@ export function Chat() {
   // the state is useless to the abort path — and the abort path is precisely
   // where the partial answer has to be recovered and kept.
   const streamTextRef = useRef('');
+  const streamToolsRef = useRef<ToolCall[]>([]);
   // Aborts the in-flight turn (the composer's Stop control). Null when idle.
   const abortRef = useRef<AbortController | null>(null);
   // Live tool-call status, mirroring Telegram/Slack (CLAUDE.md "Chat surface
@@ -171,26 +174,24 @@ export function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
-  // Reopen a stored conversation: point at its chatId and replay its turns.
-  // The transcript endpoint returns the real turn array (Sessions.tsx uses the
-  // same one). Only the last 20 turns exist server-side — the window cap.
+  function activateConversation(id: string, forAgent = agentId) {
+    draftsRef.current.set(`${agentId}/${chatId}`, input);
+    setInput(draftsRef.current.get(`${forAgent}/${id}`) ?? '');
+    setChatId(id);
+    rememberChatId(forAgent, id);
+  }
+
+  // Reopen a stored conversation, including tool results and stopped turns.
   async function openConversation(id: string) {
     if (streaming) return;
-    setChatId(id);
-    rememberChatId(agentId, id);
+    activateConversation(id);
     setStreamText('');
     setMessages([]);
     try {
-      const d = await api.get<{ turns?: Array<{ role: string; text: string; ts: number }> }>(
+      const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
         `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(id)}`,
       );
-      setMessages(
-        (d.turns ?? []).map((t) => ({
-          role: t.role === 'user' ? 'user' : 'assistant',
-          text: t.text,
-          ts: t.ts,
-        })),
-      );
+      setMessages(transcriptToMessages(d.turns ?? []));
     } catch (e) {
       console.error('Chat: failed to load transcript', e);
       setLoadError('Could not load that conversation. It may have been deleted.');
@@ -198,10 +199,9 @@ export function Chat() {
   }
 
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
-  function startNewChat() {
+  function startNewChat(forAgent = agentId) {
     const id = freshChatId();
-    setChatId(id);
-    rememberChatId(agentId, id);
+    activateConversation(id, forAgent);
     setMessages([]);
     setStreamText('');
   }
@@ -264,13 +264,15 @@ export function Chat() {
   function selectAgent(id: string) {
     if (id === agentId) return;
     setAgentId(id);
-    startNewChat();
+    startNewChat(id);
   }
 
   async function send() {
     const text = input.trim();
     const sendFiles = files;
     if ((!text && sendFiles.length === 0) || streaming || !agentId) return;
+    const clientMessageId = crypto.randomUUID();
+    draftsRef.current.delete(`${agentId}/${chatId}`);
     setInput('');
     setFiles([]);
     const fileNote = sendFiles.length > 0
@@ -285,6 +287,7 @@ export function Chat() {
     setStreaming(true);
     setStreamText('');
     streamTextRef.current = '';
+    streamToolsRef.current = [];
     setToolStatus('');
     setStreamStartedAt(Date.now());
     const abort = new AbortController();
@@ -305,6 +308,8 @@ export function Chat() {
           text,
           agentId,
           chatId,
+          clientMessageId,
+          protocol: 2,
           ...(modelId ? { modelOverride: modelId } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
         },
@@ -312,6 +317,7 @@ export function Chat() {
         {
           onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
           onToolStatus: setToolStatus,
+          onTools: (tools) => { streamToolsRef.current = tools; },
         },
         // Stop is the only thing this signal does; every other exit path from
         // streamTurn is unchanged.
@@ -349,17 +355,16 @@ export function Chat() {
       // whatever text had arrived as a settled turn instead of throwing it away
       // (and instead of dressing a deliberate cancel up as a red error bubble).
       //
-      // No `tools` on a stopped turn: streamTurn's accumulator is local to the
-      // call that just rejected, and reaching into lib/chat to hand it out
-      // early would change a module pinned by the golden tests. No `meta`
-      // either — the run never reached `final`, so AssistantMessage renders the
-      // StoppedFooter in the footer slot rather than inventing numbers.
+      // Keep the latest tool snapshot too. No `meta` — the run never reached
+      // `final`, so AssistantMessage renders StoppedFooter rather than
+      // inventing numbers.
       if ((e as { name?: string } | null)?.name === 'AbortError') {
         setMessages((prev) => [...prev, {
           role: 'assistant',
           text: streamTextRef.current,
           ts: Date.now() / 1000,
           stopped: true,
+          ...(streamToolsRef.current.length > 0 ? { tools: streamToolsRef.current } : {}),
         }]);
         setStreamText('');
         streamTextRef.current = '';
