@@ -473,6 +473,46 @@ describe('turn lifecycle (P2) — agent loop, review fixes', () => {
     expect(settled.outputTokens).toBeGreaterThanOrEqual(5 + 5 + 8_192);
   });
 
+  it("counts a cut first call's output at its ceiling when the guardrail holds the stream", async () => {
+    // Under the runtime switch `sync`, Bedrock shows nothing until the guardrail has
+    // checked the whole answer, so a Stop mid-generation has no streamed text to go
+    // by: like any call that shows nothing while it runs, its output counts at its
+    // ceiling (found in the coordinator's inspection of the review fixes).
+    process.env.BEDROCK_GUARDRAIL_ID = 'gr-test';
+    getConfig.mockImplementation(async (category: string, key: string) =>
+      category === 'bedrock' && key === 'guardrail_stream_mode' ? 'sync' : undefined,
+    );
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockImplementation(async () => {
+      ac.abort();
+      throw abortError();
+    });
+
+    await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    expect(finalize.mock.calls[0]![0].outputTokens).toBeGreaterThanOrEqual(8_192);
+  });
+
+  it('counts only what streamed when the guardrail checks alongside', async () => {
+    // The default (decision 50): text arrives as it is written, so the streamed text
+    // is the estimate, and a quick Stop is not charged the ceiling.
+    process.env.BEDROCK_GUARDRAIL_ID = 'gr-test';
+    const ac = new AbortController();
+    converseStreamTurnWithFallback.mockImplementation(
+      async (_input: unknown, callbacks: { onChunk?: (t: string) => void }) => {
+        callbacks.onChunk?.('Partial answer text, several words long.');
+        ac.abort();
+        throw abortError();
+      },
+    );
+
+    await runAgentTurn({ ...baseReq, onChunk: vi.fn(), abortSignal: ac.signal });
+
+    const settled = finalize.mock.calls[0]![0];
+    expect(settled.outputTokens).toBeGreaterThan(0);
+    expect(settled.outputTokens).toBeLessThan(8_192);
+  });
+
   it('starts no further tool once the turn is stopped mid-round', async () => {
     const ac = new AbortController();
     converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
