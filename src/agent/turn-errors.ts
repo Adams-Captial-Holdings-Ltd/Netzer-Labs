@@ -21,7 +21,7 @@ export function classifyTurnError(err: unknown): { code: string; message: string
       : { code: 'cost_cap_exceeded', message: 'The daily spending cap has been reached. Raise it in Cost or try again tomorrow.' };
   }
   if (err instanceof KillSwitchActiveError) {
-    return { code: 'kill_switch_active', message: `An operator has paused this: ${err.reason}` };
+    return { code: 'kill_switch_active', message: 'An operator has paused this for now. Try again later.' };
   }
   return MODEL_ERROR_NAMES.has((err as { name?: string })?.name ?? '')
     ? { code: 'model_error', message: 'The model could not answer this time. Try again.' }

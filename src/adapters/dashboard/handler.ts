@@ -459,9 +459,9 @@ function refusedSend(code: 'unknown_agent' | 'unknown_model' | 'invalid_message_
  * left during the route's awaits before the stream began — but the request's
  * own signal has fired by then.
  */
-function abortWithRequest(signal: AbortSignal, abort: AbortController): void {
-  if (signal.aborted) abort.abort();
-  else signal.addEventListener('abort', () => abort.abort(), { once: true });
+function abortWithRequest(signal: AbortSignal, stream: SSEStreamingApi): void {
+  if (signal.aborted) stream.abort();
+  else signal.addEventListener('abort', () => stream.abort(), { once: true });
 }
 
 function chunkWriter(stream: SSEStreamingApi, protocol?: number): (text: string) => void {
@@ -2107,7 +2107,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     return streamSSE(c, async (stream) => {
       const abort = new AbortController();
       stream.onAbort(() => abort.abort());
-      abortWithRequest(c.req.raw.signal, abort);
+      abortWithRequest(c.req.raw.signal, stream);
       const heartbeat = setInterval(() => void stream.write(': ping\n\n'), SSE_HEARTBEAT_MS);
       const tools: ToolRecord[] = [];
       const toolStarts = new Map<string, Pick<ToolRecord, 'label' | 'step'>>();

@@ -91,6 +91,8 @@ export interface ConverseTurnOutput {
 export interface ConverseStreamCallbacks {
   /** Called with cumulative text after each chunk. */
   onChunk?: (cumulativeText: string) => void;
+  /** Called with cumulative tool-input characters after each fragment. */
+  onToolInput?: (chars: number) => void;
 }
 
 // ── Temperature self-heal ──────────────────────────────────────────
@@ -192,6 +194,7 @@ export async function converseStreamTurnWithFallback(
     const modelId = chain[i];
     let emitted = 0;
     const guarded: ConverseStreamCallbacks = {
+      onToolInput: callbacks.onToolInput,
       ...(callbacks.onChunk
         ? {
             onChunk: (cumulativeText: string) => {
@@ -482,6 +485,7 @@ export async function converseStreamTurn(
   }
 
   let text = '';
+  let toolInputChars = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadInputTokens = 0;
@@ -494,6 +498,11 @@ export async function converseStreamTurn(
       if (event.contentBlockDelta?.delta?.text) {
         text += event.contentBlockDelta.delta.text;
         callbacks.onChunk?.(text);
+      }
+      const toolInput = event.contentBlockDelta?.delta?.toolUse?.input;
+      if (typeof toolInput === 'string') {
+        toolInputChars += toolInput.length;
+        callbacks.onToolInput?.(toolInputChars);
       }
       if (event.messageStop?.stopReason) {
         stopReason = event.messageStop.stopReason;

@@ -1108,8 +1108,11 @@ async function runAdmittedTurn(
   // turn nobody watches keeps its mid-stream fallback).
   let lastEmitted = '';
   let partialText = '';
+  let toolInputChars = 0;
   let emitModelChunk: ((text: string) => void) | undefined;
-  const streamCallbacks: ConverseStreamCallbacks = {};
+  const streamCallbacks: ConverseStreamCallbacks = {
+    onToolInput: (chars) => { toolInputChars = chars; },
+  };
   const redact = req.onChunk || req.onToolEvent || req.onToolResult
     ? await buildStreamingRedactor()
     : (text: string): string => text;
@@ -1141,6 +1144,7 @@ async function runAdmittedTurn(
       streamed: sent.streamed ?? false,
     };
     partialText = '';
+    toolInputChars = 0;
     try {
       const result = await call();
       // A stream the SDK ended quietly after a Stop (HTTP/2) returns with no
@@ -1158,7 +1162,7 @@ async function runAdmittedTurn(
     // streamed — or, for a call that shows nothing while it runs, at its ceiling.
     if (inFlight) {
       totalIn += inFlight.inputTokens;
-      totalOut += inFlight.streamed ? Math.ceil(partialText.length / 4) : turnMaxTokens;
+      totalOut += inFlight.streamed ? Math.ceil((partialText.length + toolInputChars) / 4) : turnMaxTokens;
     }
     const costUsd = turnCost(modelId, totalIn, totalOut, totalCacheRead, totalCacheWrite);
     const latencyMs = Date.now() - t0;
