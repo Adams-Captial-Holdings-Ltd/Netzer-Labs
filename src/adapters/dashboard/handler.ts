@@ -370,6 +370,8 @@ async function visibleConversations<T extends Record<string, unknown>>(
  * The same rule for a caller known only by its principal: the Jarvis `sessions`
  * action, which answered every enabled principal with everyone's conversations
  * (the first critic's F1). Null when an admin's override could not be audited.
+ * The stand-in context has no headers; everything this rule reads comes from
+ * the principal (dashboardIdentity, ownsConversation, hasCapability).
  */
 export function conversationsVisibleTo<T extends Record<string, unknown>>(
   principal: TokenPrincipal,
@@ -3433,7 +3435,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
   // removes the conversation the Chat sidebar lists. Since P1 every message is
   // also its own record beside the conversation row (WI-1.2), so deleteSession
   // CASCADES: it removes the conversation's records first and the row last, so
-  // a delete that stops part-way leaves the row to retry, never stray messages.
+  // a delete that stops part-way leaves the row to retry. A message written
+  // while the delete runs can still be left behind (the P1 critics' A3).
   router.delete('/sessions', async (c) => {
     // Destructive mutation, so agents:write — the operator-tier capability this
     // repo already uses for every per-tab delete (scheduled-task delete, vector

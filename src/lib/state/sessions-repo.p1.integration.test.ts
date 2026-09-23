@@ -157,7 +157,7 @@ describe('P1 owner and expiry, set once and kept (real DynamoDB; the first criti
   // migration below sweeps from the whole table, so none may outlive this block.
   afterAll(async () => {
     const r = await repo();
-    for (const id of ['never', 'room-person', 'room-root', 'room-kept', 'legacy-kept', 'root-chat', 'reown']) {
+    for (const id of ['never', 'room-person', 'room-root', 'room-kept', 'legacy-kept', 'root-chat', 'reown', 'sched', 'linked-later', 'sched-new']) {
       await r.deleteSession('p1', `dashboard:${id}`);
     }
   });
@@ -222,10 +222,98 @@ describe('P1 owner and expiry, set once and kept (real DynamoDB; the first criti
     expect(await row('p1', 'dashboard:root-chat')).toMatchObject({ turns: [], ttl: expect.any(Number) });
   });
 
+  it('a scheduled turn — a writer that cannot say who is sending — keeps an expiring conversation expiring', async () => {
+    // The call shape of scheduler.ts and queue-drain.ts: no enrichment at all.
+    const r = await repo();
+    await r.appendTurns('p1', 'dashboard:sched', [u('q'), a('a')], undefined, ROOT);
+
+    await r.appendTurns('p1', 'dashboard:sched', [u('[scheduled] q'), a('a')]);
+
+    expect(await row('p1', 'dashboard:sched')).toMatchObject({ userId: ROOT.userId, ttl: expect.any(Number) });
+    const recs = await records('p1', 'dashboard:sched');
+    expect(recs).toHaveLength(4);
+    for (const x of recs) expect(x.ttl).toEqual(expect.any(Number));
+  });
+
+  it('a writer that cannot say who is sending starts an expiring conversation, never a durable one nobody owns', async () => {
+    const r = await repo();
+
+    await r.appendTurns('p1', 'dashboard:sched-new', [u('[scheduled] q'), a('a')]);
+
+    const conv = await row('p1', 'dashboard:sched-new');
+    expect(conv?.turns).toHaveLength(2);
+    expect(conv).not.toHaveProperty('userId');
+    expect(conv?.ttl).toEqual(expect.any(Number));
+  });
+
+  it('a person continuing a conversation that began with no person keeps it, and every record, expiring', async () => {
+    const r = await repo();
+    await r.appendTurns('p1', 'dashboard:linked-later', [u('q1'), a('a1')], undefined, ROOT);
+
+    await r.appendTurns('p1', 'dashboard:linked-later', [u('q2'), a('a2')], undefined, {
+      surface: 'dashboard', userId: 'dashboard:user:user-owner', ephemeral: false,
+    });
+
+    const conv = await row('p1', 'dashboard:linked-later');
+    expect(conv).toMatchObject({ userId: ROOT.userId, ttl: expect.any(Number) });
+    const recs = await records('p1', 'dashboard:linked-later');
+    expect(recs).toHaveLength(4);
+    for (const x of recs) expect(x.ttl).toEqual(expect.any(Number));
+  });
+
+  it('a chat id whose earlier conversation expired starts again, clearing only records already past their expiry', async () => {
+    // DynamoDB's TTL can sweep a row before its records; a Telegram or Slack chat
+    // keeps its id, so its next conversation numbered from 0 into them.
+    const c = await client();
+    const past = Math.floor(Date.now() / 1000) - 60;
+    for (const seq of [0, 1]) {
+      await c.send(new PutCommand({
+        TableName: SESSIONS,
+        Item: { PK: 'AGENT#p1', SK: `CHAT#slack:C-swept#MSG#${String(seq).padStart(10, '0')}`, seq, role: 'user', text: `old ${seq}`, ts: 1, ttl: past },
+      }));
+    }
+    const r = await repo();
+
+    await r.appendTurns('p1', 'slack:C-swept', [u('new q'), a('new a')], undefined, { surface: 'slack' });
+
+    expect((await records('p1', 'slack:C-swept')).map((x) => x.text)).toEqual(['new q', 'new a']);
+  });
+
+  it('never clears a record that has not expired: the write fails and the record stays', async () => {
+    await (await client()).send(new PutCommand({
+      TableName: SESSIONS,
+      Item: { PK: 'AGENT#p1', SK: 'CHAT#slack:C-live#MSG#0000000000', seq: 0, role: 'user', text: 'live', ts: 1 },
+    }));
+    const r = await repo();
+
+    await expect(r.appendTurns('p1', 'slack:C-live', [u('q'), a('a')], undefined, { surface: 'slack' })).rejects.toThrow();
+
+    expect((await records('p1', 'slack:C-live')).map((x) => x.text)).toEqual(['live']);
+  });
+
+  it('/newchat and a model override refresh a bot chat\'s expiry, as appendTurns does', async () => {
+    // Pinned by nothing until the second critic's NEW-6: the older tests only
+    // assert that a ttl exists, and appendTurns had already set one.
+    const c = await client();
+    const aged = Math.floor(Date.now() / 1000) + 60;
+    for (const chat of ['tg:ttl-clear', 'tg:ttl-model']) {
+      await c.send(new PutCommand({ TableName: SESSIONS, Item: { PK: 'AGENT#p1', SK: `CHAT#${chat}`, turns: [], updatedAt: 1, ttl: aged } }));
+    }
+    const r = await repo();
+
+    await r.clearSession('p1', 'tg:ttl-clear');
+    await r.setModelOverride('p1', 'tg:ttl-model', 'some.model.id');
+
+    const sixDays = Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60;
+    expect((await row('p1', 'tg:ttl-clear'))?.ttl).toBeGreaterThan(sixDays);
+    expect((await row('p1', 'tg:ttl-model'))?.ttl).toBeGreaterThan(sixDays);
+  });
+
   it('re-owning a conversation re-owns the records it already has, and none of them expires', async () => {
-    // Begun by a token with no person, a conversation expires, records and all.
-    // Continued once that token is linked, the row turns durable — and the
-    // migration re-owning it must not leave its first messages to expire.
+    // Its records carry the legacy owner. None should carry an expiry under a
+    // durable conversation — expiry is settled when a conversation is created —
+    // but the re-own makes sure: a durable conversation must not lose its first
+    // messages to a stray one.
     const c = await client();
     const legacy = `dashboard:${'c'.repeat(64)}`;
     await c.send(new PutCommand({

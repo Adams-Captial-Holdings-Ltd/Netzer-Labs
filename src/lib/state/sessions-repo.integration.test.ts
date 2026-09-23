@@ -53,10 +53,18 @@ const TURNS = [
   { role: 'assistant' as const, text: 'hi', ts: 2 },
 ];
 
+/**
+ * A dashboard turn, as every dashboard route sends one since P1: it says who is
+ * sending (conversationOwner). Whether a dashboard conversation lasts is settled
+ * by whoever creates it — a person's lasts — so a turn that says nothing starts
+ * one that expires (owner decisions 1 and 46).
+ */
+const PERSON = { surface: 'dashboard' as const, userId: 'dashboard:user:integ', ephemeral: false };
+
 describe('conversation persistence (real DynamoDB)', () => {
   it('appendTurns writes NO ttl attribute for a dashboard chat', async () => {
     const repo = await loadRepo();
-    await repo.appendTurns('a1', 'dashboard:1001', TURNS, undefined, { surface: 'dashboard' });
+    await repo.appendTurns('a1', 'dashboard:1001', TURNS, undefined, PERSON);
 
     const item = await rawItem('a1', 'dashboard:1001');
     expect(item).toBeDefined();
@@ -75,10 +83,14 @@ describe('conversation persistence (real DynamoDB)', () => {
     expect(item?.ttl as number).toBeGreaterThan(Math.floor(Date.now() / 1000));
   });
 
-  it('strips a ttl left behind on a dashboard row by the pre-persistence code', async () => {
-    // Rows written before this change carry a ttl. appendTurns uses a Put, so
-    // the next turn on an existing conversation should clear it rather than
-    // leaving the conversation quietly scheduled for deletion.
+  it('never turns an expiring dashboard conversation durable, whoever continues it', async () => {
+    // This used to strip a ttl left on a dashboard row by the code that ran before
+    // dashboard conversations persisted (f132a9c). That code left staging and
+    // production on 2026-08-13 and 2026-08-14, so every such ttl has long since
+    // expired or been stripped. Since P1 a dashboard row carries a ttl only because
+    // a principal with no person started it, and that is settled when it is
+    // created: turning it durable later would also leave its first records to
+    // expire under it (the P1 critic's NEW-2).
     const { ddb } = await import('./ddb.js');
     const { PutCommand } = await import('@aws-sdk/lib-dynamodb');
     await ddb().send(
@@ -95,14 +107,14 @@ describe('conversation persistence (real DynamoDB)', () => {
     expect(await rawItem('a2', 'dashboard:2002')).toHaveProperty('ttl');
 
     const repo = await loadRepo();
-    await repo.appendTurns('a2', 'dashboard:2002', TURNS, undefined, { surface: 'dashboard' });
+    await repo.appendTurns('a2', 'dashboard:2002', TURNS, undefined, PERSON);
 
-    expect(await rawItem('a2', 'dashboard:2002')).not.toHaveProperty('ttl');
+    expect(await rawItem('a2', 'dashboard:2002')).toHaveProperty('ttl');
   });
 
   it('setModelOverride does not re-arm expiry on a dashboard chat', async () => {
     const repo = await loadRepo();
-    await repo.appendTurns('a3', 'dashboard:3003', TURNS, undefined, { surface: 'dashboard' });
+    await repo.appendTurns('a3', 'dashboard:3003', TURNS, undefined, PERSON);
     await repo.setModelOverride('a3', 'dashboard:3003', 'some.model.id');
 
     const item = await rawItem('a3', 'dashboard:3003');
@@ -122,7 +134,7 @@ describe('conversation persistence (real DynamoDB)', () => {
 
   it('clearSession does not re-arm expiry on a dashboard chat', async () => {
     const repo = await loadRepo();
-    await repo.appendTurns('a4', 'dashboard:4004', TURNS, undefined, { surface: 'dashboard' });
+    await repo.appendTurns('a4', 'dashboard:4004', TURNS, undefined, PERSON);
     await repo.clearSession('a4', 'dashboard:4004');
 
     const item = await rawItem('a4', 'dashboard:4004');

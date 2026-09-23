@@ -109,6 +109,18 @@ const JARVIS_MEMORY_ROW = {
   createdAt: '2026-09-22T00:00:00.000Z',
 };
 
+/**
+ * The same foreign type, carrying the caller as its owner. Since P1 the list, the
+ * CSV export and the Jarvis action all filter by owner, and the real row above
+ * has no `userId`, so the owner filter drops it whatever containment does — only
+ * this one proves containment rejects the TYPE (the second critic's NEW-5).
+ */
+const OWNED_FOREIGN_ROW = {
+  ...JARVIS_MEMORY_ROW,
+  SK: 'TURN#2026-09-22T00:00:01.000Z#0b8e3c5a-6f1d-4c2e-9a7b-3d4e5f607182',
+  userId: OWNER,
+};
+
 /** Items the mocked sessions read returns for this test. */
 let partition: Record<string, unknown>[] = [];
 
@@ -224,7 +236,7 @@ describe('GET /sessions — containment (WI-1.0)', () => {
     // The cross-agent branch Scans the WHOLE table, so it sees every partition
     // — including jarvis memory. This is the rendering consequence the
     // specification could only INFER (A130); here it is measured.
-    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW];
+    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW, OWNED_FOREIGN_ROW];
 
     const res = await listAllSessions();
 
@@ -240,7 +252,7 @@ describe('GET /sessions — containment (WI-1.0)', () => {
 
 describe('GET /sessions/export — containment (WI-1.0)', () => {
   it('carries no row that is not a conversation', async () => {
-    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW];
+    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW, OWNED_FOREIGN_ROW];
 
     const res = await exportSessions();
 
@@ -255,7 +267,7 @@ describe('GET /sessions/export — containment (WI-1.0)', () => {
 
 describe('jarvis sessions action — containment (WI-1.0)', () => {
   it('lists only conversations', async () => {
-    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW];
+    partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW, OWNED_FOREIGN_ROW];
     // Asked as the conversation's owner: since P1 the action lists only the
     // caller's own conversations (decisions 1 and 9), and containment is what
     // this test is about.

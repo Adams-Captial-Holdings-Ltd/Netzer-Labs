@@ -112,6 +112,13 @@ const ALLOWLIST: Record<string, AllowlistEntry> = {
 };
 
 /**
+ * The most items a table with hidden rows reads to find the rows it may show.
+ * ponytail: a busy partition is mostly message records (no index, owner
+ * decision 11); past this the answer says more may exist — narrow with sk_prefix.
+ */
+const HIDDEN_READ_CEILING = 5_000;
+
+/**
  * Enforce table scope against the calling agent. Returns an error message if
  * the model-supplied `pk` reaches outside what this agent may read, or null
  * if the query is allowed.
@@ -203,24 +210,38 @@ tools.register('dynamodb_query', {
     if (skPrefix) values[':sk'] = skPrefix;
 
     try {
-      const out = await ddb().send(
-        new QueryCommand({
-          TableName: entry.table,
-          KeyConditionExpression: condition,
-          ExpressionAttributeValues: values,
-          Limit: limit,
-          ScanIndexForward: !reverse,
-        }),
-      );
-      const rows = (out.Items ?? []).filter((r) => !entry.hidden?.(r));
+      // A table with hidden rows cannot let DynamoDB stop at `limit` items: the
+      // rows it may show can all sit behind rows it may not, so it reads on until
+      // it has them or reaches its ceiling (the P1 critic's NEW-4).
+      const rows: Record<string, unknown>[] = [];
+      let read = 0;
+      let startKey: Record<string, unknown> | undefined;
+      do {
+        const out = await ddb().send(
+          new QueryCommand({
+            TableName: entry.table,
+            KeyConditionExpression: condition,
+            ExpressionAttributeValues: values,
+            ...(entry.hidden ? {} : { Limit: limit }),
+            ScanIndexForward: !reverse,
+            ExclusiveStartKey: startKey,
+          }),
+        );
+        read += out.Items?.length ?? 0;
+        for (const r of out.Items ?? []) if (!entry.hidden?.(r) && rows.length < limit) rows.push(r);
+        startKey = out.LastEvaluatedKey;
+      } while (entry.hidden && startKey && rows.length < limit && read < HIDDEN_READ_CEILING);
+      const more = entry.hidden && startKey && rows.length < limit
+        ? ` More may exist beyond the ${read} rows read; narrow with sk_prefix.`
+        : '';
       if (rows.length === 0) {
-        return { text: `0 rows in ${logical} for pk='${pk}'${skPrefix ? ` sk~'${skPrefix}'` : ''}.` };
+        return { text: `0 rows in ${logical} for pk='${pk}'${skPrefix ? ` sk~'${skPrefix}'` : ''}.${more}` };
       }
       const trimmed = rows.map(redact);
       return {
         text: `${rows.length} rows from ${logical}:\n${trimmed
           .map((r, i) => `[${i + 1}] ${JSON.stringify(r).slice(0, 500)}`)
-          .join('\n')}`,
+          .join('\n')}${more}`,
       };
     } catch (err) {
       return {

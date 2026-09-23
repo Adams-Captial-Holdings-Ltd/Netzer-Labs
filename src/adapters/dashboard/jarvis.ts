@@ -1832,11 +1832,18 @@ async function runJarvisConnection(
     reject(ws, JARVIS_CLOSE.UNAUTHORIZED, 'unauthorized');
     return;
   }
+  const record = await lookupToken(resolved.tokenHash).catch(() => undefined);
+  // The ticket carries only the token's hash, role and label; the person behind
+  // the token comes from its record, exactly as the HTTP path resolves it
+  // (dashboard-auth.ts), so voice answers a person with that person's own
+  // conversations (decisions 1 and 9; the P1 critic's NEW-7).
   const principal: TokenPrincipal = {
     tokenHash: resolved.tokenHash,
     role: resolved.role,
     label: resolved.label,
     hashPrefix16: resolved.tokenHash.slice(0, 16),
+    ...(record?.userId ? { userId: record.userId } : {}),
+    ...(record?.linkedUserId ? { linkedUserId: record.linkedUserId } : {}),
   };
 
   // 3. Re-validate the token by tokenHash. Operators are fail-CLOSED — a ticket
@@ -1846,7 +1853,6 @@ async function runJarvisConnection(
   //    inactive/expired, so voice works before/without the dashboard-tokens table
   //    being seeded (it is empty by default). Without this the strict lookup 4011s
   //    every root-token voice session — the real reason voice never connected.
-  const record = await lookupToken(principal.tokenHash).catch(() => undefined);
   const explicitlyRevoked = !!record && (!record.active || isExpired(record));
   const isRoot = isRootTokenHash(principal.tokenHash);
   if (explicitlyRevoked || (!isRoot && !record)) {

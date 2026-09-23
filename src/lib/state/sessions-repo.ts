@@ -385,15 +385,18 @@ export async function appendTurns(
     const firstUserText = userTurns[0]?.text;
     // The first owner stays the owner (see SessionEnrichment.userId).
     const owner = existing?.userId ?? enrichment?.userId;
-    // Omitted entirely for durable dashboard chats — the conversation row is
-    // replaced whole, so a person's turn also strips the ttl off rows written
-    // before conversations became persistent. A principal with no person gets an
-    // expiring conversation (decision 1) but never arms a durable one it
-    // continues: the master token's pre-P1 chats would otherwise drop out of the
-    // legacy migration, which skips expiring rows (the first critic's F3).
-    // Records share the row's expiry.
+    // Whether a dashboard conversation lasts is settled ONCE, by whoever creates
+    // it (owner decisions 1 and 46): a person's lasts; anyone else's expires — a
+    // principal with no person, or a writer that cannot say who is sending, like
+    // the scheduler. Nothing changes it afterwards: an expiring conversation is
+    // refreshed and a lasting one never gains a ttl, whoever continues it. So a
+    // principal with no person cannot drop a legacy chat out of the migration
+    // (the first critic's F3), a scheduled turn cannot make its chat permanent
+    // (the second critic's NEW-3), and no lasting conversation keeps records that
+    // expire under it (NEW-2). Bot chats always expire. Each record carries the
+    // expiry its conversation had when the record was written.
     const expires =
-      !isPersistentChat(chatId) || (enrichment?.ephemeral === true && (!existing || existing.ttl !== undefined));
+      !isPersistentChat(chatId) || (existing ? existing.ttl !== undefined : !(enrichment?.ephemeral === false && owner));
     const ttl = expires ? now + TTL_SECONDS : undefined;
     // WI-1.2: each new message ALSO becomes its own immutable record, numbered by
     // its place in the whole conversation (prevTotal is the cumulative count the
@@ -468,17 +471,30 @@ export async function appendTurns(
     } catch (err) {
       // Re-read only when the conversation's own fence (item 0) lost a race or
       // another transaction was in flight. A record whose sequence number is
-      // already taken is NOT retried: re-reading cannot free the number, and
-      // overwriting durable history is exactly what the condition forbids.
+      // already taken is NOT retried — re-reading cannot free the number, and
+      // overwriting durable history is exactly what the condition forbids —
+      // unless that record has already expired (below).
       const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
-      const reason = e.CancellationReasons?.[0]?.Code;
+      const reasons = e.CancellationReasons ?? [];
       const cancelled = e.name === 'TransactionCanceledException';
-      const fenced = cancelled && (reason === 'ConditionalCheckFailed' || reason === 'TransactionConflict');
+      const fenced =
+        cancelled && (reasons[0]?.Code === 'ConditionalCheckFailed' || reasons[0]?.Code === 'TransactionConflict');
       // A throttled item cancels the whole transaction, and the SDK does not
       // retry a cancelled transaction (it did retry the single Put this
       // replaced), so back off and try again rather than lose the turn.
-      const throttled = cancelled && (e.CancellationReasons ?? []).some((r) => r.Code === 'ThrottlingError');
-      if ((fenced || throttled) && attempt < MAX_ATTEMPTS - 1) {
+      const throttled = cancelled && reasons.some((r) => r.Code === 'ThrottlingError');
+      // A NEW conversation whose numbers are taken: an earlier one under this id
+      // expired, and DynamoDB's TTL swept its row before its records — it deletes
+      // in no set order, and a Telegram or Slack chat keeps its id for good. Those
+      // records are past their own expiry, so clear them and write again (the
+      // second critic's NEW-1). One that has not expired is never cleared.
+      const staleNumbers =
+        cancelled &&
+        !existing &&
+        attempt < MAX_ATTEMPTS - 1 &&
+        reasons.slice(1).some((r) => r.Code === 'ConditionalCheckFailed') &&
+        (await deleteExpiredRecords(agentId, chatId)) > 0;
+      if ((fenced || throttled || staleNumbers) && attempt < MAX_ATTEMPTS - 1) {
         if (throttled) await new Promise((r) => setTimeout(r, 50 * 2 ** attempt));
         continue;
       }
@@ -712,11 +728,13 @@ export async function reownLegacyConversation(
     for (const r of out.Items ?? []) recorded.add(Number(r.seq));
     startKey = out.LastEvaluatedKey;
   } while (startKey);
-  // A record written before the re-own carries the old owner — and, if the
-  // conversation was then still expiring, that expiry, which must not delete it
-  // from under a durable conversation (the first critic's F3). Updated one by one
-  // and FIRST, so a failure leaves the conversation legacy for a re-run to finish;
-  // a record that expired meanwhile is not brought back.
+  // A record written before the re-own carries the old owner, so each is
+  // re-owned, and any expiry on it stripped: none should carry one under a
+  // durable conversation — expiry is settled when a conversation is created —
+  // but a durable conversation must never lose a message to a stray one (the
+  // first critic's F3). Updated one by one and FIRST, so a failure leaves the
+  // conversation legacy for a re-run to finish; a record that expired meanwhile
+  // is not brought back.
   for (const seq of recorded) {
     await updateIfExists(
       { PK: key.PK, SK: msgSk(chatId, seq) },
@@ -802,6 +820,36 @@ export async function deleteSession(
       Key: { PK: pk(agentId), SK: sk(chatId) },
     }),
   );
+}
+
+/**
+ * Delete a chat id's message records that are already past their own expiry —
+ * what DynamoDB's TTL sweep has not reached yet — and say how many. Never one
+ * that has not expired, so a live conversation's records are safe from it.
+ */
+async function deleteExpiredRecords(agentId: string, chatId: string): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  const expired: Array<Record<string, unknown>> = [];
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const out = await ddb().send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': msgPrefix(chatId) },
+        ProjectionExpression: 'PK, SK, #t',
+        ExpressionAttributeNames: { '#t': 'ttl' },
+        ConsistentRead: true,
+        ExclusiveStartKey: startKey,
+      }),
+    );
+    for (const r of out.Items ?? []) {
+      if (typeof r.ttl === 'number' && r.ttl <= now) expired.push({ PK: r.PK, SK: r.SK });
+    }
+    startKey = out.LastEvaluatedKey;
+  } while (startKey);
+  for (let i = 0; i < expired.length; i += 25) await batchDelete(expired.slice(i, i + 25));
+  return expired.length;
 }
 
 /** BatchWriteItem, retrying what DynamoDB hands back unprocessed; throws if it never clears. */

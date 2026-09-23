@@ -160,3 +160,38 @@ describe('dynamodb_query — a conversation\'s messages stay out of the model\'s
     expect(out.text).not.toContain('legacyOwner');
   });
 });
+
+describe('dynamodb_query — a table with hidden rows still finds the rows it may show (the second critic\'s NEW-4)', () => {
+  const msg = (n: number) => ({ PK: 'AGENT#research', SK: `CHAT#dashboard:1#MSG#${String(n).padStart(10, '0')}`, text: `m${n}` });
+  const conv = (n: number) => ({ PK: 'AGENT#research', SK: `CHAT#dashboard:${n}`, firstMessage: `conversation ${n}` });
+  // clearAllMocks keeps queued once-answers; a test that reads fewer pages than
+  // it queued would hand the rest to the next one.
+  beforeEach(() => sendMock.mockReset());
+
+  it('reads on past message records until it has conversation rows to show', async () => {
+    // DynamoDB's Limit counts items BEFORE the records are hidden, so one page
+    // of a busy conversation's messages came back as "0 rows".
+    sendMock
+      .mockResolvedValueOnce({ Items: [msg(0), msg(1), msg(2)], LastEvaluatedKey: { PK: 'p', SK: 's' } })
+      .mockResolvedValueOnce({ Items: [conv(1), conv(2)] });
+
+    const out = await tools.invoke('dynamodb_query', { table: 'sessions', pk: 'AGENT#research' }, ctx);
+
+    expect(out.text).toMatch(/^2 rows from sessions/);
+    expect(out.text).toContain('conversation 2');
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('says so when it stops reading before it found them all', async () => {
+    sendMock.mockResolvedValue({
+      Items: Array.from({ length: 1000 }, (_, i) => msg(i)),
+      LastEvaluatedKey: { PK: 'p', SK: 's' },
+    });
+
+    const out = await tools.invoke('dynamodb_query', { table: 'sessions', pk: 'AGENT#research' }, ctx);
+
+    expect(out.text).toMatch(/^0 rows in sessions/);
+    expect(out.text).toMatch(/more may exist/i);
+    expect(sendMock.mock.calls.length).toBeGreaterThan(1);
+  });
+});

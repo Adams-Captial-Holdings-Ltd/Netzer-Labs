@@ -7,9 +7,10 @@ import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
  * Driven against an in-memory stand-in for DynamoDB (src/__test-utils__/
  * fake-dynamo.ts) so a sequence of appends can be followed end to end: what the
  * replay window holds, what each message record holds, what a delete leaves.
- * Condition expressions are NOT evaluated there; the version fence and the
- * all-or-nothing transaction are proved against Floci in
- * sessions-repo.integration.test.ts.
+ * Condition expressions are NOT evaluated there beyond a lone key-existence
+ * check (see the fake); the version fence and the all-or-nothing transaction are
+ * proved against Floci in sessions-repo.integration.test.ts and
+ * sessions-repo.p1.integration.test.ts.
  */
 
 const { send, ingestEvictedTurns } = vi.hoisted(() => ({
@@ -130,6 +131,43 @@ describe('appendTurns — durable or not (owner decision 1)', () => {
     for (const r of records()) expect(r).not.toHaveProperty('ttl');
   });
 
+  it('never lets a writer that cannot say who is sending — a scheduled task — make an expiring conversation durable', async () => {
+    // scheduler.ts and queue-drain.ts append with no enrichment at all. A dashboard
+    // chat with no ephemeral flag used to count as durable, so the first scheduled
+    // reply made a person-less principal's chat permanent (the second critic's NEW-3).
+    await appendTurns(AGENT, CHAT, [turn('user', 'q'), turn('assistant', 'a')], undefined, NO_PERSON);
+
+    await appendTurns(AGENT, CHAT, [turn('user', '[scheduled] q'), turn('assistant', 'a')]);
+
+    expect(conversation()?.ttl).toEqual(expect.any(Number));
+    expect(conversation()?.userId).toBe('dashboard:hash-root');
+    expect(records()).toHaveLength(4);
+    for (const r of records()) expect(r.ttl).toEqual(expect.any(Number));
+  });
+
+  it('keeps a conversation that began with no person expiring when a person continues it', async () => {
+    // A token linked after it started this chat. Decision 46 makes a linked token's
+    // NEW chats durable; this one is not new. Turning it durable here also left its
+    // first records to expire under it (the second critic's NEW-2).
+    await appendTurns(AGENT, CHAT, [turn('user', 'q1'), turn('assistant', 'a1')], undefined, NO_PERSON);
+
+    await appendTurns(AGENT, CHAT, [turn('user', 'q2'), turn('assistant', 'a2')], undefined, PERSON);
+
+    expect(conversation()?.ttl).toEqual(expect.any(Number));
+    expect(records()).toHaveLength(4);
+    for (const r of records()) expect(r.ttl).toEqual(expect.any(Number));
+  });
+
+  it('gives a conversation started by a writer that cannot say who is sending an expiry, never a durable row nobody owns', async () => {
+    // A scheduled task whose chat is gone — deleted, or never saved — would
+    // otherwise leave a permanent row only an admin can see.
+    await appendTurns(AGENT, CHAT, [turn('user', '[scheduled] q'), turn('assistant', 'a')]);
+
+    expect(conversation()?.turns).toHaveLength(2);
+    expect(conversation()).not.toHaveProperty('userId');
+    expect(conversation()?.ttl).toEqual(expect.any(Number));
+  });
+
   it('keeps a conversation with no person behind it expiring as it continues', async () => {
     await appendTurns(AGENT, CHAT, [turn('user', 'q1'), turn('assistant', 'a1')], undefined, NO_PERSON);
     await appendTurns(AGENT, CHAT, [turn('user', 'q2'), turn('assistant', 'a2')], undefined, NO_PERSON);
@@ -186,6 +224,55 @@ describe('a slash command never leaves a conversation nobody owns (decision 9, t
     expect(updates()).toHaveLength(1);
     expect(updates()[0]?.input.UpdateExpression).not.toMatch(/userId|ttl|#t/);
     expect(conversation()?.userId).toBe('dashboard:user:user-a');
+  });
+});
+
+describe('a chat id whose earlier conversation expired (the second critic\'s NEW-1)', () => {
+  // DynamoDB's TTL deletes expired items in no set order, so a conversation's row
+  // can go before its records. The next conversation under the same id — a
+  // Telegram or Slack chat keeps its id for good — numbers from 0 again and finds
+  // those numbers taken.
+  const BOT = 'slack:C1:U1';
+  const leftover = (seq: number, ttl?: number) => {
+    const SK = `CHAT#${BOT}#MSG#${String(seq).padStart(10, '0')}`;
+    table.rows.set(`AGENT#${AGENT}|${SK}`, {
+      PK: `AGENT#${AGENT}`, SK, seq, role: 'user', text: `old ${seq}`, ts: 1, ...(ttl === undefined ? {} : { ttl }),
+    });
+  };
+  /** DynamoDB's `attribute_not_exists(SK)` on each record, which the fake does not evaluate in a transaction. */
+  const takenNumbersFail = () =>
+    send.mockImplementation(async (cmd: { constructor: { name: string }; input: { TransactItems?: Array<{ Put: { Item: Record<string, unknown> } }> } }) => {
+      if (cmd.constructor.name === 'TransactWriteCommand') {
+        const reasons = cmd.input.TransactItems!.map((t, i) => ({
+          Code: i > 0 && table.rows.has(`${String(t.Put.Item.PK)}|${String(t.Put.Item.SK)}`) ? 'ConditionalCheckFailed' : 'None',
+        }));
+        if (reasons.some((r) => r.Code !== 'None')) {
+          throw Object.assign(new Error('Transaction cancelled'), { name: 'TransactionCanceledException', CancellationReasons: reasons });
+        }
+      }
+      return table.send(cmd as Parameters<typeof table.send>[0]);
+    });
+  const now = () => Math.floor(Date.now() / 1000);
+
+  it('clears the records already past their expiry, and writes the new conversation', async () => {
+    leftover(0, now() - 60);
+    leftover(1, now() - 60);
+    takenNumbersFail();
+
+    await appendTurns(AGENT, BOT, [turn('user', 'new q'), turn('assistant', 'new a')], undefined, { surface: 'slack' });
+
+    expect(records(BOT).map((r) => r.text)).toEqual(['new q', 'new a']);
+  });
+
+  it('never clears a record that has not expired: the write fails and the record stays', async () => {
+    leftover(0);
+    leftover(1, now() + 3600);
+    takenNumbersFail();
+
+    await expect(
+      appendTurns(AGENT, BOT, [turn('user', 'q'), turn('assistant', 'a')], undefined, { surface: 'slack' }),
+    ).rejects.toThrow('Transaction cancelled');
+    expect(records(BOT).map((r) => r.text)).toEqual(['old 0', 'old 1']);
   });
 });
 
