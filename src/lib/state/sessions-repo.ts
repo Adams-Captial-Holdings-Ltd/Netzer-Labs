@@ -297,6 +297,35 @@ function capMessageText(text: string, byteBudget: number): { text: string; trunc
   return { text: bytes.subarray(0, maxBytes).toString('utf8').replace(/�$/, ''), truncated: true };
 }
 
+/**
+ * The tool results a record can carry. When their JSON alone is over the record
+ * cap, outputs give way oldest first — the replay window's rule (decision 41) —
+ * and every call stays listed. Works on a copy; the caller's turn is unchanged.
+ */
+function fitToolRecords(tools: ToolRecord[]): ToolRecord[] {
+  const fitted = tools.map((tool) => ({ ...tool }));
+  let bytes = Buffer.byteLength(JSON.stringify(fitted), 'utf8');
+  for (const tool of fitted) {
+    if (bytes <= MAX_MESSAGE_BYTES) break;
+    if (!tool.output) continue;
+    const before = Buffer.byteLength(JSON.stringify(tool), 'utf8');
+    tool.output = '';
+    tool.truncated = true;
+    bytes += Buffer.byteLength(JSON.stringify(tool), 'utf8') - before;
+  }
+  return fitted;
+}
+
+/** A record's text and tool results, capped so the item fits: the text takes whatever budget the results leave. */
+function capRecordContent(t: Turn): { text: string; truncated?: true; tools?: ToolRecord[] } {
+  const tools = t.tools ? fitToolRecords(t.tools) : undefined;
+  const toolBytes = Buffer.byteLength(JSON.stringify(tools ?? []), 'utf8');
+  return {
+    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes),
+    ...(tools ? { tools } : {}),
+  };
+}
+
 export async function getSession(
   agentId: string,
   chatId: string,
@@ -489,10 +518,9 @@ export async function appendTurns(
           SK: msgSk(chatId, prevTotal + i),
           seq: prevTotal + i,
           role: t.role,
-          ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - Buffer.byteLength(JSON.stringify(t.tools ?? []), 'utf8')),
+          ...capRecordContent(t),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
-          ...(t.tools ? { tools: t.tools } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           ...(owner ? { userId: owner } : {}),
           ...(ttl ? { ttl } : {}),
@@ -864,10 +892,9 @@ export async function reownLegacyConversation(
           SK: msgSk(chatId, seq),
           seq,
           role: t.role,
-          ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - Buffer.byteLength(JSON.stringify(t.tools ?? []), 'utf8')),
+          ...capRecordContent(t),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
-          ...(t.tools ? { tools: t.tools } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           userId: newOwner,
         },

@@ -314,6 +314,9 @@ export async function withRetry<T>(
     try {
       return await op();
     } catch (err) {
+      // A Stop is not a failure: rethrown before any logging or retry, because
+      // every error-level line counts toward the alarm that pages the operator.
+      if ((err as { name?: string }).name === 'AbortError') throw err;
       lastErr = err;
       const name = (err as { name?: string }).name ?? '';
       if (!isRetryable(name) || attempt === maxRetries - 1) {
@@ -421,6 +424,16 @@ function isLocalUnsupportedStream(err: unknown): boolean {
   return /UnsupportedOperation|UnknownOperation|NotImplemented|501/i.test(`${name} ${msg}`);
 }
 
+/**
+ * Over HTTP/2 the SDK ends an aborted event stream cleanly instead of throwing,
+ * so a stopped call would otherwise return what had streamed, with no usage, as
+ * if the model had finished. The agent loop reads the name, exactly as it reads
+ * the SDK's own abort.
+ */
+function stoppedError(): Error {
+  return Object.assign(new Error('The turn was stopped'), { name: 'AbortError' });
+}
+
 export async function converseStreamTurn(
   input: ConverseTurnInput,
   callbacks: ConverseStreamCallbacks = {},
@@ -477,6 +490,7 @@ export async function converseStreamTurn(
 
   if (stream.stream) {
     for await (const event of stream.stream) {
+      if (input.abortSignal?.aborted) throw stoppedError();
       if (event.contentBlockDelta?.delta?.text) {
         text += event.contentBlockDelta.delta.text;
         callbacks.onChunk?.(text);
@@ -496,6 +510,7 @@ export async function converseStreamTurn(
       }
     }
   }
+  if (input.abortSignal?.aborted) throw stoppedError();
 
   return {
     text: text.trim(),

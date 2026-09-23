@@ -80,6 +80,7 @@ import {
   type KillSwitchName,
 } from '../../lib/state/kill-switches-repo.js';
 import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { classifyTurnError } from '../../agent/turn-errors.js';
 import { processMedia, buildKbConfirmation, kindForMime, stageLabel } from '../../lib/media/process.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
@@ -436,23 +437,31 @@ export function requiredRole(method: string, subPath: string): TokenRole {
 export const SSE_HEARTBEAT_MS = 15_000;
 export const STOPPED_EMPTY_TEXT = '(Stopped before a reply.)';
 
-function classifyTurnError(err: unknown): { code: string; message: string } {
-  if (err instanceof CostCapExceededError) {
-    return Number.isNaN(err.spendUsd)
-      ? { code: 'cost_cap_unverifiable', message: 'The daily spending check could not run, so this message was not sent.' }
-      : { code: 'cost_cap_exceeded', message: 'The daily spending cap has been reached.' };
-  }
-  if (err instanceof KillSwitchActiveError) {
-    return { code: 'kill_switch_active', message: `An operator has paused this: ${err.reason}` };
-  }
-  const modelErrors = new Set([
-    'ValidationException', 'ThrottlingException', 'ServiceUnavailableException', 'ModelTimeoutException',
-    'ModelNotReadyException', 'ModelErrorException', 'ModelStreamErrorException', 'AccessDeniedException',
-    'ResourceNotFoundException', 'ServiceQuotaExceededException',
-  ]);
-  return modelErrors.has((err as { name?: string })?.name ?? '')
-    ? { code: 'model_error', message: 'The model could not answer this time. Try again.' }
-    : { code: 'internal_error', message: 'Something went wrong on our side. Try again.' };
+/** A refusal an operator chose (the daily cap, a kill switch): audited already, so a warning, not an alarm. */
+function isOperatorRefusal(err: unknown): boolean {
+  return err instanceof CostCapExceededError || err instanceof KillSwitchActiveError;
+}
+
+/** Known from the cache first; the agents table is read only for an agent not seen yet. */
+async function isKnownAgent(agentId: string): Promise<boolean> {
+  return listKnownAgents().includes(agentId) || (await listKnownAgentsAsync()).includes(agentId);
+}
+
+/** A refused send is logged with its code so a refusal can be found; nothing failed, so at warn. */
+function refusedSend(code: 'unknown_agent' | 'unknown_model' | 'invalid_message_id', fields: Record<string, unknown>): { error: string } {
+  logger.warn({ ...fields, code }, 'dashboard chat send refused');
+  return { error: code };
+}
+
+/**
+ * Stop the turn when the request itself is gone. node-server never cancels a
+ * body nobody started reading, so `stream.onAbort` never fires for a reader who
+ * left during the route's awaits before the stream began — but the request's
+ * own signal has fired by then.
+ */
+function abortWithRequest(signal: AbortSignal, abort: AbortController): void {
+  if (signal.aborted) abort.abort();
+  else signal.addEventListener('abort', () => abort.abort(), { once: true });
 }
 
 function chunkWriter(stream: SSEStreamingApi, protocol?: number): (text: string) => void {
@@ -473,9 +482,10 @@ function chunkWriter(stream: SSEStreamingApi, protocol?: number): (text: string)
 async function finishChatTurn(agentId: string, chatId: string, id: string | undefined, status: Exclude<TurnStatus, 'streaming'>): Promise<void> {
   if (!id) return;
   try {
-    await endTurn(agentId, chatId, id, status);
+    const ended = await endTurn(agentId, chatId, id, status);
+    if (!ended) logger.warn({ agentId, chatId, clientMessageId: id, status }, 'dashboard chat turn record was not streaming');
   } catch (err) {
-    logger.error({ agentId, chatId, err }, 'dashboard chat turn state save failed');
+    logger.error({ agentId, chatId, clientMessageId: id, status, err }, 'dashboard chat turn state save failed');
   }
 }
 
@@ -2061,13 +2071,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         return c.json({ error: 'invalid_upload_key' }, 400);
       }
     }
-    if (!(await listKnownAgentsAsync()).includes(agentId)) return c.json({ error: 'unknown_agent' }, 404);
+    if (!(await isKnownAgent(agentId))) return c.json(refusedSend('unknown_agent', { agentId }), 404);
     if (body?.modelOverride !== undefined && !listAvailableModels(process.env).some((m) => m.id === body.modelOverride)) {
-      return c.json({ error: 'unknown_model' }, 400);
+      return c.json(refusedSend('unknown_model', { agentId, model: body.modelOverride }), 400);
     }
     const clientMessageId = body?.clientMessageId;
     if (clientMessageId !== undefined && (typeof clientMessageId !== 'string' || !/^[A-Za-z0-9._:-]{1,64}$/.test(clientMessageId))) {
-      return c.json({ error: 'invalid_message_id' }, 400);
+      return c.json(refusedSend('invalid_message_id', { agentId, chatId }), 400);
     }
     // WI-1.1 (decision 9): refuse a conversation the caller does not own before
     // anything touches it — slash commands included, since /newchat wipes a
@@ -2083,7 +2093,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         text, agentId, chatId, modelOverride: body?.modelOverride ?? null,
         attachments: rawAttachments.map((a) => a.s3Key),
       })).digest('hex');
-      const turn = await beginTurn(agentId, chatId, clientMessageId, payloadHash);
+      // A turn record that cannot be written is a typed 503, named by its turn:
+      // no model call, and not an anonymous "unhandled error".
+      const turn = await beginTurn(agentId, chatId, clientMessageId, payloadHash).catch((err: unknown) => {
+        logger.error({ agentId, chatId, clientMessageId, err }, 'dashboard chat turn record could not be written');
+        return undefined;
+      });
+      if (!turn) return c.json({ error: 'turn_record_unavailable' }, 503);
       if (!turn.started) return turn.sameMessage
         ? c.json({ error: 'turn_duplicate', status: turn.status }, 409)
         : c.json({ error: 'turn_conflict' }, 409);
@@ -2091,6 +2107,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     return streamSSE(c, async (stream) => {
       const abort = new AbortController();
       stream.onAbort(() => abort.abort());
+      abortWithRequest(c.req.raw.signal, abort);
       const heartbeat = setInterval(() => void stream.write(': ping\n\n'), SSE_HEARTBEAT_MS);
       const tools: ToolRecord[] = [];
       const toolStarts = new Map<string, Pick<ToolRecord, 'label' | 'step'>>();
@@ -2267,10 +2284,12 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           return;
         }
-        finalSent = true;
-        await writeChatAnswer(stream, result, [...kbConfirmations, ...acks]);
+        // The save and the turn record come first: an awaited write to a body
+        // nobody reads never resolves, and must not gate either.
         const saved = await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c));
         await finishChatTurn(agentId, chatId, clientMessageId, result.blocked ? 'refused' : 'complete');
+        finalSent = true;
+        await writeChatAnswer(stream, result, [...kbConfirmations, ...acks]);
         await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
       } catch (err) {
         if ((err as { name?: string })?.name === 'AbortError') {
@@ -2279,7 +2298,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           return;
         }
-        logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
+        if (isOperatorRefusal(err)) logger.warn({ agentId, chatId, err }, 'dashboard chat turn refused');
+        else logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
         await finishChatTurn(agentId, chatId, clientMessageId, 'error');
         if (!finalSent) {
           const error = classifyTurnError(err);
@@ -2487,9 +2507,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = safeDashboardChatId(body.chatId);
     const persist = body.persistTurns ?? true;
 
-    if (!(await listKnownAgentsAsync()).includes(agentId)) return c.json({ error: 'unknown_agent' }, 404);
+    if (!(await isKnownAgent(agentId))) return c.json(refusedSend('unknown_agent', { agentId }), 404);
     if (body?.modelOverride !== undefined && !listAvailableModels(process.env).some((m) => m.id === body.modelOverride)) {
-      return c.json({ error: 'unknown_model' }, 400);
+      return c.json(refusedSend('unknown_model', { agentId, model: body.modelOverride }), 400);
     }
 
     // WI-1.1: the same owner check as the streamed route, before the command

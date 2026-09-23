@@ -26,6 +26,7 @@ import { processSlackFiles, stageLabel } from './media.js';
 import { getRawObject } from '../../lib/media/process.js';
 import type { ToolMedia } from '../../lib/tools/registry.js';
 import { runAgentTurn, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { classifyTurnError } from '../../agent/turn-errors.js';
 import { runCommand } from '../../agent/commands.js';
 import { pickAgent } from '../../agent/picker.js';
 import { appendTurns, getSession } from '../../lib/state/sessions-repo.js';
@@ -560,7 +561,7 @@ async function handlePerAgentSlackEvent(
   } catch (err) {
     const errMessage = err instanceof Error ? err.message : String(err);
     logger.error({ channel, agentId, errMessage }, 'per-agent slack turn failed');
-    await updateMessage(channel, placeholderTs, `Something went wrong: ${errMessage.slice(0, 300)}`, botToken);
+    await updateMessage(channel, placeholderTs, classifyTurnError(err).message, botToken);
   }
 }
 
@@ -828,7 +829,7 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
   } catch (err) {
     const errMessage = err instanceof Error ? err.message : String(err);
     logger.error({ channel, agentId: targetAgentId, errMessage }, 'agent turn failed');
-    await updateMessage(channel, placeholderTs, `Something went wrong: ${errMessage.slice(0, 300)}`);
+    await updateMessage(channel, placeholderTs, classifyTurnError(err).message);
   }
 }
 
