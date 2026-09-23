@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-23
-as_of_commit: 6c28bfaf66f5c877d007baf99db54044207876de
+as_of_commit: 45d7193491d3158648511b36d529617aa286018a
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -18,6 +18,7 @@ implemented_by:
   - src/agent/agent-loop.ts
   - src/agent/turn-errors.ts
   - src/lib/bedrock/client.ts
+  - src/lib/safety/exfil-patterns.ts
   - src/lib/tools/dynamodb-tools.ts
   - src/lib/state/legacy-chat-migration.ts
 tested_by:
@@ -133,7 +134,8 @@ backend.
   on the safe side: every call that finished keeps its real usage, and the call
   that was cut counts the text, the attached files (1,600 tokens an image, a
   document by its size), the tool list and the re-sent tool arguments it
-  carried, up to the model's context window; a cut call that shows no output
+  carried, up to the model's context window, and the output it had written —
+  text and any tool input a person never sees; a cut call that shows no output
   while it runs (a tool round) counts its output at its ceiling. The reply's
   footer says `stopped — partial reply, cost estimated`.
 - **The composer during a run.** It stays editable while a reply streams, but
@@ -147,7 +149,8 @@ backend.
   arguments are never stored anywhere (owner decision 41) — and its result
   (capped at 2 KB; "Output shortened" when cut, "Failed" when the tool errored,
   "No result" for a call the Stop interrupted). Both pass the same
-  block-severity redactor as the reply before they leave the server; a failed
+  block-severity redactor as the reply before they leave the server (it also
+  catches a key written as a JSON property, the shape tool payloads carry); a failed
   tool's text also loses account ids and ARNs; and the database lookup tool's
   (`dynamodb_query`) raw result is neither shown nor stored, because it can
   return other people's conversations (owner decision 53; who that tool may
@@ -171,8 +174,9 @@ backend.
   read only for an id the cache has not seen.
 - **Failures.** The browser gets a code and a fixed message
   (`cost_cap_exceeded`, `cost_cap_unverifiable`, `kill_switch_active`,
-  `model_error`, `internal_error`), never exception text, and the Chat tab shows
-  that message as the server wrote it; a refusal before the stream says what to
+  `model_error`, `internal_error`), never exception text — a paused turn says
+  only that an operator paused it, and the operator's reason stays in the
+  audit — and the Chat tab shows that message as the server wrote it; a refusal before the stream says what to
   do about it. Telegram and Slack post the same sanitized sentence (surface
   parity). An operator's refusal (the cost cap, a kill switch) is logged as a
   warning, a Stop not at all, so neither pages anyone. Nothing but `done`
