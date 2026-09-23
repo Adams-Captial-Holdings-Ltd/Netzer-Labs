@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-23
-as_of_commit: 5e05df0e60bffba3e885318bc25f251f9dbd1698
+as_of_commit: 6c28bfaf66f5c877d007baf99db54044207876de
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -16,6 +16,7 @@ implemented_by:
   - src/adapters/dashboard/handler.ts
   - src/adapters/dashboard/jarvis.ts
   - src/agent/agent-loop.ts
+  - src/agent/turn-errors.ts
   - src/lib/bedrock/client.ts
   - src/lib/tools/dynamodb-tools.ts
   - src/lib/state/legacy-chat-migration.ts
@@ -120,45 +121,71 @@ backend.
 
 **The turn lifecycle, including the tool-call UX (P2, roadmap step 4):**
 
-- **Stop means stop.** The Stop button, Escape in the composer, or closing the
-  tab aborts the server's turn: the signal reaches the Bedrock request, and no
-  further model call or tool round starts. The partial reply is saved marked
-  `stopped` (the fixed notice "(Stopped before a reply.)" when nothing had been
-  written, because an empty turn poisons a chat), and the partial generation's
-  spend is settled from an estimate (about four characters per token) —
-  recorded, finalized against the spend ledger and audited as `agent_turn` with
-  `stopped` — never silently released.
+- **Stop means stop.** The Stop button, Escape (in the composer or on the Stop
+  button), or closing the tab aborts the server's turn — even before the reply
+  has begun, because the route watches the request's own signal as well as the
+  stream's. The signal reaches the Bedrock request, and no further model call
+  or tool round starts. The partial reply is saved marked `stopped` (the fixed
+  notice "(Stopped before a reply.)" when nothing had been written, because an
+  empty turn poisons a chat). A turn stopped before it began reserves no spend;
+  otherwise the stopped turn's spend is recorded, finalized against the spend
+  ledger and audited as `agent_turn` with `stopped`, from an estimate that errs
+  on the safe side: every call that finished keeps its real usage, and the call
+  that was cut counts the text, the attached files (1,600 tokens an image, a
+  document by its size), the tool list and the re-sent tool arguments it
+  carried, up to the model's context window; a cut call that shows no output
+  while it runs (a tool round) counts its output at its ceiling. The reply's
+  footer says `stopped — partial reply, cost estimated`.
 - **The composer during a run.** It stays editable while a reply streams, but
-  nothing can be sent until the reply ends; Escape stops the reply; the cursor
-  returns when it ends; each conversation keeps its own unsent draft (in the
-  tab's memory).
+  nothing can be sent until the reply ends; the cursor returns when it ends
+  unless the reader moved it elsewhere; an Escape that belongs to an input
+  method (Japanese, Chinese) is left to it. Each conversation keeps its own
+  unsent draft in the tab's memory, and a draft typed before anything was sent
+  survives New chat and an agent switch.
 - **Tool calls.** Under the reply, each call shows its arguments (capped at
-  1 KB) — only in the tab that ran the turn: arguments are never stored anywhere
-  (owner decision 41) — and its result (capped at 2 KB; "Output shortened" when
-  cut, "Failed" when the tool errored). Results are stored with the reply, so a
-  reopened conversation shows the results and the `stopped` mark, but never the
-  arguments. Under the replay window's byte budget, tool results go first,
-  oldest first, before any conversation turn is cut (decision 41).
+  1 KB, "Input shortened" when cut) — only in the tab that ran the turn:
+  arguments are never stored anywhere (owner decision 41) — and its result
+  (capped at 2 KB; "Output shortened" when cut, "Failed" when the tool errored,
+  "No result" for a call the Stop interrupted). Both pass the same
+  block-severity redactor as the reply before they leave the server; a failed
+  tool's text also loses account ids and ARNs; and the database lookup tool's
+  (`dynamodb_query`) raw result is neither shown nor stored, because it can
+  return other people's conversations (owner decision 53; who that tool may
+  read is still open, A172). The model still gets every raw result. Results are
+  stored with the reply, so a reopened conversation shows the results and the
+  `stopped` mark, but never the arguments. Under the replay window's byte
+  budget, tool results go first, oldest first, before any conversation turn is
+  cut (decision 41).
 - **One paid call per message.** Every send carries a fresh `clientMessageId`;
   the server writes a turn record first (`SK=CHAT#<chatId>#TURN#<id>`, 7-day
   `ttl`, conditional on not existing), so a retried request can never start a
   second paid call (`409 turn_duplicate`; an id reused for a different message
-  is `409 turn_conflict`). The record ends in exactly one of `complete`,
-  `stopped`, `error` or `refused`.
+  is `409 turn_conflict`; a record that cannot be written refuses the send,
+  `503 turn_record_unavailable`). The record ends in exactly one of `complete`,
+  `stopped`, `error` or `refused`, and the route saves the reply and ends the
+  record BEFORE it writes `final`, so a reader who left cannot hold up the save.
 - **Send-time checks.** Both send routes refuse an agent the registry does not
   know (`404 unknown_agent`; before P2 an unknown id silently ran as `main`)
-  and a model outside the catalog (`400 unknown_model`) before any spend.
+  and a model outside the catalog (`400 unknown_model`) before any spend. An
+  agent already in the cached list is not looked up again; the agents table is
+  read only for an id the cache has not seen.
 - **Failures.** The browser gets a code and a fixed message
   (`cost_cap_exceeded`, `cost_cap_unverifiable`, `kill_switch_active`,
-  `model_error`, `internal_error`), never exception text. Nothing but `done`
-  follows the final answer; `done` says `not_saved` when saving failed, which
-  the server logs.
+  `model_error`, `internal_error`), never exception text, and the Chat tab shows
+  that message as the server wrote it; a refusal before the stream says what to
+  do about it. Telegram and Slack post the same sanitized sentence (surface
+  parity). An operator's refusal (the cost cap, a kill switch) is logged as a
+  warning, a Stop not at all, so neither pages anyone. Nothing but `done`
+  follows the final answer; `done` says `not_saved` when saving failed — the
+  server logs it, and the reply says "This reply wasn't saved, so it won't be
+  here after a reload."
 - **Streaming on the deployed stack.** The Bedrock guardrail now runs alongside
   the stream (`streamProcessingMode: 'async'`, owner decision 50) instead of
   holding the whole answer until it finishes — the measured reason the
-  deployed dashboard never streamed (decision 51). Runtime-config
-  `bedrock/guardrail_stream_mode = sync` puts it back in front with no
-  redeploy.
+  deployed dashboard never streamed (decision 51). A Stop pressed before its
+  verdict keeps the partial reply unchecked (owner decision 52). Runtime-config
+  `bedrock/guardrail_stream_mode = sync` (any case) puts it back in front with
+  no redeploy.
 
 ## 3. Current status and current source commit
 
@@ -243,14 +270,17 @@ its pull request, because a file cannot state the commit it is inside.
   rides on its reply's message record, capped at 2 KB, and that record's text
   cap is 350,000 bytes minus the results' bytes, so text and results together
   stay under DynamoDB's 400 KB item limit (the text gives way, marked
-  `truncated`).
+  `truncated`); results that alone pass that budget give way first, oldest
+  output first, every call still listed.
 
 ## 7. Known runtime risks and approved next work
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
 | Authenticated staging UI is not yet verified | Floci Bedrock stub: one chunk, no tool events; staging verification needs an owner-authorized spend-capped token | [CHATUI-008](plan.md) |
-| P2 is proven locally only: streaming to the browser, tool start/end and Stop have not run against real Bedrock through the deployed dashboard | staging runs `origin/staging` `8299f04`, which predates P1 and P2; the guardrail cause itself is measured on real Bedrock (decision 51) | the P2 staging rows (`p2-proof.sh` tier `staging`) run after promotion (decision 18) |
+| P2 is proven locally only: streaming to the browser, tool start/end and Stop have not run against real Bedrock through the deployed dashboard — including whether the deployed edge (Cloudflare tunnel, load balancer) closes the origin connection when a browser stops, which is what Stop depends on | staging runs `origin/staging` `8299f04`, which predates P1 and P2; the guardrail cause itself is measured on real Bedrock (decision 51) | the P2 staging rows (`p2-proof.sh` tier `staging`) run after promotion (decision 18) |
+| How Bedrock bills a call cut mid-way is unverified | a stopped turn's usage is an estimate built to over-count (the call's files, tool list and re-sent arguments; a cut tool round's output at its ceiling), never to under-count the daily cap | none open |
+| A Stop pressed before the async guardrail's verdict keeps the partial reply unchecked; a partial that held something the guardrail blocks can make that chat trip the filter on later turns | owner decision 52 (keep the partial): rare, and a new chat clears it | none open — the `sync` switch restores "check first" |
 | The guardrail's async mode lets a harmful sentence reach the screen before the guardrail blocks the rest of the reply (AWS's documented trade-off) | owner decision 50; the app's own streaming redactor still scrubs every chunk against the block-severity patterns first | none open — runtime-config `bedrock/guardrail_stream_mode = sync` restores "check first" with no redeploy |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |
 | Conversations written before P1 still carry a token-hash owner until the migration runs, and a pre-P1 turn that leaves the 20-turn window before then has no record anywhere | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token and run the migration (dry run, then `--apply`) straight after the deploy, before anyone chats |
