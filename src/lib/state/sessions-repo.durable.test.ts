@@ -168,6 +168,19 @@ describe('appendTurns — durable or not (owner decision 1)', () => {
     expect(conversation()?.ttl).toEqual(expect.any(Number));
   });
 
+  it('never starts a durable conversation nobody owns, even from a turn that says a person is sending', async () => {
+    // Every dashboard route names its caller, so this shape is not produced
+    // today; the rule is what keeps a durable row from ever having no owner.
+    await appendTurns(AGENT, CHAT, [turn('user', 'q'), turn('assistant', 'a')], undefined, {
+      surface: 'dashboard',
+      ephemeral: false,
+    });
+
+    expect(conversation()?.turns).toHaveLength(2);
+    expect(conversation()).not.toHaveProperty('userId');
+    expect(conversation()?.ttl).toEqual(expect.any(Number));
+  });
+
   it('keeps a conversation with no person behind it expiring as it continues', async () => {
     await appendTurns(AGENT, CHAT, [turn('user', 'q1'), turn('assistant', 'a1')], undefined, NO_PERSON);
     await appendTurns(AGENT, CHAT, [turn('user', 'q2'), turn('assistant', 'a2')], undefined, NO_PERSON);
