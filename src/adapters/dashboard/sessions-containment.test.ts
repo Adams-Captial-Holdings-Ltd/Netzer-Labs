@@ -256,7 +256,10 @@ describe('GET /sessions/export — containment (WI-1.0)', () => {
 describe('jarvis sessions action — containment (WI-1.0)', () => {
   it('lists only conversations', async () => {
     partition = [CONVERSATION_ROW, MESSAGE_ROW, JARVIS_MEMORY_ROW];
-    const principal = principalFor('viewer');
+    // Asked as the conversation's owner: since P1 the action lists only the
+    // caller's own conversations (decisions 1 and 9), and containment is what
+    // this test is about.
+    const principal = principalFor('operator');
     expect(principal).not.toBeNull();
 
     const out = await executeQueryTool(principal!, 'sessions', {});

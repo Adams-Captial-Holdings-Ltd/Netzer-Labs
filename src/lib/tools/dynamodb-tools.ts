@@ -48,6 +48,8 @@ interface AllowlistEntry {
   scope: TableScope;
   /** Optional attributes to project; undefined = all. */
   attributes?: string[];
+  /** Rows of the caller's own partition the model is still never handed. */
+  hidden?: (row: Record<string, unknown>) => boolean;
 }
 
 const ALLOWLIST: Record<string, AllowlistEntry> = {
@@ -57,6 +59,13 @@ const ALLOWLIST: Record<string, AllowlistEntry> = {
     defaultLimit: 10,
     hardLimit: 50,
     scope: 'agent',
+    // Since P1 an agent's partition also holds every message of every person's
+    // conversations with it (SK=CHAT#<chatId>#MSG#…), and a migrated one's source
+    // record (…#SRC). Returning them would hand anyone chatting with the agent
+    // other people's transcripts one message at a time (owner decision 1), so
+    // only conversation rows come back — what this returned before P1. The same
+    // shape isConversationRow selects in the dashboard.
+    hidden: (row) => !/^CHAT#[^#]+$/.test(String(row.SK ?? '')),
   },
   memories: {
     table: process.env.TABLE_MEMORIES ?? 'claudeclaw-memories',
@@ -203,7 +212,7 @@ tools.register('dynamodb_query', {
           ScanIndexForward: !reverse,
         }),
       );
-      const rows = out.Items ?? [];
+      const rows = (out.Items ?? []).filter((r) => !entry.hidden?.(r));
       if (rows.length === 0) {
         return { text: `0 rows in ${logical} for pk='${pk}'${skPrefix ? ` sk~'${skPrefix}'` : ''}.` };
       }

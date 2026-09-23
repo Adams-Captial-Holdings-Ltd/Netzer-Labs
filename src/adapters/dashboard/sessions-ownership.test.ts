@@ -37,6 +37,7 @@ const {
   linkTokenToUser,
   listTokens,
   writeAuditOrThrow,
+  exportChatData,
 } = vi.hoisted(() => ({
   authenticateDashboardToken: vi.fn(),
   getSession: vi.fn(),
@@ -50,6 +51,7 @@ const {
   linkTokenToUser: vi.fn(),
   listTokens: vi.fn(),
   writeAuditOrThrow: vi.fn(),
+  exportChatData: vi.fn(),
 }));
 
 /**
@@ -113,6 +115,11 @@ vi.mock('../../lib/audit/audit-writer.js', async (importActual) => {
     writeAudit: (event: unknown) => writeAudit(event),
     writeAuditOrThrow: (event: unknown) => writeAuditOrThrow(event),
   };
+});
+
+vi.mock('../../lib/tools/privacy-tools.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../lib/tools/privacy-tools.js')>();
+  return { ...actual, exportChatData: (...a: unknown[]) => exportChatData(...a) };
 });
 
 vi.mock('../../lib/state/users-repo.js', async (importActual) => {
@@ -214,6 +221,7 @@ beforeEach(() => {
   linkTokenToUser.mockResolvedValue('linked');
   listTokens.mockResolvedValue([]);
   writeAuditOrThrow.mockResolvedValue(undefined);
+  exportChatData.mockResolvedValue({ agentId: AGENT, chatId: CHAT, sessionTurns: 2 });
   runAgentTurn.mockResolvedValue({
     text: 'the answer',
     costUsd: 0,
@@ -274,14 +282,15 @@ describe('send routes — a conversation the caller does not own (WI-1.1, AC-1.1
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
 
-  it('answers a conversation it does not own exactly as it answers one that does not exist', async () => {
+  it('refuses a conversation it does not own with the same 404 the delete route gives a missing one', async () => {
     getSession.mockResolvedValue(ownedBy('dashboard:user:user-b'));
     const notMine = await postTurn('member-a1');
     const notMineBody = await notMine.text();
 
-    // A chat id that is not stored at all starts a NEW conversation, so the
-    // comparison that matters is the refusal's own bytes against the delete
-    // route's not-found — the same answer, never a different one.
+    // A chat id that is not stored at all starts a NEW conversation, so a send
+    // CAN tell a stored chat from a missing one; what it must not do is answer
+    // someone else's differently from a plain not-found. Compared against the
+    // delete route's not-found — the same bytes.
     getSession.mockResolvedValue(null);
     const gone = await request('member-a1', `/api/sessions?agentId=${AGENT}&chatId=${encodeURIComponent(CHAT)}`, { method: 'DELETE' });
 
@@ -298,6 +307,24 @@ describe('send routes — a conversation the caller does not own (WI-1.1, AC-1.1
     expect(res.status).toBe(200);
     expect(runAgentTurn).toHaveBeenCalledTimes(1);
     expect(appendTurns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a slash command acts for its caller (decision 9, the first critic\'s F2)', () => {
+  it('hands the caller to the command, so a conversation the command creates is theirs', async () => {
+    // /warroom as the first thing typed into a new chat creates the conversation.
+    // Created with no owner, the owner check then refused it to its own author.
+    runCommand.mockResolvedValue({ reply: 'War Room started' });
+
+    await (await postStream('member-a1', { text: '/warroom' })).text();
+    await postTurn('operator', { text: '/warroom' });
+
+    expect(runCommand).toHaveBeenNthCalledWith(1, AGENT, CHAT, '/warroom', {
+      owner: { surface: 'dashboard', userId: 'dashboard:user:user-a', ephemeral: false },
+    });
+    expect(runCommand).toHaveBeenNthCalledWith(2, AGENT, CHAT, '/warroom', {
+      owner: { surface: 'dashboard', userId: 'dashboard:hash-operator', ephemeral: true },
+    });
   });
 });
 
@@ -401,6 +428,7 @@ describe('GET /sessions/transcript — author-private with an audited admin over
     expect(res.status).toBe(200);
     expect(body.turns).toHaveLength(2);
     expect(writeAudit).not.toHaveBeenCalled();
+    expect(writeAuditOrThrow).not.toHaveBeenCalled();
   });
 
   it('shows a conversation the caller does not own as empty, exactly like one that does not exist', async () => {
@@ -423,7 +451,9 @@ describe('GET /sessions/transcript — author-private with an audited admin over
     const body = (await res.json()) as { turns: unknown[] };
 
     expect(body.turns).toHaveLength(2);
-    expect(writeAudit).toHaveBeenCalledWith(
+    // Awaited and never suppressible (the first critic's F4): a read nobody can
+    // see recorded is exactly what a hostile admin wants.
+    expect(writeAuditOrThrow).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'session_read_override',
         agentId: AGENT,
@@ -431,6 +461,16 @@ describe('GET /sessions/transcript — author-private with an audited admin over
         detail: expect.objectContaining({ scope: 'transcript', requestedBy: 'dashboard:hash-admin' }),
       }),
     );
+  });
+
+  it('hands an admin none of another person\'s transcript when that read cannot be audited', async () => {
+    getSession.mockResolvedValue(ownedBy('dashboard:user:user-b'));
+    writeAuditOrThrow.mockRejectedValue(new Error('both audit stores are down'));
+
+    const res = await transcript('admin');
+
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('a private');
   });
 });
 
@@ -455,9 +495,31 @@ describe('GET /sessions and the CSV export — each person sees their own', () =
     const body = (await res.json()) as { sessions: { chatId: string }[] };
 
     expect(body.sessions).toHaveLength(2);
-    expect(writeAudit).toHaveBeenCalledWith(
+    expect(writeAuditOrThrow).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'session_read_override', detail: expect.objectContaining({ scope: 'list' }) }),
     );
+  });
+
+  it('lists nothing to an admin when the override cannot be audited', async () => {
+    writeAuditOrThrow.mockRejectedValue(new Error('both audit stores are down'));
+
+    const res = await request('admin', '/api/sessions');
+
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('theirs');
+  });
+
+  it('lets an admin export every conversation, audited, and exports nothing when it cannot be', async () => {
+    const res = await request('admin', '/api/sessions/export');
+    expect(res.headers.get('X-Export-Row-Count')).toBe('2');
+    expect(writeAuditOrThrow).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'session_read_override', detail: expect.objectContaining({ scope: 'export' }) }),
+    );
+
+    writeAuditOrThrow.mockRejectedValue(new Error('both audit stores are down'));
+    const refused = await request('admin', '/api/sessions/export');
+    expect(refused.status).toBe(500);
+    expect(await refused.text()).not.toContain('theirs');
   });
 
   it('exports only the caller\'s conversations', async () => {
@@ -467,6 +529,54 @@ describe('GET /sessions and the CSV export — each person sees their own', () =
     expect(csv).toContain(CHAT);
     expect(csv).not.toContain('theirs');
     expect(res.headers.get('X-Export-Row-Count')).toBe('1');
+  });
+});
+
+describe('GET /export — one chat\'s full export is its author\'s, or an audited admin\'s', () => {
+  // Untested until the first critic's A7.
+  const exportChat = (who: string) =>
+    request(who, `/api/export?agentId=${AGENT}&chatId=${encodeURIComponent(CHAT)}`);
+
+  it('refuses someone else\'s chat, before reading any of it', async () => {
+    getSession.mockResolvedValue(ownedBy('dashboard:user:user-b'));
+
+    const res = await exportChat('member-a1');
+
+    expect(res.status).toBe(404);
+    expect(exportChatData).not.toHaveBeenCalled();
+  });
+
+  it('refuses a chat that has no conversation to own, so its leftovers are nobody\'s to take', async () => {
+    const res = await exportChat('member-a1');
+
+    expect(res.status).toBe(404);
+    expect(exportChatData).not.toHaveBeenCalled();
+  });
+
+  it('exports the caller\'s own chat without an override', async () => {
+    getSession.mockResolvedValue(ownedBy('dashboard:user:user-a'));
+
+    const res = await exportChat('member-a1');
+
+    expect(res.status).toBe(200);
+    expect(exportChatData).toHaveBeenCalledWith(AGENT, CHAT);
+    expect(writeAuditOrThrow).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin export another person\'s chat, audited first, and nothing when it cannot be', async () => {
+    getSession.mockResolvedValue(ownedBy('dashboard:user:user-b'));
+
+    const res = await exportChat('admin');
+    expect(res.status).toBe(200);
+    expect(writeAuditOrThrow).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'session_read_override', chatId: CHAT, detail: expect.objectContaining({ scope: 'chat-export' }) }),
+    );
+
+    exportChatData.mockClear();
+    writeAuditOrThrow.mockRejectedValue(new Error('both audit stores are down'));
+    const refused = await exportChat('admin');
+    expect(refused.status).toBe(500);
+    expect(exportChatData).not.toHaveBeenCalled();
   });
 });
 

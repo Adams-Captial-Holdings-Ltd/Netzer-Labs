@@ -70,7 +70,7 @@ import { emitJarvisMetric } from '../../observability/emf-jarvis.js';
 // through HTTP; a removed import is a compile error, R8).
 import { listAgents } from '../../lib/state/agents-repo.js';
 import { listKnownAgentsAsync, loadAgent } from '../../lib/config/agent-loader.js';
-import { computeAgentHealth, collectAcrossDays, readConversationRows } from './handler.js';
+import { computeAgentHealth, collectAcrossDays, conversationsVisibleTo, readConversationRows } from './handler.js';
 import { getDailyCostUsd, getUsageByDay, recordUsage, JARVIS_USAGE_AGENT, SpendIndeterminateError } from '../../lib/usage/token-tracker.js';
 import {
   isKillSwitchActive,
@@ -1096,7 +1096,7 @@ export async function executeQueryTool(
   if (!auth.ok) return { ok: false, code: auth.code, param: auth.param };
 
   try {
-    const result = await runQuery(auth.resource, params);
+    const result = await runQuery(auth.resource, params, principal);
     return { ok: true, result };
   } catch (err) {
     logger.warn({ err: errMsg(err), resource: auth.resource }, 'jarvis query failed');
@@ -1110,7 +1110,7 @@ function clamp(v: unknown, min: number, max: number, dflt: number): number {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-async function runQuery(resource: JarvisResource, params: QueryParams): Promise<unknown> {
+async function runQuery(resource: JarvisResource, params: QueryParams, principal: TokenPrincipal): Promise<unknown> {
   switch (resource) {
     case 'agents': {
       const [builtinIds, dbAgents] = await Promise.all([listKnownAgentsAsync(), listAgents()]);
@@ -1155,9 +1155,13 @@ async function runQuery(resource: JarvisResource, params: QueryParams): Promise<
     case 'sessions': {
       // Read to the end (WI-1.2): a single 100-item scan undercounts once
       // every message is a row of this table too.
-      const { rows: items, truncated } = await readConversationRows(
+      const { rows: all, truncated } = await readConversationRows(
         'PK, SK, updatedAt, messageCount, surface, userId',
       );
+      // Decisions 1 and 9, the rule GET /sessions applies: the caller's own
+      // conversations, or everyone's for an admin, audited first.
+      const items = await conversationsVisibleTo(principal, all, 'jarvis');
+      if (!items) throw new Error('admin override could not be audited');
       const rows = items.map((i) => ({
         agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
         chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),

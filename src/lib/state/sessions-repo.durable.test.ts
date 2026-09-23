@@ -32,6 +32,8 @@ import {
   deleteSession,
   getFullHistory,
   getSession,
+  setModelOverride,
+  setWarroomMode,
   type Turn,
 } from './sessions-repo.js';
 
@@ -48,6 +50,7 @@ const AGENT = 'main';
 const CHAT = 'dashboard:1750000000000';
 const turn = (role: Turn['role'], text: string, ts = 1): Turn => ({ role, text, ts });
 const PERSON = { surface: 'dashboard' as const, userId: 'dashboard:user:user-a', ephemeral: false };
+const NO_PERSON = { surface: 'dashboard' as const, userId: 'dashboard:hash-root', ephemeral: true };
 
 /** The stored conversation row. */
 const conversation = (chatId = CHAT) => table.rows.get(`AGENT#${AGENT}|CHAT#${chatId}`);
@@ -104,6 +107,109 @@ describe('appendTurns — durable or not (owner decision 1)', () => {
     const now = Math.floor(Date.now() / 1000);
     expect(ttl).toBeGreaterThan(now);
     expect(ttl).toBeLessThanOrEqual(now + 7 * 24 * 60 * 60);
+  });
+
+  it('never makes a durable conversation expire when a principal with no person continues it', async () => {
+    // The master token's chats from before P1 are durable and owned by its hash.
+    // Continued before the token is linked, an expiry here would drop them out of
+    // the legacy migration, which skips expiring rows, and delete them a week
+    // later (the first critic's F3).
+    table.rows.set(`AGENT#${AGENT}|CHAT#${CHAT}`, {
+      PK: `AGENT#${AGENT}`,
+      SK: `CHAT#${CHAT}`,
+      userId: 'dashboard:hash-root',
+      turns: [turn('user', 'old q'), turn('assistant', 'old a')],
+      turnsTotal: 2,
+    });
+
+    await appendTurns(AGENT, CHAT, [turn('user', 'q'), turn('assistant', 'a')], undefined, NO_PERSON);
+
+    expect(conversation()?.turns).toHaveLength(4);
+    expect(conversation()).not.toHaveProperty('ttl');
+    expect(records()).toHaveLength(2);
+    for (const r of records()) expect(r).not.toHaveProperty('ttl');
+  });
+
+  it('keeps a conversation with no person behind it expiring as it continues', async () => {
+    await appendTurns(AGENT, CHAT, [turn('user', 'q1'), turn('assistant', 'a1')], undefined, NO_PERSON);
+    await appendTurns(AGENT, CHAT, [turn('user', 'q2'), turn('assistant', 'a2')], undefined, NO_PERSON);
+
+    expect(conversation()?.ttl).toEqual(expect.any(Number));
+    expect(records()).toHaveLength(4);
+    for (const r of records()) expect(r.ttl).toEqual(expect.any(Number));
+  });
+});
+
+describe('a slash command never leaves a conversation nobody owns (decision 9, the first critic\'s F2)', () => {
+  // A row with no owner is refused to everyone but an admin, so a command that
+  // CREATED one — /newchat, /model or /warroom as the first thing typed into a
+  // new chat — locked its own author out of that chat for good.
+  const updates = () =>
+    send.mock.calls.map((c) => c[0]).filter((c) => c.constructor.name === 'UpdateCommand');
+
+  it('/newchat in a chat that does not exist writes nothing: there is nothing to clear', async () => {
+    await clearSession(AGENT, CHAT);
+
+    expect(send).toHaveBeenCalled();
+    expect(updates()).toHaveLength(0);
+  });
+
+  it('/newchat and dropping the model override only ever update a conversation that exists', async () => {
+    await exchanges(1);
+    await clearSession(AGENT, CHAT);
+    await setModelOverride(AGENT, CHAT, null);
+
+    expect(updates()).toHaveLength(2);
+    for (const u of updates()) expect(u.input.ConditionExpression).toBe('attribute_exists(PK)');
+  });
+
+  it('/warroom in a new chat creates it, owned by whoever entered it', async () => {
+    await setWarroomMode(AGENT, CHAT, 'meeting-1', PERSON);
+
+    expect(conversation()).toMatchObject({ activeWarroomId: 'meeting-1', userId: 'dashboard:user:user-a' });
+    expect(conversation()).not.toHaveProperty('ttl');
+  });
+
+  it('/warroom in a new chat of a principal with no person creates it expiring', async () => {
+    await setWarroomMode(AGENT, CHAT, 'meeting-1', NO_PERSON);
+
+    expect(conversation()).toMatchObject({ userId: 'dashboard:hash-root', ttl: expect.any(Number) });
+  });
+
+  it('/warroom in an existing conversation changes neither its owner nor its expiry', async () => {
+    await exchanges(1);
+
+    await setWarroomMode(AGENT, CHAT, 'meeting-1', NO_PERSON);
+
+    // The fake does not apply updates, so the command is what is pinned; Floci
+    // runs the same sequence end to end (sessions-repo.p1.integration.test.ts).
+    expect(updates()).toHaveLength(1);
+    expect(updates()[0]?.input.UpdateExpression).not.toMatch(/userId|ttl|#t/);
+    expect(conversation()?.userId).toBe('dashboard:user:user-a');
+  });
+});
+
+describe('appendTurns retries a transaction DynamoDB throttled (the first critic\'s A4)', () => {
+  it('retries when an item of the transaction was throttled, instead of losing the turn', async () => {
+    // A throttled item cancels the whole transaction, and the SDK does not retry
+    // a cancelled transaction — the single Put this replaced, it did retry.
+    let throttled = 0;
+    send.mockImplementation(async (cmd: { constructor: { name: string } }) => {
+      if (cmd.constructor.name === 'TransactWriteCommand' && throttled === 0) {
+        throttled++;
+        throw Object.assign(new Error('Transaction cancelled'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: [{ Code: 'None' }, { Code: 'ThrottlingError' }],
+        });
+      }
+      return table.send(cmd as Parameters<typeof table.send>[0]);
+    });
+
+    await exchanges(1);
+
+    expect(throttled).toBe(1);
+    expect(conversation()?.turns).toHaveLength(2);
+    expect(records()).toHaveLength(2);
   });
 });
 
@@ -287,5 +393,29 @@ describe('delete cascades (WI-1.3, AC-1.3-2)', () => {
 
     await expect(deleteSession(AGENT, CHAT)).rejects.toThrow('throttled');
     expect(conversation()).toBeDefined();
+  });
+
+  it('leaves a conversation whose id merely starts with the deleted one\'s', async () => {
+    // The '#' closing the prefix is what keeps `…000` from matching `…0000`. The
+    // neighbour above shares no prefix, so nothing pinned this (mutation M9).
+    await exchanges(1);
+    await exchanges(1, `${CHAT}0`);
+
+    await deleteSession(AGENT, CHAT);
+
+    expect(conversation(`${CHAT}0`)).toBeDefined();
+    expect(records(`${CHAT}0`)).toHaveLength(2);
+  });
+
+  it('finds the records it deletes with a strongly consistent read', async () => {
+    // An eventually consistent read can miss a message written a moment earlier,
+    // and once the row is gone nothing finds that message again (the first
+    // critic's A3). Floci is always consistent, so only the command can show it.
+    await exchanges(1);
+
+    await deleteSession(AGENT, CHAT);
+
+    const query = send.mock.calls.map((c) => c[0]).find((c) => c.constructor.name === 'QueryCommand');
+    expect(query?.input).toMatchObject({ ConsistentRead: true });
   });
 });

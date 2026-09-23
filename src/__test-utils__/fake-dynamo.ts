@@ -4,9 +4,11 @@
  * what each message record holds, what a delete leaves behind.
  *
  * It answers the command shapes the sessions repository sends, keyed by PK+SK
- * in one table. It does NOT evaluate condition, filter or projection
- * expressions, and it never pages: prove those against Floci in an
- * *.integration.test.ts, where DynamoDB's own semantics apply.
+ * in one table. The only condition it evaluates is a lone key-existence check
+ * (`attribute_exists(PK)` and the like) on a standalone Put or Update; it does
+ * NOT apply update expressions, evaluate any other condition, filter or
+ * projection, or page: prove those against Floci in an *.integration.test.ts,
+ * where DynamoDB's own semantics apply.
  */
 
 type Row = Record<string, unknown>;
@@ -21,20 +23,30 @@ export function createFakeDynamo() {
     if (t.Delete) rows.delete(keyOf(t.Delete.Key));
   }
 
+  /** Throw as DynamoDB does when a lone key-existence condition does not hold. */
+  function checkExists(condition: unknown, key: Row) {
+    const m = /^attribute_(not_)?exists\((?:PK|SK)\)$/.exec(String(condition ?? ''));
+    if (m && rows.has(keyOf(key)) === Boolean(m[1])) {
+      throw Object.assign(new Error('The conditional request failed'), { name: 'ConditionalCheckFailedException' });
+    }
+  }
+
   async function send(cmd: Command): Promise<Record<string, unknown>> {
     const input = cmd.input;
     switch (cmd.constructor.name) {
       case 'GetCommand':
         return { Item: rows.get(keyOf(input.Key)) };
       case 'PutCommand':
+        checkExists(input.ConditionExpression, input.Item);
         write({ Put: { Item: input.Item } });
         return {};
       case 'DeleteCommand':
         write({ Delete: { Key: input.Key } });
         return {};
       case 'UpdateCommand':
-        // Only the shapes this repo sends are needed; tests that exercise an
-        // UpdateCommand assert on the command itself.
+        // The update itself is not applied; tests that need its effect assert on
+        // the command, or run against Floci.
+        checkExists(input.ConditionExpression, input.Key);
         return {};
       case 'TransactWriteCommand':
         for (const t of input.TransactItems) write(t);

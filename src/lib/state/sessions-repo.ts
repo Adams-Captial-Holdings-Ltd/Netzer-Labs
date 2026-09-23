@@ -31,10 +31,12 @@
 import {
   BatchWriteCommand,
   GetCommand,
+  PutCommand,
   QueryCommand,
   TransactWriteCommand,
   UpdateCommand,
   DeleteCommand,
+  type UpdateCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './ddb.js';
 import { ingestEvictedTurns } from '../../agent/memory-ingest.js';
@@ -222,6 +224,8 @@ export interface Session {
    * Absent on rows written before the fence existed.
    */
   version?: number;
+  /** When DynamoDB deletes the conversation (epoch seconds); absent when it is durable. */
+  ttl?: number;
 }
 
 function pk(agentId: string): string {
@@ -296,6 +300,7 @@ export async function getSession(
     turnsTotal: out.Item.turnsTotal as number | undefined,
     turnsIngested: out.Item.turnsIngested as number | undefined,
     version: out.Item.version as number | undefined,
+    ttl: out.Item.ttl as number | undefined,
   };
 }
 
@@ -381,9 +386,15 @@ export async function appendTurns(
     // The first owner stays the owner (see SessionEnrichment.userId).
     const owner = existing?.userId ?? enrichment?.userId;
     // Omitted entirely for durable dashboard chats — the conversation row is
-    // replaced whole, so this also strips the ttl off rows written before
-    // conversations became persistent. Records share the row's expiry.
-    const ttl = isPersistentChat(chatId) && !enrichment?.ephemeral ? undefined : now + TTL_SECONDS;
+    // replaced whole, so a person's turn also strips the ttl off rows written
+    // before conversations became persistent. A principal with no person gets an
+    // expiring conversation (decision 1) but never arms a durable one it
+    // continues: the master token's pre-P1 chats would otherwise drop out of the
+    // legacy migration, which skips expiring rows (the first critic's F3).
+    // Records share the row's expiry.
+    const expires =
+      !isPersistentChat(chatId) || (enrichment?.ephemeral === true && (!existing || existing.ttl !== undefined));
+    const ttl = expires ? now + TTL_SECONDS : undefined;
     // WI-1.2: each new message ALSO becomes its own immutable record, numbered by
     // its place in the whole conversation (prevTotal is the cumulative count the
     // window cannot lose). Written in the same all-or-nothing transaction as the
@@ -461,10 +472,14 @@ export async function appendTurns(
       // overwriting durable history is exactly what the condition forbids.
       const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
       const reason = e.CancellationReasons?.[0]?.Code;
-      const fenced =
-        e.name === 'TransactionCanceledException' &&
-        (reason === 'ConditionalCheckFailed' || reason === 'TransactionConflict');
-      if (fenced && attempt < MAX_ATTEMPTS - 1) {
+      const cancelled = e.name === 'TransactionCanceledException';
+      const fenced = cancelled && (reason === 'ConditionalCheckFailed' || reason === 'TransactionConflict');
+      // A throttled item cancels the whole transaction, and the SDK does not
+      // retry a cancelled transaction (it did retry the single Put this
+      // replaced), so back off and try again rather than lose the turn.
+      const throttled = cancelled && (e.CancellationReasons ?? []).some((r) => r.Code === 'ThrottlingError');
+      if ((fenced || throttled) && attempt < MAX_ATTEMPTS - 1) {
+        if (throttled) await new Promise((r) => setTimeout(r, 50 * 2 ** attempt));
         continue;
       }
       throw err;
@@ -479,108 +494,121 @@ export async function appendTurns(
   }
 }
 
-/** Set or clear the per-chat model override. */
+/**
+ * Update an item only if it exists; false when there was none. The slash-command
+ * helpers below used to upsert, and a conversation a command CREATED carried no
+ * owner — which the owner check (decision 9) then refused to its own author, for
+ * good (the first critic's F2). A dashboard conversation's expiry is left alone
+ * here too: it is settled when the conversation is created (appendTurns).
+ */
+async function updateIfExists(
+  Key: Record<string, string>,
+  update: Pick<UpdateCommandInput, 'UpdateExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'>,
+): Promise<boolean> {
+  try {
+    await ddb().send(new UpdateCommand({ TableName: TABLE, Key, ...update, ConditionExpression: 'attribute_exists(PK)' }));
+    return true;
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return false;
+    throw err;
+  }
+}
+
+/** The update that refreshes a bot chat's expiry; a dashboard chat's is left alone. */
+function refreshTtl(chatId: string, set: string, values: Record<string, unknown>) {
+  if (isPersistentChat(chatId)) return { UpdateExpression: set, ExpressionAttributeValues: values };
+  return {
+    UpdateExpression: `${set}, #t = :t`,
+    ExpressionAttributeNames: { '#t': 'ttl' },
+    ExpressionAttributeValues: { ...values, ':t': Math.floor(Date.now() / 1000) + TTL_SECONDS },
+  };
+}
+
+/** Set or clear the per-chat model override of a conversation that exists. */
 export async function setModelOverride(
   agentId: string,
   chatId: string,
   modelId: string | null,
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  if (modelId) {
-    // Strip the ttl on persistent chats rather than refreshing it. Without
-    // this, picking a model on a dashboard conversation would quietly re-arm
-    // the 7-day expiry that appendTurns just removed.
-    const persist = isPersistentChat(chatId);
-    await ddb().send(
-      new UpdateCommand({
-        TableName: TABLE,
-        Key: { PK: pk(agentId), SK: sk(chatId) },
-        UpdateExpression: persist
-          ? 'SET modelOverride = :m, updatedAt = :u REMOVE #t'
-          : 'SET modelOverride = :m, updatedAt = :u, #t = :t',
-        ExpressionAttributeNames: { '#t': 'ttl' },
-        ExpressionAttributeValues: {
-          ':m': modelId,
-          ':u': now,
-          // DynamoDB rejects a declared-but-unused expression value.
-          ...(persist ? {} : { ':t': now + TTL_SECONDS }),
-        },
-      }),
-    );
-  } else {
-    await ddb().send(
-      new UpdateCommand({
-        TableName: TABLE,
-        Key: { PK: pk(agentId), SK: sk(chatId) },
-        UpdateExpression: 'REMOVE modelOverride SET updatedAt = :u',
-        ExpressionAttributeValues: { ':u': now },
-      }),
-    );
-  }
+  const Key = { PK: pk(agentId), SK: sk(chatId) };
+  await updateIfExists(
+    Key,
+    modelId
+      ? refreshTtl(chatId, 'SET modelOverride = :m, updatedAt = :u', { ':m': modelId, ':u': now })
+      : { UpdateExpression: 'REMOVE modelOverride SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } },
+  );
 }
 
+/**
+ * Enter or leave a war room. Entering one is the one command that must remember
+ * something in a chat that does not exist yet, so it creates the conversation —
+ * owned by whoever entered, and expiring on appendTurns' rule for a new one.
+ */
 export async function setWarroomMode(
   agentId: string,
   chatId: string,
   meetingId: string | null,
+  owner?: SessionEnrichment,
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  if (meetingId) {
-    await ddb().send(
-      new UpdateCommand({
-        TableName: TABLE,
-        Key: { PK: pk(agentId), SK: sk(chatId) },
-        UpdateExpression: 'SET activeWarroomId = :w, updatedAt = :u',
-        ExpressionAttributeValues: { ':w': meetingId, ':u': now },
-      }),
-    );
-  } else {
-    await ddb().send(
-      new UpdateCommand({
-        TableName: TABLE,
-        Key: { PK: pk(agentId), SK: sk(chatId) },
-        UpdateExpression: 'REMOVE activeWarroomId SET updatedAt = :u',
-        ExpressionAttributeValues: { ':u': now },
-      }),
-    );
+  const Key = { PK: pk(agentId), SK: sk(chatId) };
+  if (!meetingId) {
+    await updateIfExists(Key, { UpdateExpression: 'REMOVE activeWarroomId SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } });
+    return;
   }
+  const entered = await updateIfExists(Key, {
+    UpdateExpression: 'SET activeWarroomId = :w, updatedAt = :u',
+    ExpressionAttributeValues: { ':w': meetingId, ':u': now },
+  });
+  if (entered) return;
+  const expires = !isPersistentChat(chatId) || owner?.ephemeral === true;
+  await ddb().send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: {
+        ...Key,
+        turns: [],
+        activeWarroomId: meetingId,
+        createdAt: now,
+        updatedAt: now,
+        ...(owner?.surface ? { surface: owner.surface } : {}),
+        ...(owner?.userId ? { userId: owner.userId } : {}),
+        ...(expires ? { ttl: now + TTL_SECONDS } : {}),
+      },
+      // Created by a concurrent write since the update above missed it: the
+      // command reports the failure rather than overwrite that conversation.
+      ConditionExpression: 'attribute_not_exists(PK)',
+    }),
+  );
 }
 
-/** /newchat — wipe history but keep the row so model override persists. */
+/** /newchat — wipe the history of a conversation that exists, keeping its row (and its model override). */
 export async function clearSession(agentId: string, chatId: string): Promise<void> {
   // Flush any un-ingested tail before wiping, so closing a short conversation
   // (one that never hit the cadence threshold) still captures its memory.
   const existing = await getSession(agentId, chatId);
-  if (existing && existing.turns.length > 0) {
+  // Nothing to clear in a chat that does not exist — and writing one would
+  // leave a conversation nobody owns (F2).
+  if (!existing) return;
+  if (existing.turns.length > 0) {
     const total = existing.turnsTotal ?? existing.turns.length;
     const pendingCount = Math.max(0, Math.min(total - (existing.turnsIngested ?? 0), existing.turns.length));
     if (pendingCount >= 2) {
       void ingestEvictedTurns({ agentId, chatId, evicted: existing.turns.slice(-pendingCount) });
     }
   }
-  const now = Math.floor(Date.now() / 1000);
-  const persist = isPersistentChat(chatId);
-  await ddb().send(
-    new UpdateCommand({
-      TableName: TABLE,
-      Key: { PK: pk(agentId), SK: sk(chatId) },
-      // /newchat starts a fresh conversation for the MODEL: the window empties
-      // and nothing is pending ingest. turnsTotal is NOT reset — it numbers the
-      // durable per-message records (WI-1.2), which /newchat keeps, and a reset
-      // would hand the next message a sequence number that is already taken.
-      // Marking every turn so far as ingested gives the zero pending count the
-      // old reset gave. Same TTL rule as everywhere else: refresh it on expiring
-      // chats, strip it on persistent ones.
-      UpdateExpression: persist
-        ? 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u REMOVE #t'
-        : 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u, #t = :t',
-      ExpressionAttributeNames: { '#t': 'ttl' },
-      ExpressionAttributeValues: {
-        ':empty': [],
-        ':z': 0,
-        ':u': now,
-        ...(persist ? {} : { ':t': now + TTL_SECONDS }),
-      },
+  // /newchat starts a fresh conversation for the MODEL: the window empties and
+  // nothing is pending ingest. turnsTotal is NOT reset — it numbers the durable
+  // per-message records (WI-1.2), which /newchat keeps, and a reset would hand
+  // the next message a sequence number that is already taken. Marking every turn
+  // so far as ingested gives the zero pending count the old reset gave.
+  await updateIfExists(
+    { PK: pk(agentId), SK: sk(chatId) },
+    refreshTtl(chatId, 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u', {
+      ':empty': [],
+      ':z': 0,
+      ':u': Math.floor(Date.now() / 1000),
     }),
   );
 }
@@ -684,6 +712,17 @@ export async function reownLegacyConversation(
     for (const r of out.Items ?? []) recorded.add(Number(r.seq));
     startKey = out.LastEvaluatedKey;
   } while (startKey);
+  // A record written before the re-own carries the old owner — and, if the
+  // conversation was then still expiring, that expiry, which must not delete it
+  // from under a durable conversation (the first critic's F3). Updated one by one
+  // and FIRST, so a failure leaves the conversation legacy for a re-run to finish;
+  // a record that expired meanwhile is not brought back.
+  for (const seq of recorded) {
+    await updateIfExists(
+      { PK: key.PK, SK: msgSk(chatId, seq) },
+      { UpdateExpression: 'SET userId = :o REMOVE #t', ExpressionAttributeNames: { '#t': 'ttl' }, ExpressionAttributeValues: { ':o': newOwner } },
+    );
+  }
   const backfill = turns.flatMap((t, i) => {
     const seq = total - turns.length + i;
     if (recorded.has(seq)) return [];
@@ -746,6 +785,9 @@ export async function deleteSession(
         KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
         ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': childPrefix(chatId) },
         ProjectionExpression: 'PK, SK',
+        // A message written a moment before the delete must be found, or it is
+        // stranded once the row is gone (the first critic's A3).
+        ConsistentRead: true,
       }),
     );
     const keys = (out.Items ?? []).map((i) => ({ PK: i.PK, SK: i.SK }));

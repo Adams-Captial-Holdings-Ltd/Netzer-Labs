@@ -14,12 +14,14 @@ import type { TokenPrincipal } from '../../lib/auth/dashboard-auth.js';
  * isConversationRow.
  */
 
-const { authenticateDashboardToken, send } = vi.hoisted(() => ({
+const { authenticateDashboardToken, send, writeAuditOrThrow } = vi.hoisted(() => ({
   authenticateDashboardToken: vi.fn(),
   send: vi.fn(),
+  writeAuditOrThrow: vi.fn(),
 }));
 
 const OPERATOR: TokenPrincipal = { tokenHash: 'hash-operator', label: 'operator', hashPrefix16: 'operator', role: 'operator' };
+const ADMIN: TokenPrincipal = { tokenHash: 'hash-admin', label: 'admin', hashPrefix16: 'admin', role: 'admin' };
 
 vi.mock('../../lib/auth/dashboard-auth.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/auth/dashboard-auth.js')>();
@@ -36,6 +38,10 @@ vi.mock('../../lib/state/ddb.js', async (importActual) => {
 vi.mock('../../lib/state/kill-switches-repo.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/state/kill-switches-repo.js')>();
   return { ...actual, isKillSwitchActive: () => Promise.resolve({ active: false }) };
+});
+vi.mock('../../lib/audit/audit-writer.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../lib/audit/audit-writer.js')>();
+  return { ...actual, writeAuditOrThrow: (e: unknown) => writeAuditOrThrow(e) };
 });
 vi.mock('../../observability/logger.js', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -83,6 +89,8 @@ const get = (path: string) => app().request(path, { headers: { Authorization: 'B
 
 beforeEach(() => {
   send.mockReset();
+  writeAuditOrThrow.mockReset();
+  writeAuditOrThrow.mockResolvedValue(undefined);
   authenticateDashboardToken.mockImplementation(async (raw: string) => (raw === 'operator' ? OPERATOR : null));
   answerFromPages(PAGES);
 });
@@ -128,6 +136,48 @@ describe('the listings read past message rows (WI-1.2, the WI-1.0 review finding
     const out = await executeQueryTool(OPERATOR, 'sessions', {});
 
     expect((out as { ok: true; result: { count: number } }).result.count).toBe(10);
+  });
+});
+
+describe('the jarvis sessions action — each person sees their own (decisions 1 and 9, the first critic\'s F1)', () => {
+  // Jarvis answers any enabled principal at viewer rank. Before this, its
+  // `sessions` action listed every person's conversations to all of them.
+  beforeEach(() => {
+    // Ten conversations behind a page of message rows; the first two are someone else's.
+    answerFromPages([
+      PAGES[0]!,
+      {
+        Items: Array.from({ length: 10 }, (_, i) => ({
+          ...conversationRow(i + 1),
+          ...(i < 2 ? { userId: 'dashboard:user:someone-else' } : {}),
+        })),
+      },
+    ]);
+  });
+  const listed = (out: unknown) =>
+    (out as { ok: true; result: { count: number; sessions: { chatId: string }[] } }).result;
+
+  it('lists only the caller\'s own conversations', async () => {
+    const result = listed(await executeQueryTool(OPERATOR, 'sessions', {}));
+
+    expect(result.count).toBe(8);
+    expect(result.sessions.map((s) => s.chatId)).not.toContain('dashboard:1');
+    expect(writeAuditOrThrow).not.toHaveBeenCalled();
+  });
+
+  it('lists everyone\'s to an admin, audited before any of it is returned', async () => {
+    const result = listed(await executeQueryTool(ADMIN, 'sessions', {}));
+
+    expect(result.count).toBe(10);
+    expect(writeAuditOrThrow).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'session_read_override', detail: expect.objectContaining({ scope: 'jarvis' }) }),
+    );
+  });
+
+  it('returns nothing to an admin when that override cannot be audited', async () => {
+    writeAuditOrThrow.mockRejectedValue(new Error('both audit stores are down'));
+
+    expect(await executeQueryTool(ADMIN, 'sessions', {})).toEqual({ ok: false, code: 'QUERY_ERROR' });
   });
 });
 

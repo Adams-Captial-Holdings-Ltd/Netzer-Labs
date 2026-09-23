@@ -16,6 +16,8 @@ const {
   publishMock,
   getSessionMock,
   setModelOverrideMock,
+  setWarroomModeMock,
+  createMeetingMock,
 } = vi.hoisted(() => ({
   loadAgentMock: vi.fn(),
   updateAgentMock: vi.fn(async () => {}),
@@ -23,6 +25,8 @@ const {
   publishMock: vi.fn(),
   getSessionMock: vi.fn(async () => null),
   setModelOverrideMock: vi.fn(async () => {}),
+  setWarroomModeMock: vi.fn(async () => {}),
+  createMeetingMock: vi.fn(),
 }));
 
 vi.mock('../lib/config/agent-loader.js', () => ({
@@ -35,12 +39,11 @@ vi.mock('../lib/config/invalidation-publisher.js', () => ({ publishInvalidation:
 vi.mock('../lib/state/sessions-repo.js', () => ({
   clearSession: vi.fn(async () => {}),
   setModelOverride: setModelOverrideMock,
-  setWarroomMode: vi.fn(async () => {}),
+  setWarroomMode: setWarroomModeMock,
   getSession: getSessionMock,
 }));
-// War-room imports run at module load but no /model test exercises them.
 vi.mock('../lib/warroom/meetings-repo.js', () => ({
-  createMeeting: vi.fn(),
+  createMeeting: createMeetingMock,
   getMeeting: vi.fn(),
   endMeeting: vi.fn(),
 }));
@@ -116,5 +119,19 @@ describe('/model reset — back to the platform default', () => {
     expect(publishMock).toHaveBeenCalledWith('agent', 'ops');
     expect(setModelOverrideMock).toHaveBeenCalledWith('ops', 'tg:1', null);
     expect(r?.reply).toContain(`platform default: ${SONNET}`);
+  });
+});
+
+describe('/warroom — a conversation it creates belongs to its caller (decision 9)', () => {
+  it('hands the dashboard\'s caller to the session it arms', async () => {
+    // In a new chat, arming the room creates the conversation; with no owner the
+    // dashboard's owner check refused it to the person who typed /warroom (the
+    // first critic's F2).
+    createMeetingMock.mockResolvedValue({ meetingId: 'room-1', title: 'War Room' });
+    const owner = { surface: 'dashboard' as const, userId: 'dashboard:user:user-a', ephemeral: false };
+
+    await runCommand('main', 'dashboard:1', '/warroom', { owner });
+
+    expect(setWarroomModeMock).toHaveBeenCalledWith('main', 'dashboard:1', 'room-1', owner);
   });
 });

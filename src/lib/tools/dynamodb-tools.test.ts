@@ -135,3 +135,28 @@ describe('dynamodb_query authorization — bypass attempts', () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('dynamodb_query — a conversation\'s messages stay out of the model\'s reach (decision 1)', () => {
+  it('returns the sessions table\'s conversation rows, never the per-message records P1 stores beside them', async () => {
+    // An agent's partition holds every person's conversations with it. Since P1
+    // each message is also a row there, so this tool would have read other
+    // people's transcripts to anyone chatting with the agent, one message at a
+    // time (the first critic's A1). Conversation rows it returned before P1 are
+    // unchanged.
+    sendMock.mockResolvedValue({
+      Items: [
+        { PK: 'AGENT#research', SK: 'CHAT#dashboard:1', firstMessage: 'a conversation row' },
+        { PK: 'AGENT#research', SK: 'CHAT#dashboard:1#MSG#0000000000', text: 'somebody else wrote this' },
+        { PK: 'AGENT#research', SK: 'CHAT#dashboard:1#SRC', legacyOwner: 'dashboard:x' },
+      ],
+    });
+
+    const out = await tools.invoke('dynamodb_query', { table: 'sessions', pk: 'AGENT#research' }, ctx);
+
+    expect(out.isError).toBeFalsy();
+    expect(out.text).toMatch(/^1 rows from sessions/);
+    expect(out.text).toContain('a conversation row');
+    expect(out.text).not.toContain('somebody else');
+    expect(out.text).not.toContain('legacyOwner');
+  });
+});

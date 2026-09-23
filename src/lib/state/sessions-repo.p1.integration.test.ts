@@ -10,7 +10,7 @@
  * legacy migration's conditions hold.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import {
   ensureLocalStack,
@@ -146,6 +146,111 @@ describe('P1 durable transcript (real DynamoDB)', () => {
     expect(await children('p1', 'dashboard:del')).toEqual([]);
     expect(await row('p1', 'dashboard:del2')).toBeDefined();
     expect(await records('p1', 'dashboard:del2')).toHaveLength(2);
+  });
+});
+
+describe('P1 owner and expiry, set once and kept (real DynamoDB; the first critic\'s F2 and F3)', () => {
+  // A token with no person behind it: its conversations expire (decision 1).
+  const ROOT = { surface: 'dashboard' as const, userId: `dashboard:${'d'.repeat(64)}`, ephemeral: true };
+
+  // Rows owned by a token hash look exactly like the legacy conversations the
+  // migration below sweeps from the whole table, so none may outlive this block.
+  afterAll(async () => {
+    const r = await repo();
+    for (const id of ['never', 'room-person', 'room-root', 'room-kept', 'legacy-kept', 'root-chat', 'reown']) {
+      await r.deleteSession('p1', `dashboard:${id}`);
+    }
+  });
+
+  it('/newchat and dropping the model override create nothing in a chat that does not exist', async () => {
+    const r = await repo();
+
+    await r.clearSession('p1', 'dashboard:never');
+    await r.setModelOverride('p1', 'dashboard:never', null);
+
+    expect(await row('p1', 'dashboard:never')).toBeUndefined();
+  });
+
+  it('/warroom in a new chat creates it for whoever entered it, expiring only when no person did', async () => {
+    const r = await repo();
+
+    await r.setWarroomMode('p1', 'dashboard:room-person', 'm-1', PERSON);
+    await r.setWarroomMode('p1', 'dashboard:room-root', 'm-2', ROOT);
+
+    const person = await row('p1', 'dashboard:room-person');
+    expect(person).toMatchObject({ activeWarroomId: 'm-1', userId: PERSON.userId });
+    expect(person).not.toHaveProperty('ttl');
+    expect(await row('p1', 'dashboard:room-root')).toMatchObject({
+      activeWarroomId: 'm-2', userId: ROOT.userId, ttl: expect.any(Number),
+    });
+  });
+
+  it('/warroom in an existing conversation changes neither its owner nor its expiry', async () => {
+    const r = await repo();
+    await r.appendTurns('p1', 'dashboard:room-kept', [u('q'), a('a')], undefined, PERSON);
+
+    await r.setWarroomMode('p1', 'dashboard:room-kept', 'm-3', ROOT);
+
+    const kept = await row('p1', 'dashboard:room-kept');
+    expect(kept).toMatchObject({ activeWarroomId: 'm-3', userId: PERSON.userId });
+    expect(kept).not.toHaveProperty('ttl');
+  });
+
+  it('a principal with no person continuing a durable conversation leaves it, and its records, durable', async () => {
+    await (await client()).send(new PutCommand({
+      TableName: SESSIONS,
+      Item: { PK: 'AGENT#p1', SK: 'CHAT#dashboard:legacy-kept', userId: ROOT.userId, updatedAt: 1, turns: [u('old q'), a('old a')] },
+    }));
+    const r = await repo();
+
+    await r.appendTurns('p1', 'dashboard:legacy-kept', [u('q'), a('a')], undefined, ROOT);
+
+    const conv = await row('p1', 'dashboard:legacy-kept');
+    expect(conv?.turns).toHaveLength(4);
+    expect(conv).not.toHaveProperty('ttl');
+    const recs = await records('p1', 'dashboard:legacy-kept');
+    expect(recs).toHaveLength(2);
+    for (const x of recs) expect(x).not.toHaveProperty('ttl');
+  });
+
+  it('/newchat leaves an expiring conversation expiring', async () => {
+    const r = await repo();
+    await r.appendTurns('p1', 'dashboard:root-chat', [u('q'), a('a')], undefined, ROOT);
+
+    await r.clearSession('p1', 'dashboard:root-chat');
+
+    expect(await row('p1', 'dashboard:root-chat')).toMatchObject({ turns: [], ttl: expect.any(Number) });
+  });
+
+  it('re-owning a conversation re-owns the records it already has, and none of them expires', async () => {
+    // Begun by a token with no person, a conversation expires, records and all.
+    // Continued once that token is linked, the row turns durable — and the
+    // migration re-owning it must not leave its first messages to expire.
+    const c = await client();
+    const legacy = `dashboard:${'c'.repeat(64)}`;
+    await c.send(new PutCommand({
+      TableName: SESSIONS,
+      Item: { PK: 'AGENT#p1', SK: 'CHAT#dashboard:reown', userId: legacy, updatedAt: 1, turnsTotal: 2, turns: [u('early q'), a('early a')] },
+    }));
+    for (const [seq, role, text] of [[0, 'user', 'early q'], [1, 'assistant', 'early a']] as const) {
+      await c.send(new PutCommand({
+        TableName: SESSIONS,
+        Item: {
+          PK: 'AGENT#p1', SK: `CHAT#dashboard:reown#MSG#${String(seq).padStart(10, '0')}`,
+          seq, role, text, ts: 1, userId: legacy, ttl: Math.floor(Date.now() / 1000) + 3600,
+        },
+      }));
+    }
+    const r = await repo();
+
+    await r.reownLegacyConversation('p1', 'dashboard:reown', legacy, 'dashboard:user:user-owner', 'link');
+
+    const recs = await records('p1', 'dashboard:reown');
+    expect(recs.map((x) => x.text)).toEqual(['early q', 'early a']);
+    for (const x of recs) {
+      expect(x).not.toHaveProperty('ttl');
+      expect(x.userId).toBe('dashboard:user:user-owner');
+    }
   });
 });
 

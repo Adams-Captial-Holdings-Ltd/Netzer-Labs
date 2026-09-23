@@ -92,6 +92,7 @@ import {
   getSession,
   getFullHistory,
   deleteSession,
+  type SessionEnrichment,
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
@@ -294,6 +295,15 @@ function personOf(c: DashboardCtx): string | undefined {
 }
 
 /**
+ * Who a conversation the caller starts belongs to, and whether it lasts: a
+ * person's is durable, a principal with no person's expires (decision 1). What
+ * appendTurns stamps, and what a slash command that creates one stamps (F2).
+ */
+function conversationOwner(c: DashboardCtx): SessionEnrichment {
+  return { surface: 'dashboard', userId: dashboardIdentity(c), ephemeral: !personOf(c) };
+}
+
+/**
  * Whether the caller owns a stored conversation (decisions 1 and 9). Also true
  * for a row the caller's OWN token wrote before WI-1.1, which carries
  * `dashboard:<tokenHash>`: stable for a token with no person, so that history
@@ -304,6 +314,69 @@ function ownsConversation(c: DashboardCtx, owner: unknown): boolean {
   if (typeof owner !== 'string' || owner === '') return false;
   const p = getPrincipal(c);
   return owner === dashboardIdentity(c) || (p !== null && owner === `dashboard:${p.tokenHash}`);
+}
+
+/** The answer when an admin override could not be recorded: nothing is returned. */
+const OVERRIDE_UNAUDITED = { error: 'override_not_audited' } as const;
+
+/**
+ * Record an admin's look at a conversation that is not theirs BEFORE any of it
+ * leaves (decision 1). Awaited and never suppressible, like `token_linked`: an
+ * override nobody can see recorded is exactly what a hostile admin wants (the
+ * first critic's F4). False means it could not be recorded, and the caller must
+ * return nothing.
+ */
+async function auditedOverride(
+  c: DashboardCtx,
+  scope: string,
+  where: { agentId?: string; chatId?: string } = {},
+): Promise<boolean> {
+  try {
+    await writeAuditOrThrow({
+      action: 'session_read_override',
+      ...where,
+      detail: { scope, requestedBy: dashboardIdentity(c) },
+      result: 'ok',
+    });
+    return true;
+  } catch (err) {
+    logger.error(
+      { scope, ...where, errMessage: err instanceof Error ? err.message : String(err) },
+      'admin conversation override refused: its audit could not be written',
+    );
+    return false;
+  }
+}
+
+/**
+ * Decisions 1 and 9: of these conversation rows, the ones the caller may see —
+ * its own, or every one for an admin (`security:write`), whose look at anyone
+ * else's is audited first. Null when that audit could not be written.
+ */
+async function visibleConversations<T extends Record<string, unknown>>(
+  c: DashboardCtx,
+  rows: T[],
+  scope: string,
+  agentId?: string,
+): Promise<T[] | null> {
+  const isAdmin = await hasCapability(c, 'security:write');
+  const visible = rows.filter((i) => isAdmin || ownsConversation(c, i.userId));
+  const others = visible.some((i) => !ownsConversation(c, i.userId));
+  if (others && !(await auditedOverride(c, scope, agentId ? { agentId } : {}))) return null;
+  return visible;
+}
+
+/**
+ * The same rule for a caller known only by its principal: the Jarvis `sessions`
+ * action, which answered every enabled principal with everyone's conversations
+ * (the first critic's F1). Null when an admin's override could not be audited.
+ */
+export function conversationsVisibleTo<T extends Record<string, unknown>>(
+  principal: TokenPrincipal,
+  rows: T[],
+  scope: string,
+): Promise<T[] | null> {
+  return visibleConversations({ req: { header: () => undefined }, get: () => principal }, rows, scope);
 }
 
 export const ROLE_RANK: Record<TokenRole, number> = { viewer: 0, operator: 1, admin: 2 };
@@ -1897,7 +1970,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     }
     // WI-1.1 (decision 9): refuse a conversation the caller does not own before
     // anything touches it — slash commands included, since /newchat wipes a
-    // history. The same 404 DELETE /sessions gives, so a chat id cannot be probed.
+    // history — with the 404 DELETE /sessions gives a missing chat. A send still
+    // tells a stored chat from a missing one (a missing one simply starts), so
+    // this hides the conversation, not whether its id is taken.
     const stored = await getSession(agentId, chatId);
     if (stored && !ownsConversation(c, stored.userId)) {
       return c.json({ error: 'not_found' }, 404);
@@ -1907,7 +1982,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       // attachment turns — a caption starting with '/' is data, not a command
       // (parity with Telegram/Slack).
       if (rawAttachments.length === 0) {
-        const cmd = await runCommand(agentId, chatId, text);
+        const cmd = await runCommand(agentId, chatId, text, { owner: conversationOwner(c) });
         if (cmd?.reply) {
           await stream.writeSSE({ event: 'reply', data: cmd.reply });
           await stream.writeSSE({ event: 'done', data: 'command' });
@@ -2112,7 +2187,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           await appendTurns(agentId, chatId, [
             { role: 'user', text: userText, ts: now },
             { role: 'assistant', text: result.text, ts: now },
-          ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c), ephemeral: !personOf(c) });
+          ], undefined, conversationOwner(c));
         }
         await stream.writeSSE({ event: 'done', data: 'ok' });
       } catch (err) {
@@ -2149,17 +2224,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const { rows: items, truncated } = await readConversationRows(projection, agentId || undefined);
 
     // Decision 1: conversations are author-private. A non-admin sees only their
-    // own; an admin sees every one, and seeing someone else's is audited.
-    const isAdmin = await hasCapability(c, 'security:write');
-    const conversations = items.filter((i) => isAdmin || ownsConversation(c, i.userId));
-    if (isAdmin && conversations.some((i) => !ownsConversation(c, i.userId))) {
-      void writeAudit({
-        action: 'session_read_override',
-        ...(agentId ? { agentId } : {}),
-        detail: { scope: 'list', requestedBy: dashboardIdentity(c) },
-        result: 'ok',
-      });
-    }
+    // own; an admin sees every one, and seeing someone else's is audited first.
+    const conversations = await visibleConversations(c, items, 'list', agentId || undefined);
+    if (!conversations) return c.json(OVERRIDE_UNAUDITED, 500);
     const rows = conversations.map((i) => ({
       agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
       chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
@@ -2346,7 +2413,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     }
 
     // Slash command path — handled inline.
-    const cmd = await runCommand(agentId, chatId, body.text);
+    const cmd = await runCommand(agentId, chatId, body.text, { owner: conversationOwner(c) });
     if (cmd?.reply) {
       return c.json({ kind: 'command', agentId, chatId, reply: cmd.reply });
     }
@@ -2378,7 +2445,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         await appendTurns(agentId, chatId, [
           { role: 'user', text: body.text, ts: now },
           { role: 'assistant', text: result.text, ts: now },
-        ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c), ephemeral: !personOf(c) });
+        ], undefined, conversationOwner(c));
       }
       logger.info(
         {
@@ -3285,13 +3352,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // one that does not exist; an admin may read it, and that read is audited.
     if (session && !ownsConversation(c, session.userId)) {
       if (!(await hasCapability(c, 'security:write'))) return c.json(none);
-      void writeAudit({
-        action: 'session_read_override',
-        agentId,
-        chatId,
-        detail: { scope: 'transcript', requestedBy: dashboardIdentity(c) },
-        result: 'ok',
-      });
+      if (!(await auditedOverride(c, 'transcript', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
     }
     // WI-1.3: the whole conversation, not only the 20-turn replay window.
     return c.json(session ? await getFullHistory(agentId, chatId, session) : none);
@@ -3433,15 +3494,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
     // Decision 1: one chat's full export is its author's, or an audited admin's.
     const session = await getSession(agentId, chatId);
+    // A chat with no conversation row is refused too: its memories and tasks
+    // are nobody's to take but an admin's.
     if (!ownsConversation(c, session?.userId)) {
       if (!(await hasCapability(c, 'security:write'))) return c.json({ error: 'not_found' }, 404);
-      void writeAudit({
-        action: 'session_read_override',
-        agentId,
-        chatId,
-        detail: { scope: 'chat-export', requestedBy: dashboardIdentity(c) },
-        result: 'ok',
-      });
+      if (!(await auditedOverride(c, 'chat-export', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
     }
     const payload = await exportChatData(agentId, chatId);
     return c.json(payload);
@@ -3810,17 +3867,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const today = new Date().toISOString().slice(0, 10);
     const headers = ['agentId', 'chatId', 'updatedAt', 'createdAt', 'surface', 'userId', 'messageCount', 'firstMessage', 'modelOverride'];
     // Decision 1, the same rule as GET /sessions: your own rows, or every row
-    // for an admin with the override audited.
-    const isAdmin = await hasCapability(c, 'security:write');
-    const conversations = allItems.filter((i) => isAdmin || ownsConversation(c, i.userId));
+    // for an admin with the override audited first.
+    const conversations = await visibleConversations(c, allItems, 'export');
+    if (!conversations) return c.json(OVERRIDE_UNAUDITED, 500);
     const truncated = readTruncated || conversations.length > EXPORT_CAP;
-    if (isAdmin && conversations.some((i) => !ownsConversation(c, i.userId))) {
-      void writeAudit({
-        action: 'session_read_override',
-        detail: { scope: 'export', requestedBy: dashboardIdentity(c) },
-        result: 'ok',
-      });
-    }
     const csvRows = conversations.slice(0, EXPORT_CAP).map((i) => [
       String(i.PK ?? '').replace(/^AGENT#/, ''),
       String(i.SK ?? '').replace(/^CHAT#/, ''),
