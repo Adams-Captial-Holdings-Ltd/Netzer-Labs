@@ -337,6 +337,20 @@ describe('ownership survives token rotation (WI-1.1, AC-1.1-1/-3)', () => {
     expect(body.sessions.map((s) => s.chatId)).toEqual([CHAT]);
   });
 
+  it('a token linked to a person still reaches what it wrote before it was linked', async () => {
+    // The owner's master token wrote five production conversations as
+    // dashboard:<its hash> (decision 46). Linked, its identity becomes the
+    // person, and those rows must stay reachable until WI-1.4 re-keys them —
+    // the only case the tokenHash half of ownsConversation exists for.
+    getSession.mockResolvedValue(ownedBy('dashboard:hash-linked'));
+
+    const res = await postStream('linked-operator');
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
   it('a token linked to a person owns what that person owns (decision 1)', async () => {
     getSession.mockResolvedValue(ownedBy('dashboard:user:user-a'));
 
