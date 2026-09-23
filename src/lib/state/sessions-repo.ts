@@ -284,16 +284,17 @@ function msgSk(chatId: string, seq: number): string {
  * A message record is one DynamoDB item, and an item over 400KB fails the
  * write — which would lose the turn that wanted recording. The window already
  * drops a turn that big (MAX_TURN_WINDOW_BYTES); the record keeps its first
- * 350,000 bytes and says so. ponytail: truncate, not split; chunk it across
- * records if a single message ever needs to survive whole.
+ * 350,000 bytes less its tool results and says so. ponytail: truncate, not split;
+ * chunk it across records if a single message ever needs to survive whole.
  */
 const MAX_MESSAGE_BYTES = 350_000;
 
-function capMessageText(text: string): { text: string; truncated?: true } {
+function capMessageText(text: string, byteBudget: number): { text: string; truncated?: true } {
+  const maxBytes = Math.max(0, byteBudget);
   const bytes = Buffer.from(text, 'utf8');
-  if (bytes.length <= MAX_MESSAGE_BYTES) return { text };
+  if (bytes.length <= maxBytes) return { text };
   // A cut inside a multi-byte character decodes to U+FFFD; drop that remnant.
-  return { text: bytes.subarray(0, MAX_MESSAGE_BYTES).toString('utf8').replace(/�$/, ''), truncated: true };
+  return { text: bytes.subarray(0, maxBytes).toString('utf8').replace(/�$/, ''), truncated: true };
 }
 
 export async function getSession(
@@ -488,7 +489,7 @@ export async function appendTurns(
           SK: msgSk(chatId, prevTotal + i),
           seq: prevTotal + i,
           role: t.role,
-          ...capMessageText(String(t.text ?? '')),
+          ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - Buffer.byteLength(JSON.stringify(t.tools ?? []), 'utf8')),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
           ...(t.tools ? { tools: t.tools } : {}),
@@ -863,7 +864,7 @@ export async function reownLegacyConversation(
           SK: msgSk(chatId, seq),
           seq,
           role: t.role,
-          ...capMessageText(String(t.text ?? '')),
+          ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - Buffer.byteLength(JSON.stringify(t.tools ?? []), 'utf8')),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
           ...(t.tools ? { tools: t.tools } : {}),

@@ -2273,13 +2273,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         await finishChatTurn(agentId, chatId, clientMessageId, result.blocked ? 'refused' : 'complete');
         await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
       } catch (err) {
-        logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
         if ((err as { name?: string })?.name === 'AbortError') {
           clearInterval(heartbeat);
           await saveChatTurn(agentId, chatId, userText, { text: '', stopped: true }, tools, conversationOwner(c));
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           return;
         }
+        logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
         await finishChatTurn(agentId, chatId, clientMessageId, 'error');
         if (!finalSent) {
           const error = classifyTurnError(err);

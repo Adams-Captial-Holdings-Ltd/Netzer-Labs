@@ -1039,13 +1039,17 @@ async function runAdmittedTurn(
   // synthesis emit below. Passthrough when the guard is off / no block patterns.
   let lastEmitted = '';
   let partialText = '';
-  const redact = await buildStreamingRedactor();
-  const emitModelChunk = (text: string): void => {
-    partialText = text;
-    lastEmitted = redact(text);
-    req.onChunk?.(lastEmitted);
-  };
-  const streamCallbacks: ConverseStreamCallbacks = { onChunk: emitModelChunk };
+  let emitModelChunk: ((text: string) => void) | undefined;
+  const streamCallbacks: ConverseStreamCallbacks = {};
+  if (req.onChunk) {
+    const redact = await buildStreamingRedactor();
+    emitModelChunk = (text: string): void => {
+      partialText = text;
+      lastEmitted = redact(text);
+      req.onChunk?.(lastEmitted);
+    };
+    streamCallbacks.onChunk = emitModelChunk;
+  }
   let totalIn = 0;
   let totalOut = 0;
   let totalCacheRead = 0;
@@ -1317,7 +1321,7 @@ async function runAdmittedTurn(
       const tu = block.toolUse;
       const args = (tu.input as Record<string, unknown> | undefined) ?? {};
       logger.info(
-        { agentId: req.agentId, chatId: req.chatId, tool: tu.name },
+        { agentId: req.agentId, chatId: req.chatId, tool: tu.name, args },
         'invoking tool',
       );
       try {
