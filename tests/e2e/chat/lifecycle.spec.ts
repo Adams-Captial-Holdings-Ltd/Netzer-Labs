@@ -55,11 +55,14 @@ test('keeps the composer editable while a reply streams', async ({ page }) => {
   await sendText(page, '/fixture longstream');
   await expect(stopOf(page)).toBeVisible();
 
+  // Editable NOW, while the reply streams. The chat suite's expect timeout is 30 s
+  // (playwright.config.ts), long enough to outlast the whole fixture, so a
+  // default-timeout check here would simply wait for the reply to end and pass.
   const composer = composerOf(page);
-  await expect(composer).toBeEnabled();
-  await composer.fill('a follow-up I am still writing');
+  await expect(composer).toBeEditable({ timeout: 2_000 });
+  await composer.fill('a follow-up I am still writing', { timeout: 2_000 });
   // Still streaming: the control is Stop, so a second turn cannot start.
-  await expect(stopOf(page)).toBeVisible();
+  await expect(stopOf(page)).toBeVisible({ timeout: 2_000 });
   await expect(sendOf(page)).toHaveCount(0);
 
   // When the reply ends, the draft is still there, untouched.
@@ -82,8 +85,10 @@ test("keeps each conversation's own draft", async ({ page }) => {
   await page.goto('/dashboard/chat');
   const composer = composerOf(page);
   await expect(composer).toBeVisible();
-  const first = page.locator('button[title="Wiring the turn stream"]');
-  const second = page.locator('button[title="Which model is the LP update agent on?"]');
+  // `:visible` — the conversation list is rendered twice (the desktop rail and the
+  // hidden mobile drawer), so a bare title match finds two buttons.
+  const first = page.locator('button[title="Wiring the turn stream"]:visible');
+  const second = page.locator('button[title="Which model is the LP update agent on?"]:visible');
 
   await first.click();
   await composer.fill('draft for the first conversation');
