@@ -185,6 +185,16 @@ interface ComposerProps {
  * generous end: a cap that is too tall clamps against TEXTAREA_MAX, while one
  * that is too short would silently take four rows off a laptop composer.
  */
+/**
+ * Whether nothing else took the focus while a reply streamed: no active element,
+ * the body (the Send button that had it was replaced by Stop), or something
+ * inside the composer's own form.
+ */
+function focusIsFree(form: HTMLFormElement | null): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || (form !== null && form.contains(active));
+}
+
 function useMaxRows(): number {
   const mediaQuery = () =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -224,7 +234,16 @@ export function Composer({
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const area = textareaRef ?? ownRef;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const maxRows = useMaxRows();
+  const wasStreaming = useRef(streaming);
+
+  // The cursor comes back to the composer when a reply ends — unless something
+  // else took the focus while the reply streamed, which is theirs to keep.
+  useEffect(() => {
+    if (wasStreaming.current && !streaming && focusIsFree(formRef.current)) area.current?.focus();
+    wasStreaming.current = streaming;
+  }, [streaming]);
 
   // No sizing effect of our own any more. TextareaAutosize re-measures in a
   // layout effect on every render — which is every keystroke, paste, starter
@@ -251,9 +270,25 @@ export function Composer({
     submit();
   }
 
+  // Escape stops a streaming reply from anywhere in the composer: the form
+  // receives the keydown from the textarea and from the Stop button alike.
+  function handleEscape(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || !streaming) return;
+    // The Escape that closes a Japanese or Chinese input method's candidates is
+    // the input method's, not a Stop.
+    if (e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    // The page-wide Jarvis Escape listener (JarvisWidget.tsx, on `window`) must
+    // not also fire and end a voice session.
+    e.stopPropagation();
+    onStop();
+  }
+
   return (
     <form
+      ref={formRef}
       onSubmit={(e) => { e.preventDefault(); submit(); }}
+      onKeyDown={handleEscape}
       // No measure, no padding, no border — see the header. This element's
       // content box IS the shared column's.
       class="flex flex-col"
@@ -336,9 +371,7 @@ export function Composer({
           onKeyDown={handleKeyDown}
           placeholder={`Message ${agentName}...`}
           aria-label={`Message ${agentName}`}
-          // Unchanged from the single-line composer: a second turn cannot be
-          // composed on top of the one in flight.
-          disabled={streaming}
+          // The next turn can be composed during a run; canSend waits for it to end.
           autoFocus
           // `chat-composer__input` is where the CAPPED state is finished (see
           // index.css): no scrollbar furniture, and a fade at both ends so a

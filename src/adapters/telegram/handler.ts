@@ -33,6 +33,7 @@ import type { IncomingAttachment, TelegramUpdate } from './types.js';
 import { downloadAndStore } from './media.js';
 import { buildKbConfirmation, stageLabel, getRawObject } from '../../lib/media/process.js';
 import { runAgentTurn, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { classifyTurnError } from '../../agent/turn-errors.js';
 import { runCommand } from '../../agent/commands.js';
 import { pickAgent } from '../../agent/picker.js';
 import { appendTurns, getSession } from '../../lib/state/sessions-repo.js';
@@ -420,6 +421,7 @@ async function handleMessage(
       history,
       modelOverride,
       onChunk,
+      // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
       onToolEvent,
       surface: 'telegram',
       // A person typed this in a chat window. `origin` is the ONLY thing that
@@ -574,7 +576,7 @@ async function handleMessage(
       botAgentId,
       replyChatId,
       placeholderId,
-      `Something went wrong: ${errMessage.slice(0, 300)}`,
+      classifyTurnError(err).message,
     );
   }
 }

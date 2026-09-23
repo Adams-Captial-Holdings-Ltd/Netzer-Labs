@@ -24,6 +24,17 @@ describe('buildStreamingRedactor', () => {
     expect(out).toContain('[REDACTED]');
   });
 
+  it('redacts an API key written as a JSON property, the shape tool payloads carry', async () => {
+    // Codex's inspection of the P2 review fixes: tool inputs and results now pass
+    // this redactor on their way to the browser, and they are JSON. The key name's
+    // closing quote sat between the name and the colon, so the pattern missed it.
+    const redact = await buildStreamingRedactor();
+    const secret = 'abcdefghijklmnopqrstuvwx';
+    for (const text of [`{"api_key":"${secret}"}`, `{"apiKey": "${secret}"}`, `{'secret_key':'${secret}'}`]) {
+      expect(redact(text)).not.toContain(secret);
+    }
+  });
+
   it('passes ordinary text through unchanged', async () => {
     const redact = await buildStreamingRedactor();
     expect(redact('just a normal streamed reply')).toBe('just a normal streamed reply');

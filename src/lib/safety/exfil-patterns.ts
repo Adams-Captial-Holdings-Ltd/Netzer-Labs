@@ -35,7 +35,7 @@ export const BUILTIN_PATTERNS: ExfilPattern[] = [
   {
     id: 'generic_api_key',
     name: 'Generic API Key Header',
-    regex: '(?:api[_-]?key|apikey|api_secret|secret_key)\\s*[:=]\\s*["\']?[A-Za-z0-9_\\-]{20,}',
+    regex: '(?:api[_-]?key|apikey|api_secret|secret_key)["\']?\\s*[:=]\\s*["\']?[A-Za-z0-9_\\-]{20,}',
     severity: 'block',
     enabled: true,
   },

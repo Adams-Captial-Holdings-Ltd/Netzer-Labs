@@ -40,6 +40,7 @@ export function bedrockClient(): BedrockRuntimeClient {
 
 export interface ConverseTurnInput {
   modelId: string;
+  abortSignal?: AbortSignal;
   systemPrompt: string;
   userText: string;
   /**
@@ -52,7 +53,7 @@ export interface ConverseTurnInput {
   maxTokens?: number;
   temperature?: number;
   /** Optional Bedrock Guardrail. Off when guardrail.id is empty or 'REPLACE_ME'. */
-  guardrail?: { id: string; version: string };
+  guardrail?: { id: string; version: string; streamMode?: 'sync' | 'async' };
   /** Retry budget. Default 3. */
   maxRetries?: number;
   /** Optional tool config. When set, Bedrock may emit toolUse blocks. */
@@ -90,6 +91,8 @@ export interface ConverseTurnOutput {
 export interface ConverseStreamCallbacks {
   /** Called with cumulative text after each chunk. */
   onChunk?: (cumulativeText: string) => void;
+  /** Called with cumulative tool-input characters after each fragment. */
+  onToolInput?: (chars: number) => void;
 }
 
 // ── Temperature self-heal ──────────────────────────────────────────
@@ -191,6 +194,7 @@ export async function converseStreamTurnWithFallback(
     const modelId = chain[i];
     let emitted = 0;
     const guarded: ConverseStreamCallbacks = {
+      onToolInput: callbacks.onToolInput,
       ...(callbacks.onChunk
         ? {
             onChunk: (cumulativeText: string) => {
@@ -207,6 +211,7 @@ export async function converseStreamTurnWithFallback(
       }
       return out;
     } catch (err) {
+      if (input.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') throw err;
       const next = chain[i + 1];
       if (!isFallbackTrigger(err) || emitted > 0 || !next) throw err;
       lastErr = err;
@@ -312,6 +317,9 @@ export async function withRetry<T>(
     try {
       return await op();
     } catch (err) {
+      // A Stop is not a failure: rethrown before any logging or retry, because
+      // every error-level line counts toward the alarm that pages the operator.
+      if ((err as { name?: string }).name === 'AbortError') throw err;
       lastErr = err;
       const name = (err as { name?: string }).name ?? '';
       if (!isRetryable(name) || attempt === maxRetries - 1) {
@@ -342,14 +350,21 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
   const maxRetries = input.maxRetries ?? 3;
   const t0 = Date.now();
 
+  const sendConverse = (command: ConverseCommand) => {
+    input.abortSignal?.throwIfAborted();
+    return input.abortSignal
+      ? bedrockClient().send(command, { abortSignal: input.abortSignal })
+      : bedrockClient().send(command);
+  };
   let out: ConverseCommandOutput;
   try {
     out = await withRetry<ConverseCommandOutput>(
       input.modelId,
       maxRetries,
-      () => bedrockClient().send(new ConverseCommand(buildParams(input))),
+      () => sendConverse(new ConverseCommand(buildParams(input))),
     );
   } catch (err) {
+    if (input.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') throw err;
     // First time a model rejects `temperature`, remember it and retry without —
     // buildParams now omits it for this model for the rest of the process.
     if (isTemperatureRejection(err) && !temperatureRejectingModels.has(input.modelId)) {
@@ -358,7 +373,7 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
       out = await withRetry<ConverseCommandOutput>(
         input.modelId,
         maxRetries,
-        () => bedrockClient().send(new ConverseCommand(buildParams(input))),
+        () => sendConverse(new ConverseCommand(buildParams(input))),
       );
     } else {
       throw err;
@@ -412,6 +427,16 @@ function isLocalUnsupportedStream(err: unknown): boolean {
   return /UnsupportedOperation|UnknownOperation|NotImplemented|501/i.test(`${name} ${msg}`);
 }
 
+/**
+ * Over HTTP/2 the SDK ends an aborted event stream cleanly instead of throwing,
+ * so a stopped call would otherwise return what had streamed, with no usage, as
+ * if the model had finished. The agent loop reads the name, exactly as it reads
+ * the SDK's own abort.
+ */
+function stoppedError(): Error {
+  return Object.assign(new Error('The turn was stopped'), { name: 'AbortError' });
+}
+
 export async function converseStreamTurn(
   input: ConverseTurnInput,
   callbacks: ConverseStreamCallbacks = {},
@@ -421,18 +446,28 @@ export async function converseStreamTurn(
   const maxRetries = input.maxRetries ?? 3;
   const t0 = Date.now();
 
+  const sendStream = () => {
+    input.abortSignal?.throwIfAborted();
+    const params = buildParams(input);
+    const command = new ConverseStreamCommand({
+      ...params,
+      ...(params.guardrailConfig && input.guardrail?.streamMode
+        ? { guardrailConfig: { ...params.guardrailConfig, streamProcessingMode: input.guardrail.streamMode } }
+        : {}),
+    });
+    return input.abortSignal
+      ? bedrockClient().send(command, { abortSignal: input.abortSignal })
+      : bedrockClient().send(command);
+  };
   let stream;
   try {
-    stream = await withRetry(input.modelId, maxRetries, () =>
-      bedrockClient().send(new ConverseStreamCommand(buildParams(input))),
-    );
+    stream = await withRetry(input.modelId, maxRetries, sendStream);
   } catch (err) {
+    if (input.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') throw err;
     if (isTemperatureRejection(err) && !temperatureRejectingModels.has(input.modelId)) {
       temperatureRejectingModels.add(input.modelId);
       logger.warn({ modelId: input.modelId }, 'model rejected temperature; retrying without it');
-      stream = await withRetry(input.modelId, maxRetries, () =>
-        bedrockClient().send(new ConverseStreamCommand(buildParams(input))),
-      );
+      stream = await withRetry(input.modelId, maxRetries, sendStream);
     } else if (isLocalUnsupportedStream(err)) {
       // Replay the identical request as a single non-streaming Converse and
       // hand the whole body back through onChunk, so callers that render
@@ -450,6 +485,7 @@ export async function converseStreamTurn(
   }
 
   let text = '';
+  let toolInputChars = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadInputTokens = 0;
@@ -458,9 +494,15 @@ export async function converseStreamTurn(
 
   if (stream.stream) {
     for await (const event of stream.stream) {
+      if (input.abortSignal?.aborted) throw stoppedError();
       if (event.contentBlockDelta?.delta?.text) {
         text += event.contentBlockDelta.delta.text;
         callbacks.onChunk?.(text);
+      }
+      const toolInput = event.contentBlockDelta?.delta?.toolUse?.input;
+      if (typeof toolInput === 'string') {
+        toolInputChars += toolInput.length;
+        callbacks.onToolInput?.(toolInputChars);
       }
       if (event.messageStop?.stopReason) {
         stopReason = event.messageStop.stopReason;
@@ -477,6 +519,7 @@ export async function converseStreamTurn(
       }
     }
   }
+  if (input.abortSignal?.aborted) throw stoppedError();
 
   return {
     text: text.trim(),

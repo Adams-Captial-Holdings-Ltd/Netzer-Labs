@@ -79,7 +79,8 @@ import {
   KILL_SWITCH_META,
   type KillSwitchName,
 } from '../../lib/state/kill-switches-repo.js';
-import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { classifyTurnError } from '../../agent/turn-errors.js';
 import { processMedia, buildKbConfirmation, kindForMime, stageLabel } from '../../lib/media/process.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
@@ -89,6 +90,10 @@ import { listPlaygroundModels, playgroundCost, playgroundMeteredCost } from '../
 import { InFlightGate } from '../../lib/concurrency/bounded.js';
 import {
   appendTurns,
+  beginTurn,
+  endTurn,
+  type ToolRecord,
+  type TurnStatus,
   getSession,
   getFullHistory,
   deleteSession,
@@ -141,7 +146,7 @@ import {
   listRevisions,
   type AgentFileName,
 } from '../../lib/state/agent-file-history-repo.js';
-import { streamSSE } from 'hono/streaming';
+import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { buildCsv } from '../../lib/csv.js';
 import {
   validateAgentId,
@@ -427,6 +432,100 @@ export function requiredRole(method: string, subPath: string): TokenRole {
   if (subPath === '/jarvis/manifest') return 'viewer';
   if (method === 'GET') return 'viewer';
   return 'operator';
+}
+
+export const SSE_HEARTBEAT_MS = 15_000;
+export const STOPPED_EMPTY_TEXT = '(Stopped before a reply.)';
+
+/** A refusal an operator chose (the daily cap, a kill switch): audited already, so a warning, not an alarm. */
+function isOperatorRefusal(err: unknown): boolean {
+  return err instanceof CostCapExceededError || err instanceof KillSwitchActiveError;
+}
+
+/** Known from the cache first; the agents table is read only for an agent not seen yet. */
+async function isKnownAgent(agentId: string): Promise<boolean> {
+  return listKnownAgents().includes(agentId) || (await listKnownAgentsAsync()).includes(agentId);
+}
+
+/** A refused send is logged with its code so a refusal can be found; nothing failed, so at warn. */
+function refusedSend(code: 'unknown_agent' | 'unknown_model' | 'invalid_message_id', fields: Record<string, unknown>): { error: string } {
+  logger.warn({ ...fields, code }, 'dashboard chat send refused');
+  return { error: code };
+}
+
+/**
+ * Stop the turn when the request itself is gone. node-server never cancels a
+ * body nobody started reading, so `stream.onAbort` never fires for a reader who
+ * left during the route's awaits before the stream began — but the request's
+ * own signal has fired by then.
+ */
+function abortWithRequest(signal: AbortSignal, stream: SSEStreamingApi): void {
+  if (signal.aborted) stream.abort();
+  else signal.addEventListener('abort', () => stream.abort(), { once: true });
+}
+
+function chunkWriter(stream: SSEStreamingApi, protocol?: number): (text: string) => void {
+  let previous = '';
+  return (text) => {
+    if (protocol !== 2) {
+      void stream.writeSSE({ event: 'chunk', data: text });
+      return;
+    }
+    if (previous === text) return;
+    let i = 0;
+    while (i < previous.length && i < text.length && previous[i] === text[i]) i++;
+    previous = text;
+    void stream.writeSSE({ event: 'delta', data: JSON.stringify({ i, t: text.slice(i) }) });
+  };
+}
+
+async function finishChatTurn(agentId: string, chatId: string, id: string | undefined, status: Exclude<TurnStatus, 'streaming'>): Promise<void> {
+  if (!id) return;
+  try {
+    const ended = await endTurn(agentId, chatId, id, status);
+    if (!ended) logger.warn({ agentId, chatId, clientMessageId: id, status }, 'dashboard chat turn record was not streaming');
+  } catch (err) {
+    logger.error({ agentId, chatId, clientMessageId: id, status, err }, 'dashboard chat turn state save failed');
+  }
+}
+
+async function saveChatTurn(
+  agentId: string, chatId: string, userText: string,
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked'>, tools: ToolRecord[], owner: SessionEnrichment,
+): Promise<boolean> {
+  if (result.blocked) return true;
+  const ts = Math.floor(Date.now() / 1000);
+  try {
+    await appendTurns(agentId, chatId, [
+      { role: 'user', text: userText, ts },
+      { role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
+        ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}) },
+    ], undefined, owner);
+    return true;
+  } catch (err) {
+    logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    return false;
+  }
+}
+
+async function writeChatAnswer(stream: SSEStreamingApi, result: AgentTurnResponse, confirmations: string[]): Promise<void> {
+  await stream.writeSSE({
+    event: 'final',
+    data: JSON.stringify({ text: result.text, modelId: result.modelId, latencyMs: result.latencyMs,
+      costUsd: result.costUsd, toolCallCount: result.toolCallCount }),
+  });
+  if (result.blocked) return;
+  for (const text of confirmations) {
+    await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text }) });
+  }
+  for (const m of result.media ?? []) {
+    if (!m.presignedUrl) continue;
+    await stream.writeSSE({
+      event: m.kind === 'artifact' ? 'artifact' : 'image',
+      data: JSON.stringify({ url: m.presignedUrl, caption: m.caption ?? '',
+        ...(m.kind === 'artifact' ? { name: m.caption ?? 'document', contentType: m.contentType } : {}) }),
+    });
+  }
 }
 
 function safeDashboardChatId(input: string | undefined): string {
@@ -1949,6 +2048,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         agentId?: string;
         chatId?: string;
         modelOverride?: string;
+        protocol?: number;
+        clientMessageId?: string;
         /** Pre-staged uploads (presigned PUT to the vectors staging bucket). */
         attachments?: Array<{ s3Key?: string; fileName?: string; mimeType?: string }>;
       }>()
@@ -1970,6 +2071,14 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         return c.json({ error: 'invalid_upload_key' }, 400);
       }
     }
+    if (!(await isKnownAgent(agentId))) return c.json(refusedSend('unknown_agent', { agentId }), 404);
+    if (body?.modelOverride !== undefined && !listAvailableModels(process.env).some((m) => m.id === body.modelOverride)) {
+      return c.json(refusedSend('unknown_model', { agentId, model: body.modelOverride }), 400);
+    }
+    const clientMessageId = body?.clientMessageId;
+    if (clientMessageId !== undefined && (typeof clientMessageId !== 'string' || !/^[A-Za-z0-9._:-]{1,64}$/.test(clientMessageId))) {
+      return c.json(refusedSend('invalid_message_id', { agentId, chatId }), 400);
+    }
     // WI-1.1 (decision 9): refuse a conversation the caller does not own before
     // anything touches it — slash commands included, since /newchat wipes a
     // history — with the 404 DELETE /sessions gives a missing chat. A send still
@@ -1979,129 +2088,155 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (stored && !ownsConversation(c, stored.userId)) {
       return c.json({ error: 'not_found' }, 404);
     }
+    if (clientMessageId) {
+      const payloadHash = createHash('sha256').update(JSON.stringify({
+        text, agentId, chatId, modelOverride: body?.modelOverride ?? null,
+        attachments: rawAttachments.map((a) => a.s3Key),
+      })).digest('hex');
+      // A turn record that cannot be written is a typed 503, named by its turn:
+      // no model call, and not an anonymous "unhandled error".
+      const turn = await beginTurn(agentId, chatId, clientMessageId, payloadHash).catch((err: unknown) => {
+        logger.error({ agentId, chatId, clientMessageId, err }, 'dashboard chat turn record could not be written');
+        return undefined;
+      });
+      if (!turn) return c.json({ error: 'turn_record_unavailable' }, 503);
+      if (!turn.started) return turn.sameMessage
+        ? c.json({ error: 'turn_duplicate', status: turn.status }, 409)
+        : c.json({ error: 'turn_conflict' }, 409);
+    }
     return streamSSE(c, async (stream) => {
-      // Command? send the reply as a single event and close. Skipped for
-      // attachment turns — a caption starting with '/' is data, not a command
-      // (parity with Telegram/Slack).
-      if (rawAttachments.length === 0) {
-        const cmd = await runCommand(agentId, chatId, text, { owner: conversationOwner(c) });
-        if (cmd?.reply) {
-          await stream.writeSSE({ event: 'reply', data: cmd.reply });
-          await stream.writeSSE({ event: 'done', data: 'command' });
+      const abort = new AbortController();
+      stream.onAbort(() => abort.abort());
+      abortWithRequest(c.req.raw.signal, stream);
+      const heartbeat = setInterval(() => void stream.write(': ping\n\n'), SSE_HEARTBEAT_MS);
+      const tools: ToolRecord[] = [];
+      const toolStarts = new Map<string, Pick<ToolRecord, 'label' | 'step'>>();
+      let userText = text;
+      let finalSent = false;
+      try {
+        // Command? send the reply as a single event and close. Skipped for
+        // attachment turns — a caption starting with '/' is data, not a command
+        // (parity with Telegram/Slack).
+        if (rawAttachments.length === 0) {
+          const cmd = await runCommand(agentId, chatId, text, { owner: conversationOwner(c) });
+          if (cmd?.reply) {
+            await stream.writeSSE({ event: 'reply', data: cmd.reply });
+            await finishChatTurn(agentId, chatId, clientMessageId, 'complete');
+            await stream.writeSSE({ event: 'done', data: 'command' });
+            return;
+          }
+        }
+
+        // Attachments: load staged bytes, run the shared media pipeline
+        // (raw-bucket archival, inline blocks, Transcribe, KB auto-ingest),
+        // narrate stages over SSE, then clean up the staging object.
+        const attachmentBlocks: AttachmentBlock[] = [];
+        const kbConfirmations: string[] = [];
+        const acks: string[] = [];
+        for (const a of rawAttachments) {
+          const s3Key = a.s3Key as string;
+          const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
+          try {
+            const bytes = await getObjectBuffer(s3Key);
+            const media = await processMedia(
+              {
+                surface: 'dashboard',
+                agentId,
+                targetAgentId: agentId,
+                chatId,
+                kind: kindForMime(a.mimeType),
+                fileName,
+                mimeType: a.mimeType,
+                bytes,
+              },
+              (stage) => {
+                void stream.writeSSE({
+                  event: 'media',
+                  data: JSON.stringify({ fileName, stage, label: stageLabel(stage, fileName) }),
+                });
+              },
+            );
+            attachmentBlocks.push(...media.blocks);
+            if (media.transcript) {
+              const label =
+                media.transcriptKind === 'video' ? '[video transcript]' : '[transcribed audio]';
+              userText = userText ? `${userText}\n\n${label} ${media.transcript}` : media.transcript;
+            }
+            if (media.ackText) acks.push(media.ackText);
+            if (media.kb) kbConfirmations.push(buildKbConfirmation(media.kb, fileName));
+          } catch (err) {
+            logger.warn(
+              { s3Key, errMessage: err instanceof Error ? err.message : String(err) },
+              'dashboard chat attachment processing failed',
+            );
+            acks.push(`Couldn't process ${fileName}.`);
+          } finally {
+            void deleteObject(s3Key);
+          }
+        }
+        if (rawAttachments.length > 0 && attachmentBlocks.length === 0 && userText === '' ) {
+          // Nothing the model can see (KB-only docs land here; their acks
+          // already carry the "indexed, ask me anything" line).
+          await stream.writeSSE({ event: 'reply', data: acks.join('\n') || 'Stored the file.' });
+          for (const k of kbConfirmations) {
+            await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
+          }
+          await finishChatTurn(agentId, chatId, clientMessageId, 'complete');
+          await stream.writeSSE({ event: 'done', data: 'media_only' });
           return;
         }
-      }
+        if (rawAttachments.length > 0 && !userText) userText = 'What is this?';
 
-      // Attachments: load staged bytes, run the shared media pipeline
-      // (raw-bucket archival, inline blocks, Transcribe, KB auto-ingest),
-      // narrate stages over SSE, then clean up the staging object.
-      let userText = text;
-      const attachmentBlocks: AttachmentBlock[] = [];
-      const kbConfirmations: string[] = [];
-      const acks: string[] = [];
-      for (const a of rawAttachments) {
-        const s3Key = a.s3Key as string;
-        const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
+        // Cross-surface peek (flag default OFF): when the authenticated member
+        // is a configured owner (CCE_OWNER_DASHBOARD_EMAILS), inject their
+        // recent Telegram/Slack conversation with this agent as READ-ONLY
+        // context. Dashboard turns still persist under the dashboard: chatId —
+        // the owner session is never written from here (write containment).
+        // The peek source is hard-limited to principal-scoped chatIds; a Slack
+        // channel session can never leak in.
+        let peekNote: string | undefined;
         try {
-          const bytes = await getObjectBuffer(s3Key);
-          const media = await processMedia(
-            {
-              surface: 'dashboard',
-              agentId,
-              targetAgentId: agentId,
-              chatId,
-              kind: kindForMime(a.mimeType),
-              fileName,
-              mimeType: a.mimeType,
-              bytes,
-            },
-            (stage) => {
-              void stream.writeSSE({
-                event: 'media',
-                data: JSON.stringify({ fileName, stage, label: stageLabel(stage, fileName) }),
-              });
-            },
-          );
-          attachmentBlocks.push(...media.blocks);
-          if (media.transcript) {
-            const label =
-              media.transcriptKind === 'video' ? '[video transcript]' : '[transcribed audio]';
-            userText = userText ? `${userText}\n\n${label} ${media.transcript}` : media.transcript;
-          }
-          if (media.ackText) acks.push(media.ackText);
-          if (media.kb) kbConfirmations.push(buildKbConfirmation(media.kb, fileName));
-        } catch (err) {
-          logger.warn(
-            { s3Key, errMessage: err instanceof Error ? err.message : String(err) },
-            'dashboard chat attachment processing failed',
-          );
-          acks.push(`Couldn't process ${fileName}.`);
-        } finally {
-          void deleteObject(s3Key);
-        }
-      }
-      if (rawAttachments.length > 0 && attachmentBlocks.length === 0 && userText === '' ) {
-        // Nothing the model can see (KB-only docs land here; their acks
-        // already carry the "indexed, ask me anything" line).
-        await stream.writeSSE({ event: 'reply', data: acks.join('\n') || 'Stored the file.' });
-        for (const k of kbConfirmations) {
-          await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
-        }
-        await stream.writeSSE({ event: 'done', data: 'media_only' });
-        return;
-      }
-      if (rawAttachments.length > 0 && !userText) userText = 'What is this?';
-
-      // Cross-surface peek (flag default OFF): when the authenticated member
-      // is a configured owner (CCE_OWNER_DASHBOARD_EMAILS), inject their
-      // recent Telegram/Slack conversation with this agent as READ-ONLY
-      // context. Dashboard turns still persist under the dashboard: chatId —
-      // the owner session is never written from here (write containment).
-      // The peek source is hard-limited to principal-scoped chatIds; a Slack
-      // channel session can never leak in.
-      let peekNote: string | undefined;
-      try {
-        if ((await getConfig('sessions', 'cross_surface_peek')) === '1') {
-          const principal = getPrincipal(c);
-          const email = principal?.userId
-            ? (await getUser(principal.userId))?.emailLower
-            : undefined;
-          const ownerChat = resolveOwnerChatId('dashboard', email);
-          if (ownerChat && isPrincipalScopedChatId(ownerChat)) {
-            const peekTurns = Math.max(
-              1,
-              Math.min(10, Number((await getConfig('sessions', 'cross_surface_peek_turns')) ?? 6)),
-            );
-            const ownerSession = await getSession(agentId, ownerChat);
-            const recent = (ownerSession?.turns ?? []).slice(-peekTurns);
-            if (recent.length > 0) {
-              // Neutralize angle brackets exactly like the hive block so a
-              // chat message can't close </other_surfaces> and inject
-              // pseudo-structure into the system prompt.
-              const lines = recent
-                .map((t) => {
-                  const safe = t.text.slice(0, 240).replace(/</g, '‹').replace(/>/g, '›');
-                  return `- [${t.surface ?? 'chat'}] ${t.role === 'user' ? 'user' : 'you'}: ${safe}`;
-                })
-                .join('\n');
-              peekNote = `<other_surfaces>\nThe same person's recent conversation with you on other chat surfaces (read-only background):\n${lines}\n</other_surfaces>`;
+          if ((await getConfig('sessions', 'cross_surface_peek')) === '1') {
+            const principal = getPrincipal(c);
+            const email = principal?.userId
+              ? (await getUser(principal.userId))?.emailLower
+              : undefined;
+            const ownerChat = resolveOwnerChatId('dashboard', email);
+            if (ownerChat && isPrincipalScopedChatId(ownerChat)) {
+              const peekTurns = Math.max(
+                1,
+                Math.min(10, Number((await getConfig('sessions', 'cross_surface_peek_turns')) ?? 6)),
+              );
+              const ownerSession = await getSession(agentId, ownerChat);
+              const recent = (ownerSession?.turns ?? []).slice(-peekTurns);
+              if (recent.length > 0) {
+                // Neutralize angle brackets exactly like the hive block so a
+                // chat message can't close </other_surfaces> and inject
+                // pseudo-structure into the system prompt.
+                const lines = recent
+                  .map((t) => {
+                    const safe = t.text.slice(0, 240).replace(/</g, '‹').replace(/>/g, '›');
+                    return `- [${t.surface ?? 'chat'}] ${t.role === 'user' ? 'user' : 'you'}: ${safe}`;
+                  })
+                  .join('\n');
+                peekNote = `<other_surfaces>\nThe same person's recent conversation with you on other chat surfaces (read-only background):\n${lines}\n</other_surfaces>`;
+              }
             }
           }
+        } catch {
+          // Peek is best-effort context; never fail the turn over it.
         }
-      } catch {
-        // Peek is best-effort context; never fail the turn over it.
-      }
 
-      const session = await getSession(agentId, chatId);
-      const history = session?.turns ?? [];
-      // Per-turn model: an explicit picker choice wins, else the chat's sticky
-      // /model override, else the agent's configured model (resolved in the
-      // loop). The non-stream /test-turn already does this; the stream path used
-      // to drop the override entirely, so a /model switch (or the new Chat model
-      // picker) silently had no effect on the streamed Chat tab.
-      const modelOverride = body?.modelOverride ?? session?.modelOverride;
-      try {
+        const session = await getSession(agentId, chatId);
+        const history = session?.turns ?? [];
+        // Per-turn model: an explicit picker choice wins, else the chat's sticky
+        // /model override, else the agent's configured model (resolved in the
+        // loop). The non-stream /test-turn already does this; the stream path used
+        // to drop the override entirely, so a /model switch (or the new Chat model
+        // picker) silently had no effect on the streamed Chat tab.
+        const modelOverride = body?.modelOverride ?? session?.modelOverride;
         const result = await runAgentTurn({
+          abortSignal: abort.signal,
           agentId,
           chatId,
           userText,
@@ -2131,82 +2266,47 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
           ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
           ...(peekNote ? { systemNote: peekNote } : {}),
-          onChunk: (cumulative) => {
-            // fire and forget; await would serialize the stream
-            void stream.writeSSE({ event: 'chunk', data: cumulative });
+          onChunk: chunkWriter(stream, body?.protocol),
+          onToolEvent: ({ name, callIndex, toolUseId, input, inputTruncated }) => {
+            const info = { label: humanizeToolName(name), step: callIndex + 1 };
+            toolStarts.set(toolUseId, info);
+            void stream.writeSSE({ event: 'tool', data: JSON.stringify({ ...info, toolUseId, input, inputTruncated }) });
           },
-          // Live tool status, mirroring Telegram/Slack (CLAUDE.md "Chat surface
-          // parity"). Tool dispatch emits no chunks, so without this the Chat
-          // tab shows only the typing dots while the agent works tools.
-          onToolEvent: ({ name, callIndex }) => {
-            void stream.writeSSE({
-              event: 'tool',
-              data: JSON.stringify({ label: humanizeToolName(name), step: callIndex + 1 }),
-            });
+          onToolResult: ({ name, callIndex, toolUseId, output, isError, truncated }) => {
+            const result = { toolUseId, output, isError, truncated };
+            tools.push({ ...(toolStarts.get(toolUseId) ?? { label: humanizeToolName(name), step: callIndex + 1 }), ...result });
+            void stream.writeSSE({ event: 'tool_result', data: JSON.stringify(result) });
           },
         });
-        await stream.writeSSE({
-          event: 'final',
-          data: JSON.stringify({
-            text: result.text,
-            modelId: result.modelId,
-            latencyMs: result.latencyMs,
-            costUsd: result.costUsd,
-            toolCallCount: result.toolCallCount,
-          }),
-        });
-        // Knowledge-base confirmations after the answer — the Chat tab renders
-        // these as chips under the assistant message (parity with the
-        // Telegram/Slack follow-up message).
-        if (!result.blocked) {
-          for (const k of [...kbConfirmations, ...acks]) {
-            await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
-          }
-          // Generated media: the browser renders the presigned URL directly
-          // (parity with Telegram sendPhoto / Slack file upload). Documents go
-          // out as a distinct `artifact` event so the Chat tab renders a
-          // download card rather than a broken <img> — and, critically, so the
-          // usable link never depends on the model reproducing it in its reply.
-          for (const m of result.media ?? []) {
-            if (!m.presignedUrl) continue;
-            await stream.writeSSE({
-              event: m.kind === 'artifact' ? 'artifact' : 'image',
-              data: JSON.stringify({
-                url: m.presignedUrl,
-                caption: m.caption ?? '',
-                ...(m.kind === 'artifact'
-                  ? { name: m.caption ?? 'document', contentType: m.contentType }
-                  : {}),
-              }),
-            });
-          }
+        if (result.stopped) {
+          clearInterval(heartbeat);
+          await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c));
+          await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
+          return;
         }
-        // Guardrail-blocked exchanges are not persisted; a kept block notice
-        // used to poison the session and re-trip the guardrail on every
-        // subsequent turn until /newchat.
-        if (!result.blocked) {
-          const now = Math.floor(Date.now() / 1000);
-          await appendTurns(agentId, chatId, [
-            { role: 'user', text: userText, ts: now },
-            { role: 'assistant', text: result.text, ts: now },
-          ], undefined, conversationOwner(c));
-        }
-        await stream.writeSSE({ event: 'done', data: 'ok' });
+        // The save and the turn record come first: an awaited write to a body
+        // nobody reads never resolves, and must not gate either.
+        const saved = await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c));
+        await finishChatTurn(agentId, chatId, clientMessageId, result.blocked ? 'refused' : 'complete');
+        finalSent = true;
+        await writeChatAnswer(stream, result, [...kbConfirmations, ...acks]);
+        await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
       } catch (err) {
-        // Emit a clean code for an enforcement refusal rather than the raw
-        // message (which for the indeterminate strict block would read
-        // "$NaN >= $50.00"). The Chat SSE consumer renders this error text.
-        const data =
-          err instanceof CostCapExceededError
-            ? Number.isNaN(err.spendUsd)
-              ? 'cost_cap_unverifiable'
-              : 'cost_cap_exceeded'
-            : err instanceof KillSwitchActiveError
-              ? `kill_switch_active: ${err.reason}`
-              : err instanceof Error
-                ? err.message
-                : String(err);
-        await stream.writeSSE({ event: 'error', data });
+        if ((err as { name?: string })?.name === 'AbortError') {
+          clearInterval(heartbeat);
+          await saveChatTurn(agentId, chatId, userText, { text: '', stopped: true }, tools, conversationOwner(c));
+          await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
+          return;
+        }
+        if (isOperatorRefusal(err)) logger.warn({ agentId, chatId, err }, 'dashboard chat turn refused');
+        else logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
+        await finishChatTurn(agentId, chatId, clientMessageId, 'error');
+        if (!finalSent) {
+          const error = classifyTurnError(err);
+          await stream.writeSSE({ event: 'error', data: body?.protocol === 2 ? JSON.stringify(error) : error.message });
+        }
+      } finally {
+        clearInterval(heartbeat);
       }
     });
   });
@@ -2406,6 +2506,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const agentId = body.agentId ?? 'main';
     const chatId = safeDashboardChatId(body.chatId);
     const persist = body.persistTurns ?? true;
+
+    if (!(await isKnownAgent(agentId))) return c.json(refusedSend('unknown_agent', { agentId }), 404);
+    if (body?.modelOverride !== undefined && !listAvailableModels(process.env).some((m) => m.id === body.modelOverride)) {
+      return c.json(refusedSend('unknown_model', { agentId, model: body.modelOverride }), 400);
+    }
 
     // WI-1.1: the same owner check as the streamed route, before the command
     // path. persistTurns:false still replays the stored history to the model.

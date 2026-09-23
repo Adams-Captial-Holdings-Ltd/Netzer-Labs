@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
-import type { Agent, Conversation, Message, Model } from '../lib/chat/types';
+import type { Agent, Conversation, Message, Model, ToolCall } from '../lib/chat/types';
 import {
   MODEL_NAMES,
   freshChatId,
   storedChatId,
   rememberChatId,
   conversationTitle,
-  friendlyStreamError,
+  friendlyTurnError,
+  newMessageId,
+  transcriptToMessages,
 } from '../lib/chat/helpers';
 import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
@@ -53,6 +55,15 @@ export function Chat() {
   const [chatId, setChatId] = useState(freshChatId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const draftsRef = useRef(new Map<string, string>());
+  // True while the chat on screen is a fresh one with nothing sent yet — an id
+  // nothing can reopen. Set when one is minted (`startNewChat`, the first
+  // mount), cleared by the first send in it or by opening a stored
+  // conversation. A ref, like `deletingRef`: handlers read it, nothing renders
+  // it. It is NOT `messages.length === 0` — a reopened conversation has no
+  // messages on screen until its transcript arrives, and none at all where the
+  // transcript is empty, yet its id is one the sidebar can reopen.
+  const unsentChatRef = useRef(true);
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
   // Epoch ms the in-flight turn was dispatched. The live row counts up from it,
@@ -64,6 +75,7 @@ export function Chat() {
   // the state is useless to the abort path — and the abort path is precisely
   // where the partial answer has to be recovered and kept.
   const streamTextRef = useRef('');
+  const streamToolsRef = useRef<ToolCall[]>([]);
   // Aborts the in-flight turn (the composer's Stop control). Null when idle.
   const abortRef = useRef<AbortController | null>(null);
   // Live tool-call status, mirroring Telegram/Slack (CLAUDE.md "Chat surface
@@ -171,26 +183,36 @@ export function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
-  // Reopen a stored conversation: point at its chatId and replay its turns.
-  // The transcript endpoint returns the real turn array (Sessions.tsx uses the
-  // same one). Only the last 20 turns exist server-side — the window cap.
+  // Where the chat on screen files its draft on the way out. A chat with nothing
+  // sent yet shares ONE slot: its fresh id is never reopened, so a draft filed
+  // under it was lost on New chat or on a look at another conversation. A
+  // stored conversation keeps its own.
+  const NEW_DRAFT = 'new';
+  const currentDraftKey = () => (unsentChatRef.current ? NEW_DRAFT : `${agentId}/${chatId}`);
+
+  // `fresh`: a new chat restores the `new` slot and clears it; a stored
+  // conversation restores its own draft, or nothing.
+  function activateConversation(id: string, forAgent = agentId, fresh = false) {
+    draftsRef.current.set(currentDraftKey(), input);
+    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`);
+    if (fresh) draftsRef.current.delete(NEW_DRAFT);
+    unsentChatRef.current = fresh;
+    setInput(restored ?? '');
+    setChatId(id);
+    rememberChatId(forAgent, id);
+  }
+
+  // Reopen a stored conversation, including tool results and stopped turns.
   async function openConversation(id: string) {
     if (streaming) return;
-    setChatId(id);
-    rememberChatId(agentId, id);
+    activateConversation(id);
     setStreamText('');
     setMessages([]);
     try {
-      const d = await api.get<{ turns?: Array<{ role: string; text: string; ts: number }> }>(
+      const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
         `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(id)}`,
       );
-      setMessages(
-        (d.turns ?? []).map((t) => ({
-          role: t.role === 'user' ? 'user' : 'assistant',
-          text: t.text,
-          ts: t.ts,
-        })),
-      );
+      setMessages(transcriptToMessages(d.turns ?? []));
     } catch (e) {
       console.error('Chat: failed to load transcript', e);
       setLoadError('Could not load that conversation. It may have been deleted.');
@@ -198,10 +220,9 @@ export function Chat() {
   }
 
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
-  function startNewChat() {
+  function startNewChat(forAgent = agentId) {
     const id = freshChatId();
-    setChatId(id);
-    rememberChatId(agentId, id);
+    activateConversation(id, forAgent, true);
     setMessages([]);
     setStreamText('');
   }
@@ -264,13 +285,19 @@ export function Chat() {
   function selectAgent(id: string) {
     if (id === agentId) return;
     setAgentId(id);
-    startNewChat();
+    startNewChat(id);
   }
 
   async function send() {
     const text = input.trim();
     const sendFiles = files;
     if ((!text && sendFiles.length === 0) || streaming || !agentId) return;
+    const clientMessageId = newMessageId();
+    draftsRef.current.delete(`${agentId}/${chatId}`);
+    // The first send in a fresh chat: its draft slot is spent, and from here on
+    // the chat has messages and an id the sidebar can reopen.
+    if (unsentChatRef.current) draftsRef.current.delete(NEW_DRAFT);
+    unsentChatRef.current = false;
     setInput('');
     setFiles([]);
     const fileNote = sendFiles.length > 0
@@ -285,6 +312,7 @@ export function Chat() {
     setStreaming(true);
     setStreamText('');
     streamTextRef.current = '';
+    streamToolsRef.current = [];
     setToolStatus('');
     setStreamStartedAt(Date.now());
     const abort = new AbortController();
@@ -305,6 +333,8 @@ export function Chat() {
           text,
           agentId,
           chatId,
+          clientMessageId,
+          protocol: 2,
           ...(modelId ? { modelOverride: modelId } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
         },
@@ -312,6 +342,7 @@ export function Chat() {
         {
           onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
           onToolStatus: setToolStatus,
+          onTools: (tools) => { streamToolsRef.current = tools; },
         },
         // Stop is the only thing this signal does; every other exit path from
         // streamTurn is unchanged.
@@ -322,7 +353,7 @@ export function Chat() {
         // Mid-stream failure. If text had already streamed, keep it and append a
         // clear error suffix; otherwise show the error on its own. Either way it
         // renders in a red bubble, never as a silent blank reply.
-        const msg = friendlyStreamError(outcome.errorText);
+        const msg = friendlyTurnError(outcome.errorText, outcome.errorCode);
         const partial = (!outcome.isReply && outcome.text) ? `${outcome.text}\n\n${msg}` : msg;
         setMessages((prev) => [...prev, { role: 'assistant', text: partial, ts: Date.now() / 1000, error: true }]);
         setStreamText('');
@@ -342,6 +373,8 @@ export function Chat() {
         ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
         ...(outcome.meta ? { meta: outcome.meta } : {}),
         ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
+        // `done: not_saved`: the answer arrived, the server could not store it.
+        ...(outcome.saved === false ? { notSaved: true as const } : {}),
       }]);
     } catch (e) {
       // Stop, not a failure. streamTurn rejects with an AbortError the moment
@@ -349,17 +382,16 @@ export function Chat() {
       // whatever text had arrived as a settled turn instead of throwing it away
       // (and instead of dressing a deliberate cancel up as a red error bubble).
       //
-      // No `tools` on a stopped turn: streamTurn's accumulator is local to the
-      // call that just rejected, and reaching into lib/chat to hand it out
-      // early would change a module pinned by the golden tests. No `meta`
-      // either — the run never reached `final`, so AssistantMessage renders the
-      // StoppedFooter in the footer slot rather than inventing numbers.
+      // Keep the latest tool snapshot too. No `meta` — the run never reached
+      // `final`, so AssistantMessage renders StoppedFooter rather than
+      // inventing numbers.
       if ((e as { name?: string } | null)?.name === 'AbortError') {
         setMessages((prev) => [...prev, {
           role: 'assistant',
           text: streamTextRef.current,
           ts: Date.now() / 1000,
           stopped: true,
+          ...(streamToolsRef.current.length > 0 ? { tools: streamToolsRef.current } : {}),
         }]);
         setStreamText('');
         streamTextRef.current = '';
@@ -372,12 +404,13 @@ export function Chat() {
       }
       // Log the raw cause for debugging, but render only sanitized copy: the
       // transcript must never show raw exception text (backend response bodies,
-      // URLs). friendlyStreamError is the same sanitizer the mid-stream SSE
-      // error path uses, so both failure paths speak with one voice — short
-      // clean causes still surface ("Something went wrong: Upload failed"),
-      // anything long or token-like collapses to the generic line.
+      // URLs). friendlyTurnError is the same sanitizer the mid-stream SSE error
+      // path uses, so both failure paths speak with one voice — a refusal
+      // before the stream (its `code`) says what to do about it, short clean
+      // causes still surface ("Something went wrong: Upload failed"), anything
+      // long or token-like collapses to the generic line.
       console.error('Chat: send failed', e);
-      const msg = friendlyStreamError(e instanceof Error && e.message ? e.message : '');
+      const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', (e as { code?: string } | null)?.code);
       setMessages((prev) => [...prev, { role: 'assistant', text: msg, ts: Date.now() / 1000, error: true }]);
     }
     setStreamText('');
@@ -425,8 +458,11 @@ export function Chat() {
       onRequestDelete={(c) => setPendingDelete(c)}
       // The SAME handler the header's New chat uses, confirm dialog included:
       // two controls for one action must not disagree about whether an
-      // in-progress conversation is about to be abandoned.
-      onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
+      // in-progress conversation is about to be abandoned. Only a fresh chat
+      // with nothing sent yet is left without asking; a stored conversation is
+      // confirmed whether or not its transcript has arrived (an empty one
+      // reopens all the same).
+      onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
       collapsed={sidebarCollapsed}
       onToggleCollapse={() => {
         const next = !sidebarCollapsed;
@@ -530,7 +566,7 @@ export function Chat() {
               onSelectModel={setModelId}
               chatId={chatId}
               streaming={streaming}
-              onNewChat={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
+              onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
             />
           }
           composer={composer}

@@ -67,7 +67,7 @@ const MAX_TURN_WINDOW_BYTES = 300_000;
 
 /** Byte size of a turn as DynamoDB will store it. */
 function turnBytes(t: Turn): number {
-  return Buffer.byteLength(t.text ?? '', 'utf8') + 64; // 64 ~ role/ts/surface overhead
+  return Buffer.byteLength(t.text ?? '', 'utf8') + Buffer.byteLength(JSON.stringify(t.tools ?? [])) + 64; // 64 ~ role/ts/surface overhead
 }
 
 /**
@@ -85,10 +85,24 @@ export function trimTurnsToBudget(
   turns: Turn[],
   budget = MAX_TURN_WINDOW_BYTES,
 ): { kept: Turn[]; dropped: Turn[] } {
+  // Tool output is expendable before conversation text; copy before clearing it.
+  const window = turns.map((t) => ({ ...t, ...(t.tools ? { tools: t.tools.map((tool) => ({ ...tool })) } : {}) }));
+  let bytes = window.reduce((sum, t) => sum + turnBytes(t), 0);
+  for (const turn of window) {
+    for (const tool of turn.tools ?? []) {
+      if (bytes <= budget) break;
+      if (!tool.output) continue;
+      const before = turnBytes(turn);
+      tool.output = '';
+      tool.truncated = true;
+      bytes += turnBytes(turn) - before;
+    }
+    if (bytes <= budget) break;
+  }
   let total = 0;
   let cut = 0;
   for (let i = turns.length - 1; i >= 0; i--) {
-    total += turnBytes(turns[i]!);
+    total += turnBytes(window[i]!);
     if (total > budget) {
       cut = i + 1;
       break;
@@ -97,7 +111,7 @@ export function trimTurnsToBudget(
   if (cut > 0) {
     while (cut < turns.length && turns[cut]?.role !== 'user') cut++;
   }
-  return { kept: turns.slice(cut), dropped: turns.slice(0, cut) };
+  return { kept: window.slice(cut), dropped: turns.slice(0, cut) };
 }
 const TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 // Default ingest cadence: distill the conversation into memory every N turns,
@@ -186,7 +200,18 @@ export function repairEmptyTurns(turns: Turn[]): Turn[] {
   );
 }
 
+export interface ToolRecord {
+  label: string;
+  step: number;
+  toolUseId?: string;
+  output?: string;
+  isError?: boolean;
+  truncated?: boolean;
+}
+
 export interface Turn {
+  status?: 'stopped';
+  tools?: ToolRecord[];
   role: 'user' | 'assistant';
   text: string;
   ts: number; // epoch seconds
@@ -259,16 +284,46 @@ function msgSk(chatId: string, seq: number): string {
  * A message record is one DynamoDB item, and an item over 400KB fails the
  * write — which would lose the turn that wanted recording. The window already
  * drops a turn that big (MAX_TURN_WINDOW_BYTES); the record keeps its first
- * 350,000 bytes and says so. ponytail: truncate, not split; chunk it across
- * records if a single message ever needs to survive whole.
+ * 350,000 bytes less its tool results and says so. ponytail: truncate, not split;
+ * chunk it across records if a single message ever needs to survive whole.
  */
 const MAX_MESSAGE_BYTES = 350_000;
 
-function capMessageText(text: string): { text: string; truncated?: true } {
+function capMessageText(text: string, byteBudget: number): { text: string; truncated?: true } {
+  const maxBytes = Math.max(0, byteBudget);
   const bytes = Buffer.from(text, 'utf8');
-  if (bytes.length <= MAX_MESSAGE_BYTES) return { text };
+  if (bytes.length <= maxBytes) return { text };
   // A cut inside a multi-byte character decodes to U+FFFD; drop that remnant.
-  return { text: bytes.subarray(0, MAX_MESSAGE_BYTES).toString('utf8').replace(/�$/, ''), truncated: true };
+  return { text: bytes.subarray(0, maxBytes).toString('utf8').replace(/�$/, ''), truncated: true };
+}
+
+/**
+ * The tool results a record can carry. When their JSON alone is over the record
+ * cap, outputs give way oldest first — the replay window's rule (decision 41) —
+ * and every call stays listed. Works on a copy; the caller's turn is unchanged.
+ */
+function fitToolRecords(tools: ToolRecord[]): ToolRecord[] {
+  const fitted = tools.map((tool) => ({ ...tool }));
+  let bytes = Buffer.byteLength(JSON.stringify(fitted), 'utf8');
+  for (const tool of fitted) {
+    if (bytes <= MAX_MESSAGE_BYTES) break;
+    if (!tool.output) continue;
+    const before = Buffer.byteLength(JSON.stringify(tool), 'utf8');
+    tool.output = '';
+    tool.truncated = true;
+    bytes += Buffer.byteLength(JSON.stringify(tool), 'utf8') - before;
+  }
+  return fitted;
+}
+
+/** A record's text and tool results, capped so the item fits: the text takes whatever budget the results leave. */
+function capRecordContent(t: Turn): { text: string; truncated?: true; tools?: ToolRecord[] } {
+  const tools = t.tools ? fitToolRecords(t.tools) : undefined;
+  const toolBytes = Buffer.byteLength(JSON.stringify(tools ?? []), 'utf8');
+  return {
+    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes),
+    ...(tools ? { tools } : {}),
+  };
 }
 
 export async function getSession(
@@ -303,6 +358,47 @@ export async function getSession(
     version: out.Item.version as number | undefined,
     ttl: out.Item.ttl as number | undefined,
   };
+}
+
+export type TurnStatus = 'streaming' | 'complete' | 'stopped' | 'error' | 'refused';
+
+export async function beginTurn(
+  agentId: string, chatId: string, clientMessageId: string, payloadHash: string,
+): Promise<{ started: true } | { started: false; status: TurnStatus; sameMessage: boolean }> {
+  const Key = { PK: pk(agentId), SK: `${childPrefix(chatId)}TURN#${clientMessageId}` };
+  const createdAt = Math.floor(Date.now() / 1000);
+  try {
+    await ddb().send(new PutCommand({
+      TableName: TABLE,
+      Item: { ...Key, status: 'streaming', payloadHash, createdAt, ttl: createdAt + TTL_SECONDS },
+      ConditionExpression: 'attribute_not_exists(SK)',
+    }));
+    return { started: true };
+  } catch (err) {
+    if ((err as { name?: string })?.name !== 'ConditionalCheckFailedException') throw err;
+    const { Item } = await ddb().send(new GetCommand({ TableName: TABLE, Key, ConsistentRead: true }));
+    if (!Item) throw err; // A concurrent deletion must not authorize another paid call.
+    return { started: false, status: Item.status as TurnStatus, sameMessage: Item.payloadHash === payloadHash };
+  }
+}
+
+export async function endTurn(
+  agentId: string, chatId: string, clientMessageId: string, status: Exclude<TurnStatus, 'streaming'>,
+): Promise<boolean> {
+  try {
+    await ddb().send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK: pk(agentId), SK: `${childPrefix(chatId)}TURN#${clientMessageId}` },
+      UpdateExpression: 'SET #s = :s, endedAt = :now',
+      ConditionExpression: '#s = :streaming',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: { ':s': status, ':now': Math.floor(Date.now() / 1000), ':streaming': 'streaming' },
+    }));
+    return true;
+  } catch (err) {
+    if ((err as { name?: string })?.name === 'ConditionalCheckFailedException') return false;
+    throw err;
+  }
 }
 
 export interface ContextUsage {
@@ -422,8 +518,9 @@ export async function appendTurns(
           SK: msgSk(chatId, prevTotal + i),
           seq: prevTotal + i,
           role: t.role,
-          ...capMessageText(String(t.text ?? '')),
+          ...capRecordContent(t),
           ts: t.ts,
+          ...(t.status ? { status: t.status } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           ...(owner ? { userId: owner } : {}),
           ...(ttl ? { ttl } : {}),
@@ -735,6 +832,8 @@ export async function getFullHistory(
         role: r.role as Turn['role'],
         text: r.text as string,
         ts: r.ts as number,
+        ...(r.status ? { status: r.status as Turn['status'] } : {}),
+        ...(r.tools ? { tools: r.tools as ToolRecord[] } : {}),
         ...(r.surface ? { surface: r.surface as Turn['surface'] } : {}),
       });
     }
@@ -793,8 +892,9 @@ export async function reownLegacyConversation(
           SK: msgSk(chatId, seq),
           seq,
           role: t.role,
-          ...capMessageText(String(t.text ?? '')),
+          ...capRecordContent(t),
           ts: t.ts,
+          ...(t.status ? { status: t.status } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           userId: newOwner,
         },

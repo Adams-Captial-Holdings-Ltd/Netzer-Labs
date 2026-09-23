@@ -24,6 +24,7 @@
 import type { ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { fixtures } from './fixtures';
+import type { ToolCall } from '../src/lib/chat/types';
 
 /**
  * 30-80ms between events: fast enough to feel live, slow enough to watch. An
@@ -31,9 +32,19 @@ import { fixtures } from './fixtures';
  * costs hundreds of milliseconds per call, and a fixture that fires tool events
  * at token cadence makes the live status line unobservable (see fixtures.ts).
  */
-function cadence(delayMs?: number): Promise<void> {
+function cadence(res: ServerResponse, delayMs?: number): Promise<void> {
   const ms = delayMs ?? 30 + Math.random() * 50;
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    // Record a stopped turn immediately, before a reload can read its transcript.
+    const finish = () => {
+      clearTimeout(timer);
+      res.off('close', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    res.once('close', finish);
+    if (res.destroyed) finish();
+  });
 }
 
 /** Frame one SSE event; multi-line data becomes repeated `data:` lines. */
@@ -57,6 +68,20 @@ function parseTurn(rawBody: string): { text: string; chatId: string } {
   }
 }
 
+interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean }
+
+/** Accumulate only the fields the real transcript stores, never arguments. */
+function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
+  if (event === 'tool') {
+    const { label, step, toolUseId } = JSON.parse(data) as ToolCall;
+    tools.push({ label, step, ...(toolUseId !== undefined ? { toolUseId } : {}) });
+  } else if (event === 'tool_result') {
+    const { toolUseId, output, isError, truncated } = JSON.parse(data) as ToolCall;
+    const index = tools.findIndex((tool) => tool.toolUseId !== undefined && tool.toolUseId === toolUseId);
+    if (index !== -1) tools[index] = { ...tools[index], output, isError, truncated };
+  }
+}
+
 /**
  * Play one fixture, and return the assistant text that actually reached the
  * client. `chunk` and `reply` events carry the reply CUMULATIVELY (the client
@@ -64,7 +89,7 @@ function parseTurn(rawBody: string): { text: string; chatId: string } {
  * written is the whole reply. A client that leaves mid-stream is returned what
  * it had received, which is then exactly what its transcript replays.
  */
-async function play(text: string, res: ServerResponse): Promise<string> {
+async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   // Fixture selection: "/fixture <name>" picks one by name, anything else
   // (including an unknown name) plays "default".
   const name = text.startsWith('/fixture ') ? text.slice('/fixture '.length).trim() : 'default';
@@ -76,14 +101,16 @@ async function play(text: string, res: ServerResponse): Promise<string> {
     Connection: 'keep-alive',
   });
   let streamed = '';
+  const tools: ToolCall[] = [];
   for (const ev of fixture) {
-    await cadence(ev.delayMs);
-    if (res.destroyed || res.writableEnded) return streamed; // client went away mid-stream
+    await cadence(res, ev.delayMs);
+    if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed };
     sseWrite(res, ev.event, ev.data);
     if (ev.event === 'chunk' || ev.event === 'reply') streamed = ev.data;
+    recordToolEvent(tools, ev.event, ev.data);
   }
   res.end();
-  return streamed;
+  return { text: streamed, tools, stopped: false };
 }
 
 /** Send a JSON body with the shape the real route returns. */
@@ -203,7 +230,7 @@ function mockSessions(): unknown {
 // messages with (`Date.now() / 1000`) and what the real route's stored turns
 // carry. The milliseconds mistake this file made once for `updatedAt` is
 // written up above the sidebar fixture; it is not repeated here.
-const transcripts = new Map<string, Array<{ role: string; text: string; ts: number }>>();
+const transcripts = new Map<string, Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[] }>>();
 
 // The one bound on that Map. A dev server left running all day accumulates a
 // conversation per "New chat" click and never released one, which both reviews
@@ -215,7 +242,7 @@ const transcripts = new Map<string, Array<{ role: string; text: string; ts: numb
 const MAX_CONVERSATIONS = 200;
 
 /** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
-function recordTurn(chatId: string, userText: string, replyText: string): void {
+function recordTurn(chatId: string, userText: string, reply: PlayedTurn): void {
   if (!chatId) {
     // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
     // either an unparseable body or a caller that is not the chat page.
@@ -228,7 +255,13 @@ function recordTurn(chatId: string, userText: string, replyText: string): void {
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
     { role: 'user', text: userText, ts },
-    ...(replyText ? [{ role: 'assistant', text: replyText, ts }] : []),
+    ...(reply.text || reply.stopped || reply.tools.length ? [{
+      role: 'assistant', text: reply.text, ts,
+      ...(reply.stopped ? { status: 'stopped' } : {}),
+      ...(reply.tools.length ? {
+        tools: reply.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
+      } : {}),
+    }] : []),
   ]);
   // Evicting in silence would be worse than not evicting at all: reopening a
   // dropped conversation returns an empty transcript, which is exactly what the
@@ -260,8 +293,8 @@ export function mockStreamPlugin(): Plugin {
               // A cut stream records what the client actually received, which is
               // the honest transcript — but a mysteriously short reply on replay
               // is worth a word here rather than a puzzle later.
-              if (res.destroyed) {
-                console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.length} chars)`);
+              if (reply.stopped) {
+                console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.text.length} chars)`);
               }
               recordTurn(turn.chatId, turn.text, reply);
             })

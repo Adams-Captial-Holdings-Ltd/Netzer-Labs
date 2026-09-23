@@ -130,10 +130,12 @@ export function RunFooter({ meta, showToolCount }: RunFooterProps) {
  * What a turn the reader cancelled has instead of a run footer.
  *
  * It cannot have one: a stopped turn never reaches its `final` event, so there
- * is no modelId, no latency and no metered cost to report. Printing the numbers
- * we happen to have (or worse, zeros) in the audit row would be a lie in the
- * one place on this page that must not lie, so the slot says plainly what
- * happened and stops there. Same type and same sub-row as RunFooter, so the
+ * is no modelId, no latency and no metered cost to report here. Since P2 the
+ * turn's usage IS recorded — the server settles it from an estimate that errs
+ * on the safe side — so the footer says the cost was estimated rather than that
+ * no run was recorded, and still shows no numbers: printing the ones we happen
+ * to have (or worse, zeros) in the audit row would be a lie in the one place on
+ * this page that must not lie. Same type and same sub-row as RunFooter, so the
  * transcript's rhythm is unbroken.
  */
 function StoppedFooter() {
@@ -147,7 +149,7 @@ function StoppedFooter() {
       <span aria-hidden="true" class="size-4 shrink-0">
         <CancelledIcon />
       </span>
-      <span>stopped — partial reply, no run recorded</span>
+      <span>stopped — partial reply, cost estimated</span>
     </div>
   );
 }
@@ -243,6 +245,13 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
       )}
 
       <MessageAttachments message={message} />
+
+      {/* The answer arrived but the server could not store it (`done:
+          not_saved`): one caption, so the reader knows it is theirs to copy now
+          and will not be here after a reload. */}
+      {message.notSaved && (
+        <p class="mt-2 text-caption text-muted">This reply wasn't saved, so it won't be here after a reload.</p>
+      )}
     </MessageRow>
   );
 }

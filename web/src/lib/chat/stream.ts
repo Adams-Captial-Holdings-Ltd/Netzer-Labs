@@ -9,7 +9,7 @@
 // program: keep it DOM-free and keep relative imports `.js`-suffixed
 // (NodeNext).
 
-import type { TurnMeta } from './types.js';
+import type { ToolCall, TurnMeta } from './types.js';
 
 export interface TurnAttachment { s3Key: string; fileName: string; mimeType?: string }
 
@@ -18,6 +18,8 @@ export interface TurnBody {
   agentId: string;
   chatId: string;
   modelOverride?: string;
+  clientMessageId?: string;
+  protocol?: 2;
   attachments?: TurnAttachment[];
 }
 
@@ -26,23 +28,74 @@ export interface TurnCallbacks {
   onChunk: (cumulativeText: string) => void;
   /** Live tool/media status line; '' clears it (text resumed). */
   onToolStatus: (status: string) => void;
+  onTools?: (tools: ToolCall[]) => void;
 }
 
 export interface TurnOutcome {
   text: string;
   isReply: boolean;
   errorText: string;
+  errorCode?: string;
+  saved?: boolean;
   meta?: TurnMeta;
   kb: string[];
   images: Array<{ url: string; caption: string }>;
   artifacts: Array<{ url: string; name: string }>;
-  tools: Array<{ label: string; step: number }>;
+  tools: ToolCall[];
 }
 
 export interface TurnStreamOptions {
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   endpoint?: string;
+}
+
+/** A `tool` event's data, as the server writes it. Legacy calls have only label/step. */
+interface WireTool { label: string; step: number; toolUseId?: string; input?: string; inputTruncated?: boolean }
+/** A `tool_result` event's data. */
+interface WireToolResult { toolUseId: string; output: string; isError: boolean; truncated: boolean }
+
+/**
+ * One event's JSON, or undefined when malformed. Parsing is the ONLY thing in
+ * the try, so a UI callback that throws is not swallowed as a bad event.
+ */
+function parseEvent<T>(data: string): T | undefined {
+  try {
+    return JSON.parse(data) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A positional delta, or null when it is not well formed: `i` an integer from 0
+ * to the current text length and `t` a string. One bad delta used to corrupt
+ * every later one.
+ */
+function wellFormedDelta(data: string, textLength: number): { i: number; t: string } | null {
+  const delta = parseEvent<{ i?: unknown; t?: unknown }>(data);
+  const i = delta?.i;
+  const t = delta?.t;
+  return Number.isInteger(i) && (i as number) >= 0 && (i as number) <= textLength && typeof t === 'string'
+    ? { i: i as number, t }
+    : null;
+}
+
+/**
+ * A refusal before the stream starts (`{error: code}` JSON: an unknown model or
+ * agent, a turn record that could not be written) keeps its code for the page's
+ * words; the message stays what the golden tests pin. Anything else is the bare
+ * failure it always was.
+ */
+async function streamFailure(res: Response): Promise<Error> {
+  const failure = new Error('Stream failed');
+  try {
+    const parsed: unknown = await res.json();
+    const code = (parsed as { error?: unknown } | null)?.error;
+    return typeof code === 'string' ? Object.assign(failure, { code }) : failure;
+  } catch {
+    return failure;
+  }
 }
 
 export async function streamTurn(
@@ -60,11 +113,14 @@ export async function streamTurn(
       agentId: body.agentId,
       chatId: body.chatId,
       ...(body.modelOverride ? { modelOverride: body.modelOverride } : {}),
+      ...(body.clientMessageId !== undefined ? { clientMessageId: body.clientMessageId } : {}),
+      ...(body.protocol !== undefined ? { protocol: body.protocol } : {}),
       ...(body.attachments && body.attachments.length > 0 ? { attachments: body.attachments } : {}),
     }),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
-  if (!res.ok || !res.body) throw new Error('Stream failed');
+  if (!res.ok) throw await streamFailure(res);
+  if (!res.body) throw new Error('Stream failed');
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -74,16 +130,20 @@ export async function streamTurn(
   // turn fails mid-stream. We capture it here and surface it as a red bubble
   // after the loop instead of pushing an empty assistant reply.
   let errorText = '';
+  let errorCode: string | undefined;
+  let saved: boolean | undefined;
   const kbChips: string[] = [];
   const images: Array<{ url: string; caption: string }> = [];
   const artifacts: Array<{ url: string; name: string }> = [];
-  const tools: Array<{ label: string; step: number }> = [];
+  const tools: ToolCall[] = [];
+  const publishTools = () => cb.onTools?.(tools.map((tool) => ({ ...tool })));
   let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
   let curData = '';
   let buffer = '';
 
   // Flush one fully-received SSE event (event + its accumulated data lines).
   const flushEvent = () => {
+    if (curEvent === 'done') saved = curData !== 'not_saved';
     if (curData === '') return;
     if (curEvent === 'reply') {
       // Slash-command reply: plain text, surfaced directly (not JSON).
@@ -96,20 +156,38 @@ export async function streamTurn(
       fullText = curData; // cumulative plain text for the live preview
       cb.onChunk(curData);
       cb.onToolStatus(''); // text resumed; drop the tool-status line
+    } else if (curEvent === 'delta') {
+      const delta = wellFormedDelta(curData, fullText.length);
+      if (delta) {
+        fullText = fullText.slice(0, delta.i) + delta.t;
+        cb.onChunk(fullText);
+        cb.onToolStatus('');
+      }
     } else if (curEvent === 'tool') {
-      // { label, step } — show what the agent is doing during tool dispatch.
-      try {
-        const t = JSON.parse(curData);
+      // Legacy calls have only label/step; P2 also carries live arguments.
+      const t = parseEvent<WireTool>(curData);
+      if (t) {
         cb.onToolStatus(t.step > 1 ? `${t.label}… (step ${t.step})` : `${t.label}…`);
-        tools.push({ label: t.label, step: t.step });
-      } catch { /* ignore malformed tool event */ }
+        tools.push({
+          label: t.label,
+          step: t.step,
+          ...(t.toolUseId !== undefined ? { toolUseId: t.toolUseId } : {}),
+          ...(t.input !== undefined ? { input: t.input, inputTruncated: t.inputTruncated } : {}),
+        });
+        publishTools();
+      }
+    } else if (curEvent === 'tool_result') {
+      const result = parseEvent<WireToolResult>(curData);
+      const index = result ? tools.findIndex((tool) => tool.toolUseId !== undefined && tool.toolUseId === result.toolUseId) : -1;
+      if (result && index !== -1) {
+        tools[index] = { ...tools[index]!, output: result.output, isError: result.isError, truncated: result.truncated };
+        publishTools();
+      }
     } else if (curEvent === 'media') {
       // { fileName, stage, label } — media pipeline progress (transcribe,
       // frames, indexing). Rides the same status row as tool events.
-      try {
-        const m = JSON.parse(curData);
-        cb.onToolStatus(m.label ?? `Processing ${m.fileName}…`);
-      } catch { /* ignore malformed media event */ }
+      const m = parseEvent<{ fileName?: string; label?: string }>(curData);
+      if (m) cb.onToolStatus(m.label ?? `Processing ${m.fileName}…`);
     } else if (curEvent === 'kb') {
       // { text } — knowledge-base confirmation chip for the final bubble.
       try {
@@ -131,8 +209,15 @@ export async function streamTurn(
         if (a.url) artifacts.push({ url: a.url, name: a.name || a.caption || 'document' });
       } catch { /* ignore malformed artifact event */ }
     } else if (curEvent === 'error') {
-      // Plain-text error message from the SSE writer; surfaced as an error bubble.
       errorText = curData;
+      errorCode = undefined;
+      try {
+        const error = JSON.parse(curData);
+        if (error && typeof error.code === 'string' && typeof error.message === 'string') {
+          errorText = error.message;
+          errorCode = error.code;
+        }
+      } catch { /* legacy errors are plain text */ }
     }
     // done / unknown events carry no assistant text we surface here.
     curData = '';
@@ -178,5 +263,5 @@ export async function streamTurn(
     } catch { /* not JSON (e.g. a raw chunk); use raw text */ }
   }
 
-  return { text: fullText, isReply, errorText, meta, kb: kbChips, images, artifacts, tools };
+  return { text: fullText, isReply, errorText, errorCode, saved, meta, kb: kbChips, images, artifacts, tools };
 }

@@ -2,20 +2,34 @@
 feature: netzar-chat
 document_role: index
 status: current
-observed_at: 2026-09-22
-as_of_commit: ea6c809b7c9139d69179e62b2965c16fe90a2a57
+observed_at: 2026-09-23
+as_of_commit: 45d7193491d3158648511b36d529617aa286018a
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
   - web/tailwind.config.ts
   - web/src/lib/theme.ts
+  - web/src/lib/chat/stream.ts
+  - web/src/components/chat/Composer.tsx
+  - web/src/components/chat/ToolCallsSection.tsx
   - src/lib/state/sessions-repo.ts
   - src/adapters/dashboard/handler.ts
   - src/adapters/dashboard/jarvis.ts
+  - src/agent/agent-loop.ts
+  - src/agent/turn-errors.ts
+  - src/lib/bedrock/client.ts
+  - src/lib/safety/exfil-patterns.ts
   - src/lib/tools/dynamodb-tools.ts
   - src/lib/state/legacy-chat-migration.ts
 tested_by:
   - src/adapters/dashboard/chat-stream.test.ts
+  - src/adapters/dashboard/chat-stream-p2.test.ts
+  - src/adapters/dashboard/chat-lifecycle.test.ts
+  - src/agent/agent-loop.p2.test.ts
+  - src/lib/bedrock/client.p2.test.ts
+  - src/lib/state/sessions-repo.p2.test.ts
+  - src/lib/state/sessions-repo.p2.integration.test.ts
+  - tests/e2e/chat/lifecycle.spec.ts
   - src/adapters/dashboard/chat-helpers.test.ts
   - src/lib/jarvis/route-manifest.test.ts
   - src/adapters/dashboard/sessions-ownership.test.ts
@@ -56,9 +70,13 @@ composition shell. Transport and helpers live in the eight modules under
 the `conversation-groups.ts` helper and the `useChatScroll.ts` hook — alongside
 its `lc/` donor-derived support tree. It keeps intact:
 
-- the SSE turn stream (`POST /api/test-turn/stream`; events `chunk` cumulative,
-  `tool {label, step}`, `media`, `kb`, `image`, `artifact`, `reply`, `final`,
-  `error`, `done` ignored);
+- the SSE turn stream (`POST /api/test-turn/stream`; events `chunk` cumulative —
+  or, for a client that sends `protocol: 2`, positional `delta {i, t}` —
+  `tool {label, step, toolUseId, input, inputTruncated}`,
+  `tool_result {toolUseId, output, isError, truncated}`, `media`, `kb`, `image`,
+  `artifact`, `reply`, `final`, `error` (`{code, message}` for protocol 2, the
+  plain message otherwise), `done` (`ok` or `not_saved`), and a `: ping` comment
+  every 15 s);
 - agent selection wired to `GET /agents` (active only) and `/chat/:agentId`;
 - per-turn model selection wired to `GET /models` and the `modelOverride` field
   (`''` = agent default, no override sent);
@@ -102,12 +120,89 @@ backend.
   46: nine dashboard conversations existed in production, four a member's and
   five the master token's, which is linked before the migration runs).
 
+**The turn lifecycle, including the tool-call UX (P2, roadmap step 4):**
+
+- **Stop means stop.** The Stop button, Escape (in the composer or on the Stop
+  button), or closing the tab aborts the server's turn — even before the reply
+  has begun, because the route watches the request's own signal as well as the
+  stream's. The signal reaches the Bedrock request, and no further model call
+  or tool round starts. The partial reply is saved marked `stopped` (the fixed
+  notice "(Stopped before a reply.)" when nothing had been written, because an
+  empty turn poisons a chat). A turn stopped before it began reserves no spend;
+  otherwise the stopped turn's spend is recorded, finalized against the spend
+  ledger and audited as `agent_turn` with `stopped`, from an estimate that errs
+  on the safe side: every call that finished keeps its real usage, and the call
+  that was cut counts the text, the attached files (1,600 tokens an image, a
+  document by its size), the tool list and the re-sent tool arguments it
+  carried, up to the model's context window, and the output it had written —
+  text and any tool input a person never sees; a cut call that shows no output
+  while it runs (a tool round) counts its output at its ceiling. The reply's
+  footer says `stopped — partial reply, cost estimated`.
+- **The composer during a run.** It stays editable while a reply streams, but
+  nothing can be sent until the reply ends; the cursor returns when it ends
+  unless the reader moved it elsewhere; an Escape that belongs to an input
+  method (Japanese, Chinese) is left to it. Each conversation keeps its own
+  unsent draft in the tab's memory, and a draft typed before anything was sent
+  survives New chat and an agent switch.
+- **Tool calls.** Under the reply, each call shows its arguments (capped at
+  1 KB, "Input shortened" when cut) — only in the tab that ran the turn:
+  arguments are never stored anywhere (owner decision 41) — and its result
+  (capped at 2 KB; "Output shortened" when cut, "Failed" when the tool errored,
+  "No result" for a call the Stop interrupted). Both pass the same
+  block-severity redactor as the reply before they leave the server (it also
+  catches a key written as a JSON property, the shape tool payloads carry); a failed
+  tool's text also loses account ids and ARNs; and the database lookup tool's
+  (`dynamodb_query`) raw result is neither shown nor stored, because it can
+  return other people's conversations (owner decision 53; who that tool may
+  read is still open, A172). The model still gets every raw result. Results are
+  stored with the reply, so a reopened conversation shows the results and the
+  `stopped` mark, but never the arguments. Under the replay window's byte
+  budget, tool results go first, oldest first, before any conversation turn is
+  cut (decision 41).
+- **One paid call per message.** Every send carries a fresh `clientMessageId`;
+  the server writes a turn record first (`SK=CHAT#<chatId>#TURN#<id>`, 7-day
+  `ttl`, conditional on not existing), so a retried request can never start a
+  second paid call (`409 turn_duplicate`; an id reused for a different message
+  is `409 turn_conflict`; a record that cannot be written refuses the send,
+  `503 turn_record_unavailable`). The record ends in exactly one of `complete`,
+  `stopped`, `error` or `refused`, and the route saves the reply and ends the
+  record BEFORE it writes `final`, so a reader who left cannot hold up the save.
+- **Send-time checks.** Both send routes refuse an agent the registry does not
+  know (`404 unknown_agent`; before P2 an unknown id silently ran as `main`)
+  and a model outside the catalog (`400 unknown_model`) before any spend. An
+  agent already in the cached list is not looked up again; the agents table is
+  read only for an id the cache has not seen.
+- **Failures.** The browser gets a code and a fixed message
+  (`cost_cap_exceeded`, `cost_cap_unverifiable`, `kill_switch_active`,
+  `model_error`, `internal_error`), never exception text — a paused turn says
+  only that an operator paused it, and the operator's reason stays in the
+  audit — and the Chat tab shows that message as the server wrote it; a refusal before the stream says what to
+  do about it. Telegram and Slack post the same sanitized sentence (surface
+  parity). An operator's refusal (the cost cap, a kill switch) is logged as a
+  warning, a Stop not at all, so neither pages anyone. Nothing but `done`
+  follows the final answer; `done` says `not_saved` when saving failed — the
+  server logs it, and the reply says "This reply wasn't saved, so it won't be
+  here after a reload."
+- **Streaming on the deployed stack.** The Bedrock guardrail now runs alongside
+  the stream (`streamProcessingMode: 'async'`, owner decision 50) instead of
+  holding the whole answer until it finishes — the measured reason the
+  deployed dashboard never streamed (decision 51). A Stop pressed before its
+  verdict keeps the partial reply unchecked (owner decision 52). Runtime-config
+  `bedrock/guardrail_stream_mode = sync` (any case) puts it back in front with
+  no redeploy.
+
 ## 3. Current status and current source commit
 
-Merged into `development` as PR #129 (merge
-`b3b427497d63d8f4d1faa147b46c9681c19bc460`, 2026-08-27). The merge is present
+The port merged into `development` as PR #129 (merge
+`b3b427497d63d8f4d1faa147b46c9681c19bc460`, 2026-08-27). That merge is present
 on `origin/qa` and `origin/staging`, and staging is the AWS environment reached
 through the branch-to-environment mapping; it is not on `origin/production`.
+
+P1 (roadmap step 3) merged into `development` as PR #189 (merge
+`e035f97`, 2026-09-23) and is on no environment branch yet (owner decision
+18: promotion is separate work). P2 (roadmap step 4) is the change this README
+was last updated with; [HANDOFF](HANDOFF.md) and the Gauntlet state file hold
+its pull request, because a file cannot state the commit it is inside.
 
 ## 4. Source of truth
 
@@ -132,6 +227,8 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 | Conversation storage | `src/lib/state/sessions-repo.ts` | The window row plus one record per message, written in one version-fenced transaction; `getFullHistory`; the cascading `deleteSession`; `reownLegacyConversation` |
 | Ownership and the conversation routes | `src/adapters/dashboard/handler.ts` | `dashboardIdentity`, `ownsConversation`, the send/transcript/list/export/delete routes, `readConversationRows`, `POST /tokens/:hashPrefix/link` |
 | Legacy migration | `src/lib/state/legacy-chat-migration.ts`, `scripts/p1-migrate-legacy-chats.ts` | Dry run by default; `--apply` only with the resolved table names typed out |
+| Turn lifecycle (server) | `src/adapters/dashboard/handler.ts` (the stream route), `src/agent/agent-loop.ts`, `src/lib/bedrock/client.ts`, `beginTurn`/`endTurn` in `src/lib/state/sessions-repo.ts` | Abort, heartbeat, deltas, tool start/end, typed errors, send-time checks, turn records, the stopped turn's spend, the guardrail stream mode |
+| Turn lifecycle (web) | `web/src/lib/chat/stream.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/ToolCallsSection.tsx`, `web/dev/` (the dev-only chat mock) | Protocol 2 parsing, the composer during a run, the tool panel; the mock mirrors the route for `npm run e2e:chat` |
 
 ## 6. Current business/state rules
 
@@ -168,12 +265,27 @@ through the branch-to-environment mapping; it is not on `origin/production`.
   it, last. One nobody ever claims keeps expiring and only an admin can see it.
   An expiring conversation's records each expire a week after they were
   written. `/newchat` empties the model's window but keeps the records.
+- A turn record (`SK=CHAT#<chatId>#TURN#<clientMessageId>`, P2) is a child of
+  its conversation's key like a message record: `isConversationRow` hides it,
+  `deleteSession` removes it, and its 7-day `ttl` expires it.
+- Tool arguments are stored nowhere — not in a message record, a turn record,
+  the audit log or the dev mock's transcript (decision 41); the server's
+  existing `invoking tool` log line keeps them, as before P2. A tool result
+  rides on its reply's message record, capped at 2 KB, and that record's text
+  cap is 350,000 bytes minus the results' bytes, so text and results together
+  stay under DynamoDB's 400 KB item limit (the text gives way, marked
+  `truncated`); results that alone pass that budget give way first, oldest
+  output first, every call still listed.
 
 ## 7. Known runtime risks and approved next work
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
 | Authenticated staging UI is not yet verified | Floci Bedrock stub: one chunk, no tool events; staging verification needs an owner-authorized spend-capped token | [CHATUI-008](plan.md) |
+| P2 is proven locally only: streaming to the browser, tool start/end and Stop have not run against real Bedrock through the deployed dashboard — including whether the deployed edge (Cloudflare tunnel, load balancer) closes the origin connection when a browser stops, which is what Stop depends on | staging runs `origin/staging` `8299f04`, which predates P1 and P2; the guardrail cause itself is measured on real Bedrock (decision 51) | the P2 staging rows (`p2-proof.sh` tier `staging`) run after promotion (decision 18) |
+| How Bedrock bills a call cut mid-way is unverified | a stopped turn's usage is an estimate built to over-count (the call's files, tool list and re-sent arguments; a cut tool round's output at its ceiling), never to under-count the daily cap | none open |
+| A Stop pressed before the async guardrail's verdict keeps the partial reply unchecked; a partial that held something the guardrail blocks can make that chat trip the filter on later turns | owner decision 52 (keep the partial): rare, and a new chat clears it | none open — the `sync` switch restores "check first" |
+| The guardrail's async mode lets a harmful sentence reach the screen before the guardrail blocks the rest of the reply (AWS's documented trade-off) | owner decision 50; the app's own streaming redactor still scrubs every chunk against the block-severity patterns first | none open — runtime-config `bedrock/guardrail_stream_mode = sync` restores "check first" with no redeploy |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |
 | Conversations written before P1 still carry a token-hash owner until the migration runs, and a pre-P1 turn that leaves the 20-turn window before then has no record anywhere | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token and run the migration (dry run, then `--apply`) straight after the deploy, before anyone chats |
 | An opacity modifier on a plain semantic token still emits no CSS, so `bg-primary/10` is silently a no-op | the semantic keys in [web/tailwind.config.ts](../../../web/tailwind.config.ts) are raw `var()` strings with nowhere to inject an alpha channel; the alpha-capable `-a` siblings added by CHATUI-001 sit beside them rather than replacing them | none open — the mitigation landed in [CHATUI-001](plan.md); the standing rule is the appendix mapping (`any <color>/<opacity>` → `-a` triplet keys or `*-dim` vars only). The chat subtree observed 2026-09-20 has zero occurrences; the rest of `web/src` still has them |
@@ -181,8 +293,12 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 ## 8. Exact focused and full validation commands
 
 Focused: `npx vitest run src/adapters/dashboard/chat-stream.test.ts
-src/adapters/dashboard/chat-helpers.test.ts`, plus
-`npm --prefix web run typecheck && npm --prefix web run build`.
+src/adapters/dashboard/chat-stream-p2.test.ts
+src/adapters/dashboard/chat-helpers.test.ts
+src/adapters/dashboard/chat-lifecycle.test.ts src/agent/agent-loop.p2.test.ts
+src/lib/bedrock/client.p2.test.ts src/lib/state/sessions-repo.p2.test.ts`, plus
+`npm --prefix web run typecheck && npm --prefix web run build` and the browser
+suite against the dev-only chat mock, `npm run e2e:chat`.
 
 Full pre-push suite (all must actually run):
 
