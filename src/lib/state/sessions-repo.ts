@@ -643,6 +643,91 @@ export async function getFullHistory(
 }
 
 /**
+ * P1 WI-1.4: re-own a conversation written before WI-1.1 for the person proven
+ * for it (legacy-chat-migration.ts decides who). ONE transaction, so it lands
+ * whole or not at all:
+ *  - the conversation row with the new owner and a bumped version — fenced on
+ *    the owner and version just read, so a concurrent turn cannot slip between
+ *    (appendTurns re-reads on the new version) and a second run finds nothing;
+ *  - an immutable source record, CHAT#<chatId>#SRC, naming the old owner and how
+ *    the new one was proven (decision 8's "immutable source record");
+ *  - a record for each window turn that has none: before P1 the window was the
+ *    ONLY copy of those turns, and it drops them as the conversation moves on.
+ */
+export async function reownLegacyConversation(
+  agentId: string,
+  chatId: string,
+  legacyOwner: string,
+  newOwner: string,
+  provenBy: 'session' | 'link',
+): Promise<{ backfilled: number }> {
+  const key = { PK: pk(agentId), SK: sk(chatId) };
+  const { Item: item } = await ddb().send(new GetCommand({ TableName: TABLE, Key: key, ConsistentRead: true }));
+  if (!item || item.userId !== legacyOwner) {
+    throw new Error('reownLegacyConversation: the conversation changed since it was read');
+  }
+  const turns = (item.turns as Turn[] | undefined) ?? [];
+  const total = (item.turnsTotal as number | undefined) ?? turns.length;
+  const recorded = new Set<number>();
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const out = await ddb().send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': key.PK, ':prefix': msgPrefix(chatId) },
+        ProjectionExpression: '#s',
+        ExpressionAttributeNames: { '#s': 'seq' },
+        ExclusiveStartKey: startKey,
+      }),
+    );
+    for (const r of out.Items ?? []) recorded.add(Number(r.seq));
+    startKey = out.LastEvaluatedKey;
+  } while (startKey);
+  const backfill = turns.flatMap((t, i) => {
+    const seq = total - turns.length + i;
+    if (recorded.has(seq)) return [];
+    return [{
+      Put: {
+        TableName: TABLE,
+        Item: {
+          ...key,
+          SK: msgSk(chatId, seq),
+          seq,
+          role: t.role,
+          ...capMessageText(String(t.text ?? '')),
+          ts: t.ts,
+          ...(t.surface ? { surface: t.surface } : {}),
+          userId: newOwner,
+        },
+        ConditionExpression: 'attribute_not_exists(SK)',
+      },
+    }];
+  });
+  const versioned = item.version !== undefined;
+  await ddb().send(new TransactWriteCommand({ TransactItems: [
+    {
+      Put: {
+        TableName: TABLE,
+        Item: { ...item, userId: newOwner, version: ((item.version as number | undefined) ?? 0) + 1 },
+        ConditionExpression: versioned ? 'userId = :legacy AND #v = :v' : 'userId = :legacy AND attribute_not_exists(#v)',
+        ExpressionAttributeNames: { '#v': 'version' },
+        ExpressionAttributeValues: { ':legacy': legacyOwner, ...(versioned ? { ':v': item.version } : {}) },
+      },
+    },
+    {
+      Put: {
+        TableName: TABLE,
+        Item: { PK: key.PK, SK: `${childPrefix(chatId)}SRC`, legacyOwner, owner: newOwner, provenBy, migratedAt: new Date().toISOString() },
+        ConditionExpression: 'attribute_not_exists(SK)',
+      },
+    },
+    ...backfill,
+  ] }));
+  return { backfilled: backfill.length };
+}
+
+/**
  * Delete a conversation and every record that belongs to it (WI-1.3). The
  * records go FIRST: if the delete stops part-way, the conversation row is still
  * there for the caller to retry — deleting it first would strand its messages
