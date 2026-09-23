@@ -31,6 +31,7 @@ import {
   setModelOverride,
   setWarroomMode,
   getSession,
+  type SessionEnrichment,
 } from '../lib/state/sessions-repo.js';
 import { listKnownAgents, loadAgent, invalidateAgentCache } from '../lib/config/agent-loader.js';
 import { updateAgent } from '../lib/state/agents-repo.js';
@@ -98,6 +99,12 @@ export interface CommandResult {
 export interface CommandScope {
   /** Agent whose mission board `/missions` and `/mission` act on. */
   boardAgentId?: string;
+  /**
+   * Who owns a conversation a command creates (`/warroom` in a new chat), and
+   * whether it lasts — the dashboard's caller, exactly as appendTurns stamps it
+   * (owner decision 1). Surfaces that do not check ownership pass nothing.
+   */
+  owner?: SessionEnrichment;
 }
 
 const HELP_TEXT = [
@@ -252,7 +259,7 @@ export async function runCommand(
       const title = rest.replace(/(?:^|\s)@[\w-]+/g, '').trim() || 'War Room';
       try {
         const room = await createMeeting({ createdBy: chatId, title, participants });
-        await setWarroomMode(agentId, chatId, room.meetingId);
+        await setWarroomMode(agentId, chatId, room.meetingId, scope.owner);
         return {
           reply:
             `War Room started: ${room.title}\n` +

@@ -1056,7 +1056,7 @@ npm --prefix web run build
 npm run local:test:integration
 node scripts/ci/docs-links.mjs
 node scripts/ci/feature-knowledge.mjs
-git diff --check
+git diff --check origin/development...HEAD
 ```
 
 Never record a command as passing unless it actually ran. A skipped environment

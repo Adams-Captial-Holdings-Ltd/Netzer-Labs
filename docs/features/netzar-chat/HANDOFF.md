@@ -3,82 +3,71 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-22
-as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
+as_of_commit: e42c707e6dfa085be439e0b6086837e64755bc98
 ---
 
 # Netzar Chat handoff
 
-- **CURRENT: P1 WI-1.0 is VERIFIED, and this commit is the one its LANDING
-  pushes — step 3 of 10, conversation identity and durable transcript.** Owner
-  decision 44: land WI-1.0 now, as its own pull request into `development`.
-  Branch `feature/p1-conversation-identity`, cut from `origin/development` @
-  `3393f6c`; merge target `development`. **At this commit: pushed no, PR none,
-  deployment none.** After it, the landing session runs the full
-  `development.md` step 7 list on this exact commit and asks the owner once
-  more, with the numbers; only on a yes will it push, open one pull request into
-  `development`, and merge it when every check is green. The pull request number
-  and the merge commit will live in the Gauntlet state file, because a file
-  cannot state the commit it is inside (P40). The code being landed is
-  byte-identical to the commit the critic scored, `a5c377b`. Landing does not
-  finish P1, promotes nothing (decision 18) and makes no AWS call. WI-1.0
-  only — no storage change, no ownership change, no
-  new item type, which owner decision 11 gates behind this work item. A fresh
-  critic that built none of it re-derived **every** criterion from the
-  repository — AC-1.0-1..7 and V-a..V-g, all **PASS**, nothing routed back: the
-  gate in both tiers, the three mutations re-run by hand, the scope, the diagram
-  gate's liveness, the comment-only proof of CLEANUP, each of CLEANUP's rewritten
-  sentences at its source line, the ledger carries by `diff`, and the full step 7
-  list, with the development baseline **re-measured** rather than quoted. It also
-  listed every user of the sessions table itself, independently of the
-  specification: exactly four readers turn rows into conversations, and all four
-  now filter. **Two findings, classified and not patched:** no test pins the
-  predicate's `PK` half — with it removed, all six tests and the release gate stay
-  green, because the `SK` half already rejects every fixture (a test gap, not a
-  code defect; one fixture closes it, in WI-1.2's specification); and the
-  implementation log's record of its third mutation was imprecise (all six tests
-  fail under it, not one). Detail in the WI-1.0 verification log.
-- **P1's gate, re-derived by the fresh critic at the frontmatter's commit:** `P1_TIER=containment` **`FAILS=0`,
-  `ASSESSED=6`, 6/6 PASS**; `P1_TIER=storage` **unmoved at `FAILS=8`,
-  `ASSESSED=8`** — a containment change that moved the storage tier would mean
-  the work leaked out of its work item. **CONTROL reads `FAIL` in both.** The
-  gate is mostly **behavioural**: 5 of 6 containment rows RUN a test rather than
-  grep for a line, and the rows are marked `[B]` in the table itself. The
-  incoming red — `sessions-containment.test.ts`, 1 failed / 1 passed — is green,
-  and the file now holds **6** tests.
-- **The fix, and the one defect it carries.** `isConversationRow` selects the
-  conversation key shape (`PK=AGENT#…`, `SK=CHAT#<chatId>` with no further `#`
-  segment) at all four readers. **It rests on chatIds carrying no `#`, and
-  nothing enforces that** — `safeDashboardChatId` returns an already-prefixed id
-  verbatim, and Paperclip's externally supplied `issueId` is never
-  character-filtered, so such a conversation is now silently invisible in the
-  Sessions list, the CSV export and the Jarvis view. Found because two
-  independent reviewers contradicted each other and the contradiction was
-  re-derived rather than adjudicated. **Classified, NOT patched** — both fixes
-  change something outside this work item — and put to the owner as the one open
-  fork. Whether any such row exists today is **Unknown**: it needs a read against
-  real data.
-- **The specification's inference is now a MEASUREMENT.** A Jarvis memory row
-  really did render as a conversation whose `agentId` was the principal's own
-  `JARVIS#<hashPrefix16>`, visible to any holder of `sessions:read`: the
-  cross-agent `GET /sessions` returned **3** rows before the fix and **1** after.
-  An independent security review confirmed the projection never requested the
-  row's `text`, so no memory **content** was reachable — only that id and the
-  turn's timestamp and uuid.
-- **Still open from the specification phase, unchanged here: sending a message
-  into another user's conversation takes ownership of
-  it** — the list route hands every chat id to any `sessions:read` caller, the
-  send route checks no ownership, and `appendTurns` overwrites the stored owner
-  with the caller's identity on every turn, after which `DELETE /sessions` agrees
-  the chat is theirs. Every link was read at its line; the chain itself was not
-  executed. Detail in the P1 specification log, sections 3.5 and 3.6.
-- **Baseline recorded before any change on this branch**, at `3393f6c` with fake
-  credentials planted: the full `development.md` step 7 list **matches the
-  baseline** — 247 files / 3215 tests, `guard-violations: 0`; integration 38
-  passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap by name on an
-  emulator identified as `floci/floci:1.6.0` first; all other gates exit 0; 0
-  changed paths. **Sole occupancy did NOT hold and is not claimed:** two orphaned
-  `npm run dev` trees from earlier sessions were live in the checkout, binding no
-  port and writing nothing, and the execution environment refused the `kill`.
+- **CURRENT: P1 is BUILT on `feature/p1-storage` — the four remaining work items
+  of step 3 of 10 (conversation identity + durable transcript), in one session
+  (owner decision 45).** Branch `feature/p1-storage`, cut from
+  `origin/development` @ `0178980`, where WI-1.0 landed as PR #188; merge target
+  `development`. **At this commit: pushed no, PR none, deployment none.** The
+  landing will run the full `development.md` step 7 list on this exact commit,
+  ask the owner once with the numbers, and only on a yes push, open one pull
+  request into `development` and merge it when every check is green; the pull
+  request number and the merge commit will live in the Gauntlet state file,
+  because a file cannot state the commit it is inside (P40). Nothing is promoted
+  (decision 18). The session made ONE AWS call: decision 40's read-only count, on
+  production, with the owner present and approving the command (decision 46).
+- **What P1 built** (detail: the session log below). **WI-1.1** — a person owns a
+  conversation whichever token they sign in with; every dashboard and Jarvis
+  conversation route enforces it; an admin's read of someone else's conversation
+  is audited before anything is returned, and returns nothing if it cannot be;
+  a slash command never leaves a conversation nobody owns; whether a
+  conversation lasts is settled once, when it first has an owner — a person's
+  lasts, anyone else's expires, and nothing changes that afterwards;
+  `POST /api/tokens/:hashPrefix/link` links a token with no user to one person,
+  once. **WI-1.2** — every message is its own record, written with the window in
+  one transaction; a `#` in a chat id is stored as `_` (decision 47); the four
+  conversation listings read to the end and report `truncated`. **WI-1.3** — the
+  transcript returns the whole history, and a delete cascades. **WI-1.4** — the
+  legacy migration, as code and local Floci tests only.
+- **P1's gate** (`~/.claude/plans/netzar-chat-plan/p1-proof.sh`), at the
+  frontmatter's commit: `P1_TIER=storage` **`FAILS=0`, `ASSESSED=12`** — S-a..S-h
+  frozen in the P1 specification log 4.2, S-i..S-l (WI-1.4) frozen in this
+  session before WI-1.4 was built; `P1_TIER=containment` **`FAILS=0`,
+  `ASSESSED=6`**; CONTROL reads `FAIL` in both.
+- **Four fresh critics.** The first FAILED an earlier head on owner decisions 1
+  and 9 although every gate was green: Jarvis still listed everyone's
+  conversations, a slash command typed first into a new chat locked its author
+  out, the master token's old chats could drop out of the migration, the admin
+  override's audit did not wait, and the docs overclaimed. The second confirmed
+  all five fixed and FAILED the next head on one more: a scheduled task could make
+  a person-less chat permanent (decisions 1 and 46). The third FAILED the fix for
+  that: a scheduled reply saved before a person's first message left the person's
+  new chat expiring. Three FAILs in a row stopped the session (the Three-Strike
+  Breaker); the owner chose to fix it and have a fourth critic look. Every fix is
+  test-first (session log, section 6.6); the fourth critic's verdict, on the commit
+  that carries this file, lives in the Gauntlet state file (P40).
+- **The owner's decisions this session.** 46: decision 40's count found 9
+  dashboard conversations in production — 4 provable through a member login and
+  5 made with the master token, all from the last month, none with `#` — so the
+  master token is linked to the owner, whatever is still unprovable is deleted
+  by the migration, and there is no claim path. 47: a `#` in a chat id is stored
+  as `_`.
+- **Next, at S1 only** (the staging/production promotion, never local work):
+  link the master token (`POST /api/tokens/<hashPrefix>/link` with the owner's
+  userId), run `scripts/p1-migrate-legacy-chats.ts` as a dry run and read its
+  counts, then run it with `--apply --tables=<sessions>,<dashboard-tokens>` —
+  straight after the deploy and before anyone chats: a pre-P1 turn that leaves
+  the 20-turn window before the migration has no record anywhere.
+- **Baseline recorded before any change on this branch**, at `0178980` with
+  fake credentials planted, alone in the checkout, the emulator named first as
+  `floci/floci:1.6.0`: `npm test` 248 files / 3221 tests all passing,
+  `guard-violations: 0`; integration 38 passed / 25 skipped / 1 failed, the Floci
+  `checkSecrets` gap by name; every other gate exit 0; storage `FAILS=8`,
+  containment `FAILS=0`.
 - Branch state: the work was merged into `development` by PR #129 (merge
   `b3b427497d63d8f4d1faa147b46c9681c19bc460`, 2026-08-27). It is present on
   `origin/qa` and `origin/staging`, and is not present on `origin/production`.
@@ -301,45 +290,26 @@ as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
   real verdict, **zero** left `not reached`, conversation screenshots on all four
   surfaces, and the two turn checks failing for the correct local reason, which
   is a free negative control. Full detail in the Layer B session log.
-- **Last required checks, at the frontmatter's commit**, run by the fresh critic
-  with fake credentials planted and — **for the first time in P1 — alone in the
-  checkout**: the owner cleared the two orphaned `tsx watch` trees after CLEANUP,
-  and that was re-checked rather than assumed (no process names the checkout, none
-  has its working directory in it, nothing listens on port 3000). The full
-  `development.md` step 7 list carries **no failure but the known Floci gap** —
-  `npm test` **248 files / 3221 tests, all passing**, `guard-violations: 0`;
-  integration 38 passed / 25 skipped / 1 failed, the Floci `checkSecrets …
-  schedule-deleted` gap **by name** on an emulator identified as
-  `floci/floci:1.6.0` first; typecheck, build, both web gates, `local:verify`,
-  `docs-links`, `feature-knowledge`, `docs-assets` and the PR-context drift gate
-  exit 0; `git diff --check` 0; 0 changed paths. **The baseline was re-measured,
-  not quoted:** at `3393f6c`, `npm test` is 247 files / 3215 tests, and the two
-  commits' collected-file lists differ by exactly one file, the containment test
-  — so +1 file and +6 tests is measured, not arithmetic. Both P1 tiers:
-  containment `FAILS=0`, `ASSESSED=6`; storage `FAILS=8`; CONTROL `FAIL` in both.
-  The landing runs the same list again on the commit it pushes; that result
-  lives in the Gauntlet state file (P40).
-- **Smallest next action: the landing's gates on this commit, then the owner's
-  yes or no — push, open the pull request into `development`, and merge it when
-  every check is green.** After WI-1.0 lands, the next work item is **WI-1.1's
-  specification**: ownership binds to an immutable user, and the send route
-  enforces it. The carried review findings — filtering after a bounded read can
-  under-report, and nothing signals a dropped row — plus the verification's
-  untested `PK` half are **not** landing blockers; all three belong to WI-1.2's
-  specification, because WI-1.2's per-message rows are what make them
-  consequential. A push, a PR and any promotion each need their own
-  authorization in the conversation that performs them.
-- **Awaiting the owner:** the landing's yes or no, asked after its gates run; whether a `#`-bearing
-  chatId should be fixed at the write path, by relaxing the predicate, or by
-  giving WI-1.2 an unambiguous key shape (the recommendation, because it is the
-  only one still correct after P3 adds attachments) — the silent drop is now
-  proved by running it through the real route, not only by reading the
-  predicate; decision 8's unmapped-row retention date (WI-1.4 cannot be specified
-  without it); whether the ownership-takeover finding should be closed sooner
-  than WI-1.1, which would mean reopening decision 9's "no hotfix"; and whether
-  owner-scoped listing must be fast, since the sessions table has **no GSI** and
-  decision 11 forbids adding one, so "show me only my conversations" stays a
-  scan-and-filter.
+- **Last required checks, at the frontmatter's commit**, by the builder: both P1
+  tiers — storage `FAILS=0`, `ASSESSED=12`; containment `FAILS=0`, `ASSESSED=6`;
+  CONTROL `FAIL` in both — and `npm test` 254 files / 3331 tests with fake
+  credentials planted, `guard-violations: 0`. The full `development.md` step 7
+  list runs on the commit that carries this file — by the fourth critic, and by
+  the landing on the exact commit it pushes; both results live in the Gauntlet
+  state file (P40).
+- **Smallest next action: the fourth fresh critic's verdict.** On a PASS, the
+  full step 7 list on the exact commit to push, then the owner's yes or no —
+  push, one pull request into `development`, merge when every check is green,
+  delete the branch. Then step 4 of 10, P2 (turn lifecycle). A push, a PR and any
+  promotion each need their own authorization in the conversation that performs
+  them.
+- **Awaiting the owner:** the landing's yes or no, asked after its gates run; and
+  two questions for a later step, neither blocking P1 — whether owner decisions 1
+  and 9 reach agent tools (an agent's `dynamodb_query` tool still reads its own
+  partition's conversation rows, and the memories routes answer for any chat),
+  and whether an admin deleting someone else's conversation should be audited the
+  way an admin's read of one now is (awaited, never suppressible) rather than as
+  today's fire-and-forget `data_purged`.
 - F1 status, unchanged by this phase: **Layer B has run and sits at 11 of 12**,
   with the twelfth a real product gap — the deployed dashboard does not stream
   replies to the browser — routed to **P2** and deliberately not fixed here.
@@ -357,6 +327,7 @@ as_of_commit: a5c377b8c9e4693005eed8eb581dfce695bdaf67
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-22-p1-one-shot.md](handoffs/2026-09-22-p1-one-shot.md)
 - [2026-09-22-p1-wi-1.0-landing.md](handoffs/2026-09-22-p1-wi-1.0-landing.md)
 - [2026-09-22-p1-wi-1.0-verification.md](handoffs/2026-09-22-p1-wi-1.0-verification.md)
 - [2026-09-22-p1-wi-1.0-cleanup.md](handoffs/2026-09-22-p1-wi-1.0-cleanup.md)

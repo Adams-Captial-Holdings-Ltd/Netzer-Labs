@@ -41,6 +41,7 @@ import {
 } from '../../lib/auth/permissions.js';
 import {
   createToken,
+  linkTokenToUser,
   listTokens,
   revokeToken,
   revokeTokensForUser,
@@ -89,7 +90,9 @@ import { InFlightGate } from '../../lib/concurrency/bounded.js';
 import {
   appendTurns,
   getSession,
+  getFullHistory,
   deleteSession,
+  type SessionEnrichment,
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
@@ -183,16 +186,59 @@ const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
  * every future type, and the one that got forgotten is precisely the failure
  * this gate exists to prevent.
  *
- * It assumes a chatId carries no `#`, and nothing enforces that: an
- * already-prefixed id passes `safeDashboardChatId` verbatim, and a Paperclip
- * chatId embeds an externally supplied issueId unfiltered. A conversation whose
- * chatId contains `#` is therefore excluded, silently. The agentId is left
+ * It relies on a chatId carrying no `#` into a key. Since P1 that is enforced
+ * where every key is built: sessions-repo stores a `#` as `_` (owner decision
+ * 47), so neither an already-prefixed id from `safeDashboardChatId` nor a
+ * Paperclip issueId can hide a conversation from this rule. The agentId is left
  * unconstrained beyond the prefix, because only the sort key distinguishes a
  * conversation from its own messages.
  */
 export function isConversationRow(item: Record<string, unknown>): boolean {
   const sk = typeof item.SK === 'string' ? item.SK : '';
   return /^AGENT#./.test(typeof item.PK === 'string' ? item.PK : '') && /^CHAT#[^#]+$/.test(sk);
+}
+
+/**
+ * The most items one listing reads before it stops and says `truncated`.
+ * ponytail: every message row is READ only to be skipped, because there is no
+ * index that selects conversation rows (A132); a GSI — decision 11 reopened —
+ * is the upgrade if listing ever gets slow.
+ */
+const LISTING_READ_CEILING = 100_000;
+
+/**
+ * WI-1.2: the conversation rows of the sessions table, or of one agent's
+ * partition, read to the END. P1 keeps a row per message beside every
+ * conversation, so a read bounded by a count of ITEMS undercounts conversations
+ * as soon as a partition fills with message rows — and said nothing when it did
+ * (the WI-1.0 review finding). This pages until DynamoDB has nothing more,
+ * keeps only conversation rows, and stops only at LISTING_READ_CEILING, which it
+ * reports as `truncated` instead of dropping rows silently.
+ */
+export async function readConversationRows(
+  projection: string,
+  agentId?: string,
+): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+  const rows: Record<string, unknown>[] = [];
+  let read = 0;
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const out = await ddb().send(
+      agentId
+        ? new QueryCommand({
+            TableName: TABLE_SESSIONS,
+            KeyConditionExpression: 'PK = :pk',
+            ExpressionAttributeValues: { ':pk': `AGENT#${agentId}` },
+            ProjectionExpression: projection,
+            ExclusiveStartKey: startKey,
+          })
+        : new ScanCommand({ TableName: TABLE_SESSIONS, ProjectionExpression: projection, ExclusiveStartKey: startKey }),
+    );
+    read += out.Items?.length ?? 0;
+    for (const item of out.Items ?? []) if (isConversationRow(item)) rows.push(item);
+    startKey = out.LastEvaluatedKey;
+  } while (startKey && read < LISTING_READ_CEILING);
+  return { rows, truncated: startKey !== undefined };
 }
 
 /**
@@ -220,14 +266,119 @@ function operatorIdentity(c: { req: { header: (name: string) => string | undefin
   return `dashboard:${raw.replace(/[^A-Za-z0-9_.@-]/g, '_').slice(0, 64)}`;
 }
 
+/**
+ * The owner stamped on the principal's conversations (WI-1.1). A PERSON owns
+ * them, whichever token they signed in with: a magic-link session carries its
+ * `userId`, and a token with no user of its own may be linked to one by an
+ * audited admin action (owner decision 1). Before WI-1.1 this was the token
+ * hash, and a member session mints a new token per login, so the next login
+ * orphaned everything the last one wrote (A133). A token with no person keeps
+ * its own hash, which is stable for the env root token and legacy tokens; its
+ * conversations are not durable (decision 1, see personOf in the send routes).
+ */
 function dashboardIdentity(c: DashboardCtx): string {
   const p = getPrincipal(c);
+  const person = p?.userId ?? p?.linkedUserId;
+  if (person) return `dashboard:user:${person}`;
   if (p) return `dashboard:${p.tokenHash}`;
   const auth = c.req.header('authorization') ?? '';
   const token = auth.replace(/^Bearer\s+/i, '');
   if (!token) return 'dashboard:unknown';
   const hash = createHash('sha256').update(token).digest('hex');
   return `dashboard:${hash}`;
+}
+
+/** Decision 1: the person behind the principal, if there is one. */
+function personOf(c: DashboardCtx): string | undefined {
+  const p = getPrincipal(c);
+  return p?.userId ?? p?.linkedUserId;
+}
+
+/**
+ * Who a conversation the caller starts belongs to, and whether it lasts: a
+ * person's is durable, a principal with no person's expires (decision 1). What
+ * appendTurns stamps, and what a slash command that creates one stamps (F2).
+ */
+function conversationOwner(c: DashboardCtx): SessionEnrichment {
+  return { surface: 'dashboard', userId: dashboardIdentity(c), ephemeral: !personOf(c) };
+}
+
+/**
+ * Whether the caller owns a stored conversation (decisions 1 and 9). Also true
+ * for a row the caller's OWN token wrote before WI-1.1, which carries
+ * `dashboard:<tokenHash>`: stable for a token with no person, so that history
+ * stays reachable until the legacy migration (WI-1.4) re-keys it. A row with no
+ * owner belongs to nobody — only the audited admin override reaches it.
+ */
+function ownsConversation(c: DashboardCtx, owner: unknown): boolean {
+  if (typeof owner !== 'string' || owner === '') return false;
+  const p = getPrincipal(c);
+  return owner === dashboardIdentity(c) || (p !== null && owner === `dashboard:${p.tokenHash}`);
+}
+
+/** The answer when an admin override could not be recorded: nothing is returned. */
+const OVERRIDE_UNAUDITED = { error: 'override_not_audited' } as const;
+
+/**
+ * Record an admin's look at a conversation that is not theirs BEFORE any of it
+ * leaves (decision 1). Awaited and never suppressible, like `token_linked`: an
+ * override nobody can see recorded is exactly what a hostile admin wants (the
+ * first critic's F4). False means it could not be recorded, and the caller must
+ * return nothing.
+ */
+async function auditedOverride(
+  c: DashboardCtx,
+  scope: string,
+  where: { agentId?: string; chatId?: string } = {},
+): Promise<boolean> {
+  try {
+    await writeAuditOrThrow({
+      action: 'session_read_override',
+      ...where,
+      detail: { scope, requestedBy: dashboardIdentity(c) },
+      result: 'ok',
+    });
+    return true;
+  } catch (err) {
+    logger.error(
+      { scope, ...where, errMessage: err instanceof Error ? err.message : String(err) },
+      'admin conversation override refused: its audit could not be written',
+    );
+    return false;
+  }
+}
+
+/**
+ * Decisions 1 and 9: of these conversation rows, the ones the caller may see —
+ * its own, or every one for an admin (`security:write`), whose look at anyone
+ * else's is audited first. Null when that audit could not be written.
+ */
+async function visibleConversations<T extends Record<string, unknown>>(
+  c: DashboardCtx,
+  rows: T[],
+  scope: string,
+  agentId?: string,
+): Promise<T[] | null> {
+  const isAdmin = await hasCapability(c, 'security:write');
+  const visible = rows.filter((i) => isAdmin || ownsConversation(c, i.userId));
+  const others = visible.some((i) => !ownsConversation(c, i.userId));
+  if (others && !(await auditedOverride(c, scope, agentId ? { agentId } : {}))) return null;
+  return visible;
+}
+
+/**
+ * The same rule for a caller known only by its principal: the Jarvis `sessions`
+ * action, which answered every enabled principal with everyone's conversations
+ * (the first critic's F1). Null when an admin's override could not be audited.
+ * The stand-in context has no headers; everything this rule reads comes from
+ * the principal (dashboardIdentity, ownsConversation, hasCapability).
+ */
+export function conversationsVisibleTo<T extends Record<string, unknown>>(
+  principal: TokenPrincipal,
+  rows: T[],
+  scope: string,
+): Promise<T[] | null> {
+  return visibleConversations({ req: { header: () => undefined }, get: () => principal }, rows, scope);
 }
 
 export const ROLE_RANK: Record<TokenRole, number> = { viewer: 0, operator: 1, admin: 2 };
@@ -1819,12 +1970,21 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         return c.json({ error: 'invalid_upload_key' }, 400);
       }
     }
+    // WI-1.1 (decision 9): refuse a conversation the caller does not own before
+    // anything touches it — slash commands included, since /newchat wipes a
+    // history — with the 404 DELETE /sessions gives a missing chat. A send still
+    // tells a stored chat from a missing one (a missing one simply starts), so
+    // this hides the conversation, not whether its id is taken.
+    const stored = await getSession(agentId, chatId);
+    if (stored && !ownsConversation(c, stored.userId)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
     return streamSSE(c, async (stream) => {
       // Command? send the reply as a single event and close. Skipped for
       // attachment turns — a caption starting with '/' is data, not a command
       // (parity with Telegram/Slack).
       if (rawAttachments.length === 0) {
-        const cmd = await runCommand(agentId, chatId, text);
+        const cmd = await runCommand(agentId, chatId, text, { owner: conversationOwner(c) });
         if (cmd?.reply) {
           await stream.writeSSE({ event: 'reply', data: cmd.reply });
           await stream.writeSSE({ event: 'done', data: 'command' });
@@ -2029,7 +2189,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           await appendTurns(agentId, chatId, [
             { role: 'user', text: userText, ts: now },
             { role: 'assistant', text: result.text, ts: now },
-          ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c) });
+          ], undefined, conversationOwner(c));
         }
         await stream.writeSSE({ event: 'done', data: 'ok' });
       } catch (err) {
@@ -2059,45 +2219,17 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId';
     const agentId = c.req.query('agentId')?.trim();
 
-    let items: Record<string, unknown>[] = [];
-    if (agentId) {
-      // Per-agent view (e.g. the Agent detail Sessions tab). Sessions are keyed
-      // PK=AGENT#<id>, so this is a single-partition QUERY — complete and cheap.
-      // The old code Scanned the whole table with a FilterExpression bounded to
-      // 10 pages / 50 items, which (a) could silently omit a busy agent's most
-      // recent sessions and (b) read the entire table on every load. A Query
-      // reads only this agent's partition; we page it to completion (with a sane
-      // guard) and the updatedAt sort below handles recency.
-      const pk = `AGENT#${agentId}`;
-      let exclusiveStartKey: Record<string, unknown> | undefined;
-      do {
-        const out = await ddb().send(
-          new QueryCommand({
-            TableName: TABLE_SESSIONS,
-            KeyConditionExpression: 'PK = :pk',
-            ExpressionAttributeValues: { ':pk': pk },
-            ProjectionExpression: projection,
-            ExclusiveStartKey: exclusiveStartKey,
-          }),
-        );
-        for (const item of out.Items ?? []) items.push(item);
-        exclusiveStartKey = out.LastEvaluatedKey;
-        // Guard against a pathological partition; one agent's chat count is small
-        // in practice, but never page unbounded.
-      } while (exclusiveStartKey && items.length < 1000);
-    } else {
-      // Cross-agent recent view (unchanged): a single 100-row scan, slice 50.
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: projection,
-          Limit: 100,
-        }),
-      );
-      items = out.Items ?? [];
-    }
+    // Per-agent (e.g. the Agent detail Sessions tab) is a Query of one
+    // partition; cross-agent Scans the table. Both read to the END — every
+    // message is a row since P1, so a read bounded by items would undercount
+    // conversations silently (readConversationRows).
+    const { rows: items, truncated } = await readConversationRows(projection, agentId || undefined);
 
-    const rows = items.filter(isConversationRow).map((i) => ({
+    // Decision 1: conversations are author-private. A non-admin sees only their
+    // own; an admin sees every one, and seeing someone else's is audited first.
+    const conversations = await visibleConversations(c, items, 'list', agentId || undefined);
+    if (!conversations) return c.json(OVERRIDE_UNAUDITED, 500);
+    const rows = conversations.map((i) => ({
       agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
       chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
       updatedAt: i.updatedAt as number,
@@ -2109,7 +2241,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       userId: (i.userId as string | undefined) ?? null,
     }));
     rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    return c.json({ sessions: rows.slice(0, 50) });
+    return c.json({ sessions: rows.slice(0, 50), truncated });
   });
 
   router.get('/usage', async (c) => {
@@ -2275,13 +2407,19 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = safeDashboardChatId(body.chatId);
     const persist = body.persistTurns ?? true;
 
+    // WI-1.1: the same owner check as the streamed route, before the command
+    // path. persistTurns:false still replays the stored history to the model.
+    const session = await getSession(agentId, chatId);
+    if (session && !ownsConversation(c, session.userId)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+
     // Slash command path — handled inline.
-    const cmd = await runCommand(agentId, chatId, body.text);
+    const cmd = await runCommand(agentId, chatId, body.text, { owner: conversationOwner(c) });
     if (cmd?.reply) {
       return c.json({ kind: 'command', agentId, chatId, reply: cmd.reply });
     }
 
-    const session = await getSession(agentId, chatId);
     const history = session?.turns ?? [];
     const modelOverride = body.modelOverride ?? session?.modelOverride;
 
@@ -2309,7 +2447,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         await appendTurns(agentId, chatId, [
           { role: 'user', text: body.text, ts: now },
           { role: 'assistant', text: result.text, ts: now },
-        ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c) });
+        ], undefined, conversationOwner(c));
       }
       logger.info(
         {
@@ -3211,7 +3349,15 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = c.req.query('chatId');
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
     const session = await getSession(agentId, chatId);
-    return c.json({ turns: session?.turns ?? [] });
+    const none = { turns: [], truncated: false };
+    // Decision 1: author-private. Someone else's conversation reads exactly like
+    // one that does not exist; an admin may read it, and that read is audited.
+    if (session && !ownsConversation(c, session.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json(none);
+      if (!(await auditedOverride(c, 'transcript', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
+    }
+    // WI-1.3: the whole conversation, not only the 20-turn replay window.
+    return c.json(session ? await getFullHistory(agentId, chatId, session) : none);
   });
 
   // War Room transcript PDF. Deliberately NOT under /api/warroom/* (that's
@@ -3286,10 +3432,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
 
   // Delete ONE conversation. Narrower than DELETE /export below, which is the
   // admin-only GDPR purge (memories + scheduled tasks + inbox + session); this
-  // removes exactly the session row the Chat sidebar lists. Because `turns` is
-  // an attribute ARRAY on that row rather than a child table, the single
-  // DeleteItem takes the conversation and every stored message atomically —
-  // there is no cascade to perform and no orphan to sweep.
+  // removes the conversation the Chat sidebar lists. Since P1 every message is
+  // also its own record beside the conversation row (WI-1.2), so deleteSession
+  // CASCADES: it removes the conversation's records first and the row last, so
+  // a delete that stops part-way leaves the row to retry. A message written
+  // while the delete runs can still be left behind (the P1 critics' A3).
   router.delete('/sessions', async (c) => {
     // Destructive mutation, so agents:write — the operator-tier capability this
     // repo already uses for every per-tab delete (scheduled-task delete, vector
@@ -3314,7 +3461,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // reasoning validateMagicToken applies to magic-link lookups above).
     const session = await getSession(agentId, chatId);
     const me = dashboardIdentity(c);
-    const owned = session?.userId !== undefined && session.userId === me;
+    const owned = ownsConversation(c, session?.userId);
     // Admin/owner-tier principals may remove any conversation on the agent —
     // the same tier that already holds the GDPR purge. Rows written before the
     // dashboard stamped `userId` (or by Telegram/Slack) have no owner to match,
@@ -3348,6 +3495,14 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const agentId = c.req.query('agentId') ?? 'main';
     const chatId = c.req.query('chatId');
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
+    // Decision 1: one chat's full export is its author's, or an audited admin's.
+    const session = await getSession(agentId, chatId);
+    // A chat with no conversation row is refused too: its memories and tasks
+    // are nobody's to take but an admin's.
+    if (!ownsConversation(c, session?.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json({ error: 'not_found' }, 404);
+      if (!(await auditedOverride(c, 'chat-export', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
+    }
     const payload = await exportChatData(agentId, chatId);
     return c.json(payload);
   });
@@ -3547,6 +3702,49 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     }, 201);
   });
 
+  // Owner decision 1: link a token that has no person of its own — the env root
+  // token, a legacy per-operator token — to exactly ONE user, once. Until it is
+  // linked its conversations are not durable (see personOf); once linked, the
+  // user owns them. Addressed by the hashPrefix GET /tokens hands out, like
+  // DELETE /tokens/:hashPrefix, but it must name exactly one token: a link is
+  // never moved, so an ambiguous prefix must not pick one.
+  router.post('/tokens/:hashPrefix/link', async (c) => {
+    if (!(await hasCapability(c, 'tokens:write'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'tokens:write' }, 403);
+    }
+    const prefix = c.req.param('hashPrefix');
+    const body = await c.req.json<{ userId?: unknown }>().catch(() => null);
+    const userId = typeof body?.userId === 'string' ? body.userId.trim() : '';
+    if (!/^[0-9a-f]{16,64}$/.test(prefix)) return c.json({ error: 'invalid_hash_prefix' }, 400);
+    if (!userId) return c.json({ error: 'userId_required' }, 400);
+    const user = await getUser(userId);
+    if (!user || user.status === 'disabled') return c.json({ error: 'unknown_user' }, 400);
+    const matches = (await listTokens()).filter((t) => t.tokenHash.startsWith(prefix));
+    if (matches.length !== 1) return c.json({ error: 'token_not_found' }, 404);
+    const tokenHash = matches[0]!.tokenHash;
+    const requestedBy = dashboardIdentity(c);
+    const outcome = await linkTokenToUser(tokenHash, userId, requestedBy);
+    if (outcome === 'not_found') return c.json({ error: 'token_not_found' }, 404);
+    if (outcome === 'session_token') return c.json({ error: 'token_has_its_own_user' }, 409);
+    if (outcome === 'already_linked') return c.json({ error: 'already_linked' }, 409);
+    // C5c, as for a token mint: awaited and non-suppressible. An unauditable
+    // link returns 500 — the link exists, and nobody should rely on it unseen.
+    const principal = getPrincipal(c);
+    try {
+      await writeAuditOrThrow({
+        action: 'token_linked',
+        surface: 'dashboard',
+        result: 'ok',
+        userId: principal?.hashPrefix16 ?? 'dashboard',
+        operatorLabel: principal?.label ?? 'dashboard',
+        detail: { hashPrefix: tokenHash.slice(0, 16), userId, requestedBy },
+      });
+    } catch {
+      return c.json({ error: 'token linked but the audit write failed; investigate before relying on it' }, 500);
+    }
+    return c.json({ linked: true, hashPrefix: tokenHash.slice(0, 16), userId });
+  });
+
   router.delete('/tokens/:hashPrefix', async (c) => {
     const prefix = c.req.param('hashPrefix');
     const tokens = await listTokens();
@@ -3663,24 +3861,20 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'sessions:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
     }
-    const allItems: DDBRow[] = [];
-    let exclusiveStartKey: Record<string, unknown> | undefined;
-    do {
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: 'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId',
-          ExclusiveStartKey: exclusiveStartKey,
-        }),
-      );
-      for (const item of out.Items ?? []) allItems.push(item);
-      exclusiveStartKey = out.LastEvaluatedKey;
-      if (allItems.length >= 10_000) break;
-    } while (exclusiveStartKey);
-    const truncated = allItems.length >= 10_000;
+    // Read to the end and cap the FILE at 10,000 conversations — the cap used to
+    // count items, and since P1 message rows are items too (readConversationRows).
+    const EXPORT_CAP = 10_000;
+    const { rows: allItems, truncated: readTruncated } = await readConversationRows(
+      'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId',
+    );
     const today = new Date().toISOString().slice(0, 10);
     const headers = ['agentId', 'chatId', 'updatedAt', 'createdAt', 'surface', 'userId', 'messageCount', 'firstMessage', 'modelOverride'];
-    const csvRows = allItems.filter(isConversationRow).map((i) => [
+    // Decision 1, the same rule as GET /sessions: your own rows, or every row
+    // for an admin with the override audited first.
+    const conversations = await visibleConversations(c, allItems, 'export');
+    if (!conversations) return c.json(OVERRIDE_UNAUDITED, 500);
+    const truncated = readTruncated || conversations.length > EXPORT_CAP;
+    const csvRows = conversations.slice(0, EXPORT_CAP).map((i) => [
       String(i.PK ?? '').replace(/^AGENT#/, ''),
       String(i.SK ?? '').replace(/^CHAT#/, ''),
       String(i.updatedAt ?? ''), String(i.createdAt ?? ''),
@@ -3693,7 +3887,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     c.header('Content-Disposition', `attachment; filename="sessions-${today}.csv"`);
     c.header('X-Export-Row-Count', String(csvRows.length));
     c.header('X-Export-Truncated', String(truncated));
-    if (truncated) c.header('X-Export-Cap', '10000');
+    if (truncated) c.header('X-Export-Cap', String(EXPORT_CAP));
     return c.body(csv);
   });
 

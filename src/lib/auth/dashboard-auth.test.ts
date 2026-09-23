@@ -110,4 +110,22 @@ describe('authenticateDashboardToken', () => {
     expect(p?.role).toBe('operator');
     expect(p?.expiresAt).toBe('2999-01-01T00:00:00.000Z');
   });
+
+  // Owner decision 1: an admin link decides whose conversations a token owns. It
+  // travels on the principal but is NOT a session userId, which would change the
+  // token's profile resolution and put it in the per-user revocation index.
+  it('carries an admin link on the env root token without making it a session user', async () => {
+    lookupMock.mockResolvedValue(record({ role: 'admin', active: true, linkedUserId: 'user-a' }));
+    const p = await authenticateDashboardToken(ENV_TOKEN);
+    expect(p?.linkedUserId).toBe('user-a');
+    expect(p?.userId).toBeUndefined();
+    expect(p?.profileId).toBe('owner');
+  });
+
+  it('carries an admin link on a per-operator token without making it a session user', async () => {
+    lookupMock.mockResolvedValue(record({ active: true, linkedUserId: 'user-a' }));
+    const p = await authenticateDashboardToken(OP_TOKEN);
+    expect(p?.linkedUserId).toBe('user-a');
+    expect(p?.userId).toBeUndefined();
+  });
 });

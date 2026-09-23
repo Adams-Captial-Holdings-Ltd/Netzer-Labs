@@ -2,17 +2,30 @@
 feature: netzar-chat
 document_role: index
 status: current
-observed_at: 2026-09-20
-as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
+observed_at: 2026-09-22
+as_of_commit: ea6c809b7c9139d69179e62b2965c16fe90a2a57
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
   - web/tailwind.config.ts
   - web/src/lib/theme.ts
+  - src/lib/state/sessions-repo.ts
+  - src/adapters/dashboard/handler.ts
+  - src/adapters/dashboard/jarvis.ts
+  - src/lib/tools/dynamodb-tools.ts
+  - src/lib/state/legacy-chat-migration.ts
 tested_by:
   - src/adapters/dashboard/chat-stream.test.ts
   - src/adapters/dashboard/chat-helpers.test.ts
   - src/lib/jarvis/route-manifest.test.ts
+  - src/adapters/dashboard/sessions-ownership.test.ts
+  - src/adapters/dashboard/sessions-history.test.ts
+  - src/adapters/dashboard/sessions-readers.test.ts
+  - src/adapters/dashboard/sessions-containment.test.ts
+  - src/lib/state/sessions-repo.durable.test.ts
+  - src/lib/state/legacy-chat-migration.test.ts
+  - src/lib/state/sessions-repo.p1.integration.test.ts
+  - src/lib/tools/dynamodb-tools.test.ts
 approved_work:
   - docs/features/netzar-chat/plan.md
 ---
@@ -53,7 +66,41 @@ its `lc/` donor-derived support tree. It keeps intact:
   run footer, error bubble, kb/image/artifact renderings) per
   [CLAUDE.md](../../../CLAUDE.md).
 
-It does not change any other page, `AgentDetail.tsx`'s ChatTab, or the backend.
+The port itself changes no other page, `AgentDetail.tsx`'s ChatTab, or the
+backend.
+
+**Conversation identity and the durable transcript (P1, roadmap step 3):**
+
+- A conversation belongs to a **person**, whichever token they signed in with:
+  the owner stamped on it is `dashboard:user:<userId>` for a magic-link session,
+  or for a token with no user of its own that an admin linked to one (owner
+  decision 1; `POST /api/tokens/:hashPrefix/link`, one link per token, never
+  moved, audited). A token with no person behind it can still chat, but its
+  conversations are not durable: they keep the 7-day TTL the other surfaces use,
+  and nothing makes one durable later — not a scheduled task, and not a link
+  made afterwards (only the chats a token starts once linked last).
+- Every dashboard and Jarvis conversation route enforces that owner (decision
+  9): someone else's conversation is refused with a 404 when you send into it or
+  export it, reads as empty in the transcript, and is left out of the list, the
+  CSV export and Jarvis's `sessions` answer. An admin (`security:write`) may read
+  or delete anyone's; every such read is audited as `session_read_override`
+  BEFORE anything is returned, and returns nothing if it cannot be. A slash
+  command never leaves a conversation nobody owns: `/newchat` and `/model` touch
+  only one that exists, and `/warroom` in a new chat creates it for its caller.
+  Not owner-scoped, and older than P1: an agent's `dynamodb_query` tool still
+  reads the conversation rows of its own partition (never the message records),
+  and the memories routes answer for any chat.
+- Every message is **also its own record** beside its conversation (owner
+  decision 11: a new item type in the existing sessions table, no CDK). The
+  20-turn window stays what the model replays; the records are what reopening a
+  conversation shows (`GET /api/sessions/transcript` returns the whole history,
+  oldest first, with a `truncated` flag past 2,000 messages) and what deleting it
+  removes.
+- Conversations written before P1 are moved by a one-off migration at the
+  staging/production promotion (S1): owners provable through their token are
+  re-owned with an immutable source record; the rest are deleted (owner decision
+  46: nine dashboard conversations existed in production, four a member's and
+  five the master token's, which is linked before the migration runs).
 
 ## 3. Current status and current source commit
 
@@ -82,6 +129,9 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 | Chat UI | `web/src/components/chat/` | Header, transcript, live-tool state, composer, agent/model menus, and conversation sidebar |
 | Markdown | `web/src/lib/chat/markdown.ts`, `web/src/lib/chat/code-block.ts`, `.chat-md` in `web/src/index.css` | marked → DOMPurify, chat-scoped highlighted code blocks |
 | Route | `web/src/App.tsx` (`/chat`, `/chat/:agentId`) | Parsed by `src/lib/jarvis/route-manifest.test.ts` — do not change |
+| Conversation storage | `src/lib/state/sessions-repo.ts` | The window row plus one record per message, written in one version-fenced transaction; `getFullHistory`; the cascading `deleteSession`; `reownLegacyConversation` |
+| Ownership and the conversation routes | `src/adapters/dashboard/handler.ts` | `dashboardIdentity`, `ownsConversation`, the send/transcript/list/export/delete routes, `readConversationRows`, `POST /tokens/:hashPrefix/link` |
+| Legacy migration | `src/lib/state/legacy-chat-migration.ts`, `scripts/p1-migrate-legacy-chats.ts` | Dry run by default; `--apply` only with the resolved table names typed out |
 
 ## 6. Current business/state rules
 
@@ -96,12 +146,36 @@ through the branch-to-environment mapping; it is not on `origin/production`.
   wrapper's cache invalidation).
 - DOMPurify sanitizes after all markdown transforms, immediately before
   `dangerouslySetInnerHTML`.
+- **The sessions table is shared and has no secondary index** (`infra/lib/dynamo-stack.ts`,
+  PK/SK/ttl only). Beside conversation rows (`PK=AGENT#<agentId>`,
+  `SK=CHAT#<chatId>`) it holds each message's record (`SK=CHAT#<chatId>#MSG#<seq>`),
+  a migrated conversation's source record (`SK=CHAT#<chatId>#SRC`), and Jarvis
+  long-term memory (`PK=JARVIS#…`, `jarvis-memory-repo.ts`). Every reader that
+  lists conversations therefore selects them with `isConversationRow` (WI-1.0) —
+  the per-agent and cross-agent `GET /api/sessions`, the CSV export and the Jarvis
+  `sessions` action — and reads to the end, reporting `truncated` at a ceiling
+  rather than undercounting. With no index, "the conversations owned by user X"
+  cannot be a Query: listing reads the partition (or the table) and filters.
+- A chat id never carries `#` into a key: the storage layer stores it as `_`
+  (owner decision 47), so a chat can neither pose as another's message record nor
+  vanish behind the containment rule.
+- A conversation's owner is stamped when it first has one and never
+  overwritten, and whether it lasts is settled at that moment: a person's
+  lasts, a principal with no person's expires, and nothing changes that
+  afterwards, whoever continues it. A conversation nobody owns yet — a scheduled
+  task's reply saved before its chat's first turn — expires until its first
+  owner saves in it; a person's arrival makes it, and the messages already in
+  it, last. One nobody ever claims keeps expiring and only an admin can see it.
+  An expiring conversation's records each expire a week after they were
+  written. `/newchat` empties the model's window but keeps the records.
 
 ## 7. Known runtime risks and approved next work
 
 | Risk | Evidence | Approved next work |
 |---|---|---|
 | Authenticated staging UI is not yet verified | Floci Bedrock stub: one chunk, no tool events; staging verification needs an owner-authorized spend-capped token | [CHATUI-008](plan.md) |
+| Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |
+| Conversations written before P1 still carry a token-hash owner until the migration runs, and a pre-P1 turn that leaves the 20-turn window before then has no record anywhere | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token and run the migration (dry run, then `--apply`) straight after the deploy, before anyone chats |
 | An opacity modifier on a plain semantic token still emits no CSS, so `bg-primary/10` is silently a no-op | the semantic keys in [web/tailwind.config.ts](../../../web/tailwind.config.ts) are raw `var()` strings with nowhere to inject an alpha channel; the alpha-capable `-a` siblings added by CHATUI-001 sit beside them rather than replacing them | none open — the mitigation landed in [CHATUI-001](plan.md); the standing rule is the appendix mapping (`any <color>/<opacity>` → `-a` triplet keys or `*-dim` vars only). The chat subtree observed 2026-09-20 has zero occurrences; the rest of `web/src` still has them |
 
 ## 8. Exact focused and full validation commands
@@ -121,7 +195,7 @@ npm --prefix web run build
 npm run local:test:integration
 node scripts/ci/docs-links.mjs
 node scripts/ci/feature-knowledge.mjs
-git diff --check
+git diff --check origin/development...HEAD
 ```
 
 Note (ledger M6): run Vitest from a normal checkout, never a Windows linked
