@@ -49,11 +49,11 @@ function s3(): S3Client {
  * rule to this exact value; the storage-stack test asserts they match. */
 export const UPLOAD_PREFIX = 'uploads/';
 
-export async function presignUploadUrl(key: string): Promise<string> {
-  if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
-  // No ContentType in the signature so the browser's auto Content-Type header
-  // can't cause a signature mismatch; we only read the bytes back.
-  const cmd = new PutObjectCommand({ Bucket: STAGING_BUCKET, Key: key });
+async function presignWithRetry(
+  command: PutObjectCommand,
+  options: NonNullable<Parameters<typeof getSignedUrl>[2]>,
+  logMessage: string,
+): Promise<string> {
   // getSignedUrl resolves credentials from the ECS task role; on a Fargate
   // task that endpoint can blip mid credential-refresh, which surfaced as an
   // opaque "presign_failed" with no retry. One short retry turns a transient
@@ -61,35 +61,34 @@ export async function presignUploadUrl(key: string): Promise<string> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await getSignedUrl(s3(), cmd, { expiresIn: 300 });
+      return await getSignedUrl(s3(), command, options);
     } catch (err) {
       lastErr = err;
       logger.warn(
         { attempt, errMessage: err instanceof Error ? err.message : String(err) },
-        'presign upload url failed; retrying',
+        logMessage,
       );
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
+export async function presignUploadUrl(key: string): Promise<string> {
+  if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
+  // No ContentType in the signature so the browser's auto Content-Type header
+  // can't cause a signature mismatch; we only read the bytes back.
+  const cmd = new PutObjectCommand({ Bucket: STAGING_BUCKET, Key: key });
+  return presignWithRetry(cmd, { expiresIn: 300 }, 'presign upload url failed; retrying');
+}
+
 /** Chat uploads bind the declared type and size to the direct S3 PUT. */
 export async function presignChatUploadUrl(key: string, mime: string, size: number): Promise<string> {
   if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
   const cmd = new PutObjectCommand({ Bucket: STAGING_BUCKET, Key: key, ContentType: mime, ContentLength: size });
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await getSignedUrl(s3(), cmd, {
-        expiresIn: 300,
-        signableHeaders: new Set(['content-type', 'content-length']),
-      });
-    } catch (err) {
-      lastErr = err;
-      logger.warn({ attempt, errMessage: err instanceof Error ? err.message : String(err) }, 'presign chat upload url failed; retrying');
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  return presignWithRetry(cmd, {
+    expiresIn: 300,
+    signableHeaders: new Set(['content-type', 'content-length']),
+  }, 'presign chat upload url failed; retrying');
 }
 
 /** Read only the staged object's metadata before a chat turn begins. */
