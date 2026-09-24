@@ -59,13 +59,52 @@ function sseWrite(res: ServerResponse, event: string, data: string): void {
  * record — and a missing or unparseable body is still a valid request that
  * plays "default".
  */
-function parseTurn(rawBody: string): { text: string; chatId: string } {
+function parseTurn(rawBody: string): { text: string; chatId: string; attachmentKeys: string[] } {
   try {
-    const body = JSON.parse(rawBody) as { text?: unknown; chatId?: unknown };
-    return { text: String(body.text ?? ''), chatId: String(body.chatId ?? '') };
+    const body = JSON.parse(rawBody) as { text?: unknown; chatId?: unknown; attachments?: unknown };
+    const attachmentKeys = Array.isArray(body.attachments)
+      ? body.attachments.map((a) => String((a as { s3Key?: unknown }).s3Key ?? ''))
+      : [];
+    return { text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys };
   } catch {
-    return { text: '', chatId: '' };
+    return { text: '', chatId: '', attachmentKeys: [] };
   }
+}
+
+// ── P3: uploads (written with the P3 bar, netzar-chat-plan/p3-proof.sh E-rows) ──
+// The real route signs a presigned S3 PUT (POST /api/chat/uploads) and the browser
+// PUTs the file straight to S3. Here the "S3" is this dev server, under /__mock-s3,
+// holding the bytes in memory. It refuses what real S3 would: a PUT whose
+// Content-Type is not the one that was signed. An upload whose name contains
+// "slow" answers its PUT after 1.5 s, so a browser test can see the progress bar.
+// The transcript records ONLY what the page actually sent with its message, so a
+// file-only message reloads with its chips if, and only if, the page sent them.
+const MOCK_S3 = '/__mock-s3/';
+const UPLOAD_MAX_BYTES = 30 * 1024 * 1024; // the real route's ceiling (owner decision 29)
+interface MockUpload { id: string; name: string; type: string; size: number; bytes?: Buffer }
+const uploads = new Map<string, MockUpload>(); // by key
+let uploadSeq = 0;
+
+function readBody(req: import('node:http').IncomingMessage): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function jsonStatus(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+/** What a stored message says about its files: never the storage key (the real transcript's rule). */
+function describeUploads(keys: string[]): Array<{ id: string; name: string; type: string; size: number }> {
+  return keys.flatMap((k) => {
+    const u = uploads.get(k);
+    return u ? [{ id: u.id, name: u.name, type: u.type, size: u.size }] : [];
+  });
 }
 
 interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean }
@@ -230,7 +269,10 @@ function mockSessions(): unknown {
 // messages with (`Date.now() / 1000`) and what the real route's stored turns
 // carry. The milliseconds mistake this file made once for `updatedAt` is
 // written up above the sidebar fixture; it is not repeated here.
-const transcripts = new Map<string, Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[] }>>();
+const transcripts = new Map<string, Array<{
+  role: string; text: string; ts: number; status?: string; tools?: ToolCall[];
+  attachments?: Array<{ id: string; name: string; type: string; size: number }>;
+}>>();
 
 // The one bound on that Map. A dev server left running all day accumulates a
 // conversation per "New chat" click and never released one, which both reviews
@@ -242,7 +284,7 @@ const transcripts = new Map<string, Array<{ role: string; text: string; ts: numb
 const MAX_CONVERSATIONS = 200;
 
 /** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
-function recordTurn(chatId: string, userText: string, reply: PlayedTurn): void {
+function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = []): void {
   if (!chatId) {
     // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
     // either an unparseable body or a caller that is not the chat page.
@@ -252,9 +294,10 @@ function recordTurn(chatId: string, userText: string, reply: PlayedTurn): void {
     return;
   }
   const ts = Date.now() / 1000;
+  const files = describeUploads(attachmentKeys);
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
-    { role: 'user', text: userText, ts },
+    { role: 'user', text: userText, ts, ...(files.length ? { attachments: files } : {}) },
     ...(reply.text || reply.stopped || reply.tools.length ? [{
       role: 'assistant', text: reply.text, ts,
       ...(reply.stopped ? { status: 'stopped' } : {}),
@@ -296,7 +339,7 @@ export function mockStreamPlugin(): Plugin {
               if (reply.stopped) {
                 console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.text.length} chars)`);
               }
-              recordTurn(turn.chatId, turn.text, reply);
+              recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
             })
             // Without this, a throw anywhere above becomes an unhandled
             // rejection that takes the whole dev server down and blames
@@ -305,6 +348,72 @@ export function mockStreamPlugin(): Plugin {
               console.error('[chat-mock] turn failed, nothing recorded:', err);
             });
         });
+      });
+
+      // P3: sign an upload the way POST /api/chat/uploads does.
+      server.middlewares.use('/api/chat/uploads', (req, res, next) => {
+        if (req.method !== 'POST') return next();
+        void readBody(req).then((raw) => {
+          let body: { fileName?: unknown; mimeType?: unknown; size?: unknown } = {};
+          try { body = JSON.parse(raw.toString('utf8')); } catch { /* an empty body is refused below */ }
+          const name = String(body.fileName ?? '');
+          const size = Number(body.size);
+          if (!name || !Number.isInteger(size) || size < 1) return jsonStatus(res, 400, { error: 'invalid_upload' });
+          if (size > UPLOAD_MAX_BYTES) return jsonStatus(res, 413, { error: 'file_too_large', maxBytes: UPLOAD_MAX_BYTES });
+          const id = `mock-upload-${++uploadSeq}`;
+          const key = `uploads/chat/mock/${id}/${name.replace(/[^A-Za-z0-9._-]/g, '_').slice(-120)}`;
+          const type = String(body.mimeType || 'application/octet-stream');
+          uploads.set(key, { id, name, type, size });
+          json(res, { url: `${MOCK_S3}${key}`, key, id, headers: { 'Content-Type': type } });
+        }).catch((err: unknown) => {
+          console.error('[chat-mock] upload sign failed:', err);
+          jsonStatus(res, 500, { error: 'mock_failed' });
+        });
+      });
+
+      // P3: the pretend S3 bucket the signed PUT and the download link point at.
+      server.middlewares.use(MOCK_S3.slice(0, -1), (req, res, next) => {
+        const key = decodeURIComponent((req.url ?? '/').split('?')[0].slice(1));
+        const upload = uploads.get(key);
+        if (req.method === 'PUT') {
+          if (!upload) return jsonStatus(res, 403, { error: 'no such signed upload' });
+          if (req.headers['content-type'] !== upload.type) {
+            // Real S3 refuses a PUT whose signed header differs.
+            return jsonStatus(res, 403, { error: 'SignatureDoesNotMatch: Content-Type' });
+          }
+          void readBody(req).then((bytes) => {
+            upload.bytes = bytes;
+            const done = () => { res.writeHead(200); res.end(); };
+            if (key.includes('slow')) setTimeout(done, 1500);
+            else done();
+          }).catch((err: unknown) => {
+            console.error('[chat-mock] upload PUT failed:', err);
+            jsonStatus(res, 500, { error: 'mock_failed' });
+          });
+          return;
+        }
+        if (req.method === 'GET') {
+          if (!upload?.bytes) return jsonStatus(res, 404, { error: 'NoSuchKey' });
+          res.writeHead(200, {
+            'Content-Type': upload.type,
+            'Content-Disposition': `attachment; filename="${upload.name.replace(/"/g, '')}"`,
+          });
+          res.end(upload.bytes);
+          return;
+        }
+        next();
+      });
+
+      // P3: the owner's download link for one stored file (GET /api/sessions/attachment).
+      // Mounted BEFORE '/api/sessions' for the reason given below.
+      server.middlewares.use('/api/sessions/attachment', (req, res, next) => {
+        if (req.method !== 'GET') return next();
+        const q = new URL(req.url ?? '/', 'http://localhost').searchParams;
+        const sent = (transcripts.get(q.get('chatId') ?? '') ?? []).flatMap((t) => t.attachments ?? []);
+        const file = sent.find((a) => a.id === q.get('id'));
+        const key = file ? [...uploads.entries()].find(([, u]) => u.id === file.id)?.[0] : undefined;
+        if (!file || !key) return jsonStatus(res, 404, { error: 'not_found' });
+        json(res, { url: `${MOCK_S3}${key}?download=1`, name: file.name });
       });
 
       // Mounted BEFORE '/api/sessions' — connect matches on prefix, so the
