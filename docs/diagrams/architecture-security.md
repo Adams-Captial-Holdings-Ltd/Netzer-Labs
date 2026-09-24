@@ -57,6 +57,7 @@ flowchart TD
 
 ## Legend
 
+- Chat attachment containment (P3, decisions 1, 3 and 54): staged keys live under `uploads/chat/<callerTag>/`, where the tag is derived from the caller's identity; one person cannot send another's upload. The file's size and type are signed into the PUT and checked again with `HeadObject` before a turn begins. Transcripts never carry storage keys. `GET /api/sessions/attachment` gives only the owner, or an admin after an awaited audited override, a short-lived GET link with attachment disposition. A chat file enters the knowledge base only through its chip's “Add to knowledge” switch; that knowledge copy stays when the chat is deleted. Deleting a conversation removes its stored files before its rows.
 - Solid arrows are authenticated calls; dotted arrows show where kill switches intercept.
 - **Fail-closed webhooks**: a missing or `REPLACE_ME` Telegram secret or Slack signing secret REJECTS requests (401). Signature verification is **unconditional** — there is no per-surface `*_signature_check_disabled` bypass switch (removed in Wave A; see the note below); break-glass for a broken secret is to close ingress, not to accept unsigned traffic.
 - **Kill-switch placement** (all in the `claudeclaw-kill-switches` table, namespaced MCP tools ride the same `tool_use` switch as built-ins):

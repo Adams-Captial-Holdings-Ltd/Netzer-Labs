@@ -2,8 +2,8 @@
 feature: netzar-chat
 document_role: index
 status: current
-observed_at: 2026-09-23
-as_of_commit: 45d7193491d3158648511b36d529617aa286018a
+observed_at: 2026-09-24
+as_of_commit: 97f8e79b9e9c606c8e14a64ab956e272c11b8e4c
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -21,6 +21,14 @@ implemented_by:
   - src/lib/safety/exfil-patterns.ts
   - src/lib/tools/dynamodb-tools.ts
   - src/lib/state/legacy-chat-migration.ts
+  - src/lib/chat/attachments.ts
+  - src/lib/chat/zip-check.ts
+  - src/lib/media/process.ts
+  - src/lib/vectors/store.ts
+  - src/adapters/slack/media.ts
+  - web/src/lib/chat/attachment-rules.ts
+  - web/src/lib/chat/uploads.ts
+  - web/src/components/chat/UserMessage.tsx
 tested_by:
   - src/adapters/dashboard/chat-stream.test.ts
   - src/adapters/dashboard/chat-stream-p2.test.ts
@@ -40,6 +48,15 @@ tested_by:
   - src/lib/state/legacy-chat-migration.test.ts
   - src/lib/state/sessions-repo.p1.integration.test.ts
   - src/lib/tools/dynamodb-tools.test.ts
+  - src/adapters/dashboard/chat-uploads.test.ts
+  - src/lib/chat/attachments.test.ts
+  - src/lib/chat/zip-check.test.ts
+  - src/lib/media/process.p3.test.ts
+  - src/agent/agent-loop.p3.test.ts
+  - src/lib/state/sessions-repo.p3.test.ts
+  - src/lib/state/sessions-repo.p3.integration.test.ts
+  - src/adapters/slack/media.p3.test.ts
+  - tests/e2e/chat/attachments.spec.ts
 approved_work:
   - docs/features/netzar-chat/plan.md
 ---
@@ -63,8 +80,8 @@ layer is used.
 
 ## 2. What netzar-chat does today
 
-The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 591-line state and
-composition shell. Transport and helpers live in the eight modules under
+The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 668-line state and
+composition shell. Transport and helpers live in the nine modules under
 `web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
 17 top-level files under `web/src/components/chat/` — 15 component files plus
 the `conversation-groups.ts` helper and the `useChatScroll.ts` hook — alongside
@@ -191,6 +208,45 @@ backend.
   `bedrock/guardrail_stream_mode = sync` (any case) puts it back in front with
   no redeploy.
 
+**Attachments (P3, roadmap step 5):**
+
+- **Upload on attach.** Paperclip, paste and drop all run the same rules
+  (`web/src/lib/chat/attachment-rules.ts`, the server's own numbers): documents
+  by extension (`.pdf .docx .pptx .txt .md .csv`), media by type (`image/*`,
+  `audio/*`, `video/*`), at most 30 MB and 3 files a message. A file that breaks
+  a rule is named in one alert with the reason — never dropped. An accepted file
+  uploads at once: `POST /api/chat/uploads` (`chat:read`) answers a presigned S3
+  PUT with the file's size and type signed in (300 s) under
+  `uploads/chat/<callerTag>/<id>/<name>`, where the tag comes from the caller's
+  identity; the chip shows a real progress bar, and Send waits for every upload.
+- **The send checks before it spends.** `POST /api/test-turn/stream` refuses a
+  fourth file (400), and — after the ownership check, before a turn record, a
+  read or a model call — checks every file with `HeadObject`: not the caller's
+  or missing 404 `upload_not_found` (old-style `uploads/<uuid>/…` keys too,
+  owner decision 55), over 30 MB 413 `file_too_large`, not the signed type 415
+  `unsupported_type`, S3 unreachable 503 `upload_unavailable`.
+- **What the model sees.** `pdf`, `docx`, `txt`, `md`, `csv` as Bedrock
+  document blocks up to 4.5 MB, a `pptx` as its extracted text, images up to
+  3.75 MB and only when the bytes are PNG, JPEG, GIF or WebP; a document's name
+  is cleaned to what Bedrock accepts (200 characters at most). A docx or pptx
+  passes a bounded ZIP check (`src/lib/chat/zip-check.ts`: 1,000 entries, 50 MB
+  an entry, 100 MB in all, counted by really inflating) before anything opens
+  it. A file the model could not read is named to it in a bracketed note; the
+  note is never saved into the sender's own words.
+- **A message keeps its files.** The user turn stores each file's id, name,
+  type, size and raw-bucket key; the transcript returns them without the key;
+  each chip is a Download button that asks `GET /api/sessions/attachment`
+  (`sessions:read`) for a fresh 300 s link with attachment disposition — the
+  owner only (the same 404 for missing and not yours), an admin through the
+  audited override that fails closed (decision 1).
+- **The knowledge base, only by choice** (owner decision 3). Each chip's "Add to
+  knowledge" checkbox is off by default and says on screen that everyone who uses
+  the agent can find the file and that it stays if the chat is deleted (decision
+  54); an opt-in that did not happen says so. Slack and Telegram never import a
+  chat file. Slack reads at most 3 files of 30 MB (a config may lower that, never
+  raise it) and names a file it skips for being past the third or over the size
+  limit (a failed Slack download is still reported only generically).
+
 ## 3. Current status and current source commit
 
 The port merged into `development` as PR #129 (merge
@@ -199,8 +255,9 @@ on `origin/qa` and `origin/staging`, and staging is the AWS environment reached
 through the branch-to-environment mapping; it is not on `origin/production`.
 
 P1 (roadmap step 3) merged into `development` as PR #189 (merge
-`e035f97`, 2026-09-23) and is on no environment branch yet (owner decision
-18: promotion is separate work). P2 (roadmap step 4) is the change this README
+`e035f97`, 2026-09-23) and P2 (roadmap step 4) as PR #190 (merge `700821f`,
+2026-09-23); neither is on an environment branch yet (owner decision 18:
+promotion is separate work). P3 (roadmap step 5) is the change this README
 was last updated with; [HANDOFF](HANDOFF.md) and the Gauntlet state file hold
 its pull request, because a file cannot state the commit it is inside.
 
@@ -229,6 +286,8 @@ its pull request, because a file cannot state the commit it is inside.
 | Legacy migration | `src/lib/state/legacy-chat-migration.ts`, `scripts/p1-migrate-legacy-chats.ts` | Dry run by default; `--apply` only with the resolved table names typed out |
 | Turn lifecycle (server) | `src/adapters/dashboard/handler.ts` (the stream route), `src/agent/agent-loop.ts`, `src/lib/bedrock/client.ts`, `beginTurn`/`endTurn` in `src/lib/state/sessions-repo.ts` | Abort, heartbeat, deltas, tool start/end, typed errors, send-time checks, turn records, the stopped turn's spend, the guardrail stream mode |
 | Turn lifecycle (web) | `web/src/lib/chat/stream.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/ToolCallsSection.tsx`, `web/dev/` (the dev-only chat mock) | Protocol 2 parsing, the composer during a run, the tool panel; the mock mirrors the route for `npm run e2e:chat` |
+| Attachments (server) | `src/adapters/dashboard/handler.ts` (`/chat/uploads`, the send's preflight, `/sessions/attachment`), `src/lib/chat/attachments.ts`, `src/lib/chat/zip-check.ts`, `src/lib/media/process.ts`, `src/lib/vectors/store.ts`, `deleteSession` in `src/lib/state/sessions-repo.ts`, `src/adapters/slack/media.ts` | The format table, the signed upload link, the `HeadObject` preflight, the media rules and the knowledge opt-in, the owner's download link, the file cascade on delete, Slack's ceiling |
+| Attachments (web) | `web/src/lib/chat/attachment-rules.ts`, `web/src/lib/chat/uploads.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/UserMessage.tsx`, `web/src/pages/Chat.tsx` | The same rules in the browser, upload on attach with progress, the chips and their knowledge switch, the Download buttons |
 
 ## 6. Current business/state rules
 
@@ -276,6 +335,14 @@ its pull request, because a file cannot state the commit it is inside.
   stay under DynamoDB's 400 KB item limit (the text gives way, marked
   `truncated`); results that alone pass that budget give way first, oldest
   output first, every call still listed.
+- A message's files ride on its user record (`attachments`: id, name, type,
+  size and the raw-bucket key), counted in that record's byte budget; no client
+  response carries a key except the two short-lived capability links (the
+  upload PUT and the download GET). Deleting a conversation deletes those raw
+  copies with `DeleteObjects` BEFORE any row, and keeps every row when S3 throws
+  or reports an error, so a retry finds it whole; a conversation without files
+  makes no S3 call. An opted-in knowledge-base copy is a separate document and
+  stays (decision 54).
 
 ## 7. Known runtime risks and approved next work
 
@@ -286,6 +353,8 @@ its pull request, because a file cannot state the commit it is inside.
 | How Bedrock bills a call cut mid-way is unverified | a stopped turn's usage is an estimate built to over-count (the call's files, tool list and re-sent arguments; a cut tool round's output at its ceiling), never to under-count the daily cap | none open |
 | A Stop pressed before the async guardrail's verdict keeps the partial reply unchecked; a partial that held something the guardrail blocks can make that chat trip the filter on later turns | owner decision 52 (keep the partial): rare, and a new chat clears it | none open — the `sync` switch restores "check first" |
 | The guardrail's async mode lets a harmful sentence reach the screen before the guardrail blocks the rest of the reply (AWS's documented trade-off) | owner decision 50; the app's own streaming redactor still scrubs every chunk against the block-severity patterns first | none open — runtime-config `bedrock/guardrail_stream_mode = sync` restores "check first" with no redeploy |
+| P3 is proven locally only: a real browser PUT to real S3 through the signed link, the `HeadObject` preflight on real S3 and a real download have not run | the staging tier ST-1..ST-3 of `p3-proof.sh`; the grants and the staging bucket's CORS were read from `infra/`, not exercised | `P3_TIER=staging` after promotion (decision 18) |
+| The raw bucket expires objects after 365 days, so an old message's file stops downloading (the chip stays; the click opens S3's error page) | `infra/lib/storage-stack.ts` lifecycle rule | none open — deferred in the P3 session log |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |
 | Conversations written before P1 still carry a token-hash owner until the migration runs, and a pre-P1 turn that leaves the 20-turn window before then has no record anywhere | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token and run the migration (dry run, then `--apply`) straight after the deploy, before anyone chats |
 | An opacity modifier on a plain semantic token still emits no CSS, so `bg-primary/10` is silently a no-op | the semantic keys in [web/tailwind.config.ts](../../../web/tailwind.config.ts) are raw `var()` strings with nowhere to inject an alpha channel; the alpha-capable `-a` siblings added by CHATUI-001 sit beside them rather than replacing them | none open — the mitigation landed in [CHATUI-001](plan.md); the standing rule is the appendix mapping (`any <color>/<opacity>` → `-a` triplet keys or `*-dim` vars only). The chat subtree observed 2026-09-20 has zero occurrences; the rest of `web/src` still has them |
@@ -296,7 +365,10 @@ Focused: `npx vitest run src/adapters/dashboard/chat-stream.test.ts
 src/adapters/dashboard/chat-stream-p2.test.ts
 src/adapters/dashboard/chat-helpers.test.ts
 src/adapters/dashboard/chat-lifecycle.test.ts src/agent/agent-loop.p2.test.ts
-src/lib/bedrock/client.p2.test.ts src/lib/state/sessions-repo.p2.test.ts`, plus
+src/lib/bedrock/client.p2.test.ts src/lib/state/sessions-repo.p2.test.ts
+src/adapters/dashboard/chat-uploads.test.ts src/lib/chat src/lib/media
+src/agent/agent-loop.p3.test.ts src/lib/state/sessions-repo.p3.test.ts
+src/adapters/slack/media.p3.test.ts`, plus
 `npm --prefix web run typecheck && npm --prefix web run build` and the browser
 suite against the dev-only chat mock, `npm run e2e:chat`.
 

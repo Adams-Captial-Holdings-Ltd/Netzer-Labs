@@ -7,16 +7,16 @@
  *
  *   1. store raw bytes to s3://RAW_BUCKET/<surface>/<chat>/<date>/<file>
  *   2. classify (image magic bytes / doc extension)
- *   3. image -> inline image AttachmentBlock; pdf <=20MB -> document block
+ *   3. supported images and documents -> Bedrock blocks within their per-block limits
  *   4. voice/audio -> Amazon Transcribe -> transcript text
- *   5. documents (pdf/docx/pptx/txt/md/csv) -> knowledge-base auto-ingest
- *      (see chat-kb-ingest.ts) so the file is queryable from every surface
+ *   5. opted-in documents and video transcripts -> knowledge-base ingest
  *
  * Extracted from src/adapters/telegram/media.ts, which now only does the
  * Telegram-specific download and delegates here.
  */
 
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { writeAudit } from '../audit/audit-writer.js';
 import { logger, truncateForLog } from '../../observability/logger.js';
 import { isKillSwitchActive } from '../state/kill-switches-repo.js';
@@ -27,6 +27,8 @@ import {
 import { captureAwsClient } from '../observability/xray.js';
 import type { AttachmentBlock } from '../../agent/agent-loop.js';
 import { getConfig } from '../state/runtime-config-repo.js';
+import { checkZip, ZipCheckError } from '../chat/zip-check.js';
+import { extractPptxText } from '../vectors/extractors.js';
 import {
   extractAudioTrack,
   extractKeyframes,
@@ -50,6 +52,15 @@ export async function getRawObject(key: string, bucket?: string): Promise<Buffer
   const out = await s3().send(new GetObjectCommand({ Bucket: b, Key: key }));
   if (!out.Body) throw new Error(`object not found: s3://${b}/${key}`);
   return Buffer.from(await out.Body.transformToByteArray());
+}
+
+/** Re-mint a short-lived download for a stored chat attachment. */
+export async function presignRawAttachment(key: string, name: string): Promise<string> {
+  if (!RAW_BUCKET) throw new Error('RAW_BUCKET not configured');
+  const disposition = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
+  return getSignedUrl(s3(), new GetObjectCommand({
+    Bucket: RAW_BUCKET, Key: key, ResponseContentDisposition: disposition,
+  }), { expiresIn: 300 });
 }
 
 /** Classify a chat upload by MIME type — shared by Slack + dashboard. */
@@ -77,7 +88,33 @@ export function stageLabel(stage: MediaStage, fileName: string): string {
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 const RAW_BUCKET = process.env.RAW_BUCKET ?? '';
-const MAX_INLINE_BYTES = 20 * 1024 * 1024; // 20MB Bedrock cap
+const MAX_IMAGE_BYTES = 3_750_000;
+const MAX_DOCUMENT_BYTES = 4_500_000;
+const MAX_TRANSCRIBE_BYTES = 20 * 1024 * 1024;
+
+function mediaAckText(input: {
+  kind: MediaKind;
+  safeName: string;
+  bytes: number;
+  blocks: AttachmentBlock[];
+  transcript: string | undefined;
+  videoFailureAck: string | undefined;
+  unsafeDocument: boolean;
+  imageFormat: ImageFormat | undefined;
+  docFormat: DocFormat | undefined;
+  kb: ChatKbIngestResult | null;
+  rawCopyExists: boolean;
+}): string {
+  if (input.kind === 'video') {
+    if (input.blocks.length > 0 || input.transcript) return '';
+    return input.videoFailureAck ?? `got the video (${Math.round(input.bytes / 1024)} KB), stored. Couldn't watch it just now — type out the question and I'll answer.`;
+  }
+  if (input.unsafeDocument) return `Could not open ${input.safeName} safely. The file was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
+  if (input.kind === 'photo' && !input.imageFormat) return `${input.safeName} is not a PNG, JPEG, GIF or WebP image, so it was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
+  if (input.kind === 'document' && input.docFormat && input.bytes > MAX_DOCUMENT_BYTES) return `${input.safeName} is over the 4.5 MB document limit, so it was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
+  if (input.imageFormat && input.bytes > MAX_IMAGE_BYTES) return `${input.safeName} is over the 3.75 MB image limit, so it was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
+  return buildAck(input.kind, input.safeName, input.bytes, input.blocks.length > 0, !!input.transcript, input.kb);
+}
 
 let _s3: S3Client | null = null;
 function s3(): S3Client {
@@ -106,13 +143,14 @@ export interface RawMediaInput {
   s3Key?: string;
   /** Pre-staged objects live in a different bucket (vectors staging). */
   s3Bucket?: string;
+  addToKnowledge?: boolean;
 }
 
 export interface ProcessedMedia {
   s3Url: string;
   s3Key: string;
   byteLength: number;
-  /** Inline multimodal blocks for the agent turn (images / pdf). */
+  /** Inline multimodal blocks for the agent turn (images / documents). */
   blocks: AttachmentBlock[];
   /** Transcribed text when voice/audio went through Transcribe. */
   transcript?: string;
@@ -122,7 +160,7 @@ export interface ProcessedMedia {
    * (nothing analyzable). Empty => proceed to the agent loop.
    */
   ackText: string;
-  /** Set when the file was auto-ingested into the knowledge base. */
+  /** Set when the sender opted in and the file was ingested into the knowledge base. */
   kb?: ChatKbIngestResult | null;
   kind: MediaKind;
   imageFormat?: ImageFormat;
@@ -156,6 +194,7 @@ export async function processMedia(
 
   // 1. store raw (skip when the surface already staged the object in S3)
   let s3Key = input.s3Key ?? '';
+  let rawCopyExists = Boolean(input.s3Key);
   let s3Url: string;
   if (input.s3Key) {
     s3Url = `s3://${input.s3Bucket ?? RAW_BUCKET}/${input.s3Key}`;
@@ -179,6 +218,7 @@ export async function processMedia(
             },
           }),
         );
+        rawCopyExists = true;
       } catch (err) {
         logger.warn(
           { errMessage: err instanceof Error ? err.message : String(err), s3Key },
@@ -190,15 +230,40 @@ export async function processMedia(
   }
 
   // 2. classify
-  const imageFormat = recognizeImage(input.kind, input.mimeType, safeName, bytes);
   const docFormat = recognizeDoc(input.mimeType, safeName);
-  const inline = bytes.length <= MAX_INLINE_BYTES;
-
+  const imageFormat = input.kind === 'document' && docFormat
+    ? undefined
+    : recognizeImage(input.kind, input.mimeType, safeName, bytes);
   const blocks: AttachmentBlock[] = [];
-  if (imageFormat && inline) {
+  let unsafeDocument = false;
+  let zipCheckCode: ZipCheckError['code'] | undefined;
+  if (input.kind === 'document' && (docFormat === 'docx' || docFormat === 'pptx')) {
+    try {
+      checkZip(bytes);
+    } catch (err) {
+      if (!(err instanceof ZipCheckError)) throw err;
+      unsafeDocument = true;
+      zipCheckCode = err.code;
+      logger.warn({ fileName: safeName, code: err.code }, 'zip check failed');
+    }
+  }
+  if (imageFormat && bytes.length <= MAX_IMAGE_BYTES) {
     blocks.push({ kind: 'image', format: imageFormat, bytes });
-  } else if (docFormat === 'pdf' && inline) {
-    blocks.push({ kind: 'document', format: 'pdf', name: safeName || 'attachment.pdf', bytes });
+  } else if (input.kind === 'document' && docFormat && !unsafeDocument && bytes.length <= MAX_DOCUMENT_BYTES) {
+    if (docFormat === 'pptx') {
+      try {
+        const extracted = await extractPptxText(bytes);
+        const text = Buffer.from(extracted.text, 'utf8');
+        if (text.length > 0 && text.length <= MAX_DOCUMENT_BYTES) {
+          blocks.push({ kind: 'document', format: 'txt', name: safeName, bytes: text });
+        }
+      } catch (err) {
+        unsafeDocument = true;
+        logger.warn({ fileName: safeName, errMessage: err instanceof Error ? err.message : String(err) }, 'pptx extraction failed');
+      }
+    } else {
+      blocks.push({ kind: 'document', format: docFormat, name: safeName, bytes });
+    }
   }
 
   // 3. voice/audio -> Transcribe (needs the object in S3)
@@ -207,7 +272,7 @@ export async function processMedia(
   if (
     (input.kind === 'voice' || input.kind === 'audio') &&
     s3Url.startsWith('s3://') &&
-    bytes.length <= MAX_INLINE_BYTES &&
+    bytes.length <= MAX_TRANSCRIBE_BYTES &&
     process.env.CCE_TRANSCRIBE_DISABLED !== '1'
   ) {
     safeStage(onStage, 'transcribing');
@@ -257,9 +322,9 @@ export async function processMedia(
     videoFailureAck = v.failureAck;
   }
 
-  // 4. knowledge-base auto-ingest: document formats + video transcripts
+  // 4. knowledge-base ingest only when the sender opted in
   let kb: ChatKbIngestResult | null = null;
-  if (input.kind === 'document' && ingestFormatFor(safeName)) {
+  if (input.addToKnowledge === true && input.kind === 'document' && docFormat && !unsafeDocument && ingestFormatFor(safeName)) {
     safeStage(onStage, 'indexing');
     kb = await ingestChatMedia({
       targetAgentId: input.targetAgentId,
@@ -269,7 +334,7 @@ export async function processMedia(
       bytes,
       sourceS3Url: s3Url,
     });
-  } else if (input.kind === 'video' && transcript) {
+  } else if (input.addToKnowledge === true && input.kind === 'video' && transcript) {
     safeStage(onStage, 'indexing');
     kb = await ingestChatMedia({
       targetAgentId: input.targetAgentId,
@@ -282,12 +347,19 @@ export async function processMedia(
     });
   }
 
-  const ackText =
-    input.kind === 'video'
-      ? blocks.length > 0 || transcript
-        ? ''
-        : (videoFailureAck ?? `got the video (${Math.round(bytes.length / 1024)} KB), stored. Couldn't watch it just now — type out the question and I'll answer.`)
-      : buildAck(input.kind, safeName, bytes.length, blocks.length > 0, !!transcript, kb);
+  const ackText = mediaAckText({
+    kind: input.kind,
+    safeName,
+    bytes: bytes.length,
+    blocks,
+    transcript,
+    videoFailureAck,
+    unsafeDocument,
+    imageFormat,
+    docFormat,
+    kb,
+    rawCopyExists,
+  });
 
   void writeAudit({
     action: 'media_upload',
@@ -299,6 +371,7 @@ export async function processMedia(
       bytes: bytes.length,
       s3Url,
       analyzed: blocks.length > 0,
+      ...(zipCheckCode ? { zipCheck: zipCheckCode } : {}),
       ...(kb ? { kbDocId: kb.docId, kbScope: kb.scope, kbDeduped: kb.deduped } : {}),
     },
     result: 'ok',
@@ -319,7 +392,7 @@ export async function processMedia(
 
   return {
     s3Url,
-    s3Key,
+    s3Key: rawCopyExists ? s3Key : '',
     byteLength: bytes.length,
     blocks,
     transcript,
@@ -516,7 +589,7 @@ function buildAck(
         ? `got ${fileName} (${kbSize} KB) — it's already in the knowledge base. Ask me anything about it.`
         : `got ${fileName} (${kbSize} KB) and indexed it into the knowledge base (${kb.chunks} chunk${kb.chunks === 1 ? '' : 's'}). Ask me anything about it — from Slack, Telegram, or the dashboard.`;
     }
-    return `got the file ${fileName} (${kbSize} KB), stored. PDF analysis only for files under 20MB.`;
+    return `got the file ${fileName} (${kbSize} KB), stored. It could not be read inline.`;
   }
   if (kind === 'voice' || kind === 'audio') {
     // When we got a transcript the caller flows it into the agent loop;
@@ -530,61 +603,39 @@ function buildAck(
 export function recognizeImage(
   kind: MediaKind,
   mimeType: string | undefined,
-  fileName: string,
+  _fileName: string,
   bytes: Buffer,
 ): ImageFormat | undefined {
-  if (kind !== 'photo') {
-    // Could still be image-as-document
-    if (mimeType?.startsWith('image/')) {
-      const mt = mimeType.slice('image/'.length);
-      if (mt === 'png' || mt === 'jpeg' || mt === 'jpg') return mt === 'jpg' ? 'jpeg' : (mt as ImageFormat);
-      if (mt === 'gif' || mt === 'webp') return mt;
-    }
-    return undefined;
-  }
-  // Sniff magic bytes
-  if (bytes.length >= 8) {
-    if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
-    if (
-      bytes[0] === 0x89 &&
-      bytes[1] === 0x50 &&
-      bytes[2] === 0x4e &&
-      bytes[3] === 0x47
-    )
-      return 'png';
-    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'gif';
-    if (
-      bytes[0] === 0x52 &&
-      bytes[1] === 0x49 &&
-      bytes[2] === 0x46 &&
-      bytes[3] === 0x46 &&
-      bytes[8] === 0x57 &&
-      bytes[9] === 0x45 &&
-      bytes[10] === 0x42 &&
-      bytes[11] === 0x50
-    )
-      return 'webp';
-  }
-  // Chat photos are usually JPEG; default
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith('.png')) return 'png';
-  if (lower.endsWith('.gif')) return 'gif';
-  if (lower.endsWith('.webp')) return 'webp';
-  return 'jpeg';
+  if (kind !== 'photo' && !mimeType?.toLowerCase().startsWith('image/')) return undefined;
+  // Sniff complete format signatures; labels never supply a fallback.
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) return 'png';
+  if (
+    bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 &&
+    bytes[3] === 0x38 && (bytes[4] === 0x37 || bytes[4] === 0x39) && bytes[5] === 0x61
+  ) return 'gif';
+  if (
+    bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) return 'webp';
+  return undefined;
 }
 
 export function recognizeDoc(
-  mimeType: string | undefined,
+  _mimeType: string | undefined,
   fileName: string,
 ): DocFormat | undefined {
-  const mt = mimeType?.toLowerCase() ?? '';
   const fn = fileName.toLowerCase();
-  if (mt === 'application/pdf' || fn.endsWith('.pdf')) return 'pdf';
+  if (fn.endsWith('.pdf')) return 'pdf';
   if (fn.endsWith('.docx')) return 'docx';
   if (fn.endsWith('.pptx')) return 'pptx';
-  if (mt.startsWith('text/plain') || fn.endsWith('.txt')) return 'txt';
-  if (mt.startsWith('text/markdown') || fn.endsWith('.md')) return 'md';
-  if (mt.startsWith('text/csv') || fn.endsWith('.csv')) return 'csv';
+  if (fn.endsWith('.txt')) return 'txt';
+  if (fn.endsWith('.md')) return 'md';
+  if (fn.endsWith('.csv')) return 'csv';
   return undefined;
 }
 

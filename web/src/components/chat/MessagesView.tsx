@@ -30,6 +30,8 @@ interface MessagesViewProps {
   messages: Message[];
   /** Display name of the agent answering — the author line on every reply. */
   agentName: string;
+  agentId: string;
+  chatId: string;
   /** Landing state: no turns yet, so hug the composer instead of filling. */
   landing: boolean;
   /** True while a turn is in flight; renders the live row. */
@@ -49,6 +51,8 @@ interface MessagesViewProps {
 export function MessagesView({
   messages,
   agentName,
+  agentId,
+  chatId,
   landing,
   streaming,
   streamText,
@@ -88,7 +92,7 @@ export function MessagesView({
         {children}
         {messages.map((m, i) =>
           m.role === 'user' ? (
-            <UserMessage key={i} message={m} />
+            <UserMessage key={i} message={m} agentId={agentId} chatId={chatId} />
           ) : (
             <AssistantMessage key={i} message={m} agentName={agentName} />
           ),
