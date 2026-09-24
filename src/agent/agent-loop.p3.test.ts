@@ -177,4 +177,32 @@ describe('chat attachments (P3) — agent loop', () => {
     expect(names[0]).toContain('Q3');
     expect(new Set(names).size).toBe(2);
   });
+
+  it('names a document block with characters Bedrock accepts, 200 at most even when two long names collide', async () => {
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    const long = `${'Quarterly board pack '.repeat(12)}.pdf`; // 256 characters
+    await runAgentTurn({
+      ...baseReq,
+      onChunk: vi.fn(),
+      attachments: [
+        { kind: 'document', format: 'pdf', name: long, bytes },
+        { kind: 'document', format: 'pdf', name: long, bytes },
+      ],
+    });
+
+    const input = converseStreamTurnWithFallback.mock.calls[0]![0] as {
+      userContent: Array<{ document?: { name?: string } }>;
+    };
+    const names = input.userContent.flatMap((b) => (b.document ? [b.document.name ?? ''] : []));
+    expect(names).toHaveLength(2);
+    for (const name of names) {
+      // AWS DocumentBlock.name: 1 to 200 characters, the suffix that keeps two apart included.
+      expect(name.length, JSON.stringify(name)).toBeLessThanOrEqual(200);
+      expect(name, JSON.stringify(name)).toMatch(/^[A-Za-z0-9 ()[\]-]+$/);
+      expect(name, JSON.stringify(name)).not.toMatch(/\s{2}/);
+      expect(name.trim(), JSON.stringify(name)).toBe(name);
+    }
+    expect(names[0]).toContain('Quarterly');
+    expect(new Set(names).size).toBe(2);
+  });
 });
