@@ -184,3 +184,18 @@ test('sends the knowledge opt-in only for the file it was turned on for', async 
     ['private.txt', false],
   ]);
 });
+
+test('shows on screen what adding a file to knowledge means', async ({ page }) => {
+  // Review finding (coordinator C10, council 3-0): the sentence was screen-reader-only, so a
+  // sighted reader ticked a shared, chat-outliving copy (decisions 3 and 54) without seeing it.
+  await newChat(page);
+  await fileInputOf(page).setInputFiles([text('share.txt')]);
+  await uploadsDone(page);
+
+  const note = chipsOf(page).first().getByText(/stays if you delete this chat/i);
+  await expect(note).toBeVisible();
+  // A screen-reader-only element is 1x1 pixel and still counts as "visible": measure it.
+  const box = await note.boundingBox();
+  expect(box!.width).toBeGreaterThan(20);
+  expect(box!.height).toBeGreaterThan(5);
+});

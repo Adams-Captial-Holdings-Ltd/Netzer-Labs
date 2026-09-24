@@ -73,6 +73,7 @@ const {
   getFullHistoryMock,
   runCommandMock,
   writeAuditOrThrowMock,
+  getSignedUrlMock,
 } = vi.hoisted(() => {
   // Read at import time by store.ts / process.ts.
   process.env.VECTORS_STAGING_BUCKET = 'staging-test-bucket';
@@ -90,12 +91,20 @@ const {
     getFullHistoryMock: vi.fn(),
     runCommandMock: vi.fn(),
     writeAuditOrThrowMock: vi.fn(),
+    getSignedUrlMock: vi.fn(),
   };
 });
 
 vi.mock('../../lib/vectors/store.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/vectors/store.js')>();
   return { ...actual, getObjectBuffer: getObjectBufferMock, deleteObject: deleteObjectMock };
+});
+
+// Signing stays real; one test makes it fail.
+vi.mock('@aws-sdk/s3-request-presigner', async (importActual) => {
+  const actual = await importActual<typeof import('@aws-sdk/s3-request-presigner')>();
+  getSignedUrlMock.mockImplementation(actual.getSignedUrl);
+  return { ...actual, getSignedUrl: getSignedUrlMock };
 });
 
 vi.mock('../../lib/media/process.js', async (importActual) => {
@@ -364,6 +373,22 @@ describe('POST /test-turn/stream attachments', () => {
     expect(userText).toContain('annual.pdf');
   });
 
+  it('saves only the words the sender typed, not the note to the model', async () => {
+    // Review finding (coordinator C6, council 3-0): the note reached the saved message, so
+    // after a reload the sender's own bubble showed words they never typed.
+    processMediaMock.mockResolvedValue(media({
+      blocks: [],
+      ackText: 'annual.pdf is over the 4.5 MB the model can read at once, so it was stored but not read.',
+    }));
+    const key = await stagedKey('operator', 'annual.pdf');
+
+    const res = await postStream({ text: 'summarize please', attachments: [{ s3Key: key, fileName: 'annual.pdf', mimeType: PDF }] });
+    await res.text();
+
+    const turns = appendTurnsMock.mock.calls[0]![2] as Array<{ role: string; text: string }>;
+    expect(turns[0]).toMatchObject({ role: 'user', text: 'summarize please' });
+  });
+
   it('passes the knowledge opt-in to the media pipeline for that file only', async () => {
     const a = await stagedKey('operator', 'share.pdf');
     const b = await stagedKey('operator', 'private.pdf');
@@ -380,6 +405,30 @@ describe('POST /test-turn/stream attachments', () => {
     expect(processMediaMock).toHaveBeenCalledTimes(2);
     expect(processMediaMock.mock.calls[0]![0]).toMatchObject({ fileName: 'share.pdf', addToKnowledge: true });
     expect((processMediaMock.mock.calls[1]![0] as { addToKnowledge?: boolean }).addToKnowledge ?? false).toBe(false);
+  });
+
+  it('tells the sender when a file they chose to add to knowledge was not added', async () => {
+    // Review finding (silent-failure-hunter I1, council 3-0): with the knowledge base switched
+    // off or the file too big for it, an explicit opt-in quietly did nothing.
+    processMediaMock.mockResolvedValue(media({ kb: null }));
+    const a = await stagedKey('operator', 'share.pdf');
+    const b = await stagedKey('operator', 'private.pdf');
+
+    const res = await postStream({
+      text: 'two files',
+      attachments: [
+        { s3Key: a, fileName: 'share.pdf', mimeType: PDF, addToKnowledge: true },
+        { s3Key: b, fileName: 'private.pdf', mimeType: PDF },
+      ],
+    });
+    const notes = (await res.text()).split('\n\n').flatMap((block) => {
+      const lines = block.split('\n');
+      if (!lines.includes('event: kb')) return [];
+      const data = lines.find((l) => l.startsWith('data: '));
+      return data ? [(JSON.parse(data.slice('data: '.length)) as { text: string }).text] : [];
+    });
+
+    expect(notes.filter((n) => /not added to the knowledge base/.test(n))).toEqual([expect.stringContaining('share.pdf')]);
   });
 });
 
@@ -469,6 +518,17 @@ describe('GET /sessions/transcript and /sessions/attachment', () => {
     const disposition = url.searchParams.get('response-content-disposition') ?? '';
     expect(disposition).toMatch(/^attachment/);
     expect(decodeURIComponent(disposition)).toContain('Q3 report.pdf');
+  });
+
+  it('answers 503 when the download link cannot be signed', async () => {
+    // Review finding (silent-failure-hunter B1): the failure fell through to the bare global 500.
+    conversation(MINE);
+    getSignedUrlMock.mockRejectedValueOnce(new Error('signing failed'));
+
+    const res = await call('operator', 'GET', `/sessions/attachment?agentId=main&chatId=${encodeURIComponent(CHAT)}&id=upload-1`);
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'download_unavailable' });
   });
 
   // Named without P1's directory-wide filter words ("does not own"), so the P1 gate

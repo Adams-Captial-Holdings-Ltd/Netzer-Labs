@@ -106,4 +106,22 @@ describe('chat attachments (P3) — Slack', () => {
     expect(said).toContain('f4.pdf');
     expect(said).toContain('f5.pdf');
   });
+
+  it('tells the sender which file it did not read because it is over the size limit', async () => {
+    // Review finding (silent-failure-hunter E1): the file vanished from the reply, and when it
+    // was the only one the reply blamed a missing files:read scope instead of its size.
+    const out = await processSlackFiles({
+      files: [slackFile({ id: 'F9', name: 'huge.mov', mimetype: 'video/quicktime', size: 30 * MB + 1 })],
+      botToken: 'xoxb',
+      agentId: 'main',
+      targetAgentId: 'main',
+      chatId: 'slack:C1',
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(processMediaMock).not.toHaveBeenCalled();
+    const said = out.acks.join('\n');
+    expect(said).toContain('huge.mov');
+    expect(said).toContain('30 MB');
+  });
 });

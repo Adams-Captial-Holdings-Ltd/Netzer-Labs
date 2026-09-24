@@ -23,6 +23,7 @@ import {
   chatAttachmentFormat,
 } from './attachments.js';
 import { MAX_BYTES, MAX_FILES, admitFiles } from '../../../web/src/lib/chat/attachment-rules.js';
+import { friendlyTurnError } from '../../../web/src/lib/chat/helpers.js';
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -119,6 +120,16 @@ describe('chat attachments (P3) — what the browser admits', () => {
     for (const [name, type] of samples) {
       const browserRefuses = admitFiles([], [file(name, 10, type)]).refused.some((r) => r.reason === 'unsupported');
       expect(browserRefuses, name).toBe(chatAttachmentFormat(name, type) === null);
+    }
+  });
+});
+
+describe('the words a refused send with files shows', () => {
+  it('has words for every refusal a send with files can get', () => {
+    // Review finding (silent-failure-hunter G1): a code with no words falls through to the
+    // wire text, so the sender read only "Stream failed".
+    for (const code of ['too_many_attachments', 'upload_not_found', 'file_too_large', 'unsupported_type', 'upload_unavailable']) {
+      expect(friendlyTurnError('Stream failed', code), code).not.toBe('Stream failed');
     }
   });
 });

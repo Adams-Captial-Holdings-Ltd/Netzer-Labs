@@ -22,6 +22,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import JSZip from 'jszip';
+import { logger } from '../../observability/logger.js';
+import { writeAudit } from '../audit/audit-writer.js';
 
 const { killSwitchMock, ingestChatMediaMock, s3SendMock } = vi.hoisted(() => ({
   killSwitchMock: vi.fn(),
@@ -182,5 +184,37 @@ describe('chat attachments (P3) — the media pipeline', () => {
     expect(out.blocks).toHaveLength(0);
     expect(ingestChatMediaMock).not.toHaveBeenCalled();
     expect(out.ackText).toContain('crowded.docx');
+  });
+
+  it('sends the model an image only when its bytes are one', async () => {
+    // Review finding (code-reviewer SEC-1): a photo whose bytes are not PNG, JPEG, GIF or WebP
+    // was labelled from its name, or as JPEG, and Bedrock refused the whole turn. A zip renamed
+    // .png and an iPhone HEIC are stored and named instead.
+    const renamed = await processMedia(input({ kind: 'photo', fileName: 'x.png', mimeType: 'image/png', bytes: await docx() }));
+    expect(renamed.blocks).toHaveLength(0);
+    expect(renamed.ackText).toContain('x.png');
+    expect(renamed.s3Key).not.toBe('');
+
+    const heic = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic'), Buffer.alloc(16, 1)]);
+    const phone = await processMedia(input({ kind: 'photo', fileName: 'IMG_0001.HEIC', mimeType: 'image/heic', bytes: heic }));
+    expect(phone.blocks).toHaveLength(0);
+    expect(phone.ackText).toContain('IMG_0001.HEIC');
+  });
+
+  it('logs and audits why an office file failed the check', async () => {
+    // Review finding (silent-failure-hunter A1): the refusal left no log line and no audit
+    // detail, so a probe with hostile archives looked the same as one corrupt file.
+    const zip = new JSZip();
+    for (let i = 0; i <= 1000; i++) zip.file(`word/part${i}.xml`, '<x/>');
+    const crowded = Buffer.from(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }));
+    const warn = vi.spyOn(logger, 'warn');
+
+    await processMedia(input({ fileName: 'crowded.docx', mimeType: DOCX, bytes: crowded }));
+
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'crowded.docx', code: 'too_many_entries' }), expect.any(String));
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({
+      detail: expect.objectContaining({ zipCheck: 'too_many_entries' }),
+    }));
+    warn.mockRestore();
   });
 });
