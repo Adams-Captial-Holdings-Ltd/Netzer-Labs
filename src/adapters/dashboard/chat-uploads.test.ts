@@ -137,6 +137,7 @@ vi.mock('../../lib/audit/audit-writer.js', async (importActual) => {
 });
 
 import { buildDashboardRouter } from './handler.js';
+import { presignUploadUrl } from '../../lib/vectors/store.js';
 
 const MB = 1024 * 1024;
 const PDF = 'application/pdf';
@@ -447,6 +448,18 @@ describe('POST /test-turn/stream attachments', () => {
 });
 
 describe('POST /chat/uploads', () => {
+  it('signs upload links S3 accepts for a file of any size: no checksum of an empty body', async () => {
+    // Fresh critic F2: the SDK's default checksum put the CRC32 of an EMPTY body into the link, and
+    // S3 validates a provided checksum against the bytes it receives, so every real upload of a
+    // non-empty file would be refused. The Knowledge tab's link shares the client.
+    const res = await sign({ fileName: 'r.pdf', mimeType: PDF, size: 1234 });
+    const chat = new URL(((await res.json()) as { url: string }).url);
+    const knowledge = new URL(await presignUploadUrl('uploads/abc/r.pdf'));
+    for (const url of [chat, knowledge]) {
+      expect([...url.searchParams.keys()].filter((k) => /checksum/i.test(k)), url.pathname).toEqual([]);
+    }
+  });
+
   it('refuses to sign an upload over 30 MB', async () => {
     const res = await sign({ fileName: 'big.pdf', mimeType: PDF, size: 30 * MB + 1 });
 

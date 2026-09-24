@@ -217,4 +217,17 @@ describe('chat attachments (P3) — the media pipeline', () => {
     }));
     warn.mockRestore();
   });
+
+  it('does not claim a file was stored when its permanent copy could not be saved', async () => {
+    // Fresh critic F1: the raw copy's upload failed, yet processMedia returned its key, so the send
+    // recorded a file that does not exist, and the note said it was stored.
+    s3SendMock.mockRejectedValueOnce(new Error('S3 503'));
+    const big = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(DOC_LIMIT + 1, 0x20)]);
+
+    const out = await processMedia(input({ fileName: 'annual-report.pdf', mimeType: 'application/pdf', bytes: big }));
+
+    expect(out.s3Key).toBe('');
+    expect(out.ackText).toContain('annual-report.pdf');
+    expect(out.ackText).not.toContain('was stored');
+  });
 });
