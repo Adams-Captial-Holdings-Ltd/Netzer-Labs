@@ -73,6 +73,39 @@ export async function presignUploadUrl(key: string): Promise<string> {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
+/** Chat uploads bind the declared type and size to the direct S3 PUT. */
+export async function presignChatUploadUrl(key: string, mime: string, size: number): Promise<string> {
+  if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
+  const cmd = new PutObjectCommand({ Bucket: STAGING_BUCKET, Key: key, ContentType: mime, ContentLength: size });
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await getSignedUrl(s3(), cmd, {
+        expiresIn: 300,
+        signableHeaders: new Set(['content-type', 'content-length']),
+      });
+    } catch (err) {
+      lastErr = err;
+      logger.warn({ attempt, errMessage: err instanceof Error ? err.message : String(err) }, 'presign chat upload url failed; retrying');
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/** Read only the staged object's metadata before a chat turn begins. */
+export async function headChatUpload(key: string): Promise<{ size: number; type: string } | null> {
+  if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');
+  try {
+    const out = await s3().send(new HeadObjectCommand({ Bucket: STAGING_BUCKET, Key: key }));
+    return { size: out.ContentLength ?? 0, type: out.ContentType ?? '' };
+  } catch (err) {
+    const name = err instanceof Error ? err.name : '';
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (name === 'NotFound' || name === 'NoSuchKey' || name === '404' || status === 404) return null;
+    throw err;
+  }
+}
+
 /** s3:// URI for a staging object, used to hand audio files to Transcribe. */
 export function objectS3Uri(key: string): string {
   if (!STAGING_BUCKET) throw new Error('VECTORS_STAGING_BUCKET env var not set');

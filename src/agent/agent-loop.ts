@@ -629,8 +629,11 @@ function buildUserContent(
       });
     } else {
       const base = (att.name ?? 'document').replace(/[^A-Za-z0-9 ()\[\]-]/g, ' ').replace(/\s+/g, ' ').trim() || 'document';
-      let name = base;
-      for (let suffix = 2; documentNames.has(name); suffix++) name = `${base} (${suffix})`;
+      let name = base.slice(0, 200).trimEnd();
+      for (let suffix = 2; documentNames.has(name); suffix++) {
+        const ending = ` (${suffix})`;
+        name = `${base.slice(0, 200 - ending.length).trimEnd()}${ending}`;
+      }
       documentNames.add(name);
       blocks.push({
         document: {

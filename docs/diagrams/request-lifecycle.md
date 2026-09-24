@@ -46,6 +46,41 @@ sequenceDiagram
   L->>D: recordUsage + writeAudit (token-usage + audit-log tables)
 ```
 
+## Dashboard chat attachment path
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as Browser
+  participant H as Dashboard handler
+  participant S as S3 staging and raw buckets
+  participant D as DynamoDB sessions
+  participant L as Media pipeline and agent loop
+
+  U->>H: POST /api/chat/uploads with name, type, size
+  H-->>U: signed PUT link, chat upload key and content type
+  U->>S: PUT file directly to staging with signed type and size
+  U->>H: POST /api/test-turn/stream with attachment key
+  H->>D: check conversation ownership
+  H->>H: check each upload key belongs to caller
+  H->>S: HeadObject for each staged file
+  alt missing, wrong owner, too large or wrong type
+    H-->>U: 404 upload_not_found, 413 file_too_large or 415 unsupported_type
+  else every file passes preflight
+    H->>D: beginTurn when message id is present
+    H->>S: read staged file
+    H->>L: processMedia, store raw file and read supported content
+    L->>S: store raw file
+    H->>D: save user message with attachment descriptors and assistant answer
+    H-->>U: final answer and done
+    U->>H: GET /api/sessions/transcript
+    H-->>U: messages and attachments without storage keys
+    U->>H: GET /api/sessions/attachment with attachment id
+    H->>D: check owner or audited admin override, find attachment
+    H-->>U: fresh short-lived named download link
+  end
+```
+
 ## Legend
 
 - The 200 ack at step 5 happens before any model work; Telegram retries on non-200 within about 60 seconds, so the handler never blocks the webhook on Bedrock latency.
@@ -54,6 +89,7 @@ sequenceDiagram
 - `resolveTurnMaxTokens` reads runtime-config `agent/max_output_tokens` once per turn, defaulting to `TURN_MAX_TOKENS` (8192) and clamping to 1024-32768; all three model calls (the initial streamed call, each tool-loop round and the post-loop synthesis call) use that one resolved ceiling.
 - Slash commands (`/newchat`, `/model`, `/missions`, `/mission`, ...) and active War Room sessions branch off before step 6 (the placeholder reply) and never reach the agent loop — the handler runs the slash-command router and the War Room check ahead of posting the placeholder. The mission commands are the cross-surface case: they talk to the Mission ACL and render through `src/lib/missions/format.ts`, so Telegram, both Slack send paths and the dashboard print the same string without any adapter knowing what a mission is. Size is the one thing that module does NOT settle for everyone: its 3000-character cap is on source characters, and each surface still has to bound what its own API measures — Telegram measures the HTML render, which escaping can expand roughly 5x (measured: 1059 source characters send as 5055; 2175 send as 9315), so `sendMessage` splits on the rendered length rather than the source. The one thing that travels the other way is the assignment push: when `create_mission` hands work to a different agent, it posts a one-line notice back into the originating chat through `deliverToReplyChat()`, which routes `ToolContext.replyChatId` to Telegram or either Slack path — and resolves WHICH bot should speak, because both surfaces run more than one: a per-agent Slack app's id carries an `app-<agentId>` segment (the main bot's does not, and keeps the workspace token) and a Telegram id carries `:bot-<agentId>`, naming the per-agent token its `/tg/:agentId/webhook` received the message on rather than the turn's agent, which the sticky default routinely makes `main` (the dashboard supplies no `replyChatId` at all and is a marked parity gap). The send result is not discarded: a refused push returns false and the create receipt says the chat was not notified. Voice notes are transcribed and fed in as text, and images/PDFs ride along as inline Bedrock content blocks.
 - The same `runAgentTurn` serves Slack and the dashboard chat; only the adapter steps (placeholder edits vs SSE events) differ. Slack additionally has two send paths (main bot and per-agent apps).
+- A dashboard chat upload uses a direct-to-S3 path. The signed PUT binds type and size; the send HEADs every staged object and refuses missing, oversized or wrong-type files before beginning a turn or reading bytes. `processMedia` stores the raw file, and the saved user message carries its attachment descriptors. A file-only media acknowledgment is saved as an exchange too. The transcript omits storage keys; an owner requests a new download link for an attachment id.
 - Binaries a tool produced (generated images and generated documents) do NOT travel in the reply text. Tools return them on `ToolMedia`, collected into `AgentTurnResponse.media` (capped at 4 per turn), and each surface delivers from that channel after the final message: Telegram `sendPhoto` for images, Slack `uploadFile` for both, dashboard chat an `image` or `artifact` SSE event. This is load-bearing rather than cosmetic — a presigned URL placed in the reply text is read by the model and reproduced in its own output, and a signed S3 URL does not survive that round trip (an observed production document link lost its entire `X-Amz-*` query string and returned AccessDenied). Documents are tagged `kind: 'artifact'` so they are never sent down an image path; Telegram currently skips them, with the reason recorded at the call site, because it has no `sendDocument` helper.
 - Model fallback (H2) is live on the initial streamed call: a throttle/unavailability BEFORE any chunk is emitted walks Opus -> Sonnet -> Haiku and pins the session to the fallback model (per-process affinity, no oscillation). Once a chunk reached the user, a mid-stream failure propagates unchanged — two models are never spliced into one reply. Tool-dispatch rounds ride the model the initial call settled on.
 - Review-fixes hardening (PR #107): tool-dispatch rounds and the budget-exhausted synthesis call share the initial call's retry/backoff (a mid-loop throttle no longer voids the turn), and the synthesis instruction rides inside the final toolResult user message to keep Converse's strict role alternation. The final placeholder edit is checked and falls back to split delivery (Telegram caps messages at 4096 chars), so an oversized reply is never dropped while persisting as sent. `appendTurns` is fenced with an optimistic version counter so concurrent tasks re-merge instead of overwriting each other, and the streaming DLP redactor carries the same 50ms per-pattern timeout as the scanner.

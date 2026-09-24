@@ -16,6 +16,7 @@
  */
 
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { writeAudit } from '../audit/audit-writer.js';
 import { logger, truncateForLog } from '../../observability/logger.js';
 import { isKillSwitchActive } from '../state/kill-switches-repo.js';
@@ -51,6 +52,15 @@ export async function getRawObject(key: string, bucket?: string): Promise<Buffer
   const out = await s3().send(new GetObjectCommand({ Bucket: b, Key: key }));
   if (!out.Body) throw new Error(`object not found: s3://${b}/${key}`);
   return Buffer.from(await out.Body.transformToByteArray());
+}
+
+/** Re-mint a short-lived download for a stored chat attachment. */
+export async function presignRawAttachment(key: string, name: string): Promise<string> {
+  if (!RAW_BUCKET) throw new Error('RAW_BUCKET not configured');
+  const disposition = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
+  return getSignedUrl(s3(), new GetObjectCommand({
+    Bucket: RAW_BUCKET, Key: key, ResponseContentDisposition: disposition,
+  }), { expiresIn: 300 });
 }
 
 /** Classify a chat upload by MIME type — shared by Slack + dashboard. */

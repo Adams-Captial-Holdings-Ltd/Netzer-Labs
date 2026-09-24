@@ -81,7 +81,8 @@ import {
 } from '../../lib/state/kill-switches-repo.js';
 import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
 import { classifyTurnError } from '../../agent/turn-errors.js';
-import { processMedia, buildKbConfirmation, kindForMime, stageLabel } from '../../lib/media/process.js';
+import { processMedia, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment } from '../../lib/media/process.js';
+import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
 import { listAvailableModels, pickDefaultModel, resolveModel } from '../../lib/bedrock/models.js';
@@ -98,6 +99,7 @@ import {
   getFullHistory,
   deleteSession,
   type SessionEnrichment,
+  type TurnAttachment,
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
@@ -105,6 +107,8 @@ import {
   listDocuments,
   search as vectorSearch,
   presignUploadUrl,
+  presignChatUploadUrl,
+  headChatUpload,
   uploadKeyFor,
   isUploadKey,
   getObjectBuffer,
@@ -291,6 +295,11 @@ function dashboardIdentity(c: DashboardCtx): string {
   if (!token) return 'dashboard:unknown';
   const hash = createHash('sha256').update(token).digest('hex');
   return `dashboard:${hash}`;
+}
+
+function chatUploadPrefix(c: DashboardCtx): string {
+  const callerTag = createHash('sha256').update(dashboardIdentity(c)).digest('hex').slice(0, 16);
+  return `uploads/chat/${callerTag}/`;
 }
 
 /** Decision 1: the person behind the principal, if there is one. */
@@ -492,12 +501,13 @@ async function finishChatTurn(agentId: string, chatId: string, id: string | unde
 async function saveChatTurn(
   agentId: string, chatId: string, userText: string,
   result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked'>, tools: ToolRecord[], owner: SessionEnrichment,
+  attachments: TurnAttachment[] = [],
 ): Promise<boolean> {
   if (result.blocked) return true;
   const ts = Math.floor(Date.now() / 1000);
   try {
     await appendTurns(agentId, chatId, [
-      { role: 'user', text: userText, ts },
+      { role: 'user', text: userText, ts, ...(attachments.length ? { attachments } : {}) },
       { role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
         ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}) },
     ], undefined, owner);
@@ -2051,15 +2061,14 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         protocol?: number;
         clientMessageId?: string;
         /** Pre-staged uploads (presigned PUT to the vectors staging bucket). */
-        attachments?: Array<{ s3Key?: string; fileName?: string; mimeType?: string }>;
+        attachments?: Array<{ s3Key?: string; fileName?: string; mimeType?: string; addToKnowledge?: boolean }>;
       }>()
       .catch(() => null);
     const text = body?.text ?? '';
     const agentId = body?.agentId ?? 'main';
     const chatId = safeDashboardChatId(body?.chatId);
-    const rawAttachments = Array.isArray(body?.attachments)
-      ? body.attachments.slice(0, 3)
-      : [];
+    const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
+    if (rawAttachments.length > CHAT_ATTACHMENT_MAX_FILES) return c.json({ error: 'too_many_attachments' }, 400);
     // File-only sends are allowed (parity with Telegram/Slack file drops).
     if (!text && rawAttachments.length === 0) {
       return c.json({ error: 'missing_text' }, 400);
@@ -2088,6 +2097,25 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (stored && !ownsConversation(c, stored.userId)) {
       return c.json({ error: 'not_found' }, 404);
     }
+    const staged: Array<{ size: number; type: string }> = [];
+    for (const a of rawAttachments) {
+      const key = a.s3Key as string;
+      if (!key.startsWith(chatUploadPrefix(c))) return c.json({ error: 'upload_not_found' }, 404);
+      let head: { size: number; type: string } | null;
+      try {
+        head = await headChatUpload(key);
+      } catch (err) {
+        logger.warn({ err, agentId, chatId }, 'chat upload preflight failed');
+        return c.json({ error: 'upload_unavailable' }, 503);
+      }
+      if (!head) return c.json({ error: 'upload_not_found' }, 404);
+      if (head.size > CHAT_ATTACHMENT_MAX_BYTES) {
+        return c.json({ error: 'file_too_large', maxBytes: CHAT_ATTACHMENT_MAX_BYTES }, 413);
+      }
+      const format = chatAttachmentFormat(a.fileName ?? '', a.mimeType);
+      if (!format || head.type !== format.mime) return c.json({ error: 'unsupported_type' }, 415);
+      staged.push(head);
+    }
     if (clientMessageId) {
       const payloadHash = createHash('sha256').update(JSON.stringify({
         text, agentId, chatId, modelOverride: body?.modelOverride ?? null,
@@ -2110,6 +2138,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       abortWithRequest(c.req.raw.signal, stream);
       const heartbeat = setInterval(() => void stream.write(': ping\n\n'), SSE_HEARTBEAT_MS);
       const tools: ToolRecord[] = [];
+      const savedAttachments: TurnAttachment[] = [];
       const toolStarts = new Map<string, Pick<ToolRecord, 'label' | 'step'>>();
       let userText = text;
       let finalSent = false;
@@ -2133,7 +2162,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         const attachmentBlocks: AttachmentBlock[] = [];
         const kbConfirmations: string[] = [];
         const acks: string[] = [];
-        for (const a of rawAttachments) {
+        for (const [index, a] of rawAttachments.entries()) {
           const s3Key = a.s3Key as string;
           const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
           try {
@@ -2144,9 +2173,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
                 agentId,
                 targetAgentId: agentId,
                 chatId,
-                kind: kindForMime(a.mimeType),
+                kind: kindForMime(staged[index]!.type),
                 fileName,
-                mimeType: a.mimeType,
+                mimeType: staged[index]!.type,
+                addToKnowledge: a.addToKnowledge === true,
                 bytes,
               },
               (stage) => {
@@ -2157,6 +2187,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
               },
             );
             attachmentBlocks.push(...media.blocks);
+            if (media.s3Key) savedAttachments.push({
+              id: s3Key.split('/')[3]!, name: fileName, type: staged[index]!.type,
+              size: staged[index]!.size, key: media.s3Key,
+            });
             if (media.transcript) {
               const label =
                 media.transcriptKind === 'video' ? '[video transcript]' : '[transcribed audio]';
@@ -2177,15 +2211,19 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         if (rawAttachments.length > 0 && attachmentBlocks.length === 0 && userText === '' ) {
           // Nothing the model can see (KB-only docs land here; their acks
           // already carry the "indexed, ask me anything" line).
-          await stream.writeSSE({ event: 'reply', data: acks.join('\n') || 'Stored the file.' });
+          userText = 'What is this?';
+          const reply = acks.join('\n') || 'Stored the file.';
+          const saved = await saveChatTurn(agentId, chatId, userText, { text: reply }, tools, conversationOwner(c), savedAttachments);
+          await stream.writeSSE({ event: 'reply', data: reply });
           for (const k of kbConfirmations) {
             await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
           }
           await finishChatTurn(agentId, chatId, clientMessageId, 'complete');
-          await stream.writeSSE({ event: 'done', data: 'media_only' });
+          await stream.writeSSE({ event: 'done', data: saved ? 'media_only' : 'not_saved' });
           return;
         }
         if (rawAttachments.length > 0 && !userText) userText = 'What is this?';
+        if (acks.length > 0) userText += `\n\n${acks.map((ack) => `[${ack}]`).join('\n')}`;
 
         // Cross-surface peek (flag default OFF): when the authenticated member
         // is a configured owner (CCE_OWNER_DASHBOARD_EMAILS), inject their
@@ -2196,11 +2234,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         // channel session can never leak in.
         let peekNote: string | undefined;
         try {
-          if ((await getConfig('sessions', 'cross_surface_peek')) === '1') {
-            const principal = getPrincipal(c);
-            const email = principal?.userId
-              ? (await getUser(principal.userId))?.emailLower
-              : undefined;
+          const principal = getPrincipal(c);
+          if (principal?.userId && (await getConfig('sessions', 'cross_surface_peek')) === '1') {
+            const email = (await getUser(principal.userId))?.emailLower;
             const ownerChat = resolveOwnerChatId('dashboard', email);
             if (ownerChat && isPrincipalScopedChatId(ownerChat)) {
               const peekTurns = Math.max(
@@ -2280,13 +2316,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         });
         if (result.stopped) {
           clearInterval(heartbeat);
-          await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c));
+          await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments);
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           return;
         }
         // The save and the turn record come first: an awaited write to a body
         // nobody reads never resolves, and must not gate either.
-        const saved = await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c));
+        const saved = await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments);
         await finishChatTurn(agentId, chatId, clientMessageId, result.blocked ? 'refused' : 'complete');
         finalSent = true;
         await writeChatAnswer(stream, result, [...kbConfirmations, ...acks]);
@@ -2294,7 +2330,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       } catch (err) {
         if ((err as { name?: string })?.name === 'AbortError') {
           clearInterval(heartbeat);
-          await saveChatTurn(agentId, chatId, userText, { text: '', stopped: true }, tools, conversationOwner(c));
+          await saveChatTurn(agentId, chatId, userText || 'What is this?', { text: '', stopped: true }, tools, conversationOwner(c), savedAttachments);
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           return;
         }
@@ -2820,6 +2856,32 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ errMessage: msg }, 'ingest failed');
       return c.json({ error: 'ingest_failed', detail: msg }, 400);
+    }
+  });
+
+  router.post('/chat/uploads', async (c) => {
+    if (!(await hasCapability(c, 'chat:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'chat:read' }, 403);
+    }
+    const body = await c.req.json<{ fileName?: unknown; mimeType?: unknown; size?: unknown }>().catch(() => null);
+    const fileName = body?.fileName;
+    const size = body?.size;
+    if (typeof fileName !== 'string' || !fileName.trim() || typeof size !== 'number' || !Number.isInteger(size) || size < 1) {
+      return c.json({ error: 'invalid_upload' }, 400);
+    }
+    if (size > CHAT_ATTACHMENT_MAX_BYTES) return c.json({ error: 'file_too_large', maxBytes: CHAT_ATTACHMENT_MAX_BYTES }, 413);
+    const format = chatAttachmentFormat(fileName, typeof body?.mimeType === 'string' ? body.mimeType : undefined);
+    if (!format) return c.json({ error: 'unsupported_type' }, 415);
+    const id = randomUUID();
+    const safeName = (fileName.split(/[\\/]/).pop() ?? '').replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.\./g, '_').slice(-120);
+    const segment = safeName === '.' ? 'upload' : safeName || 'upload';
+    const key = `${chatUploadPrefix(c)}${id}/${segment}`;
+    try {
+      const url = await presignChatUploadUrl(key, format.mime, size);
+      return c.json({ url, key, id, headers: { 'Content-Type': format.mime } });
+    } catch (err) {
+      logger.warn({ err }, 'presign chat upload url failed');
+      return c.json({ error: 'presign_failed' }, 503);
     }
   });
 
@@ -3462,7 +3524,33 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       if (!(await auditedOverride(c, 'transcript', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
     }
     // WI-1.3: the whole conversation, not only the 20-turn replay window.
-    return c.json(session ? await getFullHistory(agentId, chatId, session) : none);
+    if (!session) return c.json(none);
+    const history = await getFullHistory(agentId, chatId, session);
+    return c.json({ ...history, turns: history.turns.map((turn) => ({
+      ...turn,
+      ...(turn.attachments ? { attachments: turn.attachments.map(({ id, name, type, size }) => ({ id, name, type, size })) } : {}),
+    })) });
+  });
+
+  router.get('/sessions/attachment', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId') ?? 'main';
+    const chatId = c.req.query('chatId');
+    const id = c.req.query('id');
+    if (!chatId || !id) return c.json({ error: 'not_found' }, 404);
+    const session = await getSession(agentId, chatId);
+    if (!session) return c.json({ error: 'not_found' }, 404);
+    if (!ownsConversation(c, session.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json({ error: 'not_found' }, 404);
+      if (!(await auditedOverride(c, 'attachment', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
+    }
+    const history = await getFullHistory(agentId, chatId, session);
+    const attachment = history.turns.flatMap((turn) => turn.attachments ?? []).find((a) => a.id === id);
+    if (!attachment) return c.json({ error: 'not_found' }, 404);
+    const url = await presignRawAttachment(attachment.key, attachment.name);
+    return c.json({ url, name: attachment.name });
   });
 
   // War Room transcript PDF. Deliberately NOT under /api/warroom/* (that's
