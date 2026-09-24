@@ -92,6 +92,29 @@ const MAX_IMAGE_BYTES = 3_750_000;
 const MAX_DOCUMENT_BYTES = 4_500_000;
 const MAX_TRANSCRIBE_BYTES = 20 * 1024 * 1024;
 
+function mediaAckText(input: {
+  kind: MediaKind;
+  safeName: string;
+  bytes: number;
+  blocks: AttachmentBlock[];
+  transcript: string | undefined;
+  videoFailureAck: string | undefined;
+  unsafeDocument: boolean;
+  imageFormat: ImageFormat | undefined;
+  docFormat: DocFormat | undefined;
+  kb: ChatKbIngestResult | null;
+}): string {
+  if (input.kind === 'video') {
+    if (input.blocks.length > 0 || input.transcript) return '';
+    return input.videoFailureAck ?? `got the video (${Math.round(input.bytes / 1024)} KB), stored. Couldn't watch it just now — type out the question and I'll answer.`;
+  }
+  if (input.unsafeDocument) return `Could not open ${input.safeName} safely. The file was stored but not read.`;
+  if (input.kind === 'photo' && !input.imageFormat) return `${input.safeName} is not a PNG, JPEG, GIF or WebP image, so it was stored but not read.`;
+  if (input.kind === 'document' && input.docFormat && input.bytes > MAX_DOCUMENT_BYTES) return `${input.safeName} is over the 4.5 MB document limit, so it was stored but not read.`;
+  if (input.imageFormat && input.bytes > MAX_IMAGE_BYTES) return `${input.safeName} is over the 3.75 MB image limit, so it was stored but not read.`;
+  return buildAck(input.kind, input.safeName, input.bytes, input.blocks.length > 0, !!input.transcript, input.kb);
+}
+
 let _s3: S3Client | null = null;
 function s3(): S3Client {
   if (!_s3) _s3 = captureAwsClient(new S3Client({ region }));
@@ -321,20 +344,18 @@ export async function processMedia(
     });
   }
 
-  const ackText =
-    input.kind === 'video'
-      ? blocks.length > 0 || transcript
-        ? ''
-        : (videoFailureAck ?? `got the video (${Math.round(bytes.length / 1024)} KB), stored. Couldn't watch it just now — type out the question and I'll answer.`)
-      : unsafeDocument
-        ? `Could not open ${safeName} safely. The file was stored but not read.`
-        : input.kind === 'photo' && !imageFormat
-          ? `${safeName} is not a PNG, JPEG, GIF or WebP image, so it was stored but not read.`
-        : input.kind === 'document' && docFormat && bytes.length > MAX_DOCUMENT_BYTES
-          ? `${safeName} is over the 4.5 MB document limit, so it was stored but not read.`
-          : imageFormat && bytes.length > MAX_IMAGE_BYTES
-            ? `${safeName} is over the 3.75 MB image limit, so it was stored but not read.`
-            : buildAck(input.kind, safeName, bytes.length, blocks.length > 0, !!transcript, kb);
+  const ackText = mediaAckText({
+    kind: input.kind,
+    safeName,
+    bytes: bytes.length,
+    blocks,
+    transcript,
+    videoFailureAck,
+    unsafeDocument,
+    imageFormat,
+    docFormat,
+    kb,
+  });
 
   void writeAudit({
     action: 'media_upload',
