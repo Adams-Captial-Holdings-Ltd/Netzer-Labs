@@ -949,6 +949,36 @@ export async function deleteSession(
   agentId: string,
   chatId: string,
 ): Promise<void> {
+  await deleteSessionAttachments(agentId, chatId);
+  for (;;) {
+    // Re-query from the top each round: the rows just deleted are gone, so the
+    // next page is simply what is left.
+    const out = await ddb().send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': childPrefix(chatId) },
+        ProjectionExpression: 'PK, SK',
+        // A message written a moment before the delete must be found, or it is
+        // stranded once the row is gone (the first critic's A3).
+        ConsistentRead: true,
+      }),
+    );
+    const keys = (out.Items ?? []).map((i) => ({ PK: i.PK, SK: i.SK }));
+    for (let i = 0; i < keys.length; i += 25) {
+      await batchDelete(keys.slice(i, i + 25));
+    }
+    if (keys.length === 0 || !out.LastEvaluatedKey) break;
+  }
+  await ddb().send(
+    new DeleteCommand({
+      TableName: TABLE,
+      Key: { PK: pk(agentId), SK: sk(chatId) },
+    }),
+  );
+}
+
+async function deleteSessionAttachments(agentId: string, chatId: string): Promise<void> {
   const fileKeys = new Set<string>();
   let startKey: Record<string, unknown> | undefined;
   do {
@@ -982,32 +1012,6 @@ export async function deleteSession(
       if (result.Errors?.length) throw new Error(`Failed to delete ${result.Errors.length} stored attachment(s)`);
     }
   }
-  for (;;) {
-    // Re-query from the top each round: the rows just deleted are gone, so the
-    // next page is simply what is left.
-    const out = await ddb().send(
-      new QueryCommand({
-        TableName: TABLE,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-        ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': childPrefix(chatId) },
-        ProjectionExpression: 'PK, SK',
-        // A message written a moment before the delete must be found, or it is
-        // stranded once the row is gone (the first critic's A3).
-        ConsistentRead: true,
-      }),
-    );
-    const keys = (out.Items ?? []).map((i) => ({ PK: i.PK, SK: i.SK }));
-    for (let i = 0; i < keys.length; i += 25) {
-      await batchDelete(keys.slice(i, i + 25));
-    }
-    if (keys.length === 0 || !out.LastEvaluatedKey) break;
-  }
-  await ddb().send(
-    new DeleteCommand({
-      TableName: TABLE,
-      Key: { PK: pk(agentId), SK: sk(chatId) },
-    }),
-  );
 }
 
 /**
