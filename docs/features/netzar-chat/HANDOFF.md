@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-24
-as_of_commit: d2a65614aa62da175afffecf0c118c246aa5c214
+as_of_commit: 97f8e79b9e9c606c8e14a64ab956e272c11b8e4c
 ---
 
 # Netzar Chat handoff
@@ -38,8 +38,8 @@ as_of_commit: d2a65614aa62da175afffecf0c118c246aa5c214
   only through its chip's "Add to knowledge" switch, off by default (decision
   3), whose on-screen warning says everyone who uses the agent can find it and
   that it stays if the chat is deleted (decision 54); an opt-in that did not
-  happen says so. Slack caps a file at 30 MB and names every file it skips;
-  Slack and Telegram never import a chat file.
+  happen says so. Slack caps a file at 30 MB and names a file it skips for being
+  past the third or over that cap; Slack and Telegram never import a chat file.
 - **Who wrote it.** Codex wrote every line on the Build Ladder (decision 49):
   `gpt-6-sol` the server (two orders) and the web; `gpt-6-luna` the review
   fixes (two tries) and the cleanup. Jev picked each rung and settled the design
@@ -48,8 +48,12 @@ as_of_commit: d2a65614aa62da175afffecf0c118c246aa5c214
   hunk and re-ran every proof, catching a missing 200-character document-name
   rule, two edits outside their orders and a fix that dropped voice-note
   transcripts before any commit claimed them. Three read-only reviewers
-  (security on Opus; code and silent-failure on Sonnet) found eight more gaps;
-  each became a failing test first. The session log carries every table.
+  (security on Opus; code and silent-failure on Sonnet) found six more gaps and
+  the coordinator's own inspection two; each became a failing test first. The
+  first fresh critic passed the step and found two more — an upload link real S3
+  would refuse (an empty file's checksum signed into it) and a file recorded as
+  saved when its copy was not — fixed test-first before landing. The session log
+  carries every table.
 - **P3's gate** (`~/.claude/plans/netzar-chat-plan/p3-proof.sh`) at the
   frontmatter's commit: `P3_TIER=local` **`FAILS=0`, `ASSESSED=60`**, CONTROL
   `FAIL`. `P3_TIER=staging` (ST-1..ST-3) is **NOT RUN**: only a deployment can

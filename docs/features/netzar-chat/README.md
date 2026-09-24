@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-24
-as_of_commit: d2a65614aa62da175afffecf0c118c246aa5c214
+as_of_commit: 97f8e79b9e9c606c8e14a64ab956e272c11b8e4c
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -244,7 +244,8 @@ backend.
   the agent can find the file and that it stays if the chat is deleted (decision
   54); an opt-in that did not happen says so. Slack and Telegram never import a
   chat file. Slack reads at most 3 files of 30 MB (a config may lower that, never
-  raise it) and names every file it skips.
+  raise it) and names a file it skips for being past the third or over the size
+  limit (a failed Slack download is still reported only generically).
 
 ## 3. Current status and current source commit
 
