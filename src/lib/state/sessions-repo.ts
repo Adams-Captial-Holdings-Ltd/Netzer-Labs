@@ -42,6 +42,7 @@ import { ddb } from './ddb.js';
 import { ingestEvictedTurns } from '../../agent/memory-ingest.js';
 import { logger } from '../../observability/logger.js';
 import { getConfig } from './runtime-config-repo.js';
+import { DeleteObjectsCommand, S3Client } from '@aws-sdk/client-s3';
 
 const TABLE = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 const MAX_TURNS = 20;
@@ -67,7 +68,8 @@ const MAX_TURN_WINDOW_BYTES = 300_000;
 
 /** Byte size of a turn as DynamoDB will store it. */
 function turnBytes(t: Turn): number {
-  return Buffer.byteLength(t.text ?? '', 'utf8') + Buffer.byteLength(JSON.stringify(t.tools ?? [])) + 64; // 64 ~ role/ts/surface overhead
+  return Buffer.byteLength(t.text ?? '', 'utf8') + Buffer.byteLength(JSON.stringify(t.tools ?? [])) +
+    Buffer.byteLength(JSON.stringify(t.attachments ?? [])) + 64; // 64 ~ role/ts/surface overhead
 }
 
 /**
@@ -212,6 +214,7 @@ export interface ToolRecord {
 export interface Turn {
   status?: 'stopped';
   tools?: ToolRecord[];
+  attachments?: TurnAttachment[];
   role: 'user' | 'assistant';
   text: string;
   ts: number; // epoch seconds
@@ -223,6 +226,14 @@ export interface Turn {
    * legible to the model (see buildCrossSurfaceNote in agent-loop).
    */
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
+}
+
+export interface TurnAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  key: string;
 }
 
 export interface Session {
@@ -302,11 +313,11 @@ function capMessageText(text: string, byteBudget: number): { text: string; trunc
  * cap, outputs give way oldest first — the replay window's rule (decision 41) —
  * and every call stays listed. Works on a copy; the caller's turn is unchanged.
  */
-function fitToolRecords(tools: ToolRecord[]): ToolRecord[] {
+function fitToolRecords(tools: ToolRecord[], budget = MAX_MESSAGE_BYTES): ToolRecord[] {
   const fitted = tools.map((tool) => ({ ...tool }));
   let bytes = Buffer.byteLength(JSON.stringify(fitted), 'utf8');
   for (const tool of fitted) {
-    if (bytes <= MAX_MESSAGE_BYTES) break;
+    if (bytes <= budget) break;
     if (!tool.output) continue;
     const before = Buffer.byteLength(JSON.stringify(tool), 'utf8');
     tool.output = '';
@@ -317,12 +328,14 @@ function fitToolRecords(tools: ToolRecord[]): ToolRecord[] {
 }
 
 /** A record's text and tool results, capped so the item fits: the text takes whatever budget the results leave. */
-function capRecordContent(t: Turn): { text: string; truncated?: true; tools?: ToolRecord[] } {
-  const tools = t.tools ? fitToolRecords(t.tools) : undefined;
+function capRecordContent(t: Turn): { text: string; truncated?: true; tools?: ToolRecord[]; attachments?: TurnAttachment[] } {
+  const attachmentBytes = Buffer.byteLength(JSON.stringify(t.attachments ?? []), 'utf8');
+  const tools = t.tools ? fitToolRecords(t.tools, MAX_MESSAGE_BYTES - attachmentBytes) : undefined;
   const toolBytes = Buffer.byteLength(JSON.stringify(tools ?? []), 'utf8');
   return {
-    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes),
+    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes - attachmentBytes),
     ...(tools ? { tools } : {}),
+    ...(t.attachments ? { attachments: t.attachments } : {}),
   };
 }
 
@@ -834,6 +847,7 @@ export async function getFullHistory(
         ts: r.ts as number,
         ...(r.status ? { status: r.status as Turn['status'] } : {}),
         ...(r.tools ? { tools: r.tools as ToolRecord[] } : {}),
+        ...(r.attachments ? { attachments: r.attachments as TurnAttachment[] } : {}),
         ...(r.surface ? { surface: r.surface as Turn['surface'] } : {}),
       });
     }
@@ -935,6 +949,39 @@ export async function deleteSession(
   agentId: string,
   chatId: string,
 ): Promise<void> {
+  const fileKeys = new Set<string>();
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const out = await ddb().send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': childPrefix(chatId) },
+      ProjectionExpression: 'PK, SK, #a',
+      ExpressionAttributeNames: { '#a': 'attachments' },
+      ConsistentRead: true,
+      ExclusiveStartKey: startKey,
+    }));
+    for (const item of out.Items ?? []) {
+      for (const attachment of (item.attachments ?? []) as TurnAttachment[]) {
+        if (attachment.key) fileKeys.add(attachment.key);
+      }
+    }
+    startKey = out.LastEvaluatedKey;
+  } while (startKey);
+
+  if (fileKeys.size > 0) {
+    const bucket = process.env.RAW_BUCKET;
+    if (!bucket) throw new Error('RAW_BUCKET not configured');
+    const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-east-1' });
+    const files = [...fileKeys];
+    for (let i = 0; i < files.length; i += 1000) {
+      const result = await s3.send(new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: files.slice(i, i + 1000).map((Key) => ({ Key })) },
+      }));
+      if (result.Errors?.length) throw new Error(`Failed to delete ${result.Errors.length} stored attachment(s)`);
+    }
+  }
   for (;;) {
     // Re-query from the top each round: the rows just deleted are gone, so the
     // next page is simply what is left.

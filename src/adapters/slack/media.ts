@@ -25,10 +25,7 @@ import {
 } from '../../lib/media/process.js';
 import type { AttachmentBlock } from '../../agent/agent-loop.js';
 import { getConfig } from '../../lib/state/runtime-config-repo.js';
-
-const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
-/** Process at most this many files per message — bounds turn latency. */
-const MAX_FILES_PER_MESSAGE = 3;
+import { CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
 
 export function classifySlackFile(f: SlackFile): MediaKind {
   return kindForMime(f.mimetype);
@@ -43,8 +40,10 @@ export async function downloadSlackFile(
     logger.warn({ fileId: f.id }, 'slack file has no private url');
     return null;
   }
-  const maxBytes = Number(
-    (await getConfig('media', 'chat_kb_ingest_max_bytes')) ?? DEFAULT_MAX_BYTES,
+  const configured = Number(await getConfig('media', 'chat_kb_ingest_max_bytes'));
+  const maxBytes = Math.min(
+    CHAT_ATTACHMENT_MAX_BYTES,
+    Number.isFinite(configured) && configured >= 0 ? configured : CHAT_ATTACHMENT_MAX_BYTES,
   );
   if (f.size && f.size > maxBytes) {
     logger.info({ fileId: f.id, size: f.size, maxBytes }, 'slack file over size cap; skipping');
@@ -117,13 +116,17 @@ export async function processSlackFiles(args: {
     kbConfirmations: [],
     failed: 0,
   };
-  const files = args.files.slice(0, MAX_FILES_PER_MESSAGE);
+  const files = args.files.slice(0, CHAT_ATTACHMENT_MAX_FILES);
+  for (const f of args.files.slice(CHAT_ATTACHMENT_MAX_FILES)) {
+    out.acks.push(`${f.name ?? f.title ?? f.id} was skipped because only three files can be sent at once.`);
+  }
   for (const f of files) {
     const dl = await downloadSlackFile(f, args.botToken);
     if (!dl) {
       out.failed += 1;
       continue;
     }
+    // decision 3: Slack has no per-file opt-in, so chat files are never imported into the knowledge base.
     const media = await processMedia(
       {
         surface: 'slack',

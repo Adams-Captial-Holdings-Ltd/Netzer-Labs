@@ -618,6 +618,7 @@ function buildUserContent(
     return userText ? [{ text: userText }] : [{ text: '(no text)' }];
   }
   const blocks: ContentBlock[] = [];
+  const documentNames = new Set<string>();
   for (const att of attachments) {
     if (att.kind === 'image') {
       blocks.push({
@@ -627,10 +628,14 @@ function buildUserContent(
         },
       });
     } else {
+      const base = (att.name ?? 'document').replace(/[^A-Za-z0-9 ()\[\]-]/g, ' ').replace(/\s+/g, ' ').trim() || 'document';
+      let name = base;
+      for (let suffix = 2; documentNames.has(name); suffix++) name = `${base} (${suffix})`;
+      documentNames.add(name);
       blocks.push({
         document: {
           format: att.format as BedrockDocumentFormat,
-          name: (att.name ?? 'document').replace(/[^A-Za-z0-9._-]/g, '_'),
+          name,
           source: { bytes: att.bytes },
         },
       });
