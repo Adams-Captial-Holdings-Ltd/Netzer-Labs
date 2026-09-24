@@ -103,15 +103,16 @@ function mediaAckText(input: {
   imageFormat: ImageFormat | undefined;
   docFormat: DocFormat | undefined;
   kb: ChatKbIngestResult | null;
+  rawCopyExists: boolean;
 }): string {
   if (input.kind === 'video') {
     if (input.blocks.length > 0 || input.transcript) return '';
     return input.videoFailureAck ?? `got the video (${Math.round(input.bytes / 1024)} KB), stored. Couldn't watch it just now — type out the question and I'll answer.`;
   }
-  if (input.unsafeDocument) return `Could not open ${input.safeName} safely. The file was stored but not read.`;
-  if (input.kind === 'photo' && !input.imageFormat) return `${input.safeName} is not a PNG, JPEG, GIF or WebP image, so it was stored but not read.`;
-  if (input.kind === 'document' && input.docFormat && input.bytes > MAX_DOCUMENT_BYTES) return `${input.safeName} is over the 4.5 MB document limit, so it was stored but not read.`;
-  if (input.imageFormat && input.bytes > MAX_IMAGE_BYTES) return `${input.safeName} is over the 3.75 MB image limit, so it was stored but not read.`;
+  if (input.unsafeDocument) return `Could not open ${input.safeName} safely. The file was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
+  if (input.kind === 'photo' && !input.imageFormat) return `${input.safeName} is not a PNG, JPEG, GIF or WebP image, so it was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
+  if (input.kind === 'document' && input.docFormat && input.bytes > MAX_DOCUMENT_BYTES) return `${input.safeName} is over the 4.5 MB document limit, so it was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
+  if (input.imageFormat && input.bytes > MAX_IMAGE_BYTES) return `${input.safeName} is over the 3.75 MB image limit, so it was ${input.rawCopyExists ? 'stored but not read' : 'not stored or read'}.`;
   return buildAck(input.kind, input.safeName, input.bytes, input.blocks.length > 0, !!input.transcript, input.kb);
 }
 
@@ -193,6 +194,7 @@ export async function processMedia(
 
   // 1. store raw (skip when the surface already staged the object in S3)
   let s3Key = input.s3Key ?? '';
+  let rawCopyExists = Boolean(input.s3Key);
   let s3Url: string;
   if (input.s3Key) {
     s3Url = `s3://${input.s3Bucket ?? RAW_BUCKET}/${input.s3Key}`;
@@ -216,6 +218,7 @@ export async function processMedia(
             },
           }),
         );
+        rawCopyExists = true;
       } catch (err) {
         logger.warn(
           { errMessage: err instanceof Error ? err.message : String(err), s3Key },
@@ -355,6 +358,7 @@ export async function processMedia(
     imageFormat,
     docFormat,
     kb,
+    rawCopyExists,
   });
 
   void writeAudit({
@@ -388,7 +392,7 @@ export async function processMedia(
 
   return {
     s3Url,
-    s3Key,
+    s3Key: rawCopyExists ? s3Key : '',
     byteLength: bytes.length,
     blocks,
     transcript,

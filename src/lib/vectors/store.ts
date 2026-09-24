@@ -38,7 +38,10 @@ const STAGING_BUCKET = process.env.VECTORS_STAGING_BUCKET ?? INDEX_BUCKET;
 
 let _s3: S3Client | null = null;
 function s3(): S3Client {
-  if (!_s3) _s3 = captureAwsClient(new S3Client({ region }));
+  if (!_s3) {
+    // Avoid signing an empty-body checksum that does not match real uploads.
+    _s3 = captureAwsClient(new S3Client({ region, requestChecksumCalculation: 'WHEN_REQUIRED' }));
+  }
   return _s3;
 }
 
