@@ -31,22 +31,27 @@ export function classifySlackFile(f: SlackFile): MediaKind {
   return kindForMime(f.mimetype);
 }
 
+async function slackFileMaxBytes(): Promise<number> {
+  const configured = Number(await getConfig('media', 'chat_kb_ingest_max_bytes'));
+  return Math.min(
+    CHAT_ATTACHMENT_MAX_BYTES,
+    Number.isFinite(configured) && configured >= 0 ? configured : CHAT_ATTACHMENT_MAX_BYTES,
+  );
+}
+
 export async function downloadSlackFile(
   f: SlackFile,
   botToken: string,
+  maxBytes?: number,
 ): Promise<{ bytes: Buffer; fileName: string; mimeType?: string } | null> {
   const url = f.url_private_download ?? f.url_private;
   if (!url) {
     logger.warn({ fileId: f.id }, 'slack file has no private url');
     return null;
   }
-  const configured = Number(await getConfig('media', 'chat_kb_ingest_max_bytes'));
-  const maxBytes = Math.min(
-    CHAT_ATTACHMENT_MAX_BYTES,
-    Number.isFinite(configured) && configured >= 0 ? configured : CHAT_ATTACHMENT_MAX_BYTES,
-  );
-  if (f.size && f.size > maxBytes) {
-    logger.info({ fileId: f.id, size: f.size, maxBytes }, 'slack file over size cap; skipping');
+  const cap = maxBytes ?? await slackFileMaxBytes();
+  if ((f.size ?? 0) > cap) {
+    logger.info({ fileId: f.id, size: f.size, maxBytes: cap }, 'slack file over size cap; skipping');
     return null;
   }
   try {
@@ -68,8 +73,8 @@ export async function downloadSlackFile(
       return null;
     }
     const bytes = Buffer.from(await resp.arrayBuffer());
-    if (bytes.length > maxBytes) {
-      logger.info({ fileId: f.id, bytes: bytes.length, maxBytes }, 'slack file over size cap after download; skipping');
+    if (bytes.length > cap) {
+      logger.info({ fileId: f.id, bytes: bytes.length, maxBytes: cap }, 'slack file over size cap after download; skipping');
       return null;
     }
     return {
@@ -117,11 +122,19 @@ export async function processSlackFiles(args: {
     failed: 0,
   };
   const files = args.files.slice(0, CHAT_ATTACHMENT_MAX_FILES);
+  const maxBytes = await slackFileMaxBytes();
   for (const f of args.files.slice(CHAT_ATTACHMENT_MAX_FILES)) {
     out.acks.push(`${f.name ?? f.title ?? f.id} was skipped because only three files can be sent at once.`);
   }
   for (const f of files) {
-    const dl = await downloadSlackFile(f, args.botToken);
+    if ((f.size ?? 0) > maxBytes) {
+      const fileName = f.name ?? f.title ?? f.id;
+      const capMb = Math.max(1, Math.round(maxBytes / (1024 * 1024)));
+      out.acks.push(`${fileName} is over the ${capMb} MB limit, so it was not read.`);
+      out.failed += 1;
+      continue;
+    }
+    const dl = await downloadSlackFile(f, args.botToken, maxBytes);
     if (!dl) {
       out.failed += 1;
       continue;

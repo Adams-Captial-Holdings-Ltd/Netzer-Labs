@@ -2198,6 +2198,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
             }
             if (media.ackText) acks.push(media.ackText);
             if (media.kb) kbConfirmations.push(buildKbConfirmation(media.kb, fileName));
+            else if (a.addToKnowledge === true) kbConfirmations.push(`${fileName} was not added to the knowledge base.`);
           } catch (err) {
             logger.warn(
               { s3Key, errMessage: err instanceof Error ? err.message : String(err) },
@@ -2223,7 +2224,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           return;
         }
         if (rawAttachments.length > 0 && !userText) userText = 'What is this?';
-        if (acks.length > 0) userText += `\n\n${acks.map((ack) => `[${ack}]`).join('\n')}`;
+        const modelUserText = acks.length > 0
+          ? `${userText}\n\n${acks.map((ack) => `[${ack}]`).join('\n')}`
+          : userText;
 
         // Cross-surface peek (flag default OFF): when the authenticated member
         // is a configured owner (CCE_OWNER_DASHBOARD_EMAILS), inject their
@@ -2275,7 +2278,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           abortSignal: abort.signal,
           agentId,
           chatId,
-          userText,
+          userText: modelUserText,
           history,
           modelOverride,
           surface: 'dashboard',
@@ -3549,7 +3552,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const history = await getFullHistory(agentId, chatId, session);
     const attachment = history.turns.flatMap((turn) => turn.attachments ?? []).find((a) => a.id === id);
     if (!attachment) return c.json({ error: 'not_found' }, 404);
-    const url = await presignRawAttachment(attachment.key, attachment.name);
+    let url: string;
+    try {
+      url = await presignRawAttachment(attachment.key, attachment.name);
+    } catch (err) {
+      logger.warn({ err, agentId, chatId, id }, 'presign attachment download failed');
+      return c.json({ error: 'download_unavailable' }, 503);
+    }
     return c.json({ url, name: attachment.name });
   });
 

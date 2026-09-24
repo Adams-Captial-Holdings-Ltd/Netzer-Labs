@@ -379,7 +379,7 @@ export function Composer({
                     aria-describedby={`chat-knowledge-${f.localId}`} />
                   <span>Add to knowledge</span>
                 </label>
-                <span id={`chat-knowledge-${f.localId}`} class="sr-only">
+                <span id={`chat-knowledge-${f.localId}`} class="text-muted">
                   Everyone who uses this agent can find it, and it stays if you delete this chat.
                 </span>
               </li>

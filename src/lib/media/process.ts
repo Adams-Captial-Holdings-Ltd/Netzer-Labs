@@ -210,12 +210,15 @@ export async function processMedia(
     : recognizeImage(input.kind, input.mimeType, safeName, bytes);
   const blocks: AttachmentBlock[] = [];
   let unsafeDocument = false;
+  let zipCheckCode: ZipCheckError['code'] | undefined;
   if (input.kind === 'document' && (docFormat === 'docx' || docFormat === 'pptx')) {
     try {
       checkZip(bytes);
     } catch (err) {
       if (!(err instanceof ZipCheckError)) throw err;
       unsafeDocument = true;
+      zipCheckCode = err.code;
+      logger.warn({ fileName: safeName, code: err.code }, 'zip check failed');
     }
   }
   if (imageFormat && bytes.length <= MAX_IMAGE_BYTES) {
@@ -325,6 +328,8 @@ export async function processMedia(
         : (videoFailureAck ?? `got the video (${Math.round(bytes.length / 1024)} KB), stored. Couldn't watch it just now — type out the question and I'll answer.`)
       : unsafeDocument
         ? `Could not open ${safeName} safely. The file was stored but not read.`
+        : input.kind === 'photo' && !imageFormat
+          ? `${safeName} is not a PNG, JPEG, GIF or WebP image, so it was stored but not read.`
         : input.kind === 'document' && docFormat && bytes.length > MAX_DOCUMENT_BYTES
           ? `${safeName} is over the 4.5 MB document limit, so it was stored but not read.`
           : imageFormat && bytes.length > MAX_IMAGE_BYTES
@@ -341,6 +346,7 @@ export async function processMedia(
       bytes: bytes.length,
       s3Url,
       analyzed: blocks.length > 0,
+      ...(zipCheckCode ? { zipCheck: zipCheckCode } : {}),
       ...(kb ? { kbDocId: kb.docId, kbScope: kb.scope, kbDeduped: kb.deduped } : {}),
     },
     result: 'ok',
@@ -572,47 +578,26 @@ function buildAck(
 export function recognizeImage(
   kind: MediaKind,
   mimeType: string | undefined,
-  fileName: string,
+  _fileName: string,
   bytes: Buffer,
 ): ImageFormat | undefined {
-  if (kind !== 'photo') {
-    // Could still be image-as-document
-    if (mimeType?.startsWith('image/')) {
-      const mt = mimeType.slice('image/'.length);
-      if (mt === 'png' || mt === 'jpeg' || mt === 'jpg') return mt === 'jpg' ? 'jpeg' : (mt as ImageFormat);
-      if (mt === 'gif' || mt === 'webp') return mt;
-    }
-    return undefined;
-  }
-  // Sniff magic bytes
-  if (bytes.length >= 8) {
-    if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
-    if (
-      bytes[0] === 0x89 &&
-      bytes[1] === 0x50 &&
-      bytes[2] === 0x4e &&
-      bytes[3] === 0x47
-    )
-      return 'png';
-    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'gif';
-    if (
-      bytes[0] === 0x52 &&
-      bytes[1] === 0x49 &&
-      bytes[2] === 0x46 &&
-      bytes[3] === 0x46 &&
-      bytes[8] === 0x57 &&
-      bytes[9] === 0x45 &&
-      bytes[10] === 0x42 &&
-      bytes[11] === 0x50
-    )
-      return 'webp';
-  }
-  // Chat photos are usually JPEG; default
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith('.png')) return 'png';
-  if (lower.endsWith('.gif')) return 'gif';
-  if (lower.endsWith('.webp')) return 'webp';
-  return 'jpeg';
+  if (kind !== 'photo' && !mimeType?.toLowerCase().startsWith('image/')) return undefined;
+  // Sniff complete format signatures; labels never supply a fallback.
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) return 'png';
+  if (
+    bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 &&
+    bytes[3] === 0x38 && (bytes[4] === 0x37 || bytes[4] === 0x39) && bytes[5] === 0x61
+  ) return 'gif';
+  if (
+    bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) return 'webp';
+  return undefined;
 }
 
 export function recognizeDoc(

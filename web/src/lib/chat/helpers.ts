@@ -127,6 +127,7 @@ const REFUSAL_WORDS: Record<string, string> = {
   turn_conflict: 'Could not start the reply. Try again.',
   too_many_attachments: 'You can attach up to 3 files to a message.',
   upload_not_found: 'Please reload the page and attach the file again.',
+  upload_unavailable: 'Could not check your file right now. Please try again.',
   file_too_large: 'An attachment exceeds the 30 MB limit.',
   unsupported_type: 'An attachment type cannot be attached.',
 };
