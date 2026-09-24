@@ -1,30 +1,58 @@
-// Attachment staging, moved verbatim from web/src/pages/Chat.tsx send()
-// (Phase 0 of the chat UI port — zero behavior change). Browser-only (File,
-// global fetch); not imported by any test under src/.
+// Browser-only upload staging. The signed PUT must use exactly the Content-Type
+// returned by the chat upload route; S3 rejects a different value.
 
-import type { TurnAttachment } from './stream.js';
+export interface SignedUpload {
+  url: string;
+  key: string;
+  id: string;
+  headers: { 'Content-Type': string };
+}
 
-// Stage each file straight to S3 via a presigned PUT (the JSON body to
-// the stream endpoint then carries only small s3Key references, far
-// under the WAF 8KB cap).
-export async function stageAttachments(
-  files: File[],
+export interface StagedFile {
+  localId: number;
+  file: File;
+  status: 'uploading' | 'ready' | 'failed';
+  progress: number;
+  signed?: SignedUpload;
+  error?: string;
+  addToKnowledge: boolean;
+}
+
+export async function stageAttachment(
+  file: File,
   token: string,
-  onStatus: (status: string) => void,
-): Promise<TurnAttachment[]> {
-  const attachments: TurnAttachment[] = [];
-  for (const f of files) {
-    onStatus(`Uploading ${f.name}…`);
-    const presign = await fetch('/api/vectors/upload-url', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename: f.name }),
-    });
-    if (!presign.ok) throw new Error('Upload failed');
-    const { url, key } = await presign.json();
-    const put = await fetch(url, { method: 'PUT', body: f });
-    if (!put.ok) throw new Error('Upload failed');
-    attachments.push({ s3Key: key, fileName: f.name, ...(f.type ? { mimeType: f.type } : {}) });
+  onProgress: (percent: number) => void,
+): Promise<SignedUpload> {
+  const presign = await fetch('/api/chat/uploads', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileName: file.name, mimeType: file.type, size: file.size }),
+  });
+  if (!presign.ok) {
+    const body = await presign.json().catch(() => ({})) as { error?: string };
+    const words: Record<string, string> = {
+      file_too_large: 'File exceeds the 30 MB limit.',
+      unsupported_type: 'This file cannot be attached.',
+      invalid_upload: 'This file cannot be uploaded.',
+    };
+    throw new Error(words[body.error ?? ''] ?? 'Upload failed. Please try again.');
   }
-  return attachments;
+  const signed = await presign.json() as SignedUpload;
+  await new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', signed.url);
+    request.setRequestHeader('Content-Type', signed.headers['Content-Type']);
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress(Math.min(99, Math.round(event.loaded / event.total * 100)));
+      }
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) resolve();
+      else reject(new Error('Upload failed. Please try again.'));
+    };
+    request.onerror = () => reject(new Error('Upload failed. Please try again.'));
+    request.send(file);
+  });
+  return signed;
 }

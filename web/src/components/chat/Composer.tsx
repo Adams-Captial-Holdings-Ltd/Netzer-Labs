@@ -93,6 +93,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowUp, Paperclip, X } from 'lucide-preact';
 import TextareaAutosize from 'react-textarea-autosize';
+import { ACCEPT } from '../../lib/chat/attachment-rules';
+import type { StagedFile } from '../../lib/chat/uploads';
 
 /**
  * How tall the textarea may grow before it becomes its own scroller, in whole
@@ -161,10 +163,12 @@ interface ComposerProps {
   /** Display name of the selected agent, for the placeholder. */
   agentName: string;
   /** Files staged for the next send, shown as removable chips. */
-  files: File[];
+  files: StagedFile[];
+  attachmentAlert: string;
   /** Newly picked files. The page owns the cap and the staging list. */
   onAttach: (picked: File[]) => void;
-  onRemoveFile: (index: number) => void;
+  onRemoveFile: (id: number) => void;
+  onToggleKnowledge: (id: number, checked: boolean) => void;
   /**
    * Handed in by the page so a landing starter chip can put the caret where
    * the reader will keep typing.
@@ -227,8 +231,10 @@ export function Composer({
   agentReady,
   agentName,
   files,
+  attachmentAlert,
   onAttach,
   onRemoveFile,
+  onToggleKnowledge,
   textareaRef,
 }: ComposerProps) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
@@ -256,7 +262,8 @@ export function Composer({
   // pre-Phase-4 rules: nothing while a turn is streaming, nothing without an
   // agent to route to, and nothing for an empty or whitespace-only draft
   // (attachments alone are a valid send, as before).
-  const canSend = !streaming && agentReady && (value.trim().length > 0 || files.length > 0);
+  const canSend = !streaming && agentReady && files.every((f) => f.status === 'ready') &&
+    (value.trim().length > 0 || files.length > 0);
 
   function submit() {
     if (canSend) onSend();
@@ -289,6 +296,16 @@ export function Composer({
       ref={formRef}
       onSubmit={(e) => { e.preventDefault(); submit(); }}
       onKeyDown={handleEscape}
+      onPaste={(e: ClipboardEvent) => {
+        const picked = Array.from(e.clipboardData?.files ?? []);
+        if (picked.length > 0) { e.preventDefault(); onAttach(picked); }
+      }}
+      onDragOver={(e: DragEvent) => e.preventDefault()}
+      onDrop={(e: DragEvent) => {
+        e.preventDefault();
+        const picked = Array.from(e.dataTransfer?.files ?? []);
+        if (picked.length > 0) onAttach(picked);
+      }}
       // No measure, no padding, no border — see the header. This element's
       // content box IS the shared column's.
       class="flex flex-col"
@@ -297,7 +314,7 @@ export function Composer({
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/*,video/*,audio/*,.pdf,.docx,.pptx,.txt,.md,.csv"
+        accept={ACCEPT}
         class="hidden"
         onChange={(e) => {
           const list = (e.target as HTMLInputElement).files;
@@ -318,32 +335,53 @@ export function Composer({
           focus-within:border-primary focus-within:shadow-lg focus-within:ring-2
           focus-within:ring-primary-a/30"
       >
+        {attachmentAlert && <div role="alert" class="px-3 pt-2 text-caption text-danger">{attachmentAlert}</div>}
         {files.length > 0 && (
           // Inside the card, above the text: what is about to be sent belongs
           // in the thing that sends it, not floating above it.
           <ul class="flex flex-wrap gap-2 px-3 pt-3" aria-label="Attached files">
-            {files.map((f, i) => (
+            {files.map((f) => (
               <li
-                key={`${f.name}-${i}`}
-                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border
+                key={f.localId}
+                class="inline-flex max-w-full flex-col gap-1 rounded-lg border border-border
                   bg-bg px-2 py-1 text-caption text-secondary"
               >
+                <div class="flex min-w-0 items-center gap-1.5">
                 {/* `bg-bg` rather than `bg-surface`: the card is surface, so a
                     surface chip on it would have no edge of its own. */}
                 <Paperclip size={12} class="shrink-0 text-muted" aria-hidden="true" />
                 {/* `min-w-0` or a long filename refuses to shrink and pushes
                     its own remove button off the chip. */}
-                <span class="min-w-0 truncate">{f.name}</span>
+                <span class="min-w-0 truncate">{f.file.name}</span>
                 <button
                   type="button"
-                  onClick={() => onRemoveFile(i)}
-                  aria-label={`Remove ${f.name}`}
+                  onClick={() => onRemoveFile(f.localId)}
+                  aria-label={`Remove ${f.file.name}`}
                   class="shrink-0 rounded text-muted transition-colors duration-fast
                     hover:text-danger focus-visible:outline-none focus-visible:ring-2
                     focus-visible:ring-danger"
                 >
                   <X size={12} aria-hidden="true" />
                 </button>
+                </div>
+                {f.status === 'uploading' && (
+                  <div role="progressbar" aria-label={`Uploading ${f.file.name}`}
+                    aria-valuemin={0} aria-valuemax={100} aria-valuenow={f.progress}
+                    class="h-1 w-full overflow-hidden rounded-full bg-surface-hover">
+                    <div class="h-full bg-primary" style={{ width: `${f.progress}%` }} />
+                  </div>
+                )}
+                {f.status === 'failed' && <span class="text-danger">{f.error}</span>}
+                <label class="flex items-center gap-1.5">
+                  <input type="checkbox" checked={f.addToKnowledge}
+                    onChange={(e) => onToggleKnowledge(f.localId, (e.target as HTMLInputElement).checked)}
+                    aria-label={`Add ${f.file.name} to knowledge`}
+                    aria-describedby={`chat-knowledge-${f.localId}`} />
+                  <span>Add to knowledge</span>
+                </label>
+                <span id={`chat-knowledge-${f.localId}`} class="sr-only">
+                  Everyone who uses this agent can find it, and it stays if you delete this chat.
+                </span>
               </li>
             ))}
           </ul>

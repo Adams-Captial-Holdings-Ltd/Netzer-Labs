@@ -11,7 +11,7 @@
 
 import type { ToolCall, TurnMeta } from './types.js';
 
-export interface TurnAttachment { s3Key: string; fileName: string; mimeType?: string }
+export interface TurnAttachment { s3Key: string; fileName: string; mimeType?: string; addToKnowledge?: true }
 
 export interface TurnBody {
   text: string;

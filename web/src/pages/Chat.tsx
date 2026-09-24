@@ -14,7 +14,9 @@ import {
 } from '../lib/chat/helpers';
 import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
-import { stageAttachments } from '../lib/chat/uploads';
+import { stageAttachment } from '../lib/chat/uploads';
+import type { StagedFile } from '../lib/chat/uploads';
+import { admitFiles } from '../lib/chat/attachment-rules';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 // The shell's mobile nav toggle. Below `lg` this page's own bar is the app bar
 // (Header.tsx stands down there), so the page is what hands the house's nav
@@ -102,9 +104,12 @@ export function Chat() {
   // one action). A ref updates synchronously, which closes that window.
   const [deleting, setDeleting] = useState(false);
   const deletingRef = useRef(false);
-  // Files staged for the next send (uploaded via presigned PUT on send, which
-  // bypasses the CloudFront WAF 8KB body cap — same pattern as Knowledge).
-  const [files, setFiles] = useState<File[]>([]);
+  // Keep a synchronous snapshot so two picks in the same frame still obey the
+  // three-file cap. Uploads begin when files arrive, independent of Send.
+  const [files, setFiles] = useState<StagedFile[]>([]);
+  const filesRef = useRef<StagedFile[]>([]);
+  const nextFileId = useRef(0);
+  const [attachmentAlert, setAttachmentAlert] = useState('');
   // Set when the initial /agents load fails, so the tab shows WHY it's empty
   // instead of a silently dead chat (send() early-returns without an agent).
   const [loadError, setLoadError] = useState('');
@@ -288,10 +293,41 @@ export function Chat() {
     startNewChat(id);
   }
 
+  function updateFiles(change: (current: StagedFile[]) => StagedFile[]) {
+    const next = change(filesRef.current);
+    filesRef.current = next;
+    setFiles(next);
+  }
+
+  function attachFiles(picked: File[]) {
+    const { accepted, refused } = admitFiles(filesRef.current.map((f) => f.file), picked);
+    setAttachmentAlert(refused.map(({ name, reason }) =>
+      reason === 'too_large' ? `${name} exceeds the 30 MB limit.` :
+      reason === 'too_many' ? `${name} was left out: attach at most 3 files.` :
+      `${name} cannot be attached.`
+    ).join(' '));
+    const added = (accepted as File[]).map((file): StagedFile => ({
+      localId: ++nextFileId.current, file, status: 'uploading', progress: 0, addToKnowledge: false,
+    }));
+    updateFiles((current) => [...current, ...added]);
+    for (const staged of added) {
+      void stageAttachment(staged.file, getToken(), (progress) => {
+        updateFiles((current) => current.map((f) => f.localId === staged.localId ? { ...f, progress } : f));
+      }).then((signed) => {
+        updateFiles((current) => current.map((f) => f.localId === staged.localId
+          ? { ...f, signed, status: 'ready', progress: 100 } : f));
+      }).catch((error: unknown) => {
+        updateFiles((current) => current.map((f) => f.localId === staged.localId
+          ? { ...f, status: 'failed', error: error instanceof Error ? error.message : 'Upload failed. Please try again.' } : f));
+      });
+    }
+  }
+
   async function send() {
     const text = input.trim();
-    const sendFiles = files;
-    if ((!text && sendFiles.length === 0) || streaming || !agentId) return;
+    const sendFiles = filesRef.current;
+    if ((!text && sendFiles.length === 0) || streaming || !agentId ||
+      sendFiles.some((f) => f.status !== 'ready' || !f.signed)) return;
     const clientMessageId = newMessageId();
     draftsRef.current.delete(`${agentId}/${chatId}`);
     // The first send in a fresh chat: its draft slot is spent, and from here on
@@ -299,14 +335,15 @@ export function Chat() {
     if (unsentChatRef.current) draftsRef.current.delete(NEW_DRAFT);
     unsentChatRef.current = false;
     setInput('');
-    setFiles([]);
-    const fileNote = sendFiles.length > 0
-      ? sendFiles.map((f) => `📎 ${f.name}`).join('\n')
-      : '';
+    updateFiles(() => []);
+    setAttachmentAlert('');
     const userMsg: Message = {
       role: 'user',
-      text: text ? (fileNote ? `${text}\n${fileNote}` : text) : fileNote,
+      text,
       ts: Date.now() / 1000,
+      ...(sendFiles.length ? { attachments: sendFiles.map((f) => ({
+        id: f.signed!.id, name: f.file.name, type: f.signed!.headers['Content-Type'], size: f.file.size,
+      })) } : {}),
     };
     setMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
@@ -320,11 +357,12 @@ export function Chat() {
 
     try {
       const token = getToken();
-      // Stage each file straight to S3 via a presigned PUT (see
-      // ../lib/chat/uploads.ts; the JSON body to the stream endpoint then
-      // carries only small s3Key references, far under the WAF 8KB cap).
-      const attachments = await stageAttachments(sendFiles, token, setToolStatus);
-      setToolStatus('');
+      const attachments = sendFiles.map((f) => ({
+        s3Key: f.signed!.key,
+        fileName: f.file.name,
+        mimeType: f.signed!.headers['Content-Type'],
+        ...(f.addToKnowledge ? { addToKnowledge: true as const } : {}),
+      }));
       // The SSE parser lives in streamTurn (../lib/chat/stream.ts). Its chunk
       // callback both updates the live preview and clears the tool status —
       // exactly the pre-extraction behavior.
@@ -499,10 +537,8 @@ export function Chat() {
   // at every viewport (see ChatCanvas). The card, the autosize, Enter/
   // Shift+Enter and the Send/Stop slot live in ../components/chat/Composer.
   //
-  // The staging list and its cap stay HERE, because they are what `send()`
-  // reads: the composer reports what was picked and what was dismissed, the
-  // page decides how many survive. `.slice(0, 3)` is the pre-existing cap,
-  // unchanged.
+  // The staging list stays here because send() reads it; the composer renders
+  // its progress, refusal and knowledge choice.
   const composer = (
     <Composer
       value={input}
@@ -513,8 +549,11 @@ export function Chat() {
       agentReady={agentId !== ''}
       agentName={agentName}
       files={files}
-      onAttach={(picked) => setFiles((prev) => [...prev, ...picked].slice(0, 3))}
-      onRemoveFile={(i) => setFiles((prev) => prev.filter((_, j) => j !== i))}
+      attachmentAlert={attachmentAlert}
+      onAttach={attachFiles}
+      onRemoveFile={(id) => updateFiles((current) => current.filter((f) => f.localId !== id))}
+      onToggleKnowledge={(id, checked) => updateFiles((current) => current.map((f) =>
+        f.localId === id ? { ...f, addToKnowledge: checked } : f))}
       textareaRef={inputRef}
     />
   );
@@ -576,6 +615,8 @@ export function Chat() {
           <MessagesView
             messages={messages}
             agentName={agentName}
+            agentId={agentId}
+            chatId={chatId}
             landing={isLanding}
             streaming={streaming}
             streamText={streamText}

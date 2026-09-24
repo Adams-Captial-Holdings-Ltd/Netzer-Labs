@@ -4,14 +4,17 @@
 // under src/, so it enters the ROOT tsc program: keep it DOM-light and keep
 // relative imports `.js`-suffixed (NodeNext).
 
-import type { Conversation, Message, Model, ToolCall } from './types.js';
+import type { Conversation, Message, MessageAttachment, Model, ToolCall } from './types.js';
 
 /** Restore transcript results and stopped state; arguments belong only to the live tab. */
 export function transcriptToMessages(
-  turns: Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[] }>,
+  turns: Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[] }>,
 ): Message[] {
   return turns.map((turn) => {
-    if (turn.role === 'user') return { role: 'user', text: turn.text, ts: turn.ts };
+    if (turn.role === 'user') return {
+      role: 'user', text: turn.text, ts: turn.ts,
+      ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+    };
     return {
       role: 'assistant',
       text: turn.text,
@@ -122,6 +125,10 @@ const REFUSAL_WORDS: Record<string, string> = {
   turn_record_unavailable: 'Could not start the reply. Try again.',
   turn_duplicate: 'Could not start the reply. Try again.',
   turn_conflict: 'Could not start the reply. Try again.',
+  too_many_attachments: 'You can attach up to 3 files to a message.',
+  upload_not_found: 'Please reload the page and attach the file again.',
+  file_too_large: 'An attachment exceeds the 30 MB limit.',
+  unsupported_type: 'An attachment type cannot be attached.',
 };
 
 /** The words a failed turn shows. No code means an older server, whose wire text still goes through friendlyStreamError. */
