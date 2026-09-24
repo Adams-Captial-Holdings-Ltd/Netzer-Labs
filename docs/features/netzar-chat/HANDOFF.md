@@ -2,85 +2,79 @@
 feature: netzar-chat
 document_role: handoff
 status: current
-observed_at: 2026-09-23
-as_of_commit: 45d7193491d3158648511b36d529617aa286018a
+observed_at: 2026-09-24
+as_of_commit: d2a65614aa62da175afffecf0c118c246aa5c214
 ---
 
 # Netzar Chat handoff
 
-- **CURRENT: P2 is BUILT on `feature/p2-turn-lifecycle` — step 4 of 10 (the turn
-  lifecycle, including the tool-call UX), in one session (owner decision 45).**
-  Branch cut from `origin/development` @ `e035f97` (P1's merge, PR #189); merge
-  target `development`. **At this commit: pushed no, PR none, deployment none.**
-  The landing runs the full `development.md` step 7 list on this exact commit,
-  asks the owner once with the numbers, and only on a yes pushes, opens one pull
+- **CURRENT: P3 is BUILT on `feature/p3-attachments` — step 5 of 10
+  (attachments), in one session (owner decision 45).** Branch cut from
+  `origin/development` @ `700821f` (P2's merge, PR #190); merge target
+  `development`. **At this commit: pushed no, PR none, deployment none.** The
+  landing runs the full `development.md` step 7 list on this exact commit, asks
+  the owner once with the numbers, and only on a yes pushes, opens one pull
   request into `development` and merges it when every check is green; the pull
   request number and the merge commit live in the Gauntlet state file, because a
   file cannot state the commit it is inside (P40). Nothing is promoted (decision
-  18). The session made ONE AWS call: decision 51's three-call Bedrock probe, the
-  owner signed in and present, the exact command in front of them.
-- **What P2 built** (detail: README section 2 and the session log below).
-  **WI-2.1** — Stop, Escape or a closed tab aborts the server's turn: no further
-  model call or tool round, the partial saved as `stopped`, its spend settled
-  from an estimate. **WI-2.2** — a heartbeat every 15 s, positional deltas for a
-  protocol-2 client, tool start and end with the call's id, arguments (1 KB, never
-  stored) and result (2 KB, stored), typed errors, nothing after `final` but
-  `done`. **WI-2.3** — both send routes refuse an unknown agent or a model
-  outside the catalog before any spend, and a `clientMessageId` makes a turn
-  record so a retry can never start a second paid call. **WI-2.4** — the composer
-  stays editable during a run (nothing sends until it ends), Escape stops,
-  focus returns, drafts are per conversation. And the cause of "staging never
-  streams" (F1 Layer B's twelfth check): the guardrail now checks alongside the
-  stream (decision 50), measured first (decision 51), with a runtime switch back.
-  **The review's fixes** — Stop is noticed even before the reply has begun; a
-  stopped turn's spend errs on the safe side; tool inputs and results pass the
-  secret redactor and `dynamodb_query`'s raw result is not passed on (decision
-  53) and a key written as a JSON property is caught too; Telegram and Slack
-  post the same sanitized error sentence, which never carries a kill switch's
-  reason; an unsaved reply says so; a new chat's draft survives New chat and an
-  agent switch.
-- **Who wrote it.** Codex wrote the first builds (owner decision 49) on
-  `gpt-6-astra` — `gpt-6-luna` and `gpt-6-sol` answer 400 on this login (A180):
-  the server in one build and one correction, the web in one build. Six
-  read-only reviewers then found real defects the tests had not: a reader who
-  left before the stream began went unnoticed, a mid-stream Stop billed $0 and
-  a Stop could under-count the cost cap, tool payloads skipped the secret
-  redactor, a Stop and the cost cap would page the operator, an unsaved reply
-  looked saved, and a new chat's draft vanished. Each became a failing test
-  first. Codex's workspace ran out of credits two minutes into the fix build,
-  so Claude Fable built the fixes (decision 49: Codex's limit hit → Claude at
-  the same height). Claude (Opus) froze the criteria, wrote every failing test,
-  inspected every diff and re-ran every proof. Codex, back with credits,
-  then inspected Fable's work (the codex-build rule) and found four more gaps —
-  a kill switch's free-text reason reaching every chat surface, a JSON-shaped
-  key the redactor missed, a Stop during a long tool argument settling 0
-  output, and the non-model branches still waiting on a reader who had left —
-  each became a failing test first and Codex built the fix (work order D).
-  The session log carries every review table and what was deferred.
-- **P2's gate** (`~/.claude/plans/netzar-chat-plan/p2-proof.sh`) at the
-  frontmatter's commit: `P2_TIER=local` **`FAILS=0`, `ASSESSED=47`**, CONTROL
-  `FAIL`. `P2_TIER=staging` is **NOT RUN**: staging runs `8299f04`, which
-  predates P1 and P2, so a run now would test the old code — it runs after
-  promotion. P1's tiers are unmoved: storage **`FAILS=0`, `ASSESSED=12`**,
-  containment **`FAILS=0`, `ASSESSED=6`**.
-- **The owner's decisions this session.** 49: Codex writes the code. 50: stream
-  now, the guardrail checking alongside, with `bedrock/guardrail_stream_mode =
-  sync` to go back. 51: prove it first — one attended probe; the default mode
-  held the whole answer until the end (first text at 3.20 s, every event in the
-  last 156 ms), async streamed (first text at 1.23 s). 52: a Stop pressed before
-  the guardrail's verdict keeps the partial reply. 53: the database lookup
-  tool's raw result is neither shown nor stored until A172 is decided.
+  18). The session made **no** AWS call.
+- **What P3 built** (detail: README sections 2 and 6, and the session log
+  below). A chat file uploads the moment it is attached: `POST /api/chat/uploads`
+  signs a PUT straight to S3 with the file's size and type signed in, under a
+  prefix that belongs to the caller, and the chip shows a real progress bar. A
+  fourth file, a file over 30 MB and a type that cannot be attached are refused
+  by name, never dropped. The send checks every staged file with `HeadObject`
+  before a turn begins or anything is read or spent (404, 413, 415), and refuses
+  old-style keys (decision 55). Documents reach the model as Bedrock document
+  blocks within Bedrock's documented limits (4.5 MB a document, 3.75 MB an image;
+  a pptx as its text); a docx or pptx passes a bounded ZIP check before anything
+  opens it; a photo reaches the model only when its bytes are PNG, JPEG, GIF or
+  WebP; a file the model could not read is named to it in a bracketed note that
+  is never saved into the sender's own words. A message keeps its files: the
+  transcript lists them without storage keys, and `GET /api/sessions/attachment`
+  re-mints a 300 s download link for the owner (an admin through the audited
+  override, decision 1). Deleting a conversation deletes its stored files first
+  and keeps every row if S3 reports any error. A file enters the knowledge base
+  only through its chip's "Add to knowledge" switch, off by default (decision
+  3), whose on-screen warning says everyone who uses the agent can find it and
+  that it stays if the chat is deleted (decision 54); an opt-in that did not
+  happen says so. Slack caps a file at 30 MB and names every file it skips;
+  Slack and Telegram never import a chat file.
+- **Who wrote it.** Codex wrote every line on the Build Ladder (decision 49):
+  `gpt-6-sol` the server (two orders) and the web; `gpt-6-luna` the review
+  fixes (two tries) and the cleanup. Jev picked each rung and settled the design
+  forks; where Jev was unsure a council ran, the second one with a Codex member.
+  Claude (Opus) froze the criteria, wrote every failing test, inspected every
+  hunk and re-ran every proof, catching a missing 200-character document-name
+  rule, two edits outside their orders and a fix that dropped voice-note
+  transcripts before any commit claimed them. Three read-only reviewers
+  (security on Opus; code and silent-failure on Sonnet) found eight more gaps;
+  each became a failing test first. The session log carries every table.
+- **P3's gate** (`~/.claude/plans/netzar-chat-plan/p3-proof.sh`) at the
+  frontmatter's commit: `P3_TIER=local` **`FAILS=0`, `ASSESSED=60`**, CONTROL
+  `FAIL`. `P3_TIER=staging` (ST-1..ST-3) is **NOT RUN**: only a deployment can
+  move it. The earlier gates are unmoved: P1 storage **`FAILS=0`,
+  `ASSESSED=12`**, containment **`FAILS=0`, `ASSESSED=6`**, P2 local
+  **`FAILS=0`, `ASSESSED=47`**.
+- **The owner's decisions this session.** 54: an opted-in knowledge-base copy
+  stays when its chat is deleted. 55: old-style upload keys are refused once P3
+  ships. Decision 3 (2026-09-18) had already answered whether chat files go into
+  the knowledge base: only by an explicit per-file opt-in, default off.
 - **Next, at S1 only** (the staging/production promotion, never local work): P1's
   steps, unchanged — link the master token, then run
   `scripts/p1-migrate-legacy-chats.ts` as a dry run and with `--apply` straight
-  after the deploy, before anyone chats — and then `P2_TIER=staging` against the
-  promoted staging (S-1 streaming cadence, S-2 tool status).
-- **Baseline recorded before any change on this branch**, at `e035f97` with fake
+  after the deploy, before anyone chats — then `P2_TIER=staging` (S-1 streaming
+  cadence, S-2 tool status) and `P3_TIER=staging` (ST-1..ST-3: a real browser
+  upload to S3, the `HeadObject` preflight, a real download) against the promoted
+  staging.
+- **Baseline recorded before any change on this branch**, at `700821f` with fake
   credentials planted, alone in the checkout, the emulator named first as
-  `floci/floci:1.6.0`: `npm test` 254 files / 3331 tests all passing,
-  `guard-violations: 0`; integration 59 passed / 25 skipped / 1 failed, the Floci
+  `floci/floci:1.6.0`: `npm test` 259 files / 3400 tests all passing,
+  `guard-violations: 0`; integration 62 passed / 25 skipped / 1 failed, the Floci
   `checkSecrets` gap by name; every other gate exit 0; P1 storage `FAILS=0`,
-  containment `FAILS=0`.
+  containment `FAILS=0`, P2 local `FAILS=0`; the browser suite 16/16.
+- **P2 landed** as PR #190 into `development` (merge `700821f`, 2026-09-23); its
+  session log is [`handoffs/2026-09-23-p2-one-shot.md`](handoffs/2026-09-23-p2-one-shot.md).
 - **P1 landed** as PR #189 into `development` (merge `e035f97`, 2026-09-23); its
   session log is [`handoffs/2026-09-22-p1-one-shot.md`](handoffs/2026-09-22-p1-one-shot.md).
 - Branch state: the work was merged into `development` by PR #129 (merge
@@ -342,6 +336,8 @@ as_of_commit: 45d7193491d3158648511b36d529617aa286018a
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-24-p3-one-shot.md](handoffs/2026-09-24-p3-one-shot.md)
+- [2026-09-23-p2-one-shot.md](handoffs/2026-09-23-p2-one-shot.md)
 - [2026-09-22-p1-one-shot.md](handoffs/2026-09-22-p1-one-shot.md)
 - [2026-09-22-p1-wi-1.0-landing.md](handoffs/2026-09-22-p1-wi-1.0-landing.md)
 - [2026-09-22-p1-wi-1.0-verification.md](handoffs/2026-09-22-p1-wi-1.0-verification.md)
