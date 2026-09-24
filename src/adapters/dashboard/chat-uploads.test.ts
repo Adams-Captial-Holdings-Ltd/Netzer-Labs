@@ -389,6 +389,20 @@ describe('POST /test-turn/stream attachments', () => {
     expect(turns[0]).toMatchObject({ role: 'user', text: 'summarize please' });
   });
 
+  it("keeps a voice note's words in the saved message", async () => {
+    // Found inspecting the fix batch: saving only the typed words dropped the transcript, so a
+    // reload, and the model's next turn, lost what a voice note said.
+    processMediaMock.mockResolvedValue(media({ blocks: [], kind: 'audio', transcript: 'ship it on Friday', transcriptKind: 'audio' }));
+    const key = await stagedKey('operator', 'memo.m4a', 'audio/mp4', 2048);
+
+    const res = await postStream({ text: '', attachments: [{ s3Key: key, fileName: 'memo.m4a', mimeType: 'audio/mp4' }] });
+    await res.text();
+
+    const turns = appendTurnsMock.mock.calls[0]![2] as Array<{ role: string; text: string }>;
+    expect(turns[0]!.role).toBe('user');
+    expect(turns[0]!.text).toContain('ship it on Friday');
+  });
+
   it('passes the knowledge opt-in to the media pipeline for that file only', async () => {
     const a = await stagedKey('operator', 'share.pdf');
     const b = await stagedKey('operator', 'private.pdf');
