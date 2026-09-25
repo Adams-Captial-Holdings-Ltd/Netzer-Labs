@@ -2,19 +2,31 @@
 import { beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { S3Client } from '@aws-sdk/client-s3';
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import JSZip from 'jszip';
+import { readFileSync } from 'node:fs';
+import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
 import type { ToolHandler, ToolContext } from './registry.js';
 
-const { registered, saveArtifact, killed, signed, buildPdf, costEnforced, spend } = vi.hoisted(() => {
+const { registered, saveArtifact, readArtifactBody, getArtifactVersion, killed, signed, buildPdf, costEnforced, spend, ddbSend, scanForExfil, draftSession, draftLock } = vi.hoisted(() => {
   process.env.RAW_BUCKET = 'p4-tool-raw';
   process.env.CURATED_BUCKET = 'p4-tool-curated';
   return {
     registered: new Map<string, unknown>(),
-    saveArtifact: vi.fn(), killed: vi.fn(), signed: vi.fn(), buildPdf: vi.fn(), costEnforced: vi.fn(), spend: vi.fn(),
+    saveArtifact: vi.fn(), readArtifactBody: vi.fn(), getArtifactVersion: vi.fn(), killed: vi.fn(), signed: vi.fn(), buildPdf: vi.fn(), costEnforced: vi.fn(), spend: vi.fn(), ddbSend: vi.fn(), scanForExfil: vi.fn(), draftSession: vi.fn(), draftLock: vi.fn(),
   };
 });
 vi.mock('./registry.js', () => ({ tools: { register: (name: string, handler: unknown) => registered.set(name, handler) } }));
 vi.mock('../addons/registry.js', () => ({ registerIfConfigured: (_record: unknown, register: () => void) => register() }));
-vi.mock('../chat/artifacts-repo.js', () => ({ saveArtifact }));
+vi.mock('../chat/artifacts-repo.js', () => ({ saveArtifact, readArtifactBody, getArtifactVersion }));
+vi.mock('../state/ddb.js', () => ({ ddb: () => ({ send: ddbSend }) }));
+vi.mock('../safety/exfil-guard.js', async (importActual) => {
+  const actual = await importActual<typeof import('../safety/exfil-guard.js')>();
+  return { ...actual, scanForExfil };
+});
+vi.mock('../state/sessions-repo.js', async (importActual) => {
+  const actual = await importActual<typeof import('../state/sessions-repo.js')>();
+  return { ...actual, getSession: draftSession, acquireConversationChildLock: draftLock };
+});
 vi.mock('../documents/pdf.js', () => ({ buildPdf }));
 vi.mock('../documents/docx.js', () => ({ buildDocx: async () => Buffer.from('DOCX') }));
 vi.mock('../documents/xlsx.js', () => ({ buildXlsx: async () => Buffer.from('XLSX') }));
@@ -31,6 +43,7 @@ vi.mock('../bedrock/guard.js', () => ({ guardedBedrockSend: (send: () => Promise
 vi.mock('../observability/xray.js', () => ({ captureAwsClient: <T,>(client: T): T => client }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: signed }));
 
+let draftTable: ReturnType<typeof createFakeDynamo>;
 const OWNER = 'dashboard:user:p4-owner';
 const CHAT = 'dashboard:p4-tool-chat';
 const PDF = Buffer.from('%PDF-1.7\nP4 fixture');
@@ -49,6 +62,13 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   vi.restoreAllMocks();
+  draftTable = createFakeDynamo();
+  ddbSend.mockReset().mockImplementation((cmd: Parameters<typeof draftTable.send>[0]) => draftTable.send(cmd));
+  scanForExfil.mockReset().mockImplementation(async (text: string) => ({ blocked: false, truncated: false, matches: [], scannedBytes: text.length }));
+  draftSession.mockReset().mockResolvedValue({ agentId: 'main', chatId: CHAT, userId: OWNER, surface: 'dashboard', turns: [] });
+  draftLock.mockReset().mockResolvedValue(async () => {});
+  readArtifactBody.mockReset();
+  getArtifactVersion.mockReset().mockResolvedValue({ artifactId: AID, version: 1, fileName: 'notes.txt', contentType: 'text/plain', createdAt: '2026-09-25T00:00:00.000Z', source: {} });
   saveArtifact.mockReset().mockImplementation(async (args: { artifactId?: string; expectedVersion?: number; fileName: string; contentType: string }) => ({
     artifactId: args.artifactId ?? AID, version: args.expectedVersion ? args.expectedVersion + 1 : 1,
     fileName: args.fileName, contentType: args.contentType, createdAt: '2026-09-25T00:00:00.000Z',
@@ -133,7 +153,7 @@ it('P4 image tool stores dashboard output without model facing URLs', async () =
   expect(result.isError).not.toBe(true);
 });
 
-it('P4 PowerPoint tool stores a slide deck as a versioned dashboard artifact', async () => {
+it('P4 PowerPoint round trip keeps slide text in valid OOXML', async () => {
   const result = await documentHandler()!.invoke({ format: 'pptx', spec: {
     title: 'Launch deck', slides: [{ title: 'Launch', body: 'A planned launch' }],
   } }, dashboard);
@@ -143,6 +163,103 @@ it('P4 PowerPoint tool stores a slide deck as a versioned dashboard artifact', a
   expect(stored.contentType).toBe('application/vnd.openxmlformats-officedocument.presentationml.presentation');
   expect(stored.fileName).toMatch(/\.pptx$/);
   expect(Buffer.from(stored.body).subarray(0, 2).toString('ascii')).toBe('PK');
+  const zip = await JSZip.loadAsync(Buffer.from(stored.body));
+  expect(zip.file('[Content_Types].xml')).not.toBeNull();
+  const slide = await zip.file('ppt/slides/slide1.xml')?.async('string');
+  expect(slide).toContain('Launch');
+  expect(slide).toContain('A planned launch');
   expect(artifactView(result)).toMatchObject([{ artifactId: AID, version: 1 }]);
   expect(JSON.stringify(result)).not.toMatch(/X-Amz-|s3Bucket|s3Key|presignedUrl/);
+});
+
+const draftModulePath = './document-draft-tools.js';
+const draftHandler = () => registered.get('document_draft') as ToolHandler | undefined;
+
+it('P4 incremental document calls retain earlier sections across turns', async () => {
+  await import(draftModulePath).catch(() => null);
+  expect(draftHandler(), 'cross-turn document_draft must be registered').toBeDefined();
+  expect(readFileSync('src/server.ts', 'utf8')).toContain("import './lib/tools/document-draft-tools.js';");
+  buildPdf.mockImplementation(async (assembled: unknown) => Buffer.from(JSON.stringify(assembled)));
+  const start = await draftHandler()!.invoke({ action: 'start', format: 'pdf', title: 'Long report', operationId: 'start-1' },
+    { ...dashboard });
+  expect(start.isError).not.toBe(true);
+  const created = JSON.parse(start.text) as { draftId: string; revision: number };
+  expect(created).toMatchObject({ draftId: expect.any(String), revision: 0 });
+  expect(saveArtifact, 'a draft is not yet a downloadable artifact').not.toHaveBeenCalled();
+
+  const first = await draftHandler()!.invoke({ action: 'append', draftId: created.draftId,
+    expectedRevision: 0, operationId: 'section-1', section: { heading: 'Opening', body: 'first chapter' } },
+    { ...dashboard });
+  expect(JSON.parse(first.text)).toMatchObject({ revision: 1 });
+  const second = await draftHandler()!.invoke({ action: 'append', draftId: created.draftId,
+    expectedRevision: 1, operationId: 'section-2', section: { heading: 'Ending', body: 'second chapter' } },
+    { ...dashboard });
+  expect(JSON.parse(second.text)).toMatchObject({ revision: 2 });
+  expect(saveArtifact).not.toHaveBeenCalled();
+
+  const final = await draftHandler()!.invoke({ action: 'finalize', draftId: created.draftId,
+    expectedRevision: 2, operationId: 'final-1' }, { ...dashboard });
+  expect(artifactView(final)).toMatchObject([{ artifactId: AID, version: 1 }]);
+  expect(saveArtifact).toHaveBeenCalledOnce();
+  const stored = saveArtifact.mock.calls[0][0] as { body: Uint8Array; source: Record<string, unknown> };
+  const bytes = Buffer.from(stored.body).toString('utf8');
+  expect(bytes).toContain('first chapter');
+  expect(bytes).toContain('second chapter');
+  expect(stored.source).toMatchObject({ kind: 'draft', draftId: created.draftId, revision: 2 });
+  expect(JSON.stringify(stored.source), 'lineage must not pack the full source into one DDB item')
+    .not.toMatch(/first chapter|second chapter/);
+});
+
+it('P4 incremental draft append is owner scoped and idempotent', async () => {
+  await import(draftModulePath).catch(() => null);
+  expect(draftHandler()).toBeDefined();
+  const start = await draftHandler()!.invoke({ action: 'start', format: 'pdf', title: 'Draft', operationId: 'start-2' }, dashboard);
+  const { draftId } = JSON.parse(start.text) as { draftId: string };
+  const unit = { action: 'append', draftId, expectedRevision: 0, operationId: 'one',
+    section: { body: 'a single section' } };
+  const foreign = await draftHandler()!.invoke(unit, { ...dashboard, userId: 'dashboard:user:other' });
+  expect(foreign.isError, 'another dashboard owner cannot append').toBe(true);
+  const first = await draftHandler()!.invoke(unit, dashboard);
+  const retry = await draftHandler()!.invoke(unit, dashboard);
+  expect(JSON.parse(first.text)).toMatchObject({ revision: 1 });
+  expect(JSON.parse(retry.text), 'replaying an operation cannot duplicate a section').toMatchObject({ revision: 1 });
+  const stale = await draftHandler()!.invoke({ ...unit, operationId: 'two' }, dashboard);
+  expect(stale.isError, 'a new operation with stale expectedRevision must fail').toBe(true);
+});
+
+it('P4 incremental draft rejects unsafe or oversized sections before persistence', async () => {
+  await import(draftModulePath).catch(() => null);
+  expect(draftHandler()).toBeDefined();
+  const start = await draftHandler()!.invoke({ action: 'start', format: 'pdf', title: 'Draft', operationId: 'start-3' }, dashboard);
+  const { draftId } = JSON.parse(start.text) as { draftId: string };
+  const before = draftTable.rows.size;
+  scanForExfil.mockImplementation(async (text: string) => ({ blocked: text.includes('BLOCKED_SECRET'),
+    truncated: false, scannedBytes: text.length, matches: [] }));
+  const secret = await draftHandler()!.invoke({ action: 'append', draftId, expectedRevision: 0,
+    operationId: 'unsafe', section: { body: 'BLOCKED_SECRET' } }, dashboard);
+  expect(secret.isError).toBe(true);
+  const oversized = await draftHandler()!.invoke({ action: 'append', draftId, expectedRevision: 0,
+    operationId: 'oversized', section: { body: 'x'.repeat(500 * 1024) } }, dashboard);
+  expect(oversized.isError).toBe(true);
+  expect(draftTable.rows.size, 'unsafe or oversized sections must not become child rows').toBe(before);
+  expect(saveArtifact).not.toHaveBeenCalled();
+});
+
+it('P4 artifact read tool refuses another owner and returns bounded content', async () => {
+  const modulePath = './artifact-read-tools.js';
+  await import(modulePath).catch(() => null);
+  const handler = registered.get('read_artifact') as ToolHandler | undefined;
+  expect(handler, 'read_artifact must be registered for revision and inspection').toBeDefined();
+  expect(readFileSync('src/server.ts', 'utf8')).toContain("import './lib/tools/artifact-read-tools.js';");
+  readArtifactBody.mockResolvedValue(Buffer.from('A'.repeat(16_000)));
+  const result = await handler!.invoke({ artifactId: AID, version: 1 }, dashboard);
+  expect(result.isError).not.toBe(true);
+  expect(result.text.length, 'model-visible content must have a fixed safe bound').toBeLessThanOrEqual(9_000);
+  expect(result.text).toContain('AAAA');
+  expect(readArtifactBody).toHaveBeenCalledWith({ agentId: 'main', chatId: CHAT, ownerId: OWNER,
+    artifactId: AID, version: 1 });
+  readArtifactBody.mockRejectedValueOnce(new Error('private storage key for foreign owner'));
+  const foreign = await handler!.invoke({ artifactId: AID, version: 1 }, dashboard);
+  expect(foreign.isError).toBe(true);
+  expect(foreign.text).not.toMatch(/private storage key|s3|https?:\/\//i);
 });

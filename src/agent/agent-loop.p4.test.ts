@@ -168,10 +168,11 @@ describe('P4 agent loop artifact dispatch', () => {
   });
   afterEach(() => { delete process.env.BEDROCK_GUARDRAIL_ID; });
 
-  it('P4 loop returns URL free artifact descriptors without sending them to the model', async () => {
+  it('P4 loop carries trusted artifact context and references through tool rounds', async () => {
     toolsInvoke.mockResolvedValue({ text: 'Saved report to this conversation.', artifacts: [artifact] });
     const response = await runAgentTurn({ ...baseReq, userId: 'dashboard:user:p4-owner' });
     expect((response as typeof response & { artifacts?: unknown[] }).artifacts, 'tool-produced artifact references must reach the surface').toEqual([artifact]);
+    expect(toolsInvoke.mock.calls[0]![2]).toMatchObject({ userId: 'dashboard:user:p4-owner', surface: 'dashboard' });
     const modelInput = JSON.stringify((bedrockSend.mock.calls[1]![0] as { input: { messages: unknown } }).input.messages);
     expect(modelInput).toContain('Saved report');
     expect(modelInput).not.toMatch(/f78d0000|X-Amz-|s3Bucket|s3Key/);
@@ -185,4 +186,20 @@ describe('P4 agent loop artifact dispatch', () => {
     expect(toolsInvoke.mock.calls[0]![2], 'tool context must carry the same abort signal')
       .toMatchObject({ abortSignal: abort.signal });
   });
+
+  it('P4 loop keeps artifact instructions dashboard scoped and preserves existing notes', async () => {
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('end_turn', 'Okay.'));
+    await runAgentTurn({ ...baseReq, systemNote: 'Existing room guidance stays here.' });
+    const first = converseStreamTurnWithFallback.mock.calls[0]![0] as { systemPrompt: string };
+    expect(first.systemPrompt).toContain('Existing room guidance stays here.');
+    expect(first.systemPrompt, 'dashboard models need bounded artifact storage instructions')
+      .toContain('<dashboard_artifacts>');
+    expect(first.systemPrompt).toMatch(/generate_document|read_artifact/);
+
+    await runAgentTurn({ ...baseReq, chatId: 'slack:p4', surface: 'slack', systemNote: 'Bot room guidance.' });
+    const second = converseStreamTurnWithFallback.mock.calls[1]![0] as { systemPrompt: string };
+    expect(second.systemPrompt).toContain('Bot room guidance.');
+    expect(second.systemPrompt).not.toContain('<dashboard_artifacts>');
+  });
+
 });
