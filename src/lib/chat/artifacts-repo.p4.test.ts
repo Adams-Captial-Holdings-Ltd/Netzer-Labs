@@ -355,3 +355,30 @@ it('P4 erasure never reaches another conversation prefix', async () => {
   expect(Buffer.from(await storage!.readArtifactBody({ agentId: 'main', chatId: chatB,
     ownerId: PERSON.userId, artifactId: savedB.artifactId, version: 1 })).toString()).toBe('keep B');
 });
+
+it('P4 first-turn artifact initializes its stable owner only after safety checks', async () => {
+  const storage = await import(repoPath);
+  const { getSession } = await import('../state/sessions-repo.js');
+  const chatId = chat();
+  expect(await getSession('main', chatId)).toBeNull();
+  scanForExfil.mockImplementationOnce(async () => ({ blocked: true, truncated: false,
+    matches: [{ severity: 'block', pattern: 'fixture' }], scannedBytes: 1 }));
+  await expect(storage.saveArtifact(input(chatId))).rejects.toThrow();
+  expect(await getSession('main', chatId), 'unsafe bytes must not create an empty chat').toBeNull();
+  const saved = await storage.saveArtifact(input(chatId));
+  expect(saved.version).toBe(1);
+  expect(await getSession('main', chatId)).toMatchObject({ userId: PERSON.userId,
+    surface: 'dashboard', turns: [] });
+});
+
+it('P4 CURATED accepts generated spreadsheets and Mermaid text', async () => {
+  const storage = await import(repoPath);
+  const chatId = chat();
+  await ownedChat(chatId);
+  const xlsx = await storage.saveArtifact(input(chatId, { fileName: 'table.xlsx',
+    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: Buffer.from('PKfixture') }));
+  const mermaid = await storage.saveArtifact(input(chatId, { fileName: 'diagram.mmd',
+    contentType: 'text/vnd.mermaid', body: Buffer.from('graph TD; A-->B') }));
+  expect(xlsx.contentType).toContain('spreadsheetml.sheet');
+  expect(mermaid.contentType).toBe('text/vnd.mermaid');
+});
