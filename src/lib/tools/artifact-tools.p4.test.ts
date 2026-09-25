@@ -1,6 +1,7 @@
 /** P4 tool write-through contract. Each behavior was frozen before product edits. */
 import { beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { S3Client } from '@aws-sdk/client-s3';
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import type { ToolHandler, ToolContext } from './registry.js';
 
 const { registered, saveArtifact, killed, signed, buildPdf, costEnforced, spend } = vi.hoisted(() => {
@@ -24,6 +25,9 @@ vi.mock('../usage/token-tracker.js', async (importActual) => {
   return { ...actual, getDailyCostUsd: spend };
 });
 vi.mock('../audit/audit-writer.js', () => ({ writeAudit: vi.fn() }));
+vi.mock('../state/runtime-config-repo.js', () => ({ getConfig: async () => undefined }));
+vi.mock('../state/rate-limits-repo.js', () => ({ checkAndConsumeStrict: async () => ({ allowed: true }) }));
+vi.mock('../bedrock/guard.js', () => ({ guardedBedrockSend: (send: () => Promise<unknown>) => send() }));
 vi.mock('../observability/xray.js', () => ({ captureAwsClient: <T,>(client: T): T => client }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: signed }));
 
@@ -39,7 +43,10 @@ const documentHandler = () => registered.get('generate_document') as ToolHandler
 const artifactView = (result: unknown): Array<Record<string, unknown>> | undefined =>
   (result as { artifacts?: Array<Record<string, unknown>> }).artifacts;
 
-beforeAll(async () => { await import('./document-generation-tools.js'); });
+beforeAll(async () => {
+  await import('./document-generation-tools.js');
+  await import('./nova-canvas-tools.js');
+});
 beforeEach(() => {
   vi.restoreAllMocks();
   saveArtifact.mockReset().mockImplementation(async (args: { artifactId?: string; expectedVersion?: number; fileName: string; contentType: string }) => ({
@@ -52,6 +59,9 @@ beforeEach(() => {
   signed.mockReset().mockResolvedValue(URL);
   buildPdf.mockReset().mockResolvedValue(PDF);
   vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({} as never);
+  vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockResolvedValue({
+    body: Buffer.from(JSON.stringify({ images: [Buffer.from('PNGDATA').toString('base64')] })),
+  } as never);
 });
 
 it('P4 document tool stores dashboard output without model facing URLs', async () => {
@@ -106,4 +116,19 @@ it('P4 generation preserves cost kill switch and abort controls', async () => {
   expect(stopped.isError, 'an aborted turn cannot start a storage write').toBe(true);
   expect(saveArtifact).not.toHaveBeenCalled();
   expect(S3Client.prototype.send).not.toHaveBeenCalled();
+});
+
+
+it('P4 image tool stores dashboard output without model facing URLs', async () => {
+  const imageHandler = registered.get('generate_image') as ToolHandler | undefined;
+  expect(imageHandler, 'generate_image must stay registered').toBeDefined();
+  const result = await imageHandler!.invoke({ prompt: 'blue horizon' }, dashboard);
+  expect(saveArtifact, 'image bytes must be durable before success').toHaveBeenCalledOnce();
+  expect(saveArtifact.mock.calls[0][0]).toMatchObject({ agentId: 'main', chatId: CHAT, ownerId: OWNER,
+    contentType: 'image/png', body: Buffer.from('PNGDATA') });
+  expect(artifactView(result)).toMatchObject([{ artifactId: AID, version: 1, contentType: 'image/png' }]);
+  expect(JSON.stringify(result), 'dashboard result must not carry a RAW URL or storage key')
+    .not.toMatch(/X-Amz-|presignedUrl|s3Bucket|s3Key|p4-tool-raw/i);
+  expect(S3Client.prototype.send, 'no duplicate RAW image copy').not.toHaveBeenCalled();
+  expect(result.isError).not.toBe(true);
 });
