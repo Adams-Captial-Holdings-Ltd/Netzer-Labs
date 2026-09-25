@@ -1,6 +1,6 @@
 /** P4 WI-4.2: public artifact storage seam, frozen rows S-1 through S-6. */
 import { beforeEach, expect, it, vi } from 'vitest';
-import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
 
 const { ddbSend, scanForExfil } = vi.hoisted(() => {
@@ -196,4 +196,59 @@ it('P4 storage fails closed when its safety scan cannot complete', async () => {
   await expect(storage!.saveArtifact(input(chatId))).rejects.toThrow(/scan|safety|unavailable/i);
   expect(s3Send, 'scanner failure cannot upload bytes').not.toHaveBeenCalled();
   expect(await storage!.listArtifactHeads({ agentId: 'main', chatId, ownerId: PERSON.userId })).toEqual([]);
+});
+
+it('P4 storage publishes no descriptor after an S3 write failure', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'artifact writes must report an S3 failure').toBeTypeOf('function');
+  const chatId = chat();
+  await ownedChat(chatId);
+  s3Send.mockRejectedValueOnce(new Error('CURATED upload unavailable'));
+  await expect(storage!.saveArtifact(input(chatId))).rejects.toThrow(/upload|unavailable|S3/i);
+  expect(await storage!.listArtifactHeads({ agentId: 'main', chatId, ownerId: PERSON.userId })).toEqual([]);
+});
+
+it('P4 storage cleans an uploaded version when its record write fails', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'artifact persistence must clean up a failed record').toBeTypeOf('function');
+  const chatId = chat();
+  await ownedChat(chatId);
+  let uploadedKey = '';
+  const deleted: Array<{ Key?: string; VersionId?: string }> = [];
+  s3Send.mockImplementation(async (cmd: unknown) => {
+    if (cmd instanceof PutObjectCommand) {
+      uploadedKey = String(cmd.input.Key);
+      return { VersionId: 'physical-failed' } as never;
+    }
+    if (cmd instanceof DeleteObjectCommand) {
+      deleted.push({ Key: cmd.input.Key, VersionId: cmd.input.VersionId });
+      return {} as never;
+    }
+    throw new Error('unexpected S3 command');
+  });
+  ddbSend.mockImplementation(async (cmd) => {
+    if (cmd.constructor.name === 'PutCommand' && String(cmd.input.Item?.SK).includes('#VERSION#')) {
+      throw new Error('DynamoDB record unavailable');
+    }
+    return table.send(cmd);
+  });
+  await expect(storage!.saveArtifact(input(chatId))).rejects.toThrow(/record|DynamoDB|unavailable/i);
+  expect(deleted).toEqual([{ Key: uploadedKey, VersionId: 'physical-failed' }]);
+  expect(await storage!.listArtifactHeads({ agentId: 'main', chatId, ownerId: PERSON.userId })).toEqual([]);
+});
+
+it('P4 storage excludes writes while conversation erasure holds the lock', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'artifact writes must serialize with conversation erasure').toBeTypeOf('function');
+  const chatId = chat();
+  await ownedChat(chatId);
+  let finishPut: ((value: { VersionId: string }) => void) | undefined;
+  s3Send.mockImplementationOnce(() => new Promise((resolve) => { finishPut = resolve as typeof finishPut; }) as never);
+  const pending = storage!.saveArtifact(input(chatId));
+  await vi.waitFor(() => expect(finishPut, 'the artifact writer must reach S3').toBeTypeOf('function'));
+  const { deleteSession, getSession } = await import('../state/sessions-repo.js');
+  await expect(deleteSession('main', chatId), 'delete must refuse an active artifact writer').rejects.toThrow(/busy|lock|retry/i);
+  expect(await getSession('main', chatId)).not.toBeNull();
+  finishPut!({ VersionId: 'physical-1' });
+  await pending;
 });
