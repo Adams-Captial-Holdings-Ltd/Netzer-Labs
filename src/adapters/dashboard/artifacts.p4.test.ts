@@ -187,14 +187,20 @@ it('P4 transcript restores artifact references without keys or URLs', async () =
 
 it('P4 grammar artifacts pass the same safety and ownership checks as tools', async () => {
   const grammar = ':::artifact{identifier="notes" type="text/markdown" title="Notes.md"}\n# Safe notes\nBody\n:::';
-  runAgentTurn.mockResolvedValue({ text: `Here it is.\n${grammar}`, modelId: 'model', costUsd: 0,
-    latencyMs: 1, inputTokens: 1, outputTokens: 1, toolCallCount: 0 });
+  const grammarResult = { text: `Here it is.\n${grammar}`, modelId: 'model', costUsd: 0,
+    latencyMs: 1, inputTokens: 1, outputTokens: 1, toolCallCount: 0 };
+  runAgentTurn.mockImplementationOnce(async (req: { onChunk?: (text: string) => void }) => {
+    req.onChunk?.(grammarResult.text);
+    return grammarResult;
+  });
+  runAgentTurn.mockResolvedValue(grammarResult);
   const first = await (await stream()).text();
   expect(saveArtifact, 'grammar body must use the same CURATED save/DLP seam').toHaveBeenCalledWith(expect.objectContaining({
     agentId: 'main', chatId: CHAT, ownerId: OWNER, fileName: 'Notes.md',
     contentType: 'text/markdown', body: Buffer.from('# Safe notes\nBody'),
   }));
   expect(events(first, 'artifact_ref')).toEqual([descriptor]);
+  expect(first, 'artifact source stays off the SSE wire before DLP and after storage').not.toContain('# Safe notes');
   saveArtifact.mockRejectedValueOnce(new Error('blocked DLP secret=private-key'));
   const refused = await (await stream()).text();
   expect(events(refused, 'artifact_ref')).toEqual([]);
