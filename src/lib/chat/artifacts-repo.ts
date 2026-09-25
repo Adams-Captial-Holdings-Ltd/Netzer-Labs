@@ -10,7 +10,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../state/ddb.js';
-import { acquireConversationChildLock, getSession } from '../state/sessions-repo.js';
+import { acquireConversationChildLock, appendTurns, getSession } from '../state/sessions-repo.js';
 import { scanForExfil } from '../safety/exfil-guard.js';
 import { captureAwsClient } from '../observability/xray.js';
 
@@ -23,6 +23,8 @@ const MIME_TYPES = new Set([
   'application/json', 'application/pdf', 'application/rtf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/vnd.mermaid',
   'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
 ]);
 
@@ -169,6 +171,22 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
   try {
   // The parent can be deleted while content is being scanned, so ownership is
   // checked only after acquiring the same lock used by deleteSession.
+  const session = await getSession(args.agentId, args.chatId);
+  if (!session) {
+    // A first-turn artifact can be saved before the final transcript append.
+    // Only a stable dashboard person may settle a missing parent; never turn a
+    // bot, token-only principal, or a non-dashboard chat into durable history.
+    if (!args.chatId.startsWith('dashboard:') || !args.ownerId?.startsWith('dashboard:user:')) {
+      throw new Error('Artifact access requires a stable dashboard conversation owner');
+    }
+    try {
+      await appendTurns(args.agentId, args.chatId, [], undefined, {
+        surface: 'dashboard', userId: args.ownerId, ephemeral: false,
+      });
+    } catch {
+      throw new Error('Artifact conversation owner could not be initialized');
+    }
+  }
   await assertOwner(args);
   const head = await readHead({ ...args, artifactId });
   let version: number;
