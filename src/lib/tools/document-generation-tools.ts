@@ -38,6 +38,7 @@ import {
 import { buildPdf } from '../documents/pdf.js';
 import { buildDocx } from '../documents/docx.js';
 import { buildXlsx } from '../documents/xlsx.js';
+import { saveArtifact } from '../chat/artifacts-repo.js';
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 const RAW_BUCKET = process.env.RAW_BUCKET ?? '';
@@ -65,6 +66,16 @@ const CONTENT_TYPES: Record<GenerateFormat, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
+
+function isStableDashboardContext(ctx: { surface?: string; userId?: string; chatId: string }): boolean {
+  return ctx.surface === 'dashboard' &&
+    typeof ctx.userId === 'string' && ctx.userId.startsWith('dashboard:user:') &&
+    ctx.chatId.startsWith('dashboard:');
+}
+
+function abortedResult(): ToolResult {
+  return { text: 'Document generation was stopped before storage.', isError: true };
+}
 
 /**
  * Display filename for a generated document, taken from the spec's own title.
@@ -148,7 +159,8 @@ registerIfConfigured(
           '  - "pdf"  — printable PDF, good for reports + memos + receipts',
           '  - "docx" — editable Word doc, good for drafts the user will revise',
           '  - "xlsx" — Excel workbook with one or more sheets, good for tabular data',
-          'Returns a presigned URL the user can click. URL is valid 24h.',
+          'On Telegram and Slack, returns a presigned URL valid 24h. In dashboard chat, saves an owner-scoped artifact and returns a URL-free artifact reference.',
+          'To revise a saved dashboard artifact, provide both artifactId and its current expectedVersion.',
           'Use when the user asks for a report, a spreadsheet, a table they can download, or anything they want to keep as a file.',
         ].join('\n'),
         {
@@ -164,6 +176,15 @@ registerIfConfigured(
               type: 'object',
               description:
                 'For pdf/docx: { title, sections: [{ heading?, body?, table?: { rows: string[][] } }] }. For xlsx: { title, sheets: [{ name, rows: cell[][] }] } where cell can be string|number|boolean|null.',
+            },
+            artifactId: {
+              type: 'string',
+              description: 'Existing dashboard artifact id to revise. Requires expectedVersion.',
+            },
+            expectedVersion: {
+              type: 'integer',
+              minimum: 1,
+              description: 'Current artifact version; the revision is refused if the head has changed.',
             },
           },
         },
@@ -221,6 +242,27 @@ registerIfConfigured(
             isError: true,
           };
         }
+        const isDashboard = ctx.surface === 'dashboard' || ctx.chatId.startsWith('dashboard:');
+        if (isDashboard && !isStableDashboardContext(ctx)) {
+          return {
+            text: 'Document generation requires a stable, person-owned dashboard conversation.',
+            isError: true,
+          };
+        }
+
+        const artifactId = args.artifactId;
+        const expectedVersion = args.expectedVersion;
+        if (artifactId !== undefined && (
+          typeof artifactId !== 'string' || artifactId.length === 0 ||
+          !Number.isInteger(expectedVersion) || (expectedVersion as number) < 1
+        )) {
+          return { text: 'A document revision requires a valid expectedVersion.', isError: true };
+        }
+        if (artifactId === undefined && expectedVersion !== undefined) {
+          return { text: 'expectedVersion requires an artifactId.', isError: true };
+        }
+        if (ctx.abortSignal?.aborted) return abortedResult();
+
         const t0 = Date.now();
         let bytes: Buffer;
         try {
@@ -242,6 +284,56 @@ registerIfConfigured(
         // Display name only — never part of the storage key, which stays
         // server-derived so a model-supplied title cannot steer the S3 path.
         const fileName = documentFileName(args.spec, format);
+
+        if (isDashboard) {
+          // saveArtifact owns DLP scanning, CURATED storage, version rows and
+          // the conditional head fence. Do not create a second RAW copy here.
+          if (ctx.abortSignal?.aborted) return abortedResult();
+          try {
+            const descriptor = await saveArtifact({
+              agentId: ctx.agentId,
+              chatId: ctx.chatId,
+              ownerId: ctx.userId!,
+              fileName,
+              contentType: CONTENT_TYPES[format],
+              body: bytes,
+              source: artifactId === undefined
+                ? { kind: 'generated', format, spec: args.spec }
+                : { kind: 'revision', fromVersion: expectedVersion, format, spec: args.spec },
+              ...(artifactId !== undefined ? { artifactId, expectedVersion: expectedVersion as number } : {}),
+            });
+            const latencyMs = Date.now() - t0;
+            logger.info({ agentId: ctx.agentId, chatId: ctx.chatId, format, bytes: bytes.length, latencyMs },
+              'dashboard document generated');
+            void writeAudit({
+              action: 'tool_invoke',
+              agentId: ctx.agentId,
+              chatId: ctx.chatId,
+              toolName: 'generate_document',
+              detail: { format, artifactId: descriptor.artifactId, version: descriptor.version, bytes: bytes.length, latencyMs },
+              result: 'ok',
+            });
+            return {
+              text: `${format.toUpperCase()} generated: ${fileName} (${bytes.length.toLocaleString()} bytes). It is saved to this conversation's artifacts.`,
+              artifacts: [descriptor],
+            };
+          } catch {
+            // Repository failures can contain storage keys or DLP details;
+            // keep all failure channels free of that data and source content.
+            logger.warn({ agentId: ctx.agentId, chatId: ctx.chatId, format }, 'dashboard document storage failed');
+            void writeAudit({
+              action: 'tool_invoke',
+              agentId: ctx.agentId,
+              chatId: ctx.chatId,
+              toolName: 'generate_document',
+              detail: { format },
+              result: 'error',
+            });
+            return { text: 'Document could not be saved to this conversation. Please try again.', isError: true };
+          }
+        }
+
+        if (ctx.abortSignal?.aborted) return abortedResult();
         try {
           await s3().send(
             new PutObjectCommand({
