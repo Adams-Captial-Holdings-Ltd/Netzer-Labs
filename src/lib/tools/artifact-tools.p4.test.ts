@@ -132,3 +132,17 @@ it('P4 image tool stores dashboard output without model facing URLs', async () =
   expect(S3Client.prototype.send, 'no duplicate RAW image copy').not.toHaveBeenCalled();
   expect(result.isError).not.toBe(true);
 });
+
+it('P4 PowerPoint tool stores a slide deck as a versioned dashboard artifact', async () => {
+  const result = await documentHandler()!.invoke({ format: 'pptx', spec: {
+    title: 'Launch deck', slides: [{ title: 'Launch', body: 'A planned launch' }],
+  } }, dashboard);
+  expect(result.isError, 'ART-11 slide specs must be accepted by the document tool').not.toBe(true);
+  expect(saveArtifact, 'a PPTX must be durably stored before success').toHaveBeenCalledOnce();
+  const stored = saveArtifact.mock.calls[0]![0] as { contentType: string; fileName: string; body: Uint8Array };
+  expect(stored.contentType).toBe('application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  expect(stored.fileName).toMatch(/\.pptx$/);
+  expect(Buffer.from(stored.body).subarray(0, 2).toString('ascii')).toBe('PK');
+  expect(artifactView(result)).toMatchObject([{ artifactId: AID, version: 1 }]);
+  expect(JSON.stringify(result)).not.toMatch(/X-Amz-|s3Bucket|s3Key|presignedUrl/);
+});
