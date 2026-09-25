@@ -83,6 +83,7 @@ import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTu
 import { classifyTurnError } from '../../agent/turn-errors.js';
 import { processMedia, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment } from '../../lib/media/process.js';
 import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
+import { listArtifactHeads, listArtifactVersions, presignArtifactDownload } from '../../lib/chat/artifacts-repo.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
 import { listAvailableModels, pickDefaultModel, resolveModel } from '../../lib/bedrock/models.js';
@@ -360,6 +361,22 @@ async function auditedOverride(
     );
     return false;
   }
+}
+
+/** Resolve the stable stored owner before any artifact metadata or URL leaves. */
+async function artifactReadOwner(
+  c: DashboardCtx,
+  agentId: string,
+  chatId: string,
+): Promise<{ ownerId: string } | 'not_found' | 'unaudited'> {
+  const session = await getSession(agentId, chatId);
+  const ownerId = session?.userId;
+  if (!session || session.surface !== 'dashboard' || session.ttl !== undefined ||
+      typeof ownerId !== 'string' || !/^dashboard:user:.+/.test(ownerId)) return 'not_found';
+  if (ownsConversation(c, ownerId)) return { ownerId };
+  if (!(await hasCapability(c, 'security:write'))) return 'not_found';
+  if (!(await auditedOverride(c, 'artifact', { agentId, chatId }))) return 'unaudited';
+  return { ownerId };
 }
 
 /**
@@ -3511,6 +3528,89 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
   // also an agent tool, so its shape is frozen), which is why the Sessions page
   // could never render a transcript from it. Gated on sessions:read like the
   // list route so the read boundary is consistent.
+  router.get('/artifacts', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const artifacts = await listArtifactHeads({ agentId, chatId, ownerId: owner.ownerId });
+      return c.json({ artifacts: artifacts.map(({ artifactId, version, fileName, contentType, createdAt }) =>
+        ({ artifactId, version, fileName, contentType, createdAt })) });
+    } catch {
+      return c.json({ error: 'artifacts_unavailable' }, 503);
+    }
+  });
+
+  router.get('/artifacts/versions', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    const artifactId = c.req.query('artifactId')?.trim() ?? '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
+      return c.json({ error: 'invalid_artifact_id' }, 400);
+    }
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const versions = await listArtifactVersions({ agentId, chatId, ownerId: owner.ownerId, artifactId });
+      return c.json({ versions: versions.map(({ artifactId: id, version, fileName, contentType, createdAt }) =>
+        ({ artifactId: id, version, fileName, contentType, createdAt })) });
+    } catch {
+      return c.json({ error: 'artifacts_unavailable' }, 503);
+    }
+  });
+
+  router.get('/artifacts/download', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    const artifactId = c.req.query('artifactId')?.trim() ?? '';
+    const versionText = c.req.query('version') ?? '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
+      return c.json({ error: 'invalid_artifact_id' }, 400);
+    }
+    const version = Number(versionText);
+    if (!/^[1-9]\d*$/.test(versionText) || !Number.isSafeInteger(version)) {
+      return c.json({ error: 'invalid_version' }, 400);
+    }
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const versions = await listArtifactVersions({ agentId, chatId, ownerId: owner.ownerId, artifactId });
+      const selected = versions.find((entry) => entry.version === version);
+      if (!selected) return c.json({ error: 'not_found' }, 404);
+      const url = await presignArtifactDownload({
+        agentId, chatId, ownerId: owner.ownerId, artifactId, version: selected.version,
+      });
+      return c.json({ url, fileName: selected.fileName, version: selected.version });
+    } catch {
+      return c.json({ error: 'download_unavailable' }, 503);
+    }
+  });
+
   router.get('/sessions/transcript', async (c) => {
     if (!(await hasCapability(c, 'sessions:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
