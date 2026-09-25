@@ -986,6 +986,31 @@ export async function deleteSession(
   await deleteSessionAttachments(agentId, chatId);
   const releaseChildLock = await acquireConversationChildLock(agentId, chatId);
   try {
+  // Pending, version, and head rows all live under this child prefix. Their
+  // presence is the durable signal that this chat may own CURATED objects,
+  // including an upload whose physical VersionId was never recorded.
+  let artifactRowsExist = false;
+  let artifactStartKey: Record<string, unknown> | undefined;
+  do {
+    const artifactRows = await ddb().send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': `${childPrefix(chatId)}ARTIFACT#` },
+      ProjectionExpression: 'PK, SK',
+      ConsistentRead: true,
+      ExclusiveStartKey: artifactStartKey,
+    }));
+    if ((artifactRows.Items ?? []).length > 0) artifactRowsExist = true;
+    artifactStartKey = artifactRows.LastEvaluatedKey;
+  } while (!artifactRowsExist && artifactStartKey);
+
+  if (artifactRowsExist) {
+    // Load lazily to avoid an evaluation-time cycle: artifacts-repo imports
+    // the child-lock API from this module.
+    const { eraseConversationArtifacts } = await import('../chat/artifacts-repo.js');
+    await eraseConversationArtifacts(agentId, chatId);
+  }
+
   for (;;) {
     // Re-query from the top each round: the rows just deleted are gone, so the
     // next page is simply what is left.

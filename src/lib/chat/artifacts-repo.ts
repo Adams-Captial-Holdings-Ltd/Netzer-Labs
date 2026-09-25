@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   DeleteObjectCommand,
+  ListObjectVersionsCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
@@ -72,6 +73,10 @@ function chatPrefix(chatId: string): string { return `CHAT#${mappedChatId(chatId
 function pathPart(value: string): string { return Buffer.from(value, 'utf8').toString('base64url'); }
 function objectKey(agentId: string, chatId: string, artifactId: string, version: number): string {
   return `artifacts/${pathPart(agentId)}/${pathPart(chatId)}/${pathPart(artifactId)}/v${version}`;
+}
+/** Exact, terminal-slash scope for deleting one conversation's CURATED objects. */
+export function artifactConversationPrefix(agentId: string, chatId: string): string {
+  return `artifacts/${pathPart(agentId)}/${pathPart(chatId)}/`;
 }
 function childBase(chatId: string, artifactId: string): string {
   return `${chatPrefix(chatId)}${artifactId}#`;
@@ -274,6 +279,93 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
   }
   } finally {
     await releaseLock();
+  }
+}
+
+/**
+ * Erase every physical version and delete marker for one conversation. The
+ * caller must hold acquireConversationChildLock until this function returns
+ * and the conversation rows are removed.
+ */
+export async function eraseConversationArtifacts(agentId: string, chatId: string): Promise<void> {
+  if (!BUCKET) throw new Error('CURATED_BUCKET is not configured');
+  const prefix = artifactConversationPrefix(agentId, chatId);
+  const objects = new Map<string, { Key: string; VersionId: string }>();
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+
+  // Collect every page before deleting anything: deleting a page can change
+  // the version listing and invalidate the continuation markers.
+  for (;;) {
+    let page;
+    try {
+      page = await s3().send(new ListObjectVersionsCommand({
+        Bucket: BUCKET,
+        Prefix: prefix,
+        ...(keyMarker ? { KeyMarker: keyMarker } : {}),
+        ...(versionIdMarker ? { VersionIdMarker: versionIdMarker } : {}),
+      }));
+    } catch {
+      throw new Error('Failed to list artifact versions for conversation erasure');
+    }
+
+    for (const entry of [ ...(page.Versions ?? []), ...(page.DeleteMarkers ?? []) ]) {
+      if (!entry.Key || !entry.Key.startsWith(prefix) || !entry.VersionId) {
+        throw new Error('Artifact version listing returned an invalid object for erasure');
+      }
+      objects.set(JSON.stringify([entry.Key, entry.VersionId]), { Key: entry.Key, VersionId: entry.VersionId });
+    }
+
+    if (!page.IsTruncated) break;
+    if (!page.NextKeyMarker || !page.NextVersionIdMarker ||
+        (page.NextKeyMarker === keyMarker && page.NextVersionIdMarker === versionIdMarker)) {
+      throw new Error('Artifact version listing could not continue during conversation erasure');
+    }
+    keyMarker = page.NextKeyMarker;
+    versionIdMarker = page.NextVersionIdMarker;
+  }
+
+  // Delete each physical version or delete marker by its exact identity.
+  // DeleteObjects has inconsistent versioned-bucket behavior in supported
+  // local S3 implementations, so do not use it for erasure.
+  for (const object of objects.values()) {
+    try {
+      await s3().send(new DeleteObjectCommand({
+        Bucket: BUCKET,
+        Key: object.Key,
+        VersionId: object.VersionId,
+      }));
+    } catch {
+      throw new Error('Failed to delete artifact version during conversation erasure');
+    }
+  }
+
+  // Start from the beginning and prove that no physical version or marker
+  // remains. A successful delete response or an in-memory set is not proof.
+  keyMarker = undefined;
+  versionIdMarker = undefined;
+  for (;;) {
+    let verification;
+    try {
+      verification = await s3().send(new ListObjectVersionsCommand({
+        Bucket: BUCKET,
+        Prefix: prefix,
+        ...(keyMarker ? { KeyMarker: keyMarker } : {}),
+        ...(versionIdMarker ? { VersionIdMarker: versionIdMarker } : {}),
+      }));
+    } catch {
+      throw new Error('Failed to verify artifact erasure for conversation');
+    }
+    if ((verification.Versions?.length ?? 0) > 0 || (verification.DeleteMarkers?.length ?? 0) > 0) {
+      throw new Error('Artifact erasure is incomplete; conversation can be retried');
+    }
+    if (!verification.IsTruncated) break;
+    if (!verification.NextKeyMarker || !verification.NextVersionIdMarker ||
+        (verification.NextKeyMarker === keyMarker && verification.NextVersionIdMarker === versionIdMarker)) {
+      throw new Error('Artifact erasure could not be verified; conversation can be retried');
+    }
+    keyMarker = verification.NextKeyMarker;
+    versionIdMarker = verification.NextVersionIdMarker;
   }
 }
 
