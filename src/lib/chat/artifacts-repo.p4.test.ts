@@ -1,6 +1,6 @@
 /** P4 WI-4.2: public artifact storage seam, frozen rows S-1 through S-6. */
 import { beforeEach, expect, it, vi } from 'vitest';
-import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
 
 const { ddbSend, scanForExfil } = vi.hoisted(() => {
@@ -251,4 +251,101 @@ it('P4 storage excludes writes while conversation erasure holds the lock', async
   expect(await getSession('main', chatId)).not.toBeNull();
   finishPut!({ VersionId: 'physical-1' });
   await pending;
+});
+
+it('P4 erasure lists every page and removes versions markers and derivatives', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'version-aware erasure needs stored artifact versions').toBeTypeOf('function');
+  const chatId = chat();
+  await ownedChat(chatId);
+  const first = await storage!.saveArtifact(input(chatId));
+  await storage!.saveArtifact(input(chatId, { artifactId: first.artifactId, expectedVersion: 1,
+    body: Buffer.from('second'), source: { kind: 'revision', fromVersion: 1 } }));
+  const puts = s3Send.mock.calls.map(([cmd]) => cmd).filter((cmd) => cmd instanceof PutObjectCommand) as PutObjectCommand[];
+  const root = String(puts[0].input.Key).split('/').slice(0, 3).join('/') + '/';
+  const expected = [
+    { Key: puts[0].input.Key, VersionId: 'physical-1' },
+    { Key: puts[1].input.Key, VersionId: 'physical-2' },
+    { Key: `${root}preview/thumb.png`, VersionId: 'preview-v1' },
+    { Key: `${root}kb/copy.pdf`, VersionId: 'kb-v1' },
+    { Key: `${root}preview/thumb.png`, VersionId: 'preview-delete-marker' },
+  ];
+  const listInputs: Array<{ Prefix?: string; KeyMarker?: string; VersionIdMarker?: string }> = [];
+  const deleted: Array<{ Key?: string; VersionId?: string }> = [];
+  s3Send.mockImplementation(async (cmd: unknown) => {
+    if (cmd instanceof ListObjectVersionsCommand) {
+      listInputs.push(cmd.input);
+      if (listInputs.length === 1) return { IsTruncated: true, NextKeyMarker: 'page-2', NextVersionIdMarker: 'v2',
+        Versions: expected.slice(0, 2) } as never;
+      if (listInputs.length === 2) return { IsTruncated: false, Versions: expected.slice(2, 4),
+        DeleteMarkers: [expected[4]] } as never;
+      return { IsTruncated: false, Versions: [], DeleteMarkers: [] } as never;
+    }
+    if (cmd instanceof DeleteObjectsCommand) {
+      deleted.push(...(cmd.input.Delete?.Objects ?? []));
+      return { Errors: [] } as never;
+    }
+    throw new Error('unexpected S3 command');
+  });
+  const { deleteSession, getSession } = await import('../state/sessions-repo.js');
+  await deleteSession('main', chatId);
+  expect(listInputs, 'erasure must paginate and verify that CURATED is empty').toHaveLength(3);
+  expect(listInputs[0].Prefix).toBe(root);
+  expect(listInputs[1]).toMatchObject({ Prefix: root, KeyMarker: 'page-2', VersionIdMarker: 'v2' });
+  expect(deleted.sort((a, b) => String(a.Key).localeCompare(String(b.Key))))
+    .toEqual(expected.sort((a, b) => String(a.Key).localeCompare(String(b.Key))));
+  expect(await getSession('main', chatId)).toBeNull();
+  expect([...table.rows.values()].filter((row) => String(row.SK).startsWith(`CHAT#${chatId}#`))).toEqual([]);
+});
+
+it('P4 erasure leaves rows retryable on partial object deletion failure', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'an artifact is needed to prove retryable erasure').toBeTypeOf('function');
+  const chatId = chat();
+  await ownedChat(chatId);
+  const saved = await storage!.saveArtifact(input(chatId));
+  const put = s3Send.mock.calls.find(([cmd]) => cmd instanceof PutObjectCommand)?.[0] as PutObjectCommand;
+  s3Send.mockImplementation(async (cmd: unknown) => {
+    if (cmd instanceof ListObjectVersionsCommand) return { IsTruncated: false,
+      Versions: [{ Key: put.input.Key, VersionId: 'physical-1' }] } as never;
+    if (cmd instanceof DeleteObjectsCommand) return { Errors: [{ Key: put.input.Key, VersionId: 'physical-1', Code: 'AccessDenied' }] } as never;
+    throw new Error('unexpected S3 command');
+  });
+  const { deleteSession, getSession } = await import('../state/sessions-repo.js');
+  await expect(deleteSession('main', chatId)).rejects.toThrow(/delete|artifact|version|AccessDenied/i);
+  expect(await getSession('main', chatId)).not.toBeNull();
+  expect(await storage!.listArtifactHeads({ agentId: 'main', chatId, ownerId: PERSON.userId })).toMatchObject([{ artifactId: saved.artifactId }]);
+});
+
+it('P4 erasure never reaches another conversation prefix', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'scoped erasure needs artifact storage').toBeTypeOf('function');
+  const chatA = 'dashboard:scope-a';
+  const chatB = 'dashboard:scope-a-plus';
+  await ownedChat(chatA);
+  await ownedChat(chatB);
+  await storage!.saveArtifact(input(chatA));
+  const savedB = await storage!.saveArtifact(input(chatB, { body: Buffer.from('keep B') }));
+  const puts = s3Send.mock.calls.map(([cmd]) => cmd).filter((cmd) => cmd instanceof PutObjectCommand) as PutObjectCommand[];
+  const aKey = String(puts[0].input.Key);
+  const bKey = String(puts[1].input.Key);
+  const defaultSend = s3Send.getMockImplementation()!;
+  const deleted: Array<{ Key?: string; VersionId?: string }> = [];
+  s3Send.mockImplementation(async (cmd: unknown) => {
+    if (cmd instanceof ListObjectVersionsCommand) {
+      const all = [{ Key: aKey, VersionId: 'physical-1' }, { Key: bKey, VersionId: 'physical-2' }];
+      return { IsTruncated: false, Versions: all.filter((v) => v.Key.startsWith(cmd.input.Prefix ?? '')) } as never;
+    }
+    if (cmd instanceof DeleteObjectsCommand) {
+      deleted.push(...(cmd.input.Delete?.Objects ?? []));
+      for (const object of cmd.input.Delete?.Objects ?? []) bodies.delete(`${object.Key}|${object.VersionId}`);
+      return { Errors: [] } as never;
+    }
+    return (defaultSend as (command: unknown) => Promise<unknown>)(cmd) as never;
+  });
+  const { deleteSession } = await import('../state/sessions-repo.js');
+  await deleteSession('main', chatA);
+  expect(deleted.map((item) => item.Key)).toEqual([aKey]);
+  expect(Buffer.from(await storage!.readArtifactBody({ agentId: 'main', chatId: chatB,
+    ownerId: PERSON.userId, artifactId: savedB.artifactId, version: 1 })).toString()).toBe('keep B');
 });
