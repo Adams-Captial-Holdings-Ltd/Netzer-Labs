@@ -3,14 +3,18 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
 
-const { ddbSend } = vi.hoisted(() => {
+const { ddbSend, scanForExfil } = vi.hoisted(() => {
   process.env.TABLE_SESSIONS = 'p4-unit-sessions';
   process.env.CURATED_BUCKET = 'p4-unit-curated';
-  return { ddbSend: vi.fn() };
+  return { ddbSend: vi.fn(), scanForExfil: vi.fn() };
 });
 vi.mock('../state/ddb.js', async (importActual) => {
   const actual = await importActual<typeof import('../state/ddb.js')>();
   return { ...actual, ddb: () => ({ send: ddbSend }) };
+});
+vi.mock('../safety/exfil-guard.js', async (importActual) => {
+  const actual = await importActual<typeof import('../safety/exfil-guard.js')>();
+  return { ...actual, scanForExfil };
 });
 vi.mock('../state/runtime-config-repo.js', () => ({ getConfig: async () => undefined }));
 vi.mock('../../agent/memory-ingest.js', () => ({ ingestEvictedTurns: () => undefined }));
@@ -37,6 +41,8 @@ beforeEach(() => {
   table = createFakeDynamo();
   ddbSend.mockReset();
   ddbSend.mockImplementation((cmd) => table.send(cmd));
+  scanForExfil.mockReset();
+  scanForExfil.mockImplementation(async (text: string) => ({ blocked: false, matches: [], scannedBytes: text.length, truncated: false }));
   physicalVersion = 0;
   bodies = new Map();
   s3Send?.mockRestore();
@@ -156,4 +162,36 @@ it('P4 storage rejects unsafe names types and excessive bytes before upload', as
   await expect(storage!.saveArtifact(input(chatId, { contentType: 'application/x-msdownload' }))).rejects.toThrow();
   await expect(storage!.saveArtifact(input(chatId, { body: Buffer.alloc(30 * 1024 * 1024 + 1) }))).rejects.toThrow(/size|large|limit|bytes/i);
   expect(s3Send).not.toHaveBeenCalled();
+});
+
+it('P4 storage rejects block severity secrets in content names and source', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'the S3 write must pass a blocking safety check').toBeTypeOf('function');
+  const chatId = chat();
+  await ownedChat(chatId);
+  scanForExfil.mockImplementation(async (text: string) => ({
+    blocked: text.includes('BLOCKED_SECRET'),
+    matches: text.includes('BLOCKED_SECRET') ? [{ patternId: 'test', patternName: 'test', severity: 'block', snippet: 'redacted' }] : [],
+    scannedBytes: text.length, truncated: false,
+  }));
+  for (const changes of [
+    { body: Buffer.from('BLOCKED_SECRET') },
+    { fileName: 'BLOCKED_SECRET.md' },
+    { source: { kind: 'grammar', identifier: 'BLOCKED_SECRET' } },
+  ]) {
+    await expect(storage!.saveArtifact(input(chatId, changes)),
+      'the secret must not be copied to CURATED or published').rejects.toThrow(/secret|block|safety|refus/i);
+  }
+  expect(s3Send).not.toHaveBeenCalled();
+});
+
+it('P4 storage fails closed when its safety scan cannot complete', async () => {
+  const storage = await import(repoPath).catch(() => null);
+  expect(storage?.saveArtifact, 'artifact write safety must fail closed').toBeTypeOf('function');
+  const chatId = chat();
+  await ownedChat(chatId);
+  scanForExfil.mockRejectedValue(new Error('scanner unavailable'));
+  await expect(storage!.saveArtifact(input(chatId))).rejects.toThrow(/scan|safety|unavailable/i);
+  expect(s3Send, 'scanner failure cannot upload bytes').not.toHaveBeenCalled();
+  expect(await storage!.listArtifactHeads({ agentId: 'main', chatId, ownerId: PERSON.userId })).toEqual([]);
 });
