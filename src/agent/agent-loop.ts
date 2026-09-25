@@ -331,6 +331,14 @@ const BASE_CONDUCT = [
   '- Format for a phone screen: short paragraphs, and for a list of records give each its own short line or a small card (a bold title, then the key facts) — never a Markdown table, which renders as raw pipes on mobile.',
 ].join('\n');
 
+/** Fixed dashboard-only guidance for the artifact tools and text artifact fence. */
+const DASHBOARD_ARTIFACTS_NOTE = [
+  '<dashboard_artifacts>',
+  'For downloadable files, you may use generate_document and read_artifact. For supported safe text outputs, emit a complete :::artifact fence so the dashboard can save and offer the output as a download.',
+  'Saved artifacts are immutable, owner-scoped references. Never invent or expose raw storage URLs; use the artifact tools and their references.',
+  '</dashboard_artifacts>',
+].join('\n');
+
 /**
  * When a session's history interleaves turns from more than one surface
  * (owner-aliased/claimed principals share one session row across Telegram,
@@ -370,6 +378,7 @@ async function buildSystemPrompt(
   basePrompt: string,
   extraNote?: string,
   crossSurfaceNote?: string,
+  dashboardArtifacts = false,
 ): Promise<string> {
   // Context assembly degrades gracefully — a memory/inbox/hive read failure must
   // not kill the turn — but it is NOT silent: each fallback logs a warning so a
@@ -402,6 +411,9 @@ async function buildSystemPrompt(
   // injected memory/hive/inbox context.
   if (extraNote && extraNote.trim()) {
     sections.push(extraNote.trim());
+  }
+  if (dashboardArtifacts) {
+    sections.push(DASHBOARD_ARTIFACTS_NOTE);
   }
   if (memoryCtx.text) {
     sections.push(
@@ -1077,6 +1089,7 @@ async function runAdmittedTurn(
     agent.systemPrompt,
     req.systemNote,
     crossSurfaceNote,
+    req.surface === 'dashboard',
   );
 
   logger.info(
