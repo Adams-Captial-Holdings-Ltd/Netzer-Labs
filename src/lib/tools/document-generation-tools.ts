@@ -1,5 +1,5 @@
 /**
- * generate_document tool — produces a PDF / DOCX / XLSX, stores the
+ * generate_document tool — produces a PDF / DOCX / XLSX / PPTX, stores the
  * bytes in S3 raw under `generations/<chat>/<ulid>.<ext>`, returns a
  * presigned URL.
  *
@@ -38,6 +38,7 @@ import {
 import { buildPdf } from '../documents/pdf.js';
 import { buildDocx } from '../documents/docx.js';
 import { buildXlsx } from '../documents/xlsx.js';
+import { buildPptx } from '../documents/pptx.js';
 import { saveArtifact } from '../chat/artifacts-repo.js';
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
@@ -65,6 +66,7 @@ const CONTENT_TYPES: Record<GenerateFormat, string> = {
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
 function isStableDashboardContext(ctx: { surface?: string; userId?: string; chatId: string }): boolean {
@@ -140,10 +142,10 @@ export function buildDocumentResult(a: {
 registerIfConfigured(
   {
     id: 'document_gen',
-    title: 'Document generation (PDF / DOCX / XLSX)',
+    title: 'Document generation (PDF / DOCX / XLSX / PPTX)',
     category: 'tool',
     description:
-      'Generate documents the user can download. PDF + DOCX for narrative, XLSX for tabular data. Output stored in S3 raw with a 24h presigned URL.',
+      'Generate downloadable PDF, DOCX, XLSX, or editable PPTX files. Bot outputs use S3 raw with a 24h presigned URL; dashboard outputs are saved as owner-scoped artifacts.',
     required: [
       { envVar: 'RAW_BUCKET', description: 'S3 raw bucket for generated documents' },
     ],
@@ -159,9 +161,10 @@ registerIfConfigured(
           '  - "pdf"  — printable PDF, good for reports + memos + receipts',
           '  - "docx" — editable Word doc, good for drafts the user will revise',
           '  - "xlsx" — Excel workbook with one or more sheets, good for tabular data',
+          '  - "pptx" — editable PowerPoint presentation with titled text slides and optional bullets',
           'On Telegram and Slack, returns a presigned URL valid 24h. In dashboard chat, saves an owner-scoped artifact and returns a URL-free artifact reference.',
           'To revise a saved dashboard artifact, provide both artifactId and its current expectedVersion.',
-          'Use when the user asks for a report, a spreadsheet, a table they can download, or anything they want to keep as a file.',
+          'Use when the user asks for a report, spreadsheet, table, slide deck, or anything they want to keep as a file.',
         ].join('\n'),
         {
           type: 'object',
@@ -169,13 +172,13 @@ registerIfConfigured(
           properties: {
             format: {
               type: 'string',
-              enum: ['pdf', 'docx', 'xlsx'],
+              enum: ['pdf', 'docx', 'xlsx', 'pptx'],
               description: 'Output file format.',
             },
             spec: {
               type: 'object',
               description:
-                'For pdf/docx: { title, sections: [{ heading?, body?, table?: { rows: string[][] } }] }. For xlsx: { title, sheets: [{ name, rows: cell[][] }] } where cell can be string|number|boolean|null.',
+                'For pdf/docx: { title, sections: [{ heading?, body?, table?: { rows: string[][] } }] }. For xlsx: { title, sheets: [{ name, rows: cell[][] }] } where cell can be string|number|boolean|null. For pptx: { title, slides: [{ title, body?, bullets?: string[] }] }.',
             },
             artifactId: {
               type: 'string',
@@ -236,9 +239,9 @@ registerIfConfigured(
         }
 
         const format = (args.format ?? '') as GenerateFormat;
-        if (!['pdf', 'docx', 'xlsx'].includes(format)) {
+        if (!['pdf', 'docx', 'xlsx', 'pptx'].includes(format)) {
           return {
-            text: 'format must be one of: pdf, docx, xlsx',
+            text: 'format must be one of: pdf, docx, xlsx, pptx',
             isError: true,
           };
         }
@@ -270,10 +273,24 @@ registerIfConfigured(
             bytes = await buildXlsx(validateSpreadsheetSpec(args.spec));
           } else if (format === 'pdf') {
             bytes = await buildPdf(validateDocumentSpec(args.spec));
+          } else if (format === 'pptx') {
+            bytes = await buildPptx(args.spec);
           } else {
             bytes = await buildDocx(validateDocumentSpec(args.spec));
           }
         } catch (err) {
+          if (isDashboard) {
+            logger.warn({ agentId: ctx.agentId, chatId: ctx.chatId, format }, 'dashboard document generation failed');
+            void writeAudit({
+              action: 'tool_invoke',
+              agentId: ctx.agentId,
+              chatId: ctx.chatId,
+              toolName: 'generate_document',
+              detail: { format },
+              result: 'error',
+            });
+            return { text: 'Document could not be generated from that specification.', isError: true };
+          }
           const msg = err instanceof Error ? err.message : String(err);
           return { text: `spec invalid or build failed: ${msg}`, isError: true };
         }

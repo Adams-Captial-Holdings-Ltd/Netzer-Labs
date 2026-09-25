@@ -4,6 +4,7 @@
  * Two spec shapes:
  *   - DocumentSpec   — narrative (title + sections) for PDF + DOCX
  *   - SpreadsheetSpec — workbook (sheets + 2D rows) for XLSX
+ *   - PresentationSpec — titled slides with text and bullets for PPTX
  *
  * The format is part of the tool input; the tool dispatches to the
  * right builder.
@@ -38,7 +39,18 @@ export interface SpreadsheetSpec {
   sheets: SpreadsheetSheet[];
 }
 
-export type GenerateFormat = 'pdf' | 'docx' | 'xlsx';
+export interface PresentationSlide {
+  title: string;
+  body?: string;
+  bullets?: string[];
+}
+
+export interface PresentationSpec {
+  title: string;
+  slides: PresentationSlide[];
+}
+
+export type GenerateFormat = 'pdf' | 'docx' | 'xlsx' | 'pptx';
 
 export const MAX_SECTIONS = 50;
 export const MAX_TABLE_ROWS = 1000;

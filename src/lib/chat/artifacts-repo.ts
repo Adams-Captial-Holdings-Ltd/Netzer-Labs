@@ -22,6 +22,7 @@ const MIME_TYPES = new Set([
   'text/plain', 'text/markdown', 'text/csv', 'text/html', 'text/xml',
   'application/json', 'application/pdf', 'application/rtf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
 ]);
 
