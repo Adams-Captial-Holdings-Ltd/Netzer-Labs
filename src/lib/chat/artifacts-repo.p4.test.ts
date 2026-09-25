@@ -82,6 +82,8 @@ it('P4 storage writes curated bytes before publishing a descriptor', async () =>
   expect(saved).toMatchObject({ version: 1, fileName: 'launch-notes.md', contentType: 'text/markdown' });
   expect(saved.artifactId).toBeTypeOf('string');
   expect(JSON.stringify(saved), 'descriptor must contain no bucket, key, or URL').not.toMatch(/"(?:bucket|key|url|presignedUrl)"|X-Amz-/i);
+  const put = s3Send.mock.calls.find(([cmd]) => cmd instanceof PutObjectCommand)?.[0] as PutObjectCommand | undefined;
+  expect(put?.input.Key, 'the CURATED key must sit under the artifacts/* IAM and erasure prefix').toMatch(/^artifacts\//);
   expect(await storage!.listArtifactHeads({ agentId: 'main', chatId, ownerId: PERSON.userId })).toHaveLength(1);
 });
 
