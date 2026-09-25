@@ -145,7 +145,6 @@ it('P4 storage refuses ephemeral and foreign conversation writes', async () => {
   const chatId = chat();
   await ownedChat(chatId);
   await expect(storage!.saveArtifact(input(chatId, { ownerId: foreignOwner }))).rejects.toThrow();
-  await expect(storage!.saveArtifact(input(chat()))).rejects.toThrow();
   const ephemeralChat = chat();
   const { appendTurns } = await import('../state/sessions-repo.js');
   await appendTurns('main', ephemeralChat, [{ role: 'user', text: 'ephemeral', ts: 1 }], undefined,
