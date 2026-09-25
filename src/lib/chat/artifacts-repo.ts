@@ -7,6 +7,7 @@ import {
   ListObjectVersionsCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../state/ddb.js';
 import { acquireConversationChildLock, getSession } from '../state/sessions-repo.js';
@@ -427,4 +428,39 @@ export async function readArtifactBody(args: ArtifactVersionScope): Promise<Uint
   const chunks: Buffer[] = [];
   for await (const chunk of out.Body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks);
+}
+
+function attachmentDisposition(fileName: string): string {
+  // Keep a conservative ASCII fallback for older clients, and preserve the
+  // original UTF-8 name using the RFC 5987 filename* parameter.
+  const fallback = fileName.replace(/[^A-Za-z0-9._-]+/g, '_') || 'artifact';
+  const encoded = encodeURIComponent(fileName).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+/** Mint a short-lived owner download URL for one immutable physical version. */
+export async function presignArtifactDownload(args: ArtifactVersionScope): Promise<string> {
+  if (!BUCKET) throw new Error('CURATED_BUCKET is not configured');
+  await assertOwner(args);
+  const { Item } = await ddb().send(new GetCommand({
+    TableName: TABLE,
+    Key: { PK: pk(args.agentId), SK: versionSk(args.chatId, args.artifactId, args.version) },
+    ConsistentRead: true,
+  }));
+  const row = Item as VersionRow | undefined;
+  if (!row || row.agentId !== args.agentId || row.chatId !== args.chatId ||
+      row.ownerId !== args.ownerId || row.artifactId !== args.artifactId || row.version !== args.version ||
+      row.storageKey !== objectKey(args.agentId, args.chatId, args.artifactId, args.version) ||
+      typeof row.physicalVersionId !== 'string' || !row.physicalVersionId ||
+      typeof row.fileName !== 'string' || !row.fileName) {
+    throw new Error('Artifact version not found');
+  }
+  return getSignedUrl(s3(), new GetObjectCommand({
+    Bucket: BUCKET,
+    Key: row.storageKey,
+    VersionId: row.physicalVersionId,
+    ResponseContentDisposition: attachmentDisposition(row.fileName),
+  }), { expiresIn: 300 });
 }
