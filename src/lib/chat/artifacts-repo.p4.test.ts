@@ -1,6 +1,6 @@
 /** P4 WI-4.2: public artifact storage seam, frozen rows S-1 through S-6. */
 import { beforeEach, expect, it, vi } from 'vitest';
-import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand } from '@aws-sdk/client-s3';
 import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
 
 const { ddbSend, scanForExfil } = vi.hoisted(() => {
@@ -281,9 +281,9 @@ it('P4 erasure lists every page and removes versions markers and derivatives', a
         DeleteMarkers: [expected[4]] } as never;
       return { IsTruncated: false, Versions: [], DeleteMarkers: [] } as never;
     }
-    if (cmd instanceof DeleteObjectsCommand) {
-      deleted.push(...(cmd.input.Delete?.Objects ?? []));
-      return { Errors: [] } as never;
+    if (cmd instanceof DeleteObjectCommand) {
+      deleted.push({ Key: cmd.input.Key, VersionId: cmd.input.VersionId });
+      return {} as never;
     }
     throw new Error('unexpected S3 command');
   });
@@ -308,11 +308,16 @@ it('P4 erasure leaves rows retryable on partial object deletion failure', async 
   s3Send.mockImplementation(async (cmd: unknown) => {
     if (cmd instanceof ListObjectVersionsCommand) return { IsTruncated: false,
       Versions: [{ Key: put.input.Key, VersionId: 'physical-1' }] } as never;
-    if (cmd instanceof DeleteObjectsCommand) return { Errors: [{ Key: put.input.Key, VersionId: 'physical-1', Code: 'AccessDenied' }] } as never;
+    if (cmd instanceof DeleteObjectCommand) throw new Error('AccessDenied deleting physical version');
     throw new Error('unexpected S3 command');
   });
   const { deleteSession, getSession } = await import('../state/sessions-repo.js');
   await expect(deleteSession('main', chatId)).rejects.toThrow(/delete|artifact|version|AccessDenied/i);
+  expect(s3Send.mock.calls.filter(([cmd]) => cmd instanceof DeleteObjectCommand)
+    .map(([cmd]) => (cmd as DeleteObjectCommand).input),
+  'the failed operation must address the exact physical version').toMatchObject([
+    { Key: put.input.Key, VersionId: 'physical-1' },
+  ]);
   expect(await getSession('main', chatId)).not.toBeNull();
   expect(await storage!.listArtifactHeads({ agentId: 'main', chatId, ownerId: PERSON.userId })).toMatchObject([{ artifactId: saved.artifactId }]);
 });
@@ -337,10 +342,10 @@ it('P4 erasure never reaches another conversation prefix', async () => {
       return { IsTruncated: false, Versions: all.filter((v) => v.Key.startsWith(cmd.input.Prefix ?? '') &&
         !deleted.some((item) => item.Key === v.Key && item.VersionId === v.VersionId)) } as never;
     }
-    if (cmd instanceof DeleteObjectsCommand) {
-      deleted.push(...(cmd.input.Delete?.Objects ?? []));
-      for (const object of cmd.input.Delete?.Objects ?? []) bodies.delete(`${object.Key}|${object.VersionId}`);
-      return { Errors: [] } as never;
+    if (cmd instanceof DeleteObjectCommand) {
+      deleted.push({ Key: cmd.input.Key, VersionId: cmd.input.VersionId });
+      bodies.delete(`${cmd.input.Key}|${cmd.input.VersionId}`);
+      return {} as never;
     }
     return (defaultSend as (command: unknown) => Promise<unknown>)(cmd) as never;
   });
