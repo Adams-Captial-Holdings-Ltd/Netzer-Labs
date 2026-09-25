@@ -334,7 +334,8 @@ it('P4 erasure never reaches another conversation prefix', async () => {
   s3Send.mockImplementation(async (cmd: unknown) => {
     if (cmd instanceof ListObjectVersionsCommand) {
       const all = [{ Key: aKey, VersionId: 'physical-1' }, { Key: bKey, VersionId: 'physical-2' }];
-      return { IsTruncated: false, Versions: all.filter((v) => v.Key.startsWith(cmd.input.Prefix ?? '')) } as never;
+      return { IsTruncated: false, Versions: all.filter((v) => v.Key.startsWith(cmd.input.Prefix ?? '') &&
+        !deleted.some((item) => item.Key === v.Key && item.VersionId === v.VersionId)) } as never;
     }
     if (cmd instanceof DeleteObjectsCommand) {
       deleted.push(...(cmd.input.Delete?.Objects ?? []));
