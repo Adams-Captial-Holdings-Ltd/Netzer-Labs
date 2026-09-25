@@ -30,6 +30,7 @@ import {
 import { pickDefaultModel, turnCost, resolveModel, resolveModelInvocation } from '../lib/bedrock/models.js';
 import { loadAgent } from '../lib/config/agent-loader.js';
 import { tools, type ToolMedia, type ToolResult } from '../lib/tools/registry.js';
+import type { ArtifactDescriptor } from '../lib/chat/artifacts-repo.js';
 import { mcpToolsFor, isMcpToolName, invokeMcpTool } from '../lib/mcp/mcp-tools.js';
 import { logger, truncateForLog } from '../observability/logger.js';
 import { NO_RESPONSE_NOTICE, type Turn } from '../lib/state/sessions-repo.js';
@@ -539,6 +540,8 @@ export interface AgentTurnResponse {
    * file upload, dashboard `image` SSE event. Capped at 4 per turn.
    */
   media?: ToolMedia[];
+  /** URL-free durable artifact references for the dashboard UI. Capped at 4 per turn. */
+  artifacts?: ArtifactDescriptor[];
 }
 
 /** A guardrail intervention replaces the model output with a block message. */
@@ -1319,6 +1322,10 @@ async function runAdmittedTurn(
   // the surface after the text reply. Capped to keep delivery bounded.
   const turnMedia: ToolMedia[] = [];
   const MAX_TURN_MEDIA = 4;
+  // URL-free durable references are returned only to the surface. They never
+  // enter toolResult content, callbacks, logs, or audit records.
+  const turnArtifacts: ArtifactDescriptor[] = [];
+  const MAX_TURN_ARTIFACTS = 4;
 
   const cacheEnabled = process.env.CCE_PROMPT_CACHE !== '0';
   const cachedSystem = cacheEnabled
@@ -1441,6 +1448,7 @@ async function runAdmittedTurn(
         ...(req.replyChatId ? { replyChatId: req.replyChatId } : {}),
         ...(req.boardAgentId ? { boardAgentId: req.boardAgentId } : {}),
         ...(req.delegationDepth !== undefined ? { delegationDepth: req.delegationDepth } : {}),
+        ...(req.abortSignal ? { abortSignal: req.abortSignal } : {}),
       };
       if (req.abortSignal?.aborted) return stoppedTurn();
       const result: ToolResult = dispatchKilledMidTurn
@@ -1464,6 +1472,9 @@ async function runAdmittedTurn(
       }
       if (result.media?.length) {
         turnMedia.push(...result.media.slice(0, MAX_TURN_MEDIA - turnMedia.length));
+      }
+      if (!result.isError && result.artifacts?.length) {
+        turnArtifacts.push(...result.artifacts.slice(0, MAX_TURN_ARTIFACTS - turnArtifacts.length));
       }
       toolResults.push({
         toolResult: {
@@ -1636,5 +1647,10 @@ async function runAdmittedTurn(
     blocked: wasBlocked,
     // Suppress media delivery on guardrail-blocked turns.
     ...(turnMedia.length > 0 && !wasBlocked ? { media: turnMedia } : {}),
+    // Keep durable references in the response channel for dashboard rendering
+    // only; a stopped turn returned earlier and guardrail blocks suppress them.
+    ...(turnArtifacts.length > 0 && !wasBlocked && req.surface === 'dashboard'
+      ? { artifacts: turnArtifacts }
+      : {}),
   };
 }
