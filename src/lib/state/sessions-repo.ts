@@ -38,6 +38,7 @@ import {
   DeleteCommand,
   type UpdateCommandInput,
 } from '@aws-sdk/lib-dynamodb';
+import { randomUUID } from 'node:crypto';
 import { ddb } from './ddb.js';
 import { ingestEvictedTurns } from '../../agent/memory-ingest.js';
 import { logger } from '../../observability/logger.js';
@@ -139,6 +140,39 @@ const DEFAULT_INGEST_EVERY_N = 8;
  */
 export function isPersistentChat(chatId: string): boolean {
   return chatId.startsWith('dashboard:');
+}
+
+/**
+ * Serialize artifact writes with conversation erasure using a durable child
+ * row. There is deliberately no TTL: if a process dies while holding it, an
+ * operator must inspect and recover the conversation before removing the row.
+ */
+export async function acquireConversationChildLock(agentId: string, chatId: string): Promise<() => Promise<void>> {
+  const token = randomUUID();
+  const key = { PK: pk(agentId), SK: `${childPrefix(chatId)}CHILD_LOCK` };
+  try {
+    await ddb().send(new PutCommand({
+      TableName: TABLE,
+      Item: { ...key, lockToken: token, createdAt: new Date().toISOString() },
+      ConditionExpression: 'attribute_not_exists(PK)',
+    }));
+  } catch (error) {
+    if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') {
+      throw new Error('Conversation child storage is busy; retry after the active operation completes');
+    }
+    throw error;
+  }
+  let released = false;
+  return async () => {
+    if (released) return;
+    await ddb().send(new DeleteCommand({
+      TableName: TABLE,
+      Key: key,
+      ConditionExpression: 'lockToken = :token',
+      ExpressionAttributeValues: { ':token': token },
+    }));
+    released = true;
+  };
 }
 
 /** Parse + clamp the configured ingest cadence. Exported for tests. */
@@ -950,6 +984,8 @@ export async function deleteSession(
   chatId: string,
 ): Promise<void> {
   await deleteSessionAttachments(agentId, chatId);
+  const releaseChildLock = await acquireConversationChildLock(agentId, chatId);
+  try {
   for (;;) {
     // Re-query from the top each round: the rows just deleted are gone, so the
     // next page is simply what is left.
@@ -964,11 +1000,13 @@ export async function deleteSession(
         ConsistentRead: true,
       }),
     );
-    const keys = (out.Items ?? []).map((i) => ({ PK: i.PK, SK: i.SK }));
+    const keys = (out.Items ?? [])
+      .filter((i) => i.SK !== `${childPrefix(chatId)}CHILD_LOCK`)
+      .map((i) => ({ PK: i.PK, SK: i.SK }));
     for (let i = 0; i < keys.length; i += 25) {
       await batchDelete(keys.slice(i, i + 25));
     }
-    if (keys.length === 0 || !out.LastEvaluatedKey) break;
+    if (!out.LastEvaluatedKey) break;
   }
   await ddb().send(
     new DeleteCommand({
@@ -976,6 +1014,11 @@ export async function deleteSession(
       Key: { PK: pk(agentId), SK: sk(chatId) },
     }),
   );
+  } finally {
+    // Keep the lock row through parent deletion. A writer that acquires after
+    // release will re-read the parent and refuse to recreate an erased chat.
+    await releaseChildLock();
+  }
 }
 
 async function deleteSessionAttachments(agentId: string, chatId: string): Promise<void> {

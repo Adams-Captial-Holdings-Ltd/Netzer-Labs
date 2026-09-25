@@ -3,11 +3,12 @@ import { randomUUID } from 'node:crypto';
 import {
   GetObjectCommand,
   PutObjectCommand,
+  DeleteObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../state/ddb.js';
-import { getSession } from '../state/sessions-repo.js';
+import { acquireConversationChildLock, getSession } from '../state/sessions-repo.js';
 import { scanForExfil } from '../safety/exfil-guard.js';
 import { captureAwsClient } from '../observability/xray.js';
 
@@ -64,7 +65,8 @@ function s3(): S3Client {
 }
 
 function pk(agentId: string): string { return `AGENT#${agentId}`; }
-function chatPrefix(chatId: string): string { return `CHAT#${chatId}#ARTIFACT#`; }
+function mappedChatId(chatId: string): string { return chatId.replace(/#/g, '_'); }
+function chatPrefix(chatId: string): string { return `CHAT#${mappedChatId(chatId)}#ARTIFACT#`; }
 // S3 path components use base64url, whose alphabet and padding rules make this
 // encoding injective while keeping caller-controlled separators out of keys.
 function pathPart(value: string): string { return Buffer.from(value, 'utf8').toString('base64url'); }
@@ -73,6 +75,9 @@ function objectKey(agentId: string, chatId: string, artifactId: string, version:
 }
 function childBase(chatId: string, artifactId: string): string {
   return `${chatPrefix(chatId)}${artifactId}#`;
+}
+function pendingSk(chatId: string, operationId: string): string {
+  return `${chatPrefix(chatId)}PENDING#${operationId}`;
 }
 function headSk(chatId: string, artifactId: string): string { return `${childBase(chatId, artifactId)}HEAD`; }
 function versionSk(chatId: string, artifactId: string, version: number): string {
@@ -142,7 +147,6 @@ async function readHead(args: ArtifactScope & { artifactId: string }): Promise<H
 }
 
 export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDescriptor> {
-  await assertOwner(args);
   const body = assertFile(args);
   if (args.artifactId && (!Number.isInteger(args.expectedVersion) || args.expectedVersion! < 1)) {
     throw new Error('A revision requires its expected current version');
@@ -154,6 +158,11 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
     throw new Error('Artifact id is invalid');
   }
+  const releaseLock = await acquireConversationChildLock(args.agentId, args.chatId);
+  try {
+  // The parent can be deleted while content is being scanned, so ownership is
+  // checked only after acquiring the same lock used by deleteSession.
+  await assertOwner(args);
   const head = await readHead({ ...args, artifactId });
   let version: number;
   if (args.artifactId) {
@@ -165,35 +174,107 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
   }
 
   const storageKey = objectKey(args.agentId, args.chatId, artifactId, version);
+  const createdAt = new Date().toISOString();
+  const publicDescriptor: ArtifactDescriptor = { artifactId, version, fileName: args.fileName, contentType: args.contentType, createdAt };
+  const pkValue = pk(args.agentId);
+  const base = { ...publicDescriptor, PK: pkValue, agentId: args.agentId, chatId: args.chatId, ownerId: args.ownerId };
+  const operationId = randomUUID();
+  const pendingKey = { PK: pkValue, SK: pendingSk(args.chatId, operationId) };
+  // This row makes an interrupted upload discoverable by conversation and key.
+  await ddb().send(new PutCommand({
+    TableName: TABLE,
+    Item: { ...pendingKey, ...base, status: 'pending', storageKey },
+    ConditionExpression: 'attribute_not_exists(PK)',
+  }));
+
+  let physicalVersionId: string | undefined;
+  let versionPublished = false;
+  let headAttempted = false;
+  const discardPending = async () => ddb().send(new DeleteCommand({ TableName: TABLE, Key: pendingKey }));
+  try {
   const uploaded = await s3().send(new PutObjectCommand({
     Bucket: BUCKET,
     Key: storageKey,
     Body: body,
     ContentType: args.contentType,
   }));
-  if (typeof uploaded.VersionId !== 'string' || uploaded.VersionId.length === 0) {
+  if (typeof uploaded.VersionId === 'string' && uploaded.VersionId.length > 0) {
+    physicalVersionId = uploaded.VersionId;
+  }
+  if (!physicalVersionId) {
+    // Versioning is required, but without the returned id an object may exist
+    // that cannot be safely removed by version. Keep its recovery row.
+    await s3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: storageKey }));
     throw new Error('Artifact storage did not return a physical version id');
   }
-
-  const createdAt = new Date().toISOString();
-  const publicDescriptor: ArtifactDescriptor = { artifactId, version, fileName: args.fileName, contentType: args.contentType, createdAt };
-  const pkValue = pk(args.agentId);
-  const base = { ...publicDescriptor, PK: pkValue, agentId: args.agentId, chatId: args.chatId, ownerId: args.ownerId };
+  const pendingWithVersion = { ...pendingKey, ...base, status: 'uploaded', storageKey, physicalVersionId };
+  await ddb().send(new PutCommand({ TableName: TABLE, Item: pendingWithVersion }));
   const versionRow: VersionRow = {
     ...base,
     SK: versionSk(args.chatId, artifactId, version),
     storageKey,
-    physicalVersionId: uploaded.VersionId,
+    physicalVersionId,
     source: args.source,
   };
   const headRow: HeadRow = { ...base, SK: headSk(args.chatId, artifactId) };
+  // The version is written first with an absent-key fence; the head is then
+  // conditionally advanced from the version we observed under the lock. Thus a
+  // failed head write cannot report success or overwrite a concurrent winner.
   await ddb().send(new PutCommand({
     TableName: TABLE,
     Item: versionRow,
-    ConditionExpression: 'attribute_not_exists(SK)',
+    ConditionExpression: 'attribute_not_exists(PK)',
   }));
-  await ddb().send(new PutCommand({ TableName: TABLE, Item: headRow }));
+  versionPublished = true;
+  // The version row now carries the exact physical key and version, so it is a
+  // discoverable parent even if the process stops before head publication.
+  await discardPending();
+  headAttempted = true;
+  await ddb().send(new PutCommand({
+    TableName: TABLE,
+    Item: headRow,
+    ConditionExpression: head ? '#version = :expected' : 'attribute_not_exists(PK)',
+    ...(head ? { ExpressionAttributeNames: { '#version': 'version' }, ExpressionAttributeValues: { ':expected': head.version } } : {}),
+  }));
   return publicDescriptor;
+  } catch (error) {
+    // An unfinished operation remains discoverable through its pending child
+    // or its version row if compensation itself fails.
+    if (physicalVersionId) {
+      try {
+        if (headAttempted && (error as { name?: string })?.name !== 'ConditionalCheckFailedException') {
+          try {
+            await ddb().send(new DeleteCommand({
+              TableName: TABLE,
+              Key: { PK: pkValue, SK: headSk(args.chatId, artifactId) },
+              ConditionExpression: '#version = :version',
+              ExpressionAttributeNames: { '#version': 'version' },
+              ExpressionAttributeValues: { ':version': version },
+            }));
+          } catch (deleteHeadError) {
+            if ((deleteHeadError as { name?: string })?.name !== 'ConditionalCheckFailedException') throw deleteHeadError;
+          }
+        }
+        await s3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: storageKey, VersionId: physicalVersionId }));
+        if (versionPublished) {
+          await ddb().send(new DeleteCommand({
+            TableName: TABLE,
+            Key: { PK: pkValue, SK: versionSk(args.chatId, artifactId, version) },
+          }));
+        }
+        await discardPending();
+      } catch {
+        // Leave the pending row as the operator-visible recovery handle.
+      }
+    } else {
+      // The request may have committed before its response was lost. Without a
+      // physical version id, keep the pending row for explicit recovery.
+    }
+    throw error;
+  }
+  } finally {
+    await releaseLock();
+  }
 }
 
 export async function listArtifactHeads(args: ArtifactScope): Promise<ArtifactDescriptor[]> {
