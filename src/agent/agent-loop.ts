@@ -552,8 +552,10 @@ export interface AgentTurnResponse {
    * file upload, dashboard `image` SSE event. Capped at 4 per turn.
    */
   media?: ToolMedia[];
-  /** URL-free durable artifact references for the dashboard UI. Capped at 4 per turn. */
+  /** URL-free durable artifact references for the dashboard UI. Capped at 8 per turn. */
   artifacts?: ArtifactDescriptor[];
+  /** True when successful writes exceeded the eight URL-free references returned for this turn. */
+  artifactRefsTruncated?: true;
 }
 
 /** A guardrail intervention replaces the model output with a block message. */
@@ -1099,7 +1101,7 @@ async function runAdmittedTurn(
       modelId,
       historyLen: req.history.length,
       tools: toolList.length,
-      prompt: truncateForLog(req.userText, 80),
+      promptChars: req.userText.length,
     },
     'agent turn started',
   );
@@ -1153,6 +1155,11 @@ async function runAdmittedTurn(
   let totalCacheRead = 0;
   let totalCacheWrite = 0;
   let toolCallCount = 0;
+  // URL-free durable references are returned only to the surface. They never
+  // enter toolResult content, callbacks, logs, or audit records.
+  const turnArtifacts: ArtifactDescriptor[] = [];
+  const MAX_TURN_ARTIFACTS = 8;
+  let artifactRefsTruncated = false;
   // The call in flight, for the estimate a Stop settles with; nothing between calls.
   let inFlight: { inputTokens: number; streamed: boolean } | undefined;
   const checkStopped = (): void => {
@@ -1204,7 +1211,12 @@ async function runAdmittedTurn(
         cacheWriteInputTokens: totalCacheWrite, ...(req.runId ? { runId: req.runId } : {}) },
     });
     const text = lastEmitted ? await scanOutboundReply(lastEmitted, { agentId: req.agentId, chatId: req.chatId }) : '';
-    return { text, stopped: true, modelId, costUsd, latencyMs, inputTokens: totalIn, outputTokens: totalOut, toolCallCount, blocked: false };
+    return {
+      text, stopped: true, modelId, costUsd, latencyMs, inputTokens: totalIn, outputTokens: totalOut,
+      toolCallCount, blocked: false,
+      ...(turnArtifacts.length > 0 ? { artifacts: turnArtifacts } : {}),
+      ...(artifactRefsTruncated ? { artifactRefsTruncated: true as const } : {}),
+    };
   };
 
   // The guardrail's synchronous mode holds the whole answer until it has been
@@ -1335,11 +1347,6 @@ async function runAdmittedTurn(
   // the surface after the text reply. Capped to keep delivery bounded.
   const turnMedia: ToolMedia[] = [];
   const MAX_TURN_MEDIA = 4;
-  // URL-free durable references are returned only to the surface. They never
-  // enter toolResult content, callbacks, logs, or audit records.
-  const turnArtifacts: ArtifactDescriptor[] = [];
-  const MAX_TURN_ARTIFACTS = 4;
-
   const cacheEnabled = process.env.CCE_PROMPT_CACHE !== '0';
   const cachedSystem = cacheEnabled
     ? [{ text: systemPromptWithMemories }, { cachePoint: { type: 'default' as const } }]
@@ -1437,7 +1444,7 @@ async function runAdmittedTurn(
       const tu = block.toolUse;
       const args = (tu.input as Record<string, unknown> | undefined) ?? {};
       logger.info(
-        { agentId: req.agentId, chatId: req.chatId, tool: tu.name, args },
+        { agentId: req.agentId, chatId: req.chatId, tool: tu.name, argCount: Object.keys(args).length },
         'invoking tool',
       );
       try {
@@ -1487,12 +1494,17 @@ async function runAdmittedTurn(
         turnMedia.push(...result.media.slice(0, MAX_TURN_MEDIA - turnMedia.length));
       }
       if (!result.isError && result.artifacts?.length) {
-        turnArtifacts.push(...result.artifacts.slice(0, MAX_TURN_ARTIFACTS - turnArtifacts.length));
+        const available = Math.max(0, MAX_TURN_ARTIFACTS - turnArtifacts.length);
+        turnArtifacts.push(...result.artifacts.slice(0, available));
+        if (result.artifacts.length > available) artifactRefsTruncated = true;
       }
+      const artifactLimitNotice = !result.isError && result.artifacts?.length && artifactRefsTruncated
+        ? '\nNote: this turn has more saved artifacts than can be attached to its reference list; only the first eight are attached.'
+        : '';
       toolResults.push({
         toolResult: {
           toolUseId: tu.toolUseId ?? '',
-          content: [{ text: result.text }],
+          content: [{ text: `${result.text}${artifactLimitNotice}` }],
           status: result.isError ? 'error' : 'success',
         },
       });
@@ -1665,5 +1677,6 @@ async function runAdmittedTurn(
     ...(turnArtifacts.length > 0 && !wasBlocked && req.surface === 'dashboard'
       ? { artifacts: turnArtifacts }
       : {}),
+    ...(artifactRefsTruncated ? { artifactRefsTruncated: true as const } : {}),
   };
 }
