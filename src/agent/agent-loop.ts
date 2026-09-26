@@ -198,7 +198,9 @@ function scrubAwsIdentifiers(text: string): string {
 function toolResultForDisplay(
   name: string, result: ToolResult, redact: (text: string) => string,
 ): { output: string; truncated: boolean } {
-  if (name === 'dynamodb_query') return { output: TOOL_RESULT_HIDDEN_NOTICE, truncated: false };
+  if (name === 'dynamodb_query' || name === 'read_artifact') {
+    return { output: TOOL_RESULT_HIDDEN_NOTICE, truncated: false };
+  }
   const redacted = redact(result.text);
   const shown = result.isError ? scrubAwsIdentifiers(redacted) : redacted;
   return { output: shown.slice(0, TOOL_OUTPUT_CAP), truncated: shown.length > TOOL_OUTPUT_CAP };
