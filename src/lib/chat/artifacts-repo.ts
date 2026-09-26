@@ -222,7 +222,7 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
     const draftId = draftSource.draftId;
     const { Item } = await ddb().send(new GetCommand({
       TableName: TABLE,
-      Key: { PK: pk(args.agentId), SK: `${chatPrefix(args.chatId)}DRAFT#${draftId}#META` },
+      Key: { PK: pk(args.agentId), SK: `CHAT#${mappedChatId(args.chatId)}#DRAFT#${draftId}#META` },
       ConsistentRead: true,
     }));
     const meta = Item as Record<string, unknown> | undefined;
