@@ -176,6 +176,28 @@ async function readHead(args: ArtifactScope & { artifactId: string }): Promise<H
   return Item as HeadRow | undefined;
 }
 
+async function assertFinalizingDraft(
+  args: SaveArtifactArgs,
+  draftSource: { kind: 'draft'; draftId?: unknown; revision?: unknown },
+): Promise<void> {
+  if (typeof draftSource.draftId !== 'string' || !Number.isInteger(draftSource.revision) ||
+      (draftSource.revision as number) < 0) {
+    throw new Error('Draft metadata is invalid for artifact finalization');
+  }
+  const draftId = draftSource.draftId;
+  const { Item } = await ddb().send(new GetCommand({
+    TableName: TABLE,
+    Key: { PK: pk(args.agentId), SK: `CHAT#${mappedChatId(args.chatId)}#DRAFT#${draftId}#META` },
+    ConsistentRead: true,
+  }));
+  const meta = Item as Record<string, unknown> | undefined;
+  if (!meta || meta.kind !== 'document-draft' || meta.status !== 'finalizing' ||
+      meta.draftId !== draftId || meta.revision !== draftSource.revision ||
+      meta.agentId !== args.agentId || meta.chatId !== args.chatId || meta.ownerId !== args.ownerId) {
+    throw new Error('Draft is missing, no longer finalizing, or owned by another user');
+  }
+}
+
 export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDescriptor> {
   const body = assertFile(args);
   if (args.artifactId && (!Number.isInteger(args.expectedVersion) || args.expectedVersion! < 1)) {
@@ -214,24 +236,7 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
     }
   }
   await assertOwner(args);
-  if (draftSource) {
-    if (typeof draftSource.draftId !== 'string' || !Number.isInteger(draftSource.revision) ||
-        (draftSource.revision as number) < 0) {
-      throw new Error('Draft metadata is invalid for artifact finalization');
-    }
-    const draftId = draftSource.draftId;
-    const { Item } = await ddb().send(new GetCommand({
-      TableName: TABLE,
-      Key: { PK: pk(args.agentId), SK: `CHAT#${mappedChatId(args.chatId)}#DRAFT#${draftId}#META` },
-      ConsistentRead: true,
-    }));
-    const meta = Item as Record<string, unknown> | undefined;
-    if (!meta || meta.kind !== 'document-draft' || meta.status !== 'finalizing' ||
-        meta.draftId !== draftId || meta.revision !== draftSource.revision ||
-        meta.agentId !== args.agentId || meta.chatId !== args.chatId || meta.ownerId !== args.ownerId) {
-      throw new Error('Draft is missing, no longer finalizing, or owned by another user');
-    }
-  }
+  if (draftSource) await assertFinalizingDraft(args, draftSource);
   const head = await readHead({ ...args, artifactId });
   let version: number;
   if (args.artifactId) {
