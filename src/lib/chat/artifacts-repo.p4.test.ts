@@ -444,3 +444,17 @@ it('P4 a deleted finalizing draft cannot recreate its parent or save an artifact
   expect(await getSession('main', chatId), 'finalization must not resurrect the deleted chat').toBeNull();
   expect(s3Send, 'finalization must not write a new physical version').not.toHaveBeenCalled();
 });
+
+it('P4 live finalizing draft saves through the document tool metadata key', async () => {
+  const storage = await import(repoPath);
+  const chatId = chat();
+  const draftId = 'f78d0000-0000-4000-8000-000000000002';
+  await ownedChat(chatId);
+  const row = { PK: 'AGENT#main', SK: `CHAT#${chatId.replace(/#/g, '_')}#DRAFT#${draftId}#META`,
+    kind: 'document-draft', draftId, agentId: 'main', chatId, ownerId: PERSON.userId,
+    revision: 1, status: 'finalizing', format: 'pdf' };
+  table.rows.set(`${row.PK}|${row.SK}`, row);
+  await expect(storage.saveArtifact(input(chatId, { source: { kind: 'draft', draftId, revision: 1, format: 'pdf' } })),
+    'the real document-draft metadata key must authorize a live finalization').resolves.toMatchObject({ version: 1 });
+  expect(s3Send.mock.calls.some(([cmd]) => cmd instanceof PutObjectCommand), 'valid draft bytes must reach CURATED').toBe(true);
+});
