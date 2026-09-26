@@ -2,6 +2,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand } from '@aws-sdk/client-s3';
 import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
+import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 const { ddbSend, scanForExfil } = vi.hoisted(() => {
   process.env.TABLE_SESSIONS = 'p4-unit-sessions';
@@ -380,4 +381,66 @@ it('P4 CURATED accepts generated spreadsheets and Mermaid text', async () => {
     contentType: 'text/vnd.mermaid', body: Buffer.from('graph TD; A-->B') }));
   expect(xlsx.contentType).toContain('spreadsheetml.sheet');
   expect(mermaid.contentType).toBe('text/vnd.mermaid');
+});
+
+
+it('P4 owner artifact lists read every DynamoDB page before returning heads and versions', async () => {
+  const storage = await import(repoPath);
+  const chatId = chat();
+  await ownedChat(chatId);
+  const first = await storage.saveArtifact(input(chatId));
+  await storage.saveArtifact(input(chatId, { artifactId: first.artifactId, expectedVersion: 1,
+    body: Buffer.from('second version'), source: { kind: 'revision', fromVersion: 1 } }));
+  await storage.saveArtifact(input(chatId, { fileName: 'other.md' }));
+  ddbSend.mockImplementation(async (cmd: Parameters<typeof table.send>[0]) => {
+    if (cmd instanceof QueryCommand) {
+      const prefix = String(cmd.input.ExpressionAttributeValues?.[':prefix'] ?? '');
+      if (prefix.includes('#ARTIFACT#')) {
+        const matching = [...table.rows.values()].filter((row) => row.PK === 'AGENT#main' &&
+          String(row.SK).startsWith(prefix)).sort((a, b) => String(a.SK).localeCompare(String(b.SK)));
+        if (!cmd.input.ExclusiveStartKey && matching.length > 1) {
+          return { Items: [matching[0]], LastEvaluatedKey: { PK: matching[0].PK, SK: matching[0].SK } };
+        }
+        const index = matching.findIndex((row) => row.SK === cmd.input.ExclusiveStartKey?.SK);
+        return { Items: matching.slice(index + 1) };
+      }
+    }
+    return table.send(cmd);
+  });
+  const scope = { agentId: 'main', chatId, ownerId: PERSON.userId };
+  expect(await storage.listArtifactHeads(scope), 'all heads must remain visible after pagination').toHaveLength(2);
+  expect((await storage.listArtifactVersions({ ...scope, artifactId: first.artifactId })).map((v: { version: number }) => v.version),
+    'a download must still find the older physical version on a later page').toEqual([1, 2]);
+});
+
+it('P4 normalized chat aliases use the same physical artifact erasure prefix', async () => {
+  const storage = await import(repoPath);
+  const chatId = `dashboard:p4#alias-${Date.now()}`;
+  await ownedChat(chatId);
+  await storage.saveArtifact(input(chatId));
+  const put = s3Send.mock.calls.find(([cmd]) => cmd instanceof PutObjectCommand)?.[0] as PutObjectCommand;
+  const listedId = chatId.replace(/#/g, '_');
+  expect(put.input.Key?.startsWith(storage.artifactConversationPrefix('main', listedId)),
+    'a delete using the listed normalized chat id must enumerate the saved bytes').toBe(true);
+});
+
+it('P4 artifact writes refuse a safety scan that covered zero bytes', async () => {
+  const storage = await import(repoPath);
+  const chatId = chat();
+  await ownedChat(chatId);
+  scanForExfil.mockResolvedValue({ blocked: false, matches: [], scannedBytes: 0, truncated: false });
+  await expect(storage.saveArtifact(input(chatId)),
+    'an operator-disabled or incomplete scan cannot admit private CURATED bytes').rejects.toThrow(/scan|safety|refus/i);
+  expect(s3Send, 'unscanned bytes must never be uploaded').not.toHaveBeenCalled();
+});
+
+it('P4 a deleted finalizing draft cannot recreate its parent or save an artifact', async () => {
+  const storage = await import(repoPath);
+  const chatId = chat();
+  await expect(storage.saveArtifact(input(chatId, { source: { kind: 'draft',
+    draftId: 'f78d0000-0000-4000-8000-000000000001', revision: 1, format: 'pdf' } })),
+  'a deleted draft is not a first-turn artifact').rejects.toThrow(/draft|missing|conversation|owner/i);
+  const { getSession } = await import('../state/sessions-repo.js');
+  expect(await getSession('main', chatId), 'finalization must not resurrect the deleted chat').toBeNull();
+  expect(s3Send, 'finalization must not write a new physical version').not.toHaveBeenCalled();
 });

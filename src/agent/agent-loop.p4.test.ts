@@ -111,6 +111,7 @@ vi.mock('../lib/cost/ledger-gate.js', () => ({
 vi.mock('../lib/state/panic-state-repo.js', () => ({ tryAcquirePanic }));
 
 import { runAgentTurn } from './agent-loop.js';
+import { logger } from '../observability/logger.js';
 
 const MODEL = 'us.anthropic.claude-sonnet-4-6';
 
@@ -202,4 +203,52 @@ describe('P4 agent loop artifact dispatch', () => {
     expect(second.systemPrompt).not.toContain('<dashboard_artifacts>');
   });
 
+});
+
+
+describe('P4 review regressions in tool-turn delivery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    killState.dispatchKilled = false;
+    getConfig.mockResolvedValue(undefined);
+    tryAcquirePanic.mockResolvedValue({ acquired: false, state: { active: false, generation: 0 } });
+    converseStreamTurnWithFallback.mockResolvedValue(streamed('tool_use'));
+    bedrockSend.mockResolvedValueOnce(toolRound()).mockResolvedValueOnce(finalRound);
+    buildStreamingRedactor.mockResolvedValue((t: string) => t);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('P4 stopped turn retains references to files already stored by tools', async () => {
+    const abort = new AbortController();
+    toolsInvoke.mockImplementation(async () => {
+      abort.abort();
+      return { text: 'Saved report.', artifacts: [artifact] };
+    });
+    const response = await runAgentTurn({ ...baseReq, userId: 'dashboard:user:p4-owner', abortSignal: abort.signal });
+    expect(response.stopped).toBe(true);
+    expect(response.artifacts, 'Stop must not orphan a file saved earlier in the turn').toEqual([artifact]);
+  });
+
+  it('P4 successful fifth artifact is not silently omitted from turn references', async () => {
+    const saved = Array.from({ length: 5 }, (_, i) => ({ ...artifact,
+      artifactId: `f78d0000-0000-4000-8000-${String(i + 1).padStart(12, '0')}` }));
+    bedrockSend.mockReset().mockResolvedValueOnce({ ...toolRound(), output: { message: { role: 'assistant',
+      content: saved.map((_, i) => ({ toolUse: { toolUseId: `p4-tu-${i}`, name: 'web_search', input: {} } })) } } })
+      .mockResolvedValueOnce(finalRound);
+    let next = 0;
+    toolsInvoke.mockImplementation(async () => ({ text: 'Saved report.', artifacts: [saved[next++]] }));
+    const response = await runAgentTurn({ ...baseReq, userId: 'dashboard:user:p4-owner' });
+    expect(response.artifacts, 'every tool-success receipt must have a matching reference').toEqual(saved);
+  });
+
+  it('P4 private draft source stays out of turn and tool logs before DLP', async () => {
+    const source = 'PRIVATE-P4-DRAFT-SECTION-DO-NOT-LOG';
+    bedrockSend.mockReset().mockResolvedValueOnce({ ...toolRound(), output: { message: { role: 'assistant',
+      content: [{ toolUse: { toolUseId: 'p4-draft', name: 'document_draft',
+        input: { action: 'append', section: { body: source } } } }] } } }).mockResolvedValueOnce(finalRound);
+    toolsInvoke.mockResolvedValue({ text: 'Draft revision saved.' });
+    const info = vi.spyOn(logger, 'info');
+    await runAgentTurn({ ...baseReq, userText: source, userId: 'dashboard:user:p4-owner' });
+    expect(JSON.stringify(info.mock.calls), 'private turn text and tool arguments are never durable log fields').not.toContain(source);
+  });
 });
