@@ -70,17 +70,20 @@ function s3(): S3Client {
 }
 
 function pk(agentId: string): string { return `AGENT#${agentId}`; }
+// DynamoDB has already made `#` and `_` aliases the same physical chat id.
+// Keep CURATED under that exact same identity so deletion by the listed id
+// cannot leave an object behind under a different encoding.
 function mappedChatId(chatId: string): string { return chatId.replace(/#/g, '_'); }
 function chatPrefix(chatId: string): string { return `CHAT#${mappedChatId(chatId)}#ARTIFACT#`; }
 // S3 path components use base64url, whose alphabet and padding rules make this
 // encoding injective while keeping caller-controlled separators out of keys.
 function pathPart(value: string): string { return Buffer.from(value, 'utf8').toString('base64url'); }
 function objectKey(agentId: string, chatId: string, artifactId: string, version: number): string {
-  return `artifacts/${pathPart(agentId)}/${pathPart(chatId)}/${pathPart(artifactId)}/v${version}`;
+  return `artifacts/${pathPart(agentId)}/${pathPart(mappedChatId(chatId))}/${pathPart(artifactId)}/v${version}`;
 }
 /** Exact, terminal-slash scope for deleting one conversation's CURATED objects. */
 export function artifactConversationPrefix(agentId: string, chatId: string): string {
-  return `artifacts/${pathPart(agentId)}/${pathPart(chatId)}/`;
+  return `artifacts/${pathPart(agentId)}/${pathPart(mappedChatId(chatId))}/`;
 }
 function childBase(chatId: string, artifactId: string): string {
   return `${chatPrefix(chatId)}${artifactId}#`;
@@ -130,10 +133,28 @@ async function checkSafety(fileName: string, body: Buffer, source: unknown): Pro
     } catch {
       throw new Error('Artifact safety scan is unavailable');
     }
-    if (!result || result.truncated || result.blocked || result.matches?.some((m) => m.severity === 'block')) {
+    if (!result || result.truncated || result.blocked || !(result.scannedBytes >= candidate.length) ||
+        result.matches?.some((m) => m.severity === 'block')) {
       throw new Error('Artifact refused by the required safety scan');
     }
   }
+}
+
+async function queryAll(agentId: string, prefix: string): Promise<Record<string, unknown>[]> {
+  const items: Record<string, unknown>[] = [];
+  let cursor: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb().send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': prefix },
+      ConsistentRead: true,
+      ...(cursor ? { ExclusiveStartKey: cursor } : {}),
+    }));
+    items.push(...((page.Items ?? []) as Record<string, unknown>[]));
+    cursor = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (cursor);
+  return items;
 }
 
 function descriptor(row: Record<string, unknown>): ArtifactDescriptor {
@@ -172,7 +193,12 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
   // The parent can be deleted while content is being scanned, so ownership is
   // checked only after acquiring the same lock used by deleteSession.
   const session = await getSession(args.agentId, args.chatId);
+  const draftSource = args.source && typeof args.source === 'object' &&
+    (args.source as { kind?: unknown }).kind === 'draft'
+    ? args.source as { kind: 'draft'; draftId?: unknown; revision?: unknown }
+    : undefined;
   if (!session) {
+    if (draftSource) throw new Error('Draft conversation is missing; a finalizing draft cannot recreate it');
     // A first-turn artifact can be saved before the final transcript append.
     // Only a stable dashboard person may settle a missing parent; never turn a
     // bot, token-only principal, or a non-dashboard chat into durable history.
@@ -188,6 +214,24 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
     }
   }
   await assertOwner(args);
+  if (draftSource) {
+    if (typeof draftSource.draftId !== 'string' || !Number.isInteger(draftSource.revision) ||
+        (draftSource.revision as number) < 0) {
+      throw new Error('Draft metadata is invalid for artifact finalization');
+    }
+    const draftId = draftSource.draftId;
+    const { Item } = await ddb().send(new GetCommand({
+      TableName: TABLE,
+      Key: { PK: pk(args.agentId), SK: `${chatPrefix(args.chatId)}DRAFT#${draftId}#META` },
+      ConsistentRead: true,
+    }));
+    const meta = Item as Record<string, unknown> | undefined;
+    if (!meta || meta.kind !== 'document-draft' || meta.status !== 'finalizing' ||
+        meta.draftId !== draftId || meta.revision !== draftSource.revision ||
+        meta.agentId !== args.agentId || meta.chatId !== args.chatId || meta.ownerId !== args.ownerId) {
+      throw new Error('Draft is missing, no longer finalizing, or owned by another user');
+    }
+  }
   const head = await readHead({ ...args, artifactId });
   let version: number;
   if (args.artifactId) {
@@ -391,26 +435,14 @@ export async function eraseConversationArtifacts(agentId: string, chatId: string
 
 export async function listArtifactHeads(args: ArtifactScope): Promise<ArtifactDescriptor[]> {
   await assertOwner(args);
-  const { Items = [] } = await ddb().send(new QueryCommand({
-    TableName: TABLE,
-    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': pk(args.agentId), ':prefix': chatPrefix(args.chatId) },
-    ConsistentRead: true,
-  }));
-  return (Items as Record<string, unknown>[])
+  return (await queryAll(args.agentId, chatPrefix(args.chatId)))
     .filter((row) => typeof row.SK === 'string' && row.SK.endsWith('#HEAD') && row.ownerId === args.ownerId)
     .map(descriptor);
 }
 
 export async function listArtifactVersions(args: ArtifactScope & { artifactId: string }): Promise<ArtifactDescriptor[]> {
   await assertOwner(args);
-  const { Items = [] } = await ddb().send(new QueryCommand({
-    TableName: TABLE,
-    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': pk(args.agentId), ':prefix': childBase(args.chatId, args.artifactId) + 'VERSION#' },
-    ConsistentRead: true,
-  }));
-  return (Items as Record<string, unknown>[])
+  return (await queryAll(args.agentId, childBase(args.chatId, args.artifactId) + 'VERSION#'))
     .filter((row) => row.ownerId === args.ownerId && String(row.SK).includes('#VERSION#'))
     .map(descriptor);
 }
