@@ -251,4 +251,16 @@ describe('P4 review regressions in tool-turn delivery', () => {
     await runAgentTurn({ ...baseReq, userText: source, userId: 'dashboard:user:p4-owner' });
     expect(JSON.stringify(info.mock.calls), 'private turn text and tool arguments are never durable log fields').not.toContain(source);
   });
+
+  it('P4 artifact reads reach the model without copying private body into surface tool status', async () => {
+    const privateBody = 'PRIVATE-P4-ARTIFACT-BODY-IN-READ-RESULT';
+    const displayed: Array<{ output: string }> = [];
+    bedrockSend.mockReset().mockResolvedValueOnce(toolRound('read_artifact')).mockResolvedValueOnce(finalRound);
+    toolsInvoke.mockResolvedValue({ text: privateBody });
+    await runAgentTurn({ ...baseReq, userId: 'dashboard:user:p4-owner', onToolResult: (event) => displayed.push(event) });
+    expect(displayed[0]?.output, 'surface status is saved with the transcript and must not copy the private body')
+      .not.toContain(privateBody);
+    const modelInput = JSON.stringify((bedrockSend.mock.calls[1]![0] as { input: { messages: unknown } }).input.messages);
+    expect(modelInput, 'the model still needs the fully scanned read result').toContain(privateBody);
+  });
 });
