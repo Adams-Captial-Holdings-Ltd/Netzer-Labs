@@ -40,6 +40,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
 import { ddb } from './ddb.js';
+import type { ArtifactDescriptor } from '../chat/artifacts-repo.js';
 import { ingestEvictedTurns } from '../../agent/memory-ingest.js';
 import { logger } from '../../observability/logger.js';
 import { getConfig } from './runtime-config-repo.js';
@@ -70,7 +71,8 @@ const MAX_TURN_WINDOW_BYTES = 300_000;
 /** Byte size of a turn as DynamoDB will store it. */
 function turnBytes(t: Turn): number {
   return Buffer.byteLength(t.text ?? '', 'utf8') + Buffer.byteLength(JSON.stringify(t.tools ?? [])) +
-    Buffer.byteLength(JSON.stringify(t.attachments ?? [])) + 64; // 64 ~ role/ts/surface overhead
+    Buffer.byteLength(JSON.stringify(t.attachments ?? [])) + Buffer.byteLength(JSON.stringify(t.artifacts ?? [])) +
+    64; // 64 ~ role/ts/surface overhead
 }
 
 /**
@@ -249,6 +251,7 @@ export interface Turn {
   status?: 'stopped';
   tools?: ToolRecord[];
   attachments?: TurnAttachment[];
+  artifacts?: ArtifactDescriptor[];
   role: 'user' | 'assistant';
   text: string;
   ts: number; // epoch seconds
@@ -362,14 +365,42 @@ function fitToolRecords(tools: ToolRecord[], budget = MAX_MESSAGE_BYTES): ToolRe
 }
 
 /** A record's text and tool results, capped so the item fits: the text takes whatever budget the results leave. */
-function capRecordContent(t: Turn): { text: string; truncated?: true; tools?: ToolRecord[]; attachments?: TurnAttachment[] } {
+const MAX_MESSAGE_ARTIFACTS = 8;
+
+function safeMessageArtifacts(values: unknown): ArtifactDescriptor[] {
+  if (!Array.isArray(values)) return [];
+  const descriptors: ArtifactDescriptor[] = [];
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const row = value as Record<string, unknown>;
+    if (typeof row.artifactId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row.artifactId) ||
+        !Number.isInteger(row.version) || (row.version as number) < 1 ||
+        typeof row.fileName !== 'string' || row.fileName.length < 1 || row.fileName.length > 255 ||
+        /[/\\\u0000-\u001f\u007f]/.test(row.fileName) ||
+        typeof row.contentType !== 'string' || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(row.contentType) ||
+        typeof row.createdAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(row.createdAt) ||
+        !Number.isFinite(Date.parse(row.createdAt))) continue;
+    descriptors.push({ artifactId: row.artifactId, version: row.version as number, fileName: row.fileName,
+      contentType: row.contentType, createdAt: row.createdAt });
+    if (descriptors.length >= MAX_MESSAGE_ARTIFACTS) break;
+  }
+  return descriptors;
+}
+
+function capRecordContent(t: Turn): {
+  text: string; truncated?: true; tools?: ToolRecord[]; attachments?: TurnAttachment[]; artifacts?: ArtifactDescriptor[];
+} {
   const attachmentBytes = Buffer.byteLength(JSON.stringify(t.attachments ?? []), 'utf8');
-  const tools = t.tools ? fitToolRecords(t.tools, MAX_MESSAGE_BYTES - attachmentBytes) : undefined;
+  const artifacts = safeMessageArtifacts(t.artifacts);
+  const artifactBytes = Buffer.byteLength(JSON.stringify(artifacts), 'utf8');
+  const tools = t.tools ? fitToolRecords(t.tools, MAX_MESSAGE_BYTES - attachmentBytes - artifactBytes) : undefined;
   const toolBytes = Buffer.byteLength(JSON.stringify(tools ?? []), 'utf8');
   return {
-    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes - attachmentBytes),
+    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes - attachmentBytes - artifactBytes),
     ...(tools ? { tools } : {}),
     ...(t.attachments ? { attachments: t.attachments } : {}),
+    ...(artifacts.length ? { artifacts } : {}),
   };
 }
 
@@ -882,6 +913,7 @@ export async function getFullHistory(
         ...(r.status ? { status: r.status as Turn['status'] } : {}),
         ...(r.tools ? { tools: r.tools as ToolRecord[] } : {}),
         ...(r.attachments ? { attachments: r.attachments as TurnAttachment[] } : {}),
+        ...(r.artifacts ? { artifacts: safeMessageArtifacts(r.artifacts) } : {}),
         ...(r.surface ? { surface: r.surface as Turn['surface'] } : {}),
       });
     }

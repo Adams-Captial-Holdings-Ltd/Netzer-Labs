@@ -83,7 +83,8 @@ import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTu
 import { classifyTurnError } from '../../agent/turn-errors.js';
 import { processMedia, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment } from '../../lib/media/process.js';
 import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
-import { listArtifactHeads, listArtifactVersions, presignArtifactDownload } from '../../lib/chat/artifacts-repo.js';
+import { listArtifactHeads, listArtifactVersions, presignArtifactDownload, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
+import { extractArtifactBlocks } from '../../lib/chat/artifact-grammar.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
 import { listAvailableModels, pickDefaultModel, resolveModel } from '../../lib/bedrock/models.js';
@@ -505,6 +506,73 @@ function chunkWriter(stream: SSEStreamingApi, protocol?: number): (text: string)
   };
 }
 
+const MAX_DASHBOARD_ARTIFACT_REFS = 8;
+const ARTIFACT_DESCRIPTOR_FIELDS = ['artifactId', 'version', 'fileName', 'contentType', 'createdAt'] as const;
+
+function safeArtifactDescriptor(value: unknown): ArtifactDescriptor | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.artifactId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row.artifactId) ||
+      !Number.isInteger(row.version) || (row.version as number) < 1 ||
+      typeof row.fileName !== 'string' || row.fileName.length < 1 || row.fileName.length > 255 ||
+      /[/\\\u0000-\u001f\u007f]/.test(row.fileName) ||
+      typeof row.contentType !== 'string' || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(row.contentType) ||
+      typeof row.createdAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(row.createdAt) ||
+      !Number.isFinite(Date.parse(row.createdAt))) return undefined;
+  return Object.fromEntries(ARTIFACT_DESCRIPTOR_FIELDS.map((key) => [key, row[key]])) as unknown as ArtifactDescriptor;
+}
+
+function safeArtifactDescriptors(values: unknown): ArtifactDescriptor[] {
+  if (!Array.isArray(values)) return [];
+  const descriptors: ArtifactDescriptor[] = [];
+  for (const value of values) {
+    const descriptor = safeArtifactDescriptor(value);
+    if (descriptor) descriptors.push(descriptor);
+    if (descriptors.length >= MAX_DASHBOARD_ARTIFACT_REFS) break;
+  }
+  return descriptors;
+}
+
+/**
+ * Model chunks are cumulative. Withhold from the first possible artifact fence
+ * until finalization so even a split or partial opening marker cannot put an
+ * artifact body on the live SSE stream.
+ */
+function guardedChunkWriter(stream: SSEStreamingApi, protocol: number | undefined): {
+  onChunk: (text: string) => void;
+  finish: (safeFinalText: string) => void;
+} {
+  const write = chunkWriter(stream, protocol);
+  let withheld = false;
+  let lastVisible = '';
+  const writeVisible = (text: string) => {
+    lastVisible = text;
+    write(text);
+  };
+  const emit = (text: string) => {
+    if (withheld) return;
+    const marker = text.indexOf(':::artifact');
+    if (marker >= 0) {
+      withheld = true;
+      writeVisible(text.slice(0, marker));
+      return;
+    }
+    let partial = 0;
+    const fence = ':::artifact';
+    for (let size = Math.min(fence.length - 1, text.length); size > 0; size--) {
+      if (fence.startsWith(text.slice(-size))) { partial = size; break; }
+    }
+    writeVisible(partial ? text.slice(0, -partial) : text);
+  };
+  return {
+    onChunk: emit,
+    finish: (safeFinalText) => {
+      if (safeFinalText !== lastVisible) writeVisible(safeFinalText);
+    },
+  };
+}
+
 async function finishChatTurn(agentId: string, chatId: string, id: string | undefined, status: Exclude<TurnStatus, 'streaming'>): Promise<void> {
   if (!id) return;
   try {
@@ -517,7 +585,7 @@ async function finishChatTurn(agentId: string, chatId: string, id: string | unde
 
 async function saveChatTurn(
   agentId: string, chatId: string, userText: string,
-  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked'>, tools: ToolRecord[], owner: SessionEnrichment,
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts'>, tools: ToolRecord[], owner: SessionEnrichment,
   attachments: TurnAttachment[] = [],
 ): Promise<boolean> {
   if (result.blocked) return true;
@@ -526,7 +594,8 @@ async function saveChatTurn(
     await appendTurns(agentId, chatId, [
       { role: 'user', text: userText, ts, ...(attachments.length ? { attachments } : {}) },
       { role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
-        ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}) },
+        ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
+        ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}) },
     ], undefined, owner);
     return true;
   } catch (err) {
@@ -2291,6 +2360,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         // to drop the override entirely, so a /model switch (or the new Chat model
         // picker) silently had no effect on the streamed Chat tab.
         const modelOverride = body?.modelOverride ?? session?.modelOverride;
+        const guardedChunks = guardedChunkWriter(stream, body?.protocol);
         const result = await runAgentTurn({
           abortSignal: abort.signal,
           agentId,
@@ -2322,7 +2392,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
           ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
           ...(peekNote ? { systemNote: peekNote } : {}),
-          onChunk: chunkWriter(stream, body?.protocol),
+          onChunk: guardedChunks.onChunk,
           onToolEvent: ({ name, callIndex, toolUseId, input, inputTruncated }) => {
             const info = { label: humanizeToolName(name), step: callIndex + 1 };
             toolStarts.set(toolUseId, info);
@@ -2340,12 +2410,61 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           return;
         }
+        let displayText = result.text;
+        let artifactRefs = safeArtifactDescriptors(result.artifacts);
+        let artifactSaveFailed = false;
+        try {
+          const extracted = extractArtifactBlocks(result.text);
+          displayText = extracted.text;
+          const available = Math.max(0, MAX_DASHBOARD_ARTIFACT_REFS - artifactRefs.length);
+          if (extracted.artifacts.length > available) artifactSaveFailed = true;
+          const ownerId = dashboardIdentity(c);
+          if (ownerId.startsWith('dashboard:user:')) {
+            for (const artifact of extracted.artifacts.slice(0, available)) {
+              try {
+                const savedArtifact = await saveArtifact({
+                  agentId,
+                  chatId,
+                  ownerId,
+                  fileName: artifact.title,
+                  contentType: artifact.mimeType,
+                  body: Buffer.from(artifact.body),
+                  source: { kind: 'grammar', identifier: artifact.identifier },
+                });
+                const descriptor = safeArtifactDescriptor(savedArtifact);
+                if (descriptor) artifactRefs.push(descriptor);
+                else artifactSaveFailed = true;
+              } catch {
+                // Storage and safety details are intentionally opaque at egress.
+                artifactSaveFailed = true;
+              }
+            }
+          } else if (extracted.artifacts.length > 0) {
+            artifactSaveFailed = true;
+          }
+        } catch {
+          // A parser limit failure must not turn raw artifact source into display text.
+          const marker = result.text.indexOf(':::artifact');
+          if (marker >= 0) displayText = result.text.slice(0, marker);
+          artifactSaveFailed = true;
+        }
+        if (artifactSaveFailed) {
+          displayText = `${displayText.trimEnd()}${displayText.trimEnd() ? '\n\n' : ''}I couldn't store one or more requested files.`;
+        }
+        const displayResult: AgentTurnResponse = { ...result, text: displayText,
+          ...(artifactRefs.length ? { artifacts: artifactRefs } : { artifacts: undefined }) };
+        guardedChunks.finish(displayText);
         // The save and the turn record come first: an awaited write to a body
         // nobody reads never resolves, and must not gate either.
-        const saved = await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments);
+        const saved = await saveChatTurn(agentId, chatId, userText, displayResult, tools, conversationOwner(c), savedAttachments);
         await finishChatTurn(agentId, chatId, clientMessageId, result.blocked ? 'refused' : 'complete');
         finalSent = true;
-        await writeChatAnswer(stream, result, [...kbConfirmations, ...acks]);
+        await writeChatAnswer(stream, displayResult, [...kbConfirmations, ...acks]);
+        if (saved) {
+          for (const artifact of safeArtifactDescriptors(displayResult.artifacts)) {
+            await stream.writeSSE({ event: 'artifact_ref', data: JSON.stringify(artifact) });
+          }
+        }
         await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
       } catch (err) {
         if ((err as { name?: string })?.name === 'AbortError') {
@@ -3632,6 +3751,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     return c.json({ ...history, turns: history.turns.map((turn) => ({
       ...turn,
       ...(turn.attachments ? { attachments: turn.attachments.map(({ id, name, type, size }) => ({ id, name, type, size })) } : {}),
+      ...(turn.artifacts ? { artifacts: safeArtifactDescriptors(turn.artifacts) } : {}),
     })) });
   });
 
