@@ -125,3 +125,21 @@ it('P4 local containment keeps artifact records out of conversation lists', asyn
   expect(rows.filter((row) => row.SK === `CHAT#${chatId}`)).toHaveLength(1);
   expect(rows.some((row) => String(row.SK).includes('#ARTIFACT#'))).toBe(false);
 });
+
+it('P4 local first-turn artifact initializes and erases its stable parent', async () => {
+  const repo = await import(repoPath);
+  const { getSession, deleteSession } = await import('../state/sessions-repo.js');
+  const chatId = chat('first-turn');
+  expect(await getSession('main', chatId)).toBeNull();
+  const saved = await repo.saveArtifact(input(chatId, 'first turn body'));
+  expect(saved.version).toBe(1);
+  expect(await getSession('main', chatId)).toMatchObject({ surface: 'dashboard',
+    userId: PERSON.userId, turns: [] });
+  await deleteSession('main', chatId);
+  expect(await getSession('main', chatId)).toBeNull();
+  const { ddb } = await import('../state/ddb.js');
+  const child = await ddb().send(new QueryCommand({ TableName: TABLE,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+    ExpressionAttributeValues: { ':pk': 'AGENT#main', ':prefix': `CHAT#${chatId}#` }, ConsistentRead: true }));
+  expect(child.Items ?? []).toEqual([]);
+});
