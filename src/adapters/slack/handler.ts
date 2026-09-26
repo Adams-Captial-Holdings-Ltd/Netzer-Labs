@@ -845,6 +845,8 @@ async function deliverSlackMedia(
   threadTs?: string,
   botToken?: string,
 ): Promise<void> {
+  // P4 durable artifact SKIP: dashboard artifacts need a stable person-bound
+  // owner, and Slack has no such mapping; keep generated file/image delivery as-is.
   for (const m of media ?? []) {
     try {
       const bytes = await getRawObject(m.s3Key, m.s3Bucket);

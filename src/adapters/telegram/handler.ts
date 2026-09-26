@@ -496,6 +496,8 @@ async function handleMessage(
 
     // Generated images: deliver as real photos after the text reply. Fail
     // soft — the presigned URL is already in the reply text as fallback.
+    // P4 durable artifact SKIP: dashboard artifacts need a stable person-bound
+    // owner, and Telegram has no such mapping; keep generated image delivery as-is.
     for (const m of result.media ?? []) {
       // Parity gap, deliberate (see CLAUDE.md): generated documents ride the
       // same media channel but Telegram has no sendDocument helper yet, and
