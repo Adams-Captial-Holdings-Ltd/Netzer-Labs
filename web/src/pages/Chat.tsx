@@ -675,7 +675,7 @@ export function Chat() {
       </div>
       {openArtifact && (
         <ArtifactPanel key={`${openArtifact.artifact.artifactId}:${openArtifact.artifact.version}`}
-          agentId={agentId} chatId={chatId} artifact={openArtifact.artifact} onClose={closeArtifact} />
+          agentId={agentId} chatId={chatId} artifact={openArtifact.artifact} onClose={() => closeArtifact()} />
       )}
     </div>
   );
