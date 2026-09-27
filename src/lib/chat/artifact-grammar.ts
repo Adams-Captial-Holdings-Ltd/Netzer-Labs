@@ -16,7 +16,7 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ARTIFACTS = 8;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const HEADER_PATTERN = /^:::artifact\{identifier="([^"\r\n]*)" type="([^"\r\n]*)" title="([^"\r\n]*)"\}$/;
-const UNSAFE_TITLE_PATTERN = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+export const UNSAFE_ARTIFACT_TITLE_PATTERN = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
 
 const MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({
   'text/plain': 'text/plain',
@@ -45,7 +45,7 @@ const safeTitle = (title: string): boolean =>
   title.length <= 120 &&
   title.trim() === title &&
   !title.includes('\\') &&
-  !UNSAFE_TITLE_PATTERN.test(title);
+  !UNSAFE_ARTIFACT_TITLE_PATTERN.test(title);
 
 // Stop as soon as the limit is crossed; this avoids allocating an encoded copy
 // of an arbitrarily large model response.

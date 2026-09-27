@@ -85,7 +85,7 @@ import { processMedia, buildMediaBlocks, getRawObject, buildKbConfirmation, kind
 import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
 import { attachmentDisposition, downloadFileName, listArtifactHeads, listArtifactVersions, presignArtifactDownload, readArtifactBody, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
 import { deckOutline, DeckOutlineError } from '../../lib/chat/artifact-preview.js';
-import { extractArtifactBlocks } from '../../lib/chat/artifact-grammar.js';
+import { extractArtifactBlocks, UNSAFE_ARTIFACT_TITLE_PATTERN } from '../../lib/chat/artifact-grammar.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
 import { listAvailableModels, pickDefaultModel, resolveModel } from '../../lib/bedrock/models.js';
@@ -2625,11 +2625,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     let title: string | null | undefined;
     if (body.title !== undefined) {
       if (body.title !== null && typeof body.title !== 'string') return c.json({ error: 'invalid_title' }, 400);
-      const titleToCheck = typeof body.title === 'string' ? body.title.replace(/^ +| +$/g, '') : '';
-      // Validate before trim(), which would erase a control at either edge.
-      // The artifact parser owns this character rule; neutralizing header
-      // punctuation preserves rename's existing allowance for quotes and backslashes.
-      if (titleToCheck && extractArtifactBlocks(`:::artifact{identifier="title" type="text/plain" title="${titleToCheck.replace(/["\\]/g, 'x')}"}\nx\n:::`).artifacts.length === 0) {
+      if (typeof body.title === 'string' && UNSAFE_ARTIFACT_TITLE_PATTERN.test(body.title)) {
         return c.json({ error: 'invalid_title' }, 400);
       }
       title = typeof body.title === 'string' ? body.title.trim() || null : null;
