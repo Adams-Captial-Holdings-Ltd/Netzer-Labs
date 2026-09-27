@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import DOMPurify from 'dompurify';
 import { api, getBytes } from '../../lib/api';
 import { buildMermaidDocument, buildSandboxDocument, parseCsv, previewKind } from '../../lib/chat/artifacts';
@@ -56,7 +56,8 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
     return () => media.removeEventListener('change', update);
   }, []);
 
-  useEffect(() => {
+  // A layout effect: the listener exists as soon as the panel does, so an Escape pressed before paint is not lost.
+  useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
