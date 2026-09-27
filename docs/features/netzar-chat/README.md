@@ -374,7 +374,8 @@ backend.
   `replaceLastReply`, one version-fenced transaction over the window row and the
   reply's own record, the same message number, `turnsTotal` unchanged, nothing
   trimmed (the next append trims, with its memory summary; a reply memory had
-  already summarised is queued again). The save names the message count and the
+  already summarised is queued again, while what memory took from the replaced
+  reply stays). The save names the message count and the
   owner the route authorized, retries a version race while both still match, and
   is refused if the conversation moved on or changed hands. Only stored images
   and documents under their caps are re-read from the raw bucket (nothing
@@ -418,7 +419,9 @@ backend.
 - **Drafts, shortcuts and downloads.** Unsent drafts per conversation in the
   tab's sessionStorage, restored across a reload and cleared on send, keyed —
   with the remembered conversation — by the signed-in identity; the
-  not-yet-known identity's slot is wiped at every sign-in and sign-out. Ctrl/Cmd
+  not-yet-known identity's slot is wiped at every sign-in and sign-out (a
+  signed-out person's drafts are never shown to the next person, but stay in
+  the tab's storage until the tab closes). Ctrl/Cmd
   + Shift + O starts a new chat, Shift + Escape focuses the message box, Ctrl/Cmd
   + / focuses the search (none of them while an artifact sheet is open on a
   phone). A code block's Download code names the file by its language
@@ -493,7 +496,9 @@ message number is never overwritten).
   the identity is known both use the slot `unknown`, which sign-in and sign-out
   wipe, together with the unscoped `cce_chat_active` the page also keeps.
 - Regenerate replaces only the LAST reply, in place, and only the one it
-  answered (the authorized message count and owner); that replacement is the one
+  answered (the authorized message count and owner) — the stored last reply,
+  which is not always the one on screen (two tabs; a stopped reply whose save
+  failed; carried to P7); that replacement is the one
   write that may overwrite a taken message number (P6). Rename and pin are the
   owner's only and never create a row; every conversation writer carries `title`
   and `pinned`.
@@ -582,6 +587,9 @@ message number is never overwritten).
 | A regenerated question that carried a video is answered from its stored transcript without the video's keyframes | `replayStoredAttachments` in `src/adapters/dashboard/handler.ts` | carried in the P6 session log (Jev 0.86: extracting keyframes from raw bytes needs processVideo's probe step) |
 | The list search term travels in the GET URL, so it reaches the load balancer's access logs | `router.get('/sessions')` in `src/adapters/dashboard/handler.ts` | carried in the P6 session log — a POST search if those logs ever leave the account |
 | An admin's list shows every member's pinned conversations first, and the audited list override does not record `q` | `visibleConversations` in `src/adapters/dashboard/handler.ts`; the P6 security review, INFO-1 | carried in the P6 session log (decision 1: an admin sees every conversation, audited) |
+| Regenerate re-answers the conversation's stored last exchange, which is not always the one on screen (the same chat open in two tabs, or a stopped reply whose save failed); the page then shows the new answer under its own older question until a reload | the regenerate branch of `router.post('/test-turn/stream')` in `src/adapters/dashboard/handler.ts` and `regenerate()` in `web/src/pages/Chat.tsx`; the P6 fresh critic's F-1 | carried to P7 as its first item (the P6 session log, A233): tie the request to the reply shown and refuse a mismatch |
+| A whole-row conversation write (regenerate's `replaceLastReply`, and `appendTurns`) can undo a /newchat, /model or war-room change that lands between its read and its write, because those three writers never bump the version | `updateIfExists` in `src/lib/state/sessions-repo.ts`; the P6 fresh critic's F-7 (a code trace, not reproduced) | carried to P7 (the P6 session log, A232) |
+| Renaming a chat whose first message has a line break or tab fails when saved untouched, and the page says "Please try again" | the rename pre-fill in `web/src/components/chat/ConversationSidebar.tsx`; the P6 fresh critic's F-8 | carried to P7 (the P6 session log, A234) |
 | P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
 | A reply still generating when its chat is deleted re-creates the chat when it saves a file (visible and deletable); a crash mid-save leaves the chat's lock row, so delete stays "busy" until an operator clears it | the P4 Claude security review, M1 and M3 | hardening (P7), owner decision 59 |
 | `pptxgenjs` pulls `image-size` 1.2.1 with two HIGH advisories (a crafted image can hang it); the code never reaches it — slides carry text only | `npm audit`; the P4 session log, A202 | owner decision 56; re-check before slides carry images |

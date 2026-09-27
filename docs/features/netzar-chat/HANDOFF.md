@@ -36,7 +36,12 @@ as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
   term rides in the URL (**A221**); an admin's list shows every member's pins
   (**A222**); CLEANUP left two low-impact refactors (**A223**); a long title's
   rename field opens scrolled to its end (**A229**); the orb widget keeps a
-  spliced comment and a repeated condition (**A230**). Still carried:
+  spliced comment and a repeated condition (**A230**); a title padded with a
+  non-ASCII space is trimmed since CLEANUP (**A231**); a whole-row write can undo a
+  /newchat, /model or war-room change racing it (**A232**); Regenerate acts on the
+  stored last exchange, not always the one on screen (**A233**, P7's first item);
+  a rename pre-filled from a first message with a line break fails (**A234**).
+  Still carried:
   A212 (the WebRTC residual), ART-16, WI-5.4 / ART-10 (P7), decision 59 M1 / M3
   (P7), A209 and A213.
 - **Who wrote it.** Claude Opus coordinated; Codex wrote every production change
