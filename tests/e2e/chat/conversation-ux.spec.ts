@@ -356,6 +356,23 @@ test.describe('on a phone', () => {
     expect(await composerField(page).evaluate((el) => el.closest('[inert]') === null)).toBe(true);
   });
 
+  // P129: a listener or focus move that must exist when a surface opens belongs in a layout effect.
+  // Opening re-renders in a microtask; a plain effect waits for the next frame, and a key pressed
+  // before it (the page behind already inert) lands nowhere.
+  test('P6 the phone drawer takes focus and answers Escape before its first paint', async ({ page }) => {
+    await openChat(page);
+    const result = await page.evaluate(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Show conversation history"]')!.click();
+      for (let i = 0; i < 10; i++) await Promise.resolve(); // the render's microtasks: no frame, no new task
+      const drawer = document.querySelector('[role="dialog"][aria-label="Conversation history"]')!;
+      const focusInside = drawer.contains(document.activeElement);
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      document.dispatchEvent(escape);
+      return { focusInside, escapeHandled: escape.defaultPrevented };
+    });
+    expect(result).toEqual({ focusInside: true, escapeHandled: true });
+  });
+
   test('P6 the drawer buttons say whether their drawer is open', async ({ page }) => {
     await openChat(page);
     const historyButton = page.locator('button[aria-label="Show conversation history"]');
