@@ -4,17 +4,19 @@
 // under src/, so it enters the ROOT tsc program: keep it DOM-light and keep
 // relative imports `.js`-suffixed (NodeNext).
 
+import { parseArtifactRef } from './artifacts.js';
 import type { Conversation, Message, MessageAttachment, Model, ToolCall } from './types.js';
 
 /** Restore transcript results and stopped state; arguments belong only to the live tab. */
 export function transcriptToMessages(
-  turns: Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[] }>,
+  turns: Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[]; artifacts?: unknown[] }>,
 ): Message[] {
   return turns.map((turn) => {
     if (turn.role === 'user') return {
       role: 'user', text: turn.text, ts: turn.ts,
       ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
     };
+    const artifactRefs = turn.artifacts?.map(parseArtifactRef).filter((ref) => ref !== null);
     return {
       role: 'assistant',
       text: turn.text,
@@ -23,6 +25,7 @@ export function transcriptToMessages(
       ...(turn.tools?.length ? {
         tools: turn.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
       } : {}),
+      ...(artifactRefs?.length ? { artifactRefs } : {}),
     };
   });
 }

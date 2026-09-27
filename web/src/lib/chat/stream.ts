@@ -9,7 +9,8 @@
 // program: keep it DOM-free and keep relative imports `.js`-suffixed
 // (NodeNext).
 
-import type { ToolCall, TurnMeta } from './types.js';
+import { parseArtifactRef } from './artifacts.js';
+import type { ArtifactRef, ToolCall, TurnMeta } from './types.js';
 
 export interface TurnAttachment { s3Key: string; fileName: string; mimeType?: string; addToKnowledge?: true }
 
@@ -41,6 +42,7 @@ export interface TurnOutcome {
   kb: string[];
   images: Array<{ url: string; caption: string }>;
   artifacts: Array<{ url: string; name: string }>;
+  artifactRefs: ArtifactRef[];
   tools: ToolCall[];
 }
 
@@ -135,6 +137,7 @@ export async function streamTurn(
   const kbChips: string[] = [];
   const images: Array<{ url: string; caption: string }> = [];
   const artifacts: Array<{ url: string; name: string }> = [];
+  const artifactRefs: ArtifactRef[] = [];
   const tools: ToolCall[] = [];
   const publishTools = () => cb.onTools?.(tools.map((tool) => ({ ...tool })));
   let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
@@ -208,6 +211,9 @@ export async function streamTurn(
         const a = JSON.parse(curData);
         if (a.url) artifacts.push({ url: a.url, name: a.name || a.caption || 'document' });
       } catch { /* ignore malformed artifact event */ }
+    } else if (curEvent === 'artifact_ref') {
+      const ref = parseArtifactRef(parseEvent<unknown>(curData));
+      if (ref) artifactRefs.push(ref);
     } else if (curEvent === 'error') {
       errorText = curData;
       errorCode = undefined;
@@ -263,5 +269,5 @@ export async function streamTurn(
     } catch { /* not JSON (e.g. a raw chunk); use raw text */ }
   }
 
-  return { text: fullText, isReply, errorText, errorCode, saved, meta, kb: kbChips, images, artifacts, tools };
+  return { text: fullText, isReply, errorText, errorCode, saved, meta, kb: kbChips, images, artifacts, artifactRefs, tools };
 }
