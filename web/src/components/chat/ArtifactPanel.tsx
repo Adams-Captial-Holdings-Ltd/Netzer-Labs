@@ -42,11 +42,8 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
   const frameLoads = useRef(0);
   const sectionRef = useRef<HTMLElement>(null);
   const selected = versions.find((item) => item.version === version) ?? { ...artifact, version };
-  const kind0 = previewKind(selected.contentType, new Uint8Array());
-  const sniffedKind = selected.contentType === 'image/svg+xml' || selected.contentType === 'application/pdf' ||
-    ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(selected.contentType);
-  const textKind = selected.contentType === 'image/svg+xml' ||
-    ['html', 'markdown', 'code', 'csv', 'mermaid'].includes(kind0);
+  const declaredKind = previewKind(selected.contentType);
+  const textKind = ['svg', 'html', 'markdown', 'code', 'csv', 'mermaid'].includes(declaredKind);
   const query = `agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(chatId)}` +
     `&artifactId=${encodeURIComponent(artifact.artifactId)}`;
   const derived = useMemo(() => {
@@ -97,9 +94,9 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
     frameLoads.current = 0;
     setPreview(null);
     const path = `/artifacts/content?${query}&version=${version}`;
-    if (kind0 === 'fallback' && !sniffedKind) {
+    if (declaredKind === 'fallback') {
       setPreview({ kind: 'fallback' });
-    } else if (kind0 === 'outline') {
+    } else if (declaredKind === 'outline') {
       void api.get<{ slides: Array<{ index: number; text: string }> }>(`${path}&view=outline`)
         .then((result) => { if (active) setPreview({ kind: 'outline', slides: result.slides }); })
         .catch(() => { if (active) setPreview({ kind: 'fallback' }); });
