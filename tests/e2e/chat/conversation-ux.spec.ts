@@ -877,3 +877,21 @@ test('P6 a draft never reaches the next person in the same tab', async ({ page }
   await as('dashboard:user:user-a');
   await expect(composerOf(page)).toHaveValue('a private draft from A');
 });
+
+// Found reading build R2: the end-of-turn fix scrolled a settled turn instantly, which silently dropped the
+// documented design (useChatScroll's header: a committed turn scrolls smoothly unless motion is reduced).
+test('P6 a settled reply still scrolls smoothly when motion is allowed', async ({ page }) => {
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as unknown as { __scrolls: string[] }).__scrolls = seen;
+    const original = Element.prototype.scrollTo;
+    Element.prototype.scrollTo = function (this: Element, ...args: unknown[]) {
+      const options = args[0];
+      if (options && typeof options === 'object') seen.push(String((options as ScrollToOptions).behavior ?? 'auto'));
+      return (original as (...a: unknown[]) => void).apply(this, args);
+    } as typeof Element.prototype.scrollTo;
+  });
+  await newChat(page);
+  await sendAndWait(page, 'Summarise the last 90 days of audit data');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __scrolls: string[] }).__scrolls)).toContain('smooth');
+});
