@@ -11,16 +11,9 @@
  * donor's minimal row is exactly that one button, which is why it is the one
  * taken rather than its full `HoverButtons`.
  *
- * REGENERATE AND FEEDBACK ARE DELIBERATELY ABSENT, and this is not an
- * oversight to fix later by adding buttons. This app's wire has no endpoint for
- * either -- `POST /api/test-turn/stream` takes a prompt and streams a reply;
- * there is no re-run of a settled turn and no rating sink. A button wired to
- * nothing, or rendered disabled with an apologetic title, is worse than no
- * button: it advertises a capability the product does not have. The donor's own
- * minimal variant ships copy alone for the same reason, so nothing was removed
- * from this file to reach that state.
+ * The settled last reply also offers Regenerate through the same turn stream.
  *
- * ── The edit list, in full: FOUR changes, all of them the missing package ──
+ * ── The original port's copy-button edits ──
  *
  *   1. donor line 3, `import type { TMessage, SearchResultData } from
  *      'librechat-data-provider'` -> this app's `Message` type. That package is
@@ -36,13 +29,11 @@
  *      key table (~/hooks/useLocalize.ts) rather than through react-i18next.
  *      The call sites are unchanged; only what backs them is.
  *
- * Everything else -- the `visible mt-1 flex justify-center gap-1 self-end`
- * row, the glyph swap on copy, `disabled={!canCopy}`, the tooltip that names
- * the state rather than the control, and `revealOnRowHoverClasses` -- is
- * byte-for-byte.
+ * The copy button retains the donor's glyph swap, tooltip and hover reveal.
  */
 import { useState, useMemo } from 'react';
 import { Button, Clipboard, CheckMark, TooltipAnchor } from '@librechat/client';
+import { RotateCcw } from 'lucide-preact';
 import type { Message } from '../../../../../../lib/chat/types';
 import { useLocalize, useCopyToClipboard, hasCopyableText } from '~/hooks';
 import { revealOnRowHoverClasses } from './styles';
@@ -50,9 +41,10 @@ import { cn } from '~/utils';
 
 type THoverButtons = {
   message: Message;
+  onRegenerate?: () => void;
 };
 
-export default function MinimalHoverButtons({ message }: THoverButtons) {
+export default function MinimalHoverButtons({ message, onRegenerate }: THoverButtons) {
   const localize = useLocalize();
   const [isCopied, setIsCopied] = useState(false);
   const copyToClipboard = useCopyToClipboard({
@@ -92,6 +84,10 @@ export default function MinimalHoverButtons({ message }: THoverButtons) {
           </Button>
         }
       />
+      {onRegenerate && <button type="button" aria-label="Regenerate" title="Regenerate" onClick={onRegenerate}
+        className={cn('rounded-lg p-1.5 text-text-secondary-alt hover:bg-surface-hover hover:text-text-primary', revealOnRowHoverClasses)}>
+        <RotateCcw size={19} />
+      </button>}
     </div>
   );
 }

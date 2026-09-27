@@ -181,6 +181,7 @@ function refsTurn(reply: string, refs: Array<ReturnType<typeof artifactRef>>): M
 }
 
 export const artifactFixtures: Record<string, MockSseEvent[]> = {
+  regen: refsTurn('Here is a fresh answer to the same question.', [artifactRef(id(5))]),
   // Eight: the most references one turn can carry (MAX_DASHBOARD_ARTIFACT_REFS in the real route).
   artifacts: refsTurn('Here are your files.', [1, 2, 3, 4, 5, 6, 7, 8].map((n) => artifactRef(id(n)))),
   office: refsTurn('Here are the office files.', [9, 10].map((n) => artifactRef(id(n)))),

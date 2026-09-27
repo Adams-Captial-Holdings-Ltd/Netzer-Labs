@@ -85,8 +85,12 @@ export function Chat() {
   // Live tool-call status, mirroring Telegram/Slack (CLAUDE.md "Chat surface
   // parity"). Shown while the agent works a tool; cleared when text resumes.
   const [toolStatus, setToolStatus] = useState('');
-  const [newChatOpen, setNewChatOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [historyError, setHistoryError] = useState(false);
+  const [search, setSearch] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState(false);
   // Desktop conversation rail: collapsed or expanded, remembered across
   // reloads (localStorage, not sessionStorage — a layout preference outlives
   // the tab, unlike `cce_chat_active`, which is deliberately per-tab).
@@ -160,22 +164,26 @@ export function Chat() {
   // Conversation sidebar. /sessions with an agentId is a single Query on
   // PK=AGENT#<id> (without it the route Scans the whole table), so always
   // scope it. Newest first.
-  async function refreshConversations(forAgent: string) {
+  async function refreshConversations(forAgent: string, query = searchQuery) {
     if (!forAgent) return;
     setHistoryLoading(true);
+    setHistoryError(false);
     try {
+      clearApiCache();
       const d = await api.get<{ sessions: Conversation[] }>(
-        `/sessions?agentId=${encodeURIComponent(forAgent)}`,
+        `/sessions?agentId=${encodeURIComponent(forAgent)}${query ? `&q=${encodeURIComponent(query)}` : ''}`,
       );
       const rows = (d.sessions ?? [])
         // Only dashboard chats are browsable here; Telegram/Slack rows share
         // the table but have no UI to reopen them, and still expire.
         .filter((s) => s.chatId.startsWith('dashboard:'))
-        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+        .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
       setConversations(rows);
     } catch (e) {
       // Non-fatal: the sidebar is an aid, not a prerequisite for chatting.
       console.error('Chat: failed to load conversations', e);
+      setHistoryError(true);
+      setConversations([]);
     }
     setHistoryLoading(false);
   }
@@ -189,6 +197,15 @@ export function Chat() {
     if (remembered && remembered !== chatId) void openConversation(remembered);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (agentId) void refreshConversations(agentId, searchQuery);
+  }, [searchQuery]);
 
   // Where the chat on screen files its draft on the way out. A chat with nothing
   // sent yet shares ONE slot: its fresh id is never reopened, so a draft filed
@@ -221,14 +238,19 @@ export function Chat() {
     activateConversation(id);
     setStreamText('');
     setMessages([]);
+    setTranscriptError(false);
+    setTranscriptLoading(true);
     try {
+      clearApiCache();
       const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
         `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(id)}`,
       );
       setMessages(transcriptToMessages(d.turns ?? []));
     } catch (e) {
       console.error('Chat: failed to load transcript', e);
-      setLoadError('Could not load that conversation. It may have been deleted.');
+      setTranscriptError(true);
+    } finally {
+      setTranscriptLoading(false);
     }
   }
 
@@ -238,6 +260,19 @@ export function Chat() {
     activateConversation(id, forAgent, true);
     setMessages([]);
     setStreamText('');
+    setTranscriptLoading(false);
+    setTranscriptError(false);
+  }
+
+  async function updateConversation(c: Conversation, patch: { title?: string | null; pinned?: boolean }) {
+    try {
+      await api.patch('/sessions', { agentId: c.agentId, chatId: c.chatId, ...patch });
+      clearApiCache();
+      await refreshConversations(c.agentId);
+    } catch (e) {
+      console.error('Chat: could not update conversation', e);
+      toast('Could not update that chat. Please try again.', 'error');
+    }
   }
 
   // Permanently delete a conversation. The row IS the conversation (turns are an
@@ -331,20 +366,23 @@ export function Chat() {
     }
   }
 
-  async function send() {
-    const text = input.trim();
-    const sendFiles = filesRef.current;
+  async function send(retryIndex?: number) {
+    const retry = retryIndex !== undefined;
+    const text = retry ? messages[retryIndex - 1]?.text ?? '' : input.trim();
+    const sendFiles = retry ? [] : filesRef.current;
     if ((!text && sendFiles.length === 0) || streaming || !agentId ||
       sendFiles.some((f) => f.status !== 'ready' || !f.signed)) return;
     const clientMessageId = newMessageId();
-    draftsRef.current.delete(`${agentId}/${chatId}`);
+    if (!retry) draftsRef.current.delete(`${agentId}/${chatId}`);
     // The first send in a fresh chat: its draft slot is spent, and from here on
     // the chat has messages and an id the sidebar can reopen.
-    if (unsentChatRef.current) draftsRef.current.delete(NEW_DRAFT);
+    if (!retry && unsentChatRef.current) draftsRef.current.delete(NEW_DRAFT);
     unsentChatRef.current = false;
-    setInput('');
-    updateFiles(() => []);
-    setAttachmentAlert('');
+    if (!retry) {
+      setInput('');
+      updateFiles(() => []);
+      setAttachmentAlert('');
+    }
     const userMsg: Message = {
       role: 'user',
       text,
@@ -353,7 +391,7 @@ export function Chat() {
         id: f.signed!.id, name: f.file.name, type: f.signed!.headers['Content-Type'], size: f.file.size,
       })) } : {}),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => retry ? prev.filter((_, i) => i !== retryIndex) : [...prev, userMsg]);
     setStreaming(true);
     setStreamText('');
     streamTextRef.current = '';
@@ -390,8 +428,7 @@ export function Chat() {
           onToolStatus: setToolStatus,
           onTools: (tools) => { streamToolsRef.current = tools; },
         },
-        // Stop is the only thing this signal does; every other exit path from
-        // streamTurn is unchanged.
+        // Stop travels through the request signal.
         { signal: abort.signal },
       );
 
@@ -419,6 +456,7 @@ export function Chat() {
         ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
         ...(outcome.artifactRefs.length > 0 ? { artifactRefs: outcome.artifactRefs } : {}),
         ...(outcome.meta ? { meta: outcome.meta } : {}),
+        ...(outcome.isReply ? { isReply: true } : {}),
         ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
         // `done: not_saved`: the answer arrived, the server could not store it.
         ...(outcome.saved === false ? { notSaved: true as const } : {}),
@@ -473,6 +511,48 @@ export function Chat() {
     void refreshConversations(agentId);
   }
 
+  async function regenerate() {
+    if (streaming || messages.at(-1)?.role !== 'assistant') return;
+    const old = messages.at(-1)!;
+    if (old.error || old.notSaved || old.isReply) return;
+    setMessages((prev) => prev.slice(0, -1));
+    setStreaming(true);
+    setStreamText('');
+    streamTextRef.current = '';
+    setToolStatus('');
+    setStreamStartedAt(Date.now());
+    const abort = new AbortController();
+    abortRef.current = abort;
+    try {
+      const outcome = await streamTurn({ regenerate: true, agentId, chatId, clientMessageId: newMessageId(), protocol: 2,
+        ...(modelId ? { modelOverride: modelId } : {}) }, getToken(), {
+        onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
+        onToolStatus: setToolStatus,
+      }, { signal: abort.signal });
+      setMessages((prev) => [...prev, outcome.errorText
+        ? { role: 'assistant', text: friendlyTurnError(outcome.errorText, outcome.errorCode), ts: Date.now() / 1000, error: true }
+        : { role: 'assistant', text: outcome.text, ts: Date.now() / 1000,
+          ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
+          ...(outcome.kb.length ? { kb: outcome.kb } : {}),
+          ...(outcome.images.length ? { images: outcome.images } : {}),
+          ...(outcome.artifacts.length ? { artifacts: outcome.artifacts } : {}),
+          ...(outcome.meta ? { meta: outcome.meta } : {}),
+          ...(outcome.tools.length ? { tools: outcome.tools } : {}),
+          ...(outcome.saved === false ? { notSaved: true as const } : {}),
+        }]);
+    } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') setMessages((prev) => [...prev, old]);
+      else setMessages((prev) => [...prev, { role: 'assistant', text: friendlyTurnError(e instanceof Error ? e.message : ''), ts: Date.now() / 1000, error: true }]);
+    } finally {
+      setStreamText('');
+      setToolStatus('');
+      setStreaming(false);
+      abortRef.current = null;
+      clearApiCache();
+      void refreshConversations(agentId);
+    }
+  }
+
   // Cancel the turn in flight. The abort travels through streamTurn's optional
   // signal to the underlying fetch, which rejects the read; send()'s catch
   // recognises the AbortError and commits the partial answer instead of
@@ -487,15 +567,19 @@ export function Chat() {
   // below it. Every row, every group heading and the delete control live in
   // ../components/chat/ConversationSidebar.
   //
-  // THE DELETE FLOW STAYS HERE, deliberately and untouched. `confirmDelete`
-  // below, `deletingRef`, the snapshot-inside-the-updater rollback and the
-  // ConfirmDialog are the paid-for fixes; the sidebar only reports which row's
-  // trash icon was clicked. Nothing about them changed in this phase.
+  // The delete flow stays here: the sidebar reports the row, and this page
+  // owns the confirmation and rollback.
   const sidebar = (
     <ConversationSidebar
       conversations={conversations}
       activeChatId={chatId}
       loading={historyLoading}
+      loadError={historyError}
+      onRetryLoad={() => void refreshConversations(agentId)}
+      search={search}
+      onSearch={setSearch}
+      onRename={(c, title) => void updateConversation(c, { title })}
+      onTogglePin={(c) => void updateConversation(c, { pinned: !c.pinned })}
       streaming={streaming}
       deleting={deleting}
       // Picking a conversation in the drawer closes it — the donor's
@@ -503,13 +587,8 @@ export function Chat() {
       // there is no drawer and this is a no-op.
       onOpen={(id) => { void openConversation(id); setSidebarOpen(false); }}
       onRequestDelete={(c) => setPendingDelete(c)}
-      // The SAME handler the header's New chat uses, confirm dialog included:
-      // two controls for one action must not disagree about whether an
-      // in-progress conversation is about to be abandoned. Only a fresh chat
-      // with nothing sent yet is left without asking; a stored conversation is
-      // confirmed whether or not its transcript has arrived (an empty one
-      // reopens all the same).
-      onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
+      // The same one-click action the header uses.
+      onNewChat={() => startNewChat()}
       collapsed={sidebarCollapsed}
       onToggleCollapse={() => {
         const next = !sidebarCollapsed;
@@ -614,7 +693,7 @@ export function Chat() {
               onSelectModel={setModelId}
               chatId={chatId}
               streaming={streaming}
-              onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
+              onNewChat={() => startNewChat()}
             />
           }
           composer={composer}
@@ -627,7 +706,9 @@ export function Chat() {
             agentId={agentId}
             chatId={chatId}
             onOpenArtifact={(artifact, opener) => setOpenArtifact({ artifact, opener })}
-            landing={isLanding}
+            onRetry={(i) => void send(i)}
+            onRegenerate={() => void regenerate()}
+            landing={isLanding && !transcriptLoading && !transcriptError}
             streaming={streaming}
             streamText={streamText}
             toolStatus={toolStatus}
@@ -639,7 +720,9 @@ export function Chat() {
                 {loadError}
               </div>
             )}
-            {isLanding && (
+            {transcriptLoading && <div role="status" class="text-muted">Loading conversation…</div>}
+            {transcriptError && <div role="alert" class="text-danger">Could not load this conversation. <button type="button" onClick={() => void openConversation(chatId)}>Try again</button></div>}
+            {isLanding && !transcriptLoading && !transcriptError && (
               <ChatLanding
                 agentName={agentName}
                 modelLabel={modelLabel}
@@ -648,16 +731,6 @@ export function Chat() {
             )}
           </MessagesView>
         </ChatCanvas>
-
-        <ConfirmDialog
-          open={newChatOpen}
-          title="Start a new chat"
-          message="This starts a fresh chat session. The current conversation stays in the sidebar and can be reopened."
-          confirmPhrase="NEW CHAT"
-          confirmLabel="Start new chat"
-          onConfirm={() => { startNewChat(); setNewChatOpen(false); }}
-          onCancel={() => setNewChatOpen(false)}
-        />
 
         <ConfirmDialog
           open={pendingDelete !== null}

@@ -38,9 +38,9 @@
  *   - `Convo.tsx` reads `useParams`, `useRecoilValue`, `useNavigateToConvo`,
  *     `useUpdateConversationMutation`, `useGetStartupConfig` and `useShiftKey`
  *     in its first ten lines, and its actions slot is a rename form plus a
- *     `ConvoOptions` popover for pin/share/archive/delete. This product has
- *     one action (delete) and it is a plain sibling button, so what survives
- *     is the row's markup and class list, not the component.
+ *     `ConvoOptions` popover for pin/share/archive/delete. This product uses
+ *     plain sibling buttons for rename, pin and delete, so what survives is
+ *     the row's markup and class list, not the component.
  *   - `ConvoLink.tsx`'s gradient fade mask (`textOverflow: clip` plus a 5rem
  *     `bg-gradient-to-l` in the row's own background colour) assumes a
  *     single-line row whose background it can name. This row is two lines —
@@ -129,7 +129,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren, RefObject } from 'preact';
-import { PanelLeftClose, PanelLeftOpen, Plus, Trash2 } from 'lucide-preact';
+import { PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Pin } from 'lucide-preact';
 import type { Conversation } from '../../lib/chat/types';
 import { conversationTitle, relativeAge } from '../../lib/chat/helpers';
 import { groupConversationsByDate } from './conversation-groups';
@@ -221,6 +221,12 @@ interface ConversationSidebarProps {
   /** The conversation currently on screen — the row that is marked active. */
   activeChatId: string;
   loading: boolean;
+  loadError: boolean;
+  onRetryLoad: () => void;
+  search: string;
+  onSearch: (value: string) => void;
+  onRename: (c: Conversation, title: string) => void;
+  onTogglePin: (c: Conversation) => void;
   /** A turn is in flight: navigating away or deleting is refused, exactly as
    *  the inline rail refused it. */
   streaming: boolean;
@@ -241,6 +247,12 @@ export function ConversationSidebar({
   conversations,
   activeChatId,
   loading,
+  loadError,
+  onRetryLoad,
+  search,
+  onSearch,
+  onRename,
+  onTogglePin,
   streaming,
   deleting,
   onOpen,
@@ -251,7 +263,18 @@ export function ConversationSidebar({
   mobileOpen,
   onCloseMobile,
 }: ConversationSidebarProps) {
-  const groups = groupConversationsByDate(conversations);
+  const pinned = conversations.filter((c) => c.pinned);
+  const groups = [
+    ...(pinned.length ? [{ label: 'Pinned', conversations: pinned }] : []),
+    ...groupConversationsByDate(conversations.filter((c) => !c.pinned)),
+  ];
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState('');
+  useLayoutEffect(() => {
+    if (!renamingId) return;
+    const fields = document.querySelectorAll<HTMLInputElement>('input[aria-label="Chat title"]');
+    [...fields].find((field) => !field.closest('[inert]') && field.getClientRects().length > 0)?.focus();
+  }, [renamingId]);
   // What the scrolling list is re-measured against (see ConversationList): the
   // rows it holds, and whether the empty-state paragraph is standing in for
   // them. Both change the content height, and neither resizes the scroller.
@@ -313,7 +336,8 @@ export function ConversationSidebar({
   // ── One list, rendered into both shells ──────────────────────────────────
   const list = (
     <>
-      {conversations.length === 0 && !loading && (
+      {loadError && <div class="px-2 py-2 text-caption text-danger">Could not load your chats. <button type="button" onClick={onRetryLoad}>Try again</button></div>}
+      {conversations.length === 0 && !loading && !loadError && (
         <p class="px-2 py-2 text-caption text-muted">
           No past conversations yet. They appear here once you send a message.
         </p>
@@ -369,7 +393,16 @@ export function ConversationSidebar({
                       : 'hover:bg-row-hover'
                   }`}
                 >
-                  <button
+                  {renamingId === c.chatId ? <input
+                    aria-label="Chat title"
+                    value={renameTitle}
+                    onInput={(e) => setRenameTitle(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') { e.stopPropagation(); setRenamingId(null); }
+                      if (e.key === 'Enter') { e.preventDefault(); onRename(c, renameTitle); setRenamingId(null); }
+                    }}
+                    class="min-w-0 flex-1 rounded-lg border border-border bg-bg px-2 py-1 text-body-sm text-primary"
+                  /> : <button
                     type="button"
                     disabled={streaming}
                     onClick={() => onOpen(c.chatId)}
@@ -405,7 +438,7 @@ export function ConversationSidebar({
                       {relativeAge(c.updatedAt)}
                       {c.messageCount ? ` · ${c.messageCount} msg` : ''}
                     </span>
-                  </button>
+                  </button>}
                   {/* ── ACTION SLOT ────────────────────────────────────────
                       COPIED from donor `Convo.tsx`'s action wrapper — its
                       `actionVisibilityClassName` / `actionWidthClassName`
@@ -451,12 +484,24 @@ export function ConversationSidebar({
                       motion-reduce:transition-none
                       [@media(hover:hover)]:pointer-events-none [@media(hover:hover)]:max-w-0
                       [@media(hover:hover)]:scale-x-0 [@media(hover:hover)]:opacity-0
-                      group-hover:pointer-events-auto group-hover:max-w-[2.25rem]
+                      group-hover:pointer-events-auto group-hover:max-w-[6.75rem]
                       group-hover:scale-x-100 group-hover:opacity-100
                       group-focus-within:pointer-events-auto
-                      group-focus-within:max-w-[2.25rem] group-focus-within:scale-x-100
+                      group-focus-within:max-w-[6.75rem] group-focus-within:scale-x-100
                       group-focus-within:opacity-100"
                   >
+                    <button type="button" disabled={streaming || deleting}
+                      aria-label={`Rename chat: ${title}`} title="Rename chat"
+                      onClick={(e) => { e.stopPropagation(); setRenameTitle(c.title ?? c.firstMessage ?? ''); setRenamingId(c.chatId); }}
+                      class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40">
+                      <Pencil size={15} />
+                    </button>
+                    <button type="button" disabled={streaming || deleting}
+                      aria-label={`${c.pinned ? 'Unpin' : 'Pin'} chat: ${title}`} title={c.pinned ? 'Unpin chat' : 'Pin chat'}
+                      onClick={(e) => { e.stopPropagation(); onTogglePin(c); }}
+                      class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40">
+                      <Pin size={15} />
+                    </button>
                     {/* A SIBLING of the row button, never nested inside it: a
                         <button> within a <button> is invalid HTML, and nesting
                         would make one click both open and delete the
@@ -492,6 +537,10 @@ export function ConversationSidebar({
       ))}
     </>
   );
+
+  const searchField = <input type="search" aria-label="Search chats" value={search}
+    onInput={(e) => onSearch(e.currentTarget.value)} placeholder="Search chats"
+    class="mx-3 my-2 w-[calc(100%-1.5rem)] rounded-lg border border-border bg-bg px-2 py-1.5 text-body-sm text-primary" />;
 
   const newChatButton = (
     <button
@@ -565,6 +614,7 @@ export function ConversationSidebar({
                 </IconButton>
               </div>
             </div>
+            {searchField}
             <ConversationList signal={listSignal}>{list}</ConversationList>
             <div class="border-t border-border p-3">{newChatButton}</div>
           </>
@@ -622,6 +672,7 @@ export function ConversationSidebar({
           </h2>
           {loading && <span class="shrink-0 text-caption text-muted">…</span>}
         </div>
+        {searchField}
         <ConversationList signal={listSignal}>{list}</ConversationList>
         <div class="border-t border-border p-3">
           {/* Selecting anything in the drawer closes it — the donor's

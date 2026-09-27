@@ -37,7 +37,7 @@ export interface ToolCall {
 // reply says so.
 export interface MessageAttachment { id: string; name: string; type: string; size: number }
 export interface ArtifactRef { artifactId: string; version: number; fileName: string; contentType: string; createdAt: string }
-export interface Message { role: 'user' | 'assistant'; text: string; ts: number; attachments?: MessageAttachment[]; error?: boolean; stopped?: boolean; notSaved?: true; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; artifactRefs?: ArtifactRef[]; meta?: TurnMeta; tools?: ToolCall[] }
+export interface Message { role: 'user' | 'assistant'; text: string; ts: number; attachments?: MessageAttachment[]; error?: boolean; stopped?: boolean; isReply?: boolean; notSaved?: true; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; artifactRefs?: ArtifactRef[]; meta?: TurnMeta; tools?: ToolCall[] }
 export interface Model { label: string; id: string; contextWindow: number; family: string; isDefault: boolean }
 
 // One row of the conversation sidebar. Mirrors the shape /sessions already
@@ -48,4 +48,6 @@ export interface Conversation {
   updatedAt: number;
   messageCount: number | null;
   firstMessage: string | null;
+  title?: string | null;
+  pinned?: boolean;
 }

@@ -60,15 +60,15 @@ function sseWrite(res: ServerResponse, event: string, data: string): void {
  * record — and a missing or unparseable body is still a valid request that
  * plays "default".
  */
-function parseTurn(rawBody: string): { text: string; chatId: string; attachmentKeys: string[] } {
+function parseTurn(rawBody: string): { text: string; chatId: string; attachmentKeys: string[]; regenerate: boolean } {
   try {
-    const body = JSON.parse(rawBody) as { text?: unknown; chatId?: unknown; attachments?: unknown };
+    const body = JSON.parse(rawBody) as { text?: unknown; chatId?: unknown; attachments?: unknown; regenerate?: unknown };
     const attachmentKeys = Array.isArray(body.attachments)
       ? body.attachments.map((a) => String((a as { s3Key?: unknown }).s3Key ?? ''))
       : [];
-    return { text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys };
+    return { text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys, regenerate: body.regenerate === true };
   } catch {
-    return { text: '', chatId: '', attachmentKeys: [] };
+    return { text: '', chatId: '', attachmentKeys: [], regenerate: false };
   }
 }
 
@@ -110,7 +110,7 @@ function describeUploads(keys: string[]): Array<{ id: string; name: string; type
   });
 }
 
-interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[] }
+interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[]; failed: boolean }
 
 /** Accumulate only the fields the real transcript stores, never arguments. */
 function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
@@ -146,18 +146,20 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   const tools: ToolCall[] = [];
   // P5: the URL-free references a turn published, kept on its stored turn as the real route does.
   const artifacts: unknown[] = [];
+  let failed = false;
   for (const ev of fixture) {
     await cadence(res, ev.delayMs);
-    if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed, artifacts };
+    if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed, artifacts, failed };
     // The real route publishes at most eight references a turn (MAX_DASHBOARD_ARTIFACT_REFS).
     if (ev.event === 'artifact_ref' && artifacts.length >= 8) continue;
     sseWrite(res, ev.event, ev.data);
     if (ev.event === 'chunk' || ev.event === 'reply') streamed = ev.data;
     if (ev.event === 'artifact_ref') artifacts.push(JSON.parse(ev.data));
+    if (ev.event === 'error') failed = true;
     recordToolEvent(tools, ev.event, ev.data);
   }
   res.end();
-  return { text: streamed, tools, stopped: false, artifacts };
+  return { text: streamed, tools, stopped: false, artifacts, failed };
 }
 
 /** Send a JSON body with the shape the real route returns. */
@@ -230,8 +232,9 @@ const mockAgents = {
 // reopening it 404'd. `updatedAt` stays relative to the live clock, because
 // that is what has to keep moving for the date groups to mean anything.
 const SESSION_ID_BASE = 1_750_000_000_000;
+const sessionMeta = new Map<string, { title: string | null; pinned: boolean }>();
 
-function mockSessions(): unknown {
+function mockSessions(q = ''): unknown {
   const hourMs = 3_600_000;
   const nowMs = Date.now();
   // hours ago, messageCount, opening line
@@ -247,14 +250,15 @@ function mockSessions(): unknown {
     [24 * 21, 9, 'Reconcile the August invoice exceptions'],
     [24 * 64, 3, 'First pass at the compliance control catalogue'],
   ];
-  return {
-    sessions: [
+  const sessions = [
       ...rows.map(([hoursAgo, messageCount, firstMessage], i) => ({
         agentId: 'main',
         chatId: `dashboard:${SESSION_ID_BASE + i}`,
         updatedAt: Math.floor((nowMs - hoursAgo * hourMs) / 1000),
         messageCount,
         firstMessage,
+        title: sessionMeta.get(`dashboard:${SESSION_ID_BASE + i}`)?.title ?? null,
+        pinned: sessionMeta.get(`dashboard:${SESSION_ID_BASE + i}`)?.pinned ?? false,
       })),
       {
         agentId: 'main',
@@ -262,9 +266,17 @@ function mockSessions(): unknown {
         updatedAt: Math.floor((nowMs - 2 * hourMs) / 1000),
         messageCount: 3,
         firstMessage: 'not browsable here',
+        title: null,
+        pinned: false,
       },
-    ],
-  };
+      ...[...transcripts].filter(([chatId]) => !rows.some((_, i) => chatId === `dashboard:${SESSION_ID_BASE + i}`))
+        .map(([chatId, turns]) => ({ agentId: 'main', chatId, updatedAt: turns.at(-1)?.ts ?? nowMs / 1000,
+          messageCount: turns.length, firstMessage: turns.find((t) => t.role === 'user')?.text ?? null,
+          title: sessionMeta.get(chatId)?.title ?? null, pinned: sessionMeta.get(chatId)?.pinned ?? false })),
+    ];
+  return { sessions: sessions.filter((s) => !q || (s.title ?? '').toLowerCase().includes(q) ||
+    (s.firstMessage ?? '').toLowerCase().includes(q))
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt) };
 }
 
 // Turns this dev server actually streamed, keyed by `chatId`, so REOPENING a
@@ -337,19 +349,32 @@ export function mockStreamPlugin(): Plugin {
         req.on('data', (c: Buffer) => { raw += c; });
         req.on('end', () => {
           const turn = parseTurn(raw);
+          if (turn.regenerate) {
+            const stored = transcripts.get(turn.chatId);
+            if (!stored?.length || stored.at(-1)?.role !== 'assistant') {
+              jsonStatus(res, 409, { error: 'nothing_to_regenerate' });
+              return;
+            }
+          }
           // The record lands in the microtask after `res.end()`, and node runs
           // one thread, so it always completes before this server can accept
           // the next request — including the reload's transcript read. There is
           // no race to guard against here.
-          void play(turn.text, res)
+          void play(turn.regenerate ? '/fixture regen' : turn.text, res)
             .then((reply) => {
+              if (reply.failed) return;
               // A cut stream records what the client actually received, which is
               // the honest transcript — but a mysteriously short reply on replay
               // is worth a word here rather than a puzzle later.
               if (reply.stopped) {
                 console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.text.length} chars)`);
               }
-              recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
+              if (turn.regenerate) {
+                const stored = transcripts.get(turn.chatId)!;
+                const ts = Date.now() / 1000;
+                transcripts.set(turn.chatId, [...stored.slice(0, -1), { role: 'assistant', text: reply.text, ts,
+                  ...(reply.artifacts.length ? { artifacts: reply.artifacts } : {}) }]);
+              } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
             })
             // Without this, a throw anywhere above becomes an unhandled
             // rejection that takes the whole dev server down and blames
@@ -499,10 +524,35 @@ export function mockStreamPlugin(): Plugin {
       });
 
       server.middlewares.use('/api/sessions', (req, res, next) => {
-        // Only the list GET is mocked. DELETE keeps proxying, so the delete
-        // flow is still exercised against the real route.
+        if (req.method === 'PATCH') {
+          void readBody(req).then((raw) => {
+            let body: Record<string, unknown>;
+            try { body = JSON.parse(raw.toString()) as Record<string, unknown>; }
+            catch { jsonStatus(res, 400, { error: 'invalid_json' }); return; }
+            const chatId = body.chatId;
+            if (typeof chatId !== 'string' || !chatId) { jsonStatus(res, 400, { error: 'chatId_required' }); return; }
+            if (body.title === undefined && body.pinned === undefined) { jsonStatus(res, 400, { error: 'nothing_to_update' }); return; }
+            if (body.title !== undefined && body.title !== null && (typeof body.title !== 'string' ||
+              /[\x00-\x1f\x7f]/.test(body.title) || body.title.trim().length > 120)) {
+              jsonStatus(res, 400, { error: 'invalid_title' }); return;
+            }
+            if (body.pinned !== undefined && typeof body.pinned !== 'boolean') { jsonStatus(res, 400, { error: 'invalid_pinned' }); return; }
+            const known = (body.agentId === undefined || body.agentId === 'main') &&
+              ((chatId.startsWith('dashboard:') && Number(chatId.slice(10)) >= SESSION_ID_BASE &&
+              Number(chatId.slice(10)) < SESSION_ID_BASE + 10) || transcripts.has(chatId));
+            if (!known) { jsonStatus(res, 404, { error: 'not_found' }); return; }
+            const old = sessionMeta.get(chatId) ?? { title: null, pinned: false };
+            const title = body.title !== undefined ? (typeof body.title === 'string' ? body.title.trim() || null : null) : old.title;
+            const pinned = body.pinned !== undefined ? body.pinned as boolean : old.pinned;
+            sessionMeta.set(chatId, { title, pinned });
+            json(res, { agentId: body.agentId ?? 'main', chatId, title, pinned });
+          });
+          return;
+        }
         if (req.method !== 'GET') return next();
-        json(res, mockSessions());
+        const q = new URL(req.url ?? '/', 'http://localhost').searchParams.get('q')?.trim() ?? '';
+        if (q.length > 100) { jsonStatus(res, 400, { error: 'invalid_query' }); return; }
+        json(res, mockSessions(q.toLowerCase()));
       });
 
       server.middlewares.use('/api/agents', (req, res, next) => {

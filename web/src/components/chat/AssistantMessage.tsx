@@ -161,9 +161,13 @@ interface AssistantMessageProps {
   agentId: string;
   chatId: string;
   onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
+  canRetry: boolean;
+  onRetry: () => void;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
 }
 
-export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact }: AssistantMessageProps) {
+export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact, canRetry, onRetry, canRegenerate, onRegenerate }: AssistantMessageProps) {
   const tools = message.tools ?? [];
 
   return (
@@ -188,9 +192,7 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
           ) : message.stopped ? (
             <StoppedFooter />
           ) : null}
-          {/* The action row this product did not have. Copy only — see the
-              copied file's header for why regenerate and feedback are absent
-              rather than disabled.
+          {/* The action row: Copy on replies, Regenerate on the last saved reply.
 
               ── ROUND 3: `chat-row-actions` IS WHAT MAKES IT EXIST ON TOUCH ──
 
@@ -222,7 +224,7 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
               because it is an action, but because it is already visible on a
               phone and there is no reason for a 900px window to disagree. */}
           <div class="chat-row-actions">
-            <MinimalHoverButtons message={message} />
+            <MinimalHoverButtons message={message} onRegenerate={canRegenerate ? onRegenerate : undefined} />
           </div>
         </div>
       }
@@ -237,10 +239,12 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
         // failure and not mistakable for a short answer, so it keeps the
         // donor's bordered danger panel — and stays a `<pre>`, because the text
         // is a sanitized error string, never markdown.
-        <div class="rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">
+        <div role="alert" class="rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">
           <pre class="whitespace-pre-wrap break-words font-sans text-body-sm text-danger">
             {message.text}
           </pre>
+          {canRetry ? <button type="button" onClick={onRetry} class="mt-2 text-body-sm font-medium text-danger underline">Try again</button>
+            : <p class="mt-2 text-body-sm text-danger">Please attach the files again.</p>}
         </div>
       ) : (
         // DOMPurify runs inside renderMarkdown, last, immediately before this

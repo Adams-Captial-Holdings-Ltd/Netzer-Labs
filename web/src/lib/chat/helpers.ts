@@ -85,6 +85,7 @@ export function rememberChatId(agentId: string, chatId: string): void {
 
 /** Sidebar label for a conversation: its opening message, else the raw id. */
 export function conversationTitle(c: Conversation): string {
+  if (c.title?.trim()) return c.title.trim();
   const first = (c.firstMessage ?? '').trim();
   return first.length > 0 ? first : c.chatId;
 }
