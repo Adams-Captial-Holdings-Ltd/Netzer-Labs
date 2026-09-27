@@ -86,7 +86,7 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
   useEffect(() => {
     let active = true;
     void api.get<{ versions: ArtifactRef[] }>(`/artifacts/versions?${query}`)
-      .then((result) => { if (active) setVersions(result.versions.sort((a, b) => a.version - b.version)); })
+      .then((result) => { if (active) setVersions([...result.versions].sort((a, b) => a.version - b.version)); })
       .catch(() => { /* The opened version remains usable if the list fails. */ });
     return () => { active = false; };
   }, [agentId, chatId, artifact.artifactId, artifact.version]);
