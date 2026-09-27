@@ -94,10 +94,10 @@ sequenceDiagram
   participant S as S3 CURATED (versioned)
 
   U->>H: send turn in person-owned conversation
-  H->>D: verify stable owner; begin turn
+  H->>D: verify stable owner, begin turn
   H->>L: runAgentTurn (tools or bounded artifact grammar)
   L->>L: scan name, complete bytes and source with DLP
-  L->>D: acquire conversation child lock; write pending/version/head rows
+  L->>D: acquire conversation child lock, write pending/version/head rows
   L->>S: write immutable CURATED object version
   S-->>L: physical VersionId
   L-->>H: URL-free artifact descriptor
