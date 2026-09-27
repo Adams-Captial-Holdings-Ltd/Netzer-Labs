@@ -320,7 +320,7 @@ function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachm
     ...(transcripts.get(chatId) ?? []),
     { role: 'user', text: userText, ts, ...(files.length ? { attachments: files } : {}) },
     ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [{
-      role: 'assistant', text: reply.text, ts,
+      role: 'assistant', text: reply.text || (reply.stopped ? '(Stopped before a reply.)' : ''), ts,
       ...(reply.stopped ? { status: 'stopped' } : {}),
       ...(reply.tools.length ? {
         tools: reply.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
@@ -360,7 +360,11 @@ export function mockStreamPlugin(): Plugin {
           // one thread, so it always completes before this server can accept
           // the next request — including the reload's transcript read. There is
           // no race to guard against here.
-          void play(turn.regenerate ? '/fixture regen' : turn.text, res)
+          const previousQuestion = turn.regenerate ? transcripts.get(turn.chatId)?.at(-2)?.text ?? '' : '';
+          const fixtureText = turn.regenerate
+            ? previousQuestion.startsWith('/fixture ') ? previousQuestion : '/fixture regen'
+            : turn.text;
+          void play(fixtureText, res)
             .then((reply) => {
               if (reply.failed) return;
               // A cut stream records what the client actually received, which is
@@ -372,7 +376,8 @@ export function mockStreamPlugin(): Plugin {
               if (turn.regenerate) {
                 const stored = transcripts.get(turn.chatId)!;
                 const ts = Date.now() / 1000;
-                transcripts.set(turn.chatId, [...stored.slice(0, -1), { role: 'assistant', text: reply.text, ts,
+                transcripts.set(turn.chatId, [...stored.slice(0, -1), { role: 'assistant', text: reply.text || (reply.stopped ? '(Stopped before a reply.)' : ''), ts,
+                  ...(reply.stopped ? { status: 'stopped' } : {}),
                   ...(reply.artifacts.length ? { artifacts: reply.artifacts } : {}) }]);
               } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
             })

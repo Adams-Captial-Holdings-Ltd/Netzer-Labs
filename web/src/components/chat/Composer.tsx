@@ -280,7 +280,7 @@ export function Composer({
   // Escape stops a streaming reply from anywhere in the composer: the form
   // receives the keydown from the textarea and from the Stop button alike.
   function handleEscape(e: KeyboardEvent) {
-    if (e.key !== 'Escape' || !streaming) return;
+    if (e.key !== 'Escape' || e.shiftKey || !streaming) return;
     // The Escape that closes a Japanese or Chinese input method's candidates is
     // the input method's, not a Stop.
     if (e.isComposing || e.keyCode === 229) return;
@@ -335,7 +335,7 @@ export function Composer({
           focus-within:border-primary focus-within:shadow-lg focus-within:ring-2
           focus-within:ring-primary-a/30"
       >
-        {attachmentAlert && <div role="alert" class="px-3 pt-2 text-caption text-danger">{attachmentAlert}</div>}
+        {attachmentAlert && <div role="alert" class="chat-error-panel px-3 pt-2 text-caption">{attachmentAlert}</div>}
         {files.length > 0 && (
           // Inside the card, above the text: what is about to be sent belongs
           // in the thing that sends it, not floating above it.
@@ -371,7 +371,7 @@ export function Composer({
                     <div class="h-full bg-primary" style={{ width: `${f.progress}%` }} />
                   </div>
                 )}
-                {f.status === 'failed' && <span class="text-danger">{f.error}</span>}
+                {f.status === 'failed' && <span class="chat-error-panel">{f.error}</span>}
                 <label class="flex items-center gap-1.5">
                   <input type="checkbox" checked={f.addToKnowledge}
                     onChange={(e) => onToggleKnowledge(f.localId, (e.target as HTMLInputElement).checked)}
@@ -379,7 +379,7 @@ export function Composer({
                     aria-describedby={`chat-knowledge-${f.localId}`} />
                   <span>Add to knowledge</span>
                 </label>
-                <span id={`chat-knowledge-${f.localId}`} class="text-muted">
+                <span id={`chat-knowledge-${f.localId}`} class="text-secondary">
                   Everyone who uses this agent can find it, and it stays if you delete this chat.
                 </span>
               </li>
@@ -424,7 +424,7 @@ export function Composer({
           // previous 8px bottom padding did not, and that seam was the one
           // thing on this card that still looked unfinished.
           class={`chat-composer__input block w-full resize-none overflow-y-auto bg-transparent
-            px-4 py-4 text-body-sm text-primary outline-none placeholder:text-muted
+            px-4 py-4 text-body-sm text-primary outline-none placeholder:text-secondary
             disabled:cursor-not-allowed disabled:opacity-50 ${TEXTAREA_MAX}`}
         />
 

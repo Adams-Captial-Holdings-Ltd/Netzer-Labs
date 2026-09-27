@@ -157,7 +157,7 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
         {summary && (
           // Caps at 40% of the row so a chatty connector name can never push
           // the chevron off the end; the full list is one click away anyway.
-          <span class="min-w-0 max-w-[40%] truncate font-normal text-muted" title={summary}>
+          <span class="min-w-0 max-w-[40%] truncate font-normal text-secondary" title={summary}>
             · {summary}
           </span>
         )}
@@ -207,7 +207,7 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
                       the agent loop stamped on the call, and it is what a run in
                       the audit log is reconciled against. Monospace and fixed
                       width so the column of numbers stays a column. */}
-                  <span class="w-6 shrink-0 text-right font-mono text-muted tabular-nums">
+                  <span class="w-6 shrink-0 text-right font-mono text-secondary tabular-nums">
                     {t.step}
                   </span>
                   <Icon size={13} class="shrink-0 text-muted" />
@@ -218,24 +218,24 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
                 <div class="ml-8 min-w-0 space-y-1">
                   {t.input !== undefined && (
                     <>
-                      <div class="text-caption text-muted">Input</div>
+                      <div class="text-caption text-secondary">Input</div>
                       <pre class={TOOL_PAYLOAD_CLASS} tabIndex={0} aria-label="Tool input">{t.input}</pre>
-                      {t.inputTruncated && <div class="text-caption text-muted">Input shortened</div>}
+                      {t.inputTruncated && <div class="text-caption text-secondary">Input shortened</div>}
                     </>
                   )}
                   {t.output !== undefined && (
                     <>
-                      <div class="text-caption text-muted">Output</div>
+                      <div class="text-caption text-secondary">Output</div>
                       <pre class={TOOL_PAYLOAD_CLASS} tabIndex={0} aria-label="Tool output">{t.output}</pre>
                     </>
                   )}
                   {/* A call that started but has no result: the Stop interrupted it. */}
                   {t.toolUseId !== undefined && t.output === undefined && (
-                    <div class="text-caption text-muted">No result</div>
+                    <div class="text-caption text-secondary">No result</div>
                   )}
-                  {t.truncated && <div class="text-caption text-muted">Output shortened</div>}
+                  {t.truncated && <div class="text-caption text-secondary">Output shortened</div>}
                   {t.isError && (
-                    <span class="inline-flex rounded border border-danger-a/40 bg-danger-a/10 px-1.5 py-0.5 text-caption text-danger">
+                    <span class="chat-error-panel inline-flex rounded border border-danger-a/40 bg-danger-a/10 px-1.5 py-0.5 text-caption">
                       Failed
                     </span>
                   )}

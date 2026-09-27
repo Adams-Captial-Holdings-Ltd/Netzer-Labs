@@ -102,7 +102,8 @@ export function MessagesView({
           ) : (
             <AssistantMessage key={i} message={m} agentName={agentName}
               agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact}
-              canRetry={!messages[i - 1]?.attachments?.length} onRetry={() => onRetry(i)}
+              canRetry={!streaming && i === messages.length - 1 && !messages[i - 1]?.attachments?.length} onRetry={() => onRetry(i)}
+              needsAttachments={!!messages[i - 1]?.attachments?.length}
               canRegenerate={!streaming && i === messages.length - 1 && !m.error && !m.notSaved && !m.isReply}
               onRegenerate={onRegenerate} />
           ),

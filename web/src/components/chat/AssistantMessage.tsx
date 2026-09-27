@@ -162,12 +162,13 @@ interface AssistantMessageProps {
   chatId: string;
   onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
   canRetry: boolean;
+  needsAttachments: boolean;
   onRetry: () => void;
   canRegenerate: boolean;
   onRegenerate: () => void;
 }
 
-export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact, canRetry, onRetry, canRegenerate, onRegenerate }: AssistantMessageProps) {
+export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact, canRetry, needsAttachments, onRetry, canRegenerate, onRegenerate }: AssistantMessageProps) {
   const tools = message.tools ?? [];
 
   return (
@@ -239,12 +240,12 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
         // failure and not mistakable for a short answer, so it keeps the
         // donor's bordered danger panel — and stays a `<pre>`, because the text
         // is a sanitized error string, never markdown.
-        <div role="alert" class="rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">
-          <pre class="whitespace-pre-wrap break-words font-sans text-body-sm text-danger">
+        <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">
+          <pre class="whitespace-pre-wrap break-words font-sans text-body-sm">
             {message.text}
           </pre>
-          {canRetry ? <button type="button" onClick={onRetry} class="mt-2 text-body-sm font-medium text-danger underline">Try again</button>
-            : <p class="mt-2 text-body-sm text-danger">Please attach the files again.</p>}
+          {canRetry ? <button type="button" onClick={onRetry} class="mt-2 text-body-sm font-medium underline">Try again</button>
+            : needsAttachments ? <p class="mt-2 text-body-sm">Please attach the files again.</p> : null}
         </div>
       ) : (
         // DOMPurify runs inside renderMarkdown, last, immediately before this
@@ -258,7 +259,7 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
           not_saved`): one caption, so the reader knows it is theirs to copy now
           and will not be here after a reload. */}
       {message.notSaved && (
-        <p class="mt-2 text-caption text-muted">This reply wasn't saved, so it won't be here after a reload.</p>
+        <p class="mt-2 text-caption text-secondary">This reply wasn't saved, so it won't be here after a reload.</p>
       )}
     </MessageRow>
   );
@@ -292,7 +293,7 @@ function MessageAttachments({ message, agentId, chatId, onOpenArtifact }: {
             class="max-h-96 max-w-full rounded-xl border border-border"
             loading="lazy"
           />
-          {im.caption && <span class="mt-1 block text-caption text-muted">{im.caption}</span>}
+          {im.caption && <span class="mt-1 block text-caption text-secondary">{im.caption}</span>}
         </a>
       ))}
 

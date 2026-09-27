@@ -288,7 +288,21 @@ export function ConversationSidebar({
   // from wherever focus actually is. Same shape as ConfirmDialog/Modal.
   useEffect(() => {
     if (!mobileOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseMobile(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Escape') { e.preventDefault(); onCloseMobile(); }
+      if (e.key !== 'Tab') return;
+      const focusable = [...(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])]
+        .filter((el) => !el.closest('[inert]') && el.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (e.shiftKey && (document.activeElement === first || !drawerRef.current?.contains(document.activeElement))) {
+        e.preventDefault(); last?.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !drawerRef.current?.contains(document.activeElement))) {
+        e.preventDefault(); first?.focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [mobileOpen, onCloseMobile]);
@@ -336,9 +350,9 @@ export function ConversationSidebar({
   // ── One list, rendered into both shells ──────────────────────────────────
   const list = (
     <>
-      {loadError && <div class="px-2 py-2 text-caption text-danger">Could not load your chats. <button type="button" onClick={onRetryLoad}>Try again</button></div>}
+      {loadError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-3 py-2 text-caption">Could not load your chats. <button type="button" class="font-medium underline" onClick={onRetryLoad}>Try again</button></div>}
       {conversations.length === 0 && !loading && !loadError && (
-        <p class="px-2 py-2 text-caption text-muted">
+        <p class="px-2 py-2 text-caption text-secondary">
           No past conversations yet. They appear here once you send a message.
         </p>
       )}
@@ -349,7 +363,7 @@ export function ConversationSidebar({
               the first group so the list starts at the panel's padding. */}
           <h3
             id={`chat-group-${group.label}`}
-            class={`pl-1 pt-1 text-muted ${groupIndex === 0 ? 'mt-0' : 'mt-3'}`}
+            class={`pl-1 pt-1 text-secondary ${groupIndex === 0 ? 'mt-0' : 'mt-3'}`}
             style={{ fontSize: '0.7rem' }}
           >
             {group.label}
@@ -395,6 +409,7 @@ export function ConversationSidebar({
                 >
                   {renamingId === c.chatId ? <input
                     aria-label="Chat title"
+                    maxLength={120}
                     value={renameTitle}
                     onInput={(e) => setRenameTitle(e.currentTarget.value)}
                     onKeyDown={(e) => {
@@ -592,7 +607,7 @@ export function ConversationSidebar({
                 // `surface-hover` is a 2% step and the chip stops reading as a
                 // chip at all.
                 class="mt-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full
-                  border border-border bg-surface px-1 text-overline text-muted"
+                  border border-border bg-surface px-1 text-overline text-secondary"
                 title={`${conversations.length} conversations`}
               >
                 {conversations.length}
@@ -602,9 +617,9 @@ export function ConversationSidebar({
         ) : (
           <>
             <div class="flex items-center justify-between gap-2 px-3 pt-3">
-              <h2 class="text-overline uppercase tracking-wider text-muted">Conversations</h2>
+              <h2 class="text-overline uppercase tracking-wider text-secondary">Conversations</h2>
               <div class="flex items-center gap-1">
-                {loading && <span class="text-caption text-muted">…</span>}
+                {loading && <span class="text-caption text-secondary">…</span>}
                 <IconButton
                   label="Collapse conversation history"
                   expanded={true}
@@ -667,10 +682,10 @@ export function ConversationSidebar({
             expanded={true}
             onClick={onCloseMobile}
           />
-          <h2 class="min-w-0 flex-1 truncate text-overline uppercase tracking-wider text-muted">
+          <h2 class="min-w-0 flex-1 truncate text-overline uppercase tracking-wider text-secondary">
             Conversations
           </h2>
-          {loading && <span class="shrink-0 text-caption text-muted">…</span>}
+          {loading && <span class="shrink-0 text-caption text-secondary">…</span>}
         </div>
         {searchField}
         <ConversationList signal={listSignal}>{list}</ConversationList>
@@ -1000,16 +1015,18 @@ function DrawerToggle({
  */
 export function OpenSidebarButton({
   onClick,
+  expanded,
   class: extra = '',
 }: {
   onClick: () => void;
+  expanded: boolean;
   class?: string;
 }) {
   return (
     <DrawerToggle
       id={OPEN_SIDEBAR_ID}
       label="Show conversation history"
-      expanded={false}
+      expanded={expanded}
       onClick={onClick}
       class={`lg:hidden ${extra}`}
     />

@@ -2,8 +2,8 @@
 // the chat UI port — zero behavior change). Not imported by any test under
 // src/ — it needs marked/DOMPurify and stays out of the root tsc program.
 //
-// Phase 1 (CHATUI-001) adds fenced-code chrome + highlight.js. The exported
-// signature and the sanitize-last guarantee are unchanged.
+// Phase 1 (CHATUI-001) adds fenced-code chrome + highlight.js. The table
+// wrapper keeps wide replies inside their scrollport. Sanitation stays last.
 
 import { Marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
@@ -36,6 +36,7 @@ const md = new Marked({
 // dangerouslySetInnerHTML. It is also why the injected copy button carries no
 // inline handler: it is wired by delegation instead (installChatCodeCopy).
 export function renderMarkdown(text: string): string {
-  const html = md.parse(text, { async: false });
+  const html = md.parse(text, { async: false }).replace(/<table>[\s\S]*?<\/table>/g,
+    (table) => `<div class="chat-table-scroll">${table}</div>`);
   return DOMPurify.sanitize(html);
 }

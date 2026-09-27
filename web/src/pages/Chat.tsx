@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
 import type { Agent, ArtifactRef, Conversation, Message, Model, ToolCall } from '../lib/chat/types';
@@ -21,7 +21,9 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 // The shell's mobile nav toggle. Below `lg` this page's own bar is the app bar
 // (Header.tsx stands down there), so the page is what hands the house's nav
 // toggle to it — see the ChatHeader call below.
-import { toggleMobileMenu } from '../components/Sidebar';
+import { toggleMobileMenu, mobileMenuOpen } from '../components/Sidebar';
+import { loadDraft, saveDraft, clearDraft } from '../lib/chat/drafts';
+import { conversationMarkdown, exportFileName } from '../lib/chat/export';
 import { toast } from '../components/Toast';
 import { ChatCanvas } from '../components/chat/ChatCanvas';
 import { ChatHeader } from '../components/chat/ChatHeader';
@@ -122,6 +124,37 @@ export function Chat() {
   // Focused after a landing starter chip drops its text into the composer, so
   // the caret is already where the user will keep typing.
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pageContentRef = useRef<HTMLDivElement>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const [regenerateError, setRegenerateError] = useState('');
+  const shortcutActions = useRef({ newChat: () => {}, focusSearch: () => {}, focusComposer: () => {} });
+
+  function announce(message: string) {
+    setAnnouncement('');
+    window.setTimeout(() => setAnnouncement(message), 0);
+  }
+
+  useLayoutEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        shortcutActions.current.newChat();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        shortcutActions.current.focusSearch();
+      } else if (e.shiftKey && e.key === 'Escape') {
+        e.preventDefault();
+        shortcutActions.current.focusComposer();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (pageContentRef.current) pageContentRef.current.inert = sidebarOpen;
+  }, [sidebarOpen]);
 
   // Stick to the end of a streaming answer, let go the moment the reader
   // scrolls away, and offer them a way back. The rules (and why the attach and
@@ -195,6 +228,7 @@ export function Chat() {
     void refreshConversations(agentId);
     const remembered = storedChatId(agentId);
     if (remembered && remembered !== chatId) void openConversation(remembered);
+    else rememberChatId(agentId, chatId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
@@ -223,8 +257,9 @@ export function Chat() {
   // conversation restores its own draft, or nothing.
   function activateConversation(id: string, forAgent = agentId, fresh = false) {
     closeArtifact(false);
+    setRegenerateError('');
     draftsRef.current.set(currentDraftKey(), input);
-    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`);
+    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`) ?? loadDraft(forAgent, id);
     if (fresh) draftsRef.current.delete(NEW_DRAFT);
     unsentChatRef.current = fresh;
     setInput(restored ?? '');
@@ -373,6 +408,8 @@ export function Chat() {
     if ((!text && sendFiles.length === 0) || streaming || !agentId ||
       sendFiles.some((f) => f.status !== 'ready' || !f.signed)) return;
     const clientMessageId = newMessageId();
+    setRegenerateError('');
+    if (!retry) clearDraft(agentId, chatId);
     if (!retry) draftsRef.current.delete(`${agentId}/${chatId}`);
     // The first send in a fresh chat: its draft slot is spent, and from here on
     // the chat has messages and an id the sidebar can reopen.
@@ -461,6 +498,7 @@ export function Chat() {
         // `done: not_saved`: the answer arrived, the server could not store it.
         ...(outcome.saved === false ? { notSaved: true as const } : {}),
       }]);
+      announce('Reply finished.');
     } catch (e) {
       // Stop, not a failure. streamTurn rejects with an AbortError the moment
       // the reader hits Stop, and the partial answer is theirs to keep: commit
@@ -473,7 +511,7 @@ export function Chat() {
       if ((e as { name?: string } | null)?.name === 'AbortError') {
         setMessages((prev) => [...prev, {
           role: 'assistant',
-          text: streamTextRef.current,
+          text: streamTextRef.current || '(Stopped before a reply.)',
           ts: Date.now() / 1000,
           stopped: true,
           ...(streamToolsRef.current.length > 0 ? { tools: streamToolsRef.current } : {}),
@@ -485,6 +523,7 @@ export function Chat() {
         abortRef.current = null;
         clearApiCache();
         void refreshConversations(agentId);
+        announce('Reply stopped.');
         return;
       }
       // Log the raw cause for debugging, but render only sanitized copy: the
@@ -515,10 +554,12 @@ export function Chat() {
     if (streaming || messages.at(-1)?.role !== 'assistant') return;
     const old = messages.at(-1)!;
     if (old.error || old.notSaved || old.isReply) return;
+    setRegenerateError('');
     setMessages((prev) => prev.slice(0, -1));
     setStreaming(true);
     setStreamText('');
     streamTextRef.current = '';
+    streamToolsRef.current = [];
     setToolStatus('');
     setStreamStartedAt(Date.now());
     const abort = new AbortController();
@@ -528,10 +569,13 @@ export function Chat() {
         ...(modelId ? { modelOverride: modelId } : {}) }, getToken(), {
         onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
         onToolStatus: setToolStatus,
+        onTools: (tools) => { streamToolsRef.current = tools; },
       }, { signal: abort.signal });
-      setMessages((prev) => [...prev, outcome.errorText
-        ? { role: 'assistant', text: friendlyTurnError(outcome.errorText, outcome.errorCode), ts: Date.now() / 1000, error: true }
-        : { role: 'assistant', text: outcome.text, ts: Date.now() / 1000,
+      if (outcome.errorText) {
+        setMessages((prev) => [...prev, old]);
+        setRegenerateError(friendlyTurnError(outcome.errorText, outcome.errorCode));
+      } else {
+        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000,
           ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
           ...(outcome.kb.length ? { kb: outcome.kb } : {}),
           ...(outcome.images.length ? { images: outcome.images } : {}),
@@ -540,9 +584,17 @@ export function Chat() {
           ...(outcome.tools.length ? { tools: outcome.tools } : {}),
           ...(outcome.saved === false ? { notSaved: true as const } : {}),
         }]);
+        announce('Reply finished.');
+      }
     } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') setMessages((prev) => [...prev, old]);
-      else setMessages((prev) => [...prev, { role: 'assistant', text: friendlyTurnError(e instanceof Error ? e.message : ''), ts: Date.now() / 1000, error: true }]);
+      if ((e as { name?: string })?.name === 'AbortError') {
+        setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current || '(Stopped before a reply.)', ts: Date.now() / 1000,
+          stopped: true, ...(streamToolsRef.current.length ? { tools: streamToolsRef.current } : {}) }]);
+        announce('Reply stopped.');
+      } else {
+        setMessages((prev) => [...prev, old]);
+        setRegenerateError(friendlyTurnError(e instanceof Error ? e.message : ''));
+      }
     } finally {
       setStreamText('');
       setToolStatus('');
@@ -619,6 +671,32 @@ export function Chat() {
   // No turns and nothing in flight: the deliberate landing state.
   const isLanding = messages.length === 0 && !streaming;
 
+  shortcutActions.current = {
+    newChat: () => { if (!streaming) startNewChat(); },
+    focusSearch: () => {
+      if (window.innerWidth < 1024) setSidebarOpen(true);
+      else if (sidebarCollapsed) { setSidebarCollapsed(false); writeSidebarCollapsed(false); }
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        const fields = [...document.querySelectorAll<HTMLInputElement>('input[aria-label="Search chats"]')];
+        fields.find((field) => field.getClientRects().length > 0 && !field.closest('[inert]'))?.focus();
+      }));
+    },
+    focusComposer: () => {
+      if (sidebarOpen) setSidebarOpen(false);
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => inputRef.current?.focus()));
+    },
+  };
+
+  function exportChat() {
+    const content = conversationMarkdown({ title: headerTitle, agentName, messages });
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = exportFileName(headerTitle);
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   // Composer CONTENT only. It declares no width, no centring and no padding of
   // its own: ChatCanvas parents it into the shared content column beside the
   // transcript, which is what makes the two share one left and one right edge
@@ -630,7 +708,7 @@ export function Chat() {
   const composer = (
     <Composer
       value={input}
-      onInput={setInput}
+      onInput={(value) => { setInput(value); saveDraft(agentId, chatId, value); }}
       onSend={() => { void send(); }}
       onStop={stopStreaming}
       streaming={streaming}
@@ -660,6 +738,7 @@ export function Chat() {
     // 56px it costs a phone — measured, first content y=131.5 against the
     // donor's 57.0), so the subtraction has nothing left to subtract.
     <div class="-m-4 sm:-m-6 lg:-m-8 flex h-screen overflow-hidden bg-bg">
+      <div data-chat-announcer role="status" aria-live="polite" class="sr-only">{announcement}</div>
       {sidebar}
       {/* This page carries NO layout contract of its own — no measured header
           height, no custom property, no reading measure. ChatCanvas declares
@@ -670,7 +749,7 @@ export function Chat() {
           ResizeObserver in ChatHeader, with two breakpointed fallbacks for the
           frames before the first measurement) is gone: a sticky header takes
           its own height in the flow, so there is nothing left to measure. */}
-      <div class="relative flex flex-col flex-1 min-w-0">
+      <div ref={pageContentRef} class="relative flex flex-col flex-1 min-w-0">
         <ChatCanvas
           header={
             <ChatHeader
@@ -679,12 +758,14 @@ export function Chat() {
               // live outside it. Above `lg` the button is hidden and the rail's
               // own collapse toggle governs.
               onOpenSidebar={() => setSidebarOpen(true)}
+              sidebarOpen={sidebarOpen}
               // Below `lg` this bar IS the app bar (the house header stands
               // down — Header.tsx), so it carries the house's nav toggle too.
               // The page hands it down rather than the header reaching for the
               // shell itself: ChatHeader stays a component of this surface, not
               // a component that knows about the product's navigation.
               onOpenAppNav={toggleMobileMenu}
+              appNavOpen={mobileMenuOpen.value}
               agents={agents}
               agentId={agentId}
               onSelectAgent={selectAgent}
@@ -694,6 +775,7 @@ export function Chat() {
               chatId={chatId}
               streaming={streaming}
               onNewChat={() => startNewChat()}
+              onExport={exportChat}
             />
           }
           composer={composer}
@@ -720,13 +802,14 @@ export function Chat() {
                 {loadError}
               </div>
             )}
-            {transcriptLoading && <div role="status" class="text-muted">Loading conversation…</div>}
-            {transcriptError && <div role="alert" class="text-danger">Could not load this conversation. <button type="button" onClick={() => void openConversation(chatId)}>Try again</button></div>}
+            {transcriptLoading && <div role="status" class="rounded-xl border border-border bg-surface px-4 py-3 text-secondary">Loading conversation…</div>}
+            {transcriptError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">Could not load this conversation. <button type="button" class="font-medium underline" onClick={() => void openConversation(chatId)}>Try again</button></div>}
+            {regenerateError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
             {isLanding && !transcriptLoading && !transcriptError && (
               <ChatLanding
                 agentName={agentName}
                 modelLabel={modelLabel}
-                onStarter={(text) => { setInput(text); inputRef.current?.focus(); }}
+                onStarter={(text) => { setInput(text); saveDraft(agentId, chatId, text); inputRef.current?.focus(); }}
               />
             )}
           </MessagesView>

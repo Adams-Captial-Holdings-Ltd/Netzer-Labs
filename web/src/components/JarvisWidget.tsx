@@ -221,7 +221,7 @@ export function JarvisWidget(): preact.JSX.Element | null {
       // it; the caption + hints float OFF it (absolute) so they never shift the
       // orb's anchor or overlap the glow. Default anchor: content area, clear of the
       // fixed sidebar + bottom-right toasts. Once dragged, an inline left/top wins.
-      class="fixed bottom-5 left-5 lg:left-[calc(var(--sidebar-width)_+_1.5rem)] z-[60] grid place-items-center pointer-events-none [&_button]:pointer-events-auto"
+      class={`fixed left-5 lg:left-[calc(var(--sidebar-width)_+_1.5rem)] z-[60] grid place-items-center pointer-events-none [&_button]:pointer-events-auto ${location.startsWith('/chat') ? 'bottom-52' : 'bottom-5'}`}
       style={
         pos
           ? { left: `${pos.x}px`, top: `${pos.y}px`, right: 'auto', bottom: 'auto', width: `${HALO}px`, height: `${HALO}px` }

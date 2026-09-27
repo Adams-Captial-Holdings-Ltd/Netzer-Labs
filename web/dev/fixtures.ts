@@ -294,6 +294,10 @@ const toolCappedFixture: Fixture = [
 
 export const fixtures: Record<string, Fixture> = {
   default: defaultFixture,
+  'wide-table': (() => {
+    const text = `| Alpha | Bravo | Charlie | Delta | Echo | Foxtrot | Golf | Hotel |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| extraordinarilylongalpha | extraordinarilylongbravo | extraordinarilylongcharlie | extraordinarilylongdelta | extraordinarilylongecho | extraordinarilylongfoxtrot | extraordinarilylonggolf | extraordinarilylonghotel |`;
+    return [...cumulativeChunks(text, 3), finalEvent(text, { latencyMs: 900, costUsd: 0.002, toolCallCount: 0 })];
+  })(),
   code: codeFixture,
   tools: toolsFixture,
   'error-mid': errorMidFixture,

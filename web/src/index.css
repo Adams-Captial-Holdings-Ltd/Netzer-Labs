@@ -593,6 +593,23 @@
 .chat-md .chat-code__copy[data-copied='false'] { color: var(--color-danger); }
 .chat-md .chat-code__copy-icon { flex: none; }
 
+.chat-md .chat-code__download {
+  flex: none;
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+}
+.chat-md .chat-code__download:hover { background: rgb(var(--color-primary-rgb) / 0.12); }
+
+.chat-md .chat-table-scroll { max-width: 100%; overflow-x: auto; }
+.chat-md .chat-table-scroll table { min-width: max-content; }
+
+/* Error ink is scoped to the chat's own panels; the house danger token stays shared. */
+.chat-error-panel { color: #a5251b; }
+.dark .chat-error-panel { color: var(--color-danger); }
+
 /* Out-specifies `.chat-md pre` (0,1,1 vs 0,2,1) instead of editing it: inside
    the chrome the frame belongs to the container, so the pre contributes only
    padding and its own horizontal scroll. */
