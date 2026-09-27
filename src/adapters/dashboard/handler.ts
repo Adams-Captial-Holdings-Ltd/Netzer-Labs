@@ -80,7 +80,7 @@ import {
   type KillSwitchName,
 } from '../../lib/state/kill-switches-repo.js';
 import { runAgentTurn, scanOutboundReply, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
-import { classifyTurnError } from '../../agent/turn-errors.js';
+import { AttachmentUnavailableError, classifyTurnError } from '../../agent/turn-errors.js';
 import { processMedia, buildMediaBlocks, getRawObject, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment, MAX_IMAGE_BYTES, MAX_DOCUMENT_BYTES } from '../../lib/media/process.js';
 import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
 import { attachmentDisposition, downloadFileName, listArtifactHeads, listArtifactVersions, presignArtifactDownload, readArtifactBody, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
@@ -2308,8 +2308,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
               attachmentBlocks.push(...built.blocks);
             } catch (err) {
               logger.warn({ agentId, chatId, err }, 'dashboard chat attachment replay failed');
-              throw { code: 'attachment_unavailable',
-                message: 'A file from that message could not be read again, so the reply was not regenerated.' };
+              throw new AttachmentUnavailableError();
             }
           }
         }
@@ -2546,8 +2545,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         else logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
         await finishChatTurn(agentId, chatId, clientMessageId, 'error');
         if (!finalSent) {
-          const error = (err as { code?: string })?.code === 'attachment_unavailable'
-            ? err as { code: string; message: string } : classifyTurnError(err);
+          const error = classifyTurnError(err);
           await stream.writeSSE({ event: 'error', data: body?.protocol === 2 ? JSON.stringify(error) : error.message });
         }
       } finally {
