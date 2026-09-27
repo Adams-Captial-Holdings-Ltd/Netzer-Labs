@@ -849,3 +849,31 @@ test('P6 a finished or stopped reply is left in view above the composer', async 
   await waitForEnd(page);
   await expect.poll(clear).toBe(true);
 });
+
+// Review routing (Codex security HIGH, Claude security F5; council R3: key by identity, and wipe the
+// not-yet-known identity's slot at every sign-in and sign-out): a draft and the remembered conversation
+// belong to the person who wrote them. The next person in the same tab never sees them; the same person
+// signing out and back in keeps them.
+test('P6 a draft never reaches the next person in the same tab', async ({ page }) => {
+  // The page restores a remembered conversation (and its draft) once the agents have loaded, so a check
+  // that nothing leaked must wait for that moment, or it passes before the leak happens.
+  const as = async (who: string) => {
+    await page.evaluate((w) => localStorage.setItem('cce_dashboard_user', w), who);
+    await page.goto('/dashboard/chat');
+    await expect(composerOf(page)).toBeVisible();
+    await expect(page.locator('[data-tour="chat-agent-picker"]')).toContainText('Netzar Prime');
+    await page.waitForTimeout(500);
+  };
+  await openChat(page);
+  await as('dashboard:user:user-a');
+  await page.getByRole('button', { name: 'New chat' }).first().click();
+  await composerOf(page).fill('a private draft from A');
+  await expect.poll(() => page.evaluate(() => JSON.stringify(sessionStorage))).toContain('a private draft from A');
+
+  await page.getByRole('button', { name: 'Sign out' }).first().click();
+  await as('dashboard:user:user-b');
+  expect(await composerOf(page).inputValue()).toBe('');
+
+  await as('dashboard:user:user-a');
+  await expect(composerOf(page)).toHaveValue('a private draft from A');
+});
