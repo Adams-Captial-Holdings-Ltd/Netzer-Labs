@@ -168,6 +168,7 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
             <iframe title="PDF preview" src={preview.url} class="h-full w-full border-0 bg-white" />
           ) : preview.kind === 'markdown' ? (
             <div class="chat-md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(preview.text ?? ''), {
+              USE_PROFILES: { html: true },
               FORBID_TAGS: ['img', 'video', 'audio', 'source', 'picture', 'track', 'iframe', 'object', 'embed', 'link', 'style'],
               FORBID_ATTR: ['srcset', 'poster', 'background', 'style'],
             }) }} />

@@ -57,7 +57,8 @@ export function previewKind(contentType: string, head: Uint8Array): PreviewKind 
 
 export const SANDBOX_CSP = "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/ https://cdnjs.cloudflare.com/ajax/libs/; style-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/ https://cdnjs.cloudflare.com/ajax/libs/; font-src data: https://cdn.jsdelivr.net/npm/ https://cdnjs.cloudflare.com/ajax/libs/; img-src data: blob:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; manifest-src 'none'";
 
-const GUARD = "(function(){try{var n=window.navigation;if(n&&typeof n.addEventListener==='function'){n.addEventListener('navigate',function(e){if(e.cancelable&&!(e.destination&&e.destination.sameDocument)){e.preventDefault();}});}}catch(x){}['RTCPeerConnection','webkitRTCPeerConnection','RTCDataChannel','RTCSessionDescription','RTCIceCandidate'].forEach(function(k){try{Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false});}catch(x){}});})();";
+// WebRTC is the exit CSP cannot close; the frame's own navigation is refused by the page's frame-src (web/index.html).
+const GUARD = "(function(){['RTCPeerConnection','webkitRTCPeerConnection','RTCDataChannel','RTCSessionDescription','RTCIceCandidate'].forEach(function(k){try{Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false});}catch(x){}});})();";
 
 export function buildSandboxDocument(html: string): string {
   return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
