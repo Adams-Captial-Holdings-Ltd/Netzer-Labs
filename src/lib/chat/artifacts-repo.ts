@@ -488,27 +488,28 @@ export async function readArtifactBody(args: ArtifactVersionScope): Promise<Uint
   return Buffer.concat(chunks);
 }
 
+const DOWNLOAD_EXTENSIONS: Record<string, string[]> = {
+  'application/pdf': ['.pdf'],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+  'text/html': ['.html', '.htm'],
+  'image/svg+xml': ['.svg'],
+  'text/markdown': ['.md', '.markdown'],
+  'text/csv': ['.csv'],
+  'application/json': ['.json'],
+  'text/xml': ['.xml'],
+  'text/vnd.mermaid': ['.mmd', '.mermaid'],
+  'application/rtf': ['.rtf'],
+  'image/png': ['.png'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/gif': ['.gif'],
+  'image/webp': ['.webp'],
+  'text/plain': ['.txt'],
+};
+
 export function downloadFileName(fileName: string, contentType: string): string {
-  const extensions: Record<string, string[]> = {
-    'application/pdf': ['.pdf'],
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
-    'text/html': ['.html', '.htm'],
-    'image/svg+xml': ['.svg'],
-    'text/markdown': ['.md', '.markdown'],
-    'text/csv': ['.csv'],
-    'application/json': ['.json'],
-    'text/xml': ['.xml'],
-    'text/vnd.mermaid': ['.mmd', '.mermaid'],
-    'application/rtf': ['.rtf'],
-    'image/png': ['.png'],
-    'image/jpeg': ['.jpg', '.jpeg'],
-    'image/gif': ['.gif'],
-    'image/webp': ['.webp'],
-    'text/plain': ['.txt'],
-  };
-  const allowed = extensions[contentType];
+  const allowed = DOWNLOAD_EXTENSIONS[contentType];
   if (!allowed) return fileName;
   if (allowed.some((extension) => fileName.toLowerCase().endsWith(extension))) return fileName;
   if (contentType === 'text/plain' && /\.[A-Za-z0-9]{1,10}$/.test(fileName)) return fileName;
