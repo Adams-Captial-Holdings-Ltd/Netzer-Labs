@@ -40,8 +40,11 @@ as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
   non-ASCII space is trimmed since CLEANUP (**A231**); a whole-row write can undo a
   /newchat, /model or war-room change racing it (**A232**); Regenerate acts on the
   stored last exchange, not always the one on screen (**A233**, P7's first item);
-  a rename pre-filled from a first message with a line break fails (**A234**).
-  Still carried:
+  a rename pre-filled from a first message with a line break fails (**A234**);
+  an unsaved regenerate's alert shows the reply with no reason (**A235**); a search
+  over 100 characters looks like a failed load (**A236**); two `chat.spec.ts`
+  comments describe the pre-P6 reload (**A237**); a regenerate reads its stored
+  files before admission (**A238**). Still carried:
   A212 (the WebRTC residual), ART-16, WI-5.4 / ART-10 (P7), decision 59 M1 / M3
   (P7), A209 and A213.
 - **Who wrote it.** Claude Opus coordinated; Codex wrote every production change

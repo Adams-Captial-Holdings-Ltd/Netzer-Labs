@@ -383,7 +383,10 @@ backend.
   stored text, and a video's keyframes are not replayed); the media kill switch
   stops it, and a file that cannot be read again refuses it as
   `attachment_unavailable` before any model call. A blocked, refused or unsaved
-  regenerate leaves the old reply, and the page says why. Owner only (a
+  regenerate leaves the old reply in place and shows an alert: for a block or a
+  refusal it holds the notice; for a reply the server could not save (say, the
+  conversation moved on or changed hands, or the write failed) it holds that
+  unsaved reply itself, with no reason given (carried to P7). Owner only (a
   stranger's or missing conversation: one 404), metered and idempotent like a
   send.
 - **The stopped text.** Both stop paths — during the model call, and a stop that
