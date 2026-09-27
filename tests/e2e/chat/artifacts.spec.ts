@@ -240,6 +240,18 @@ test.describe('on a phone', () => {
     await page.keyboard.press('Escape');
     await expect(sheet).toHaveCount(0);
     await expect(opener, 'focus returns to the card that opened it').toBeFocused();
+
+    // Escape works the instant the sheet mounts, not only once the browser has painted: a key pressed in that
+    // window must not be lost (it was, once, in a full run). Open and press Escape in the same task as the render.
+    const mounted = await opener.evaluate(async (button) => {
+      (button as HTMLElement).click();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      const present = document.querySelector('[data-artifact-panel]') !== null;
+      (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return present;
+    });
+    expect(mounted, 'the sheet was in the page when Escape was pressed').toBe(true);
+    await expect(sheet).toHaveCount(0);
   });
 });
 
@@ -251,6 +263,8 @@ test('P5 a hostile page preview cannot reach the parent or the network', async (
   page.on('popup', (p) => popups.push(p.url()));
   await playFixture(page, 'hostile');
   const parentUrl = page.url();
+  // The dev server's own HMR socket opens with the page; count only the sockets opened after the preview is.
+  const devSockets = sockets.length;
   await open(page, 'hostile page');
   await expect(previewOf(page)).toHaveAttribute('data-kind', 'html');
   await expect(previewOf(page).locator('iframe')).toHaveAttribute('sandbox', 'allow-scripts');
@@ -294,7 +308,7 @@ test('P5 a hostile page preview cannot reach the parent or the network', async (
 
   // Nothing reached the network: fetch, XHR, WebSocket, beacon, images, CSS, prefetch, form, either navigation.
   expect(leaks).toEqual([]);
-  expect(sockets).toEqual([]);
+  expect(sockets.slice(devSockets)).toEqual([]);
 });
 
 test('P5 a hostile drawing preview runs no script', async ({ page, context }) => {
