@@ -657,6 +657,45 @@ function safeDashboardChatId(input: string | undefined): string {
   const sanitized = raw.replace(/[^A-Za-z0-9_:.-]/g, '_').slice(0, 100);
   return `dashboard:${sanitized}`;
 }
+
+/**
+ * Replay only stored attachments that can become model blocks. Audio, voice
+ * and video yield no block because their words are already in the stored message text;
+ * video keyframes are not replayed because that needs processVideo's probe and
+ * keyframe step for raw bytes, carried to a later step.
+ */
+async function replayStoredAttachments(
+  attachments: TurnAttachment[],
+  signal: AbortSignal,
+  agentId: string,
+  chatId: string,
+): Promise<AttachmentBlock[]> {
+  const attachmentBlocks: AttachmentBlock[] = [];
+  if (attachments.length > 0) {
+    const killed = await isKillSwitchActive('media_upload_disabled');
+    if (killed.active) throw new KillSwitchActiveError(killed.reason ?? 'no reason given', 'media_upload_disabled');
+  }
+  for (const attachment of attachments) {
+    if (signal.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+    const kind = kindForMime(attachment.type);
+    if (kind !== 'photo' && kind !== 'document') continue;
+    if (attachment.size > (kind === 'photo' ? MAX_IMAGE_BYTES : MAX_DOCUMENT_BYTES)) continue;
+    try {
+      if (!attachment.key) throw new Error('Stored attachment has no key');
+      const bytes = await getRawObject(attachment.key);
+      const built = await buildMediaBlocks({
+        kind, fileName: attachment.name,
+        mimeType: attachment.type, bytes,
+      });
+      attachmentBlocks.push(...built.blocks);
+    } catch (err) {
+      logger.warn({ agentId, chatId, err }, 'dashboard chat attachment replay failed');
+      throw new AttachmentUnavailableError();
+    }
+  }
+  return attachmentBlocks;
+}
+
 const TABLE_TOKEN_USAGE = process.env.TABLE_TOKEN_USAGE ?? 'claudeclaw-token-usage';
 const TABLE_AUDIT_LOG = process.env.TABLE_AUDIT_LOG ?? 'claudeclaw-audit-log';
 
@@ -2289,28 +2328,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         const acks: string[] = [];
         if (regenerate) {
           const replayFiles = stored!.turns.at(-2)!.attachments ?? [];
-          if (replayFiles.length > 0) {
-            const killed = await isKillSwitchActive('media_upload_disabled');
-            if (killed.active) throw new KillSwitchActiveError(killed.reason ?? 'no reason given', 'media_upload_disabled');
-          }
-          for (const attachment of replayFiles) {
-            if (abort.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError');
-            const kind = kindForMime(attachment.type);
-            if (kind !== 'photo' && kind !== 'document') continue;
-            if (attachment.size > (kind === 'photo' ? MAX_IMAGE_BYTES : MAX_DOCUMENT_BYTES)) continue;
-            try {
-              if (!attachment.key) throw new Error('Stored attachment has no key');
-              const bytes = await getRawObject(attachment.key);
-              const built = await buildMediaBlocks({
-                kind, fileName: attachment.name,
-                mimeType: attachment.type, bytes,
-              });
-              attachmentBlocks.push(...built.blocks);
-            } catch (err) {
-              logger.warn({ agentId, chatId, err }, 'dashboard chat attachment replay failed');
-              throw new AttachmentUnavailableError();
-            }
-          }
+          attachmentBlocks.push(...await replayStoredAttachments(replayFiles, abort.signal, agentId, chatId));
         }
         for (const [index, a] of rawAttachments.entries()) {
           const s3Key = a.s3Key as string;
