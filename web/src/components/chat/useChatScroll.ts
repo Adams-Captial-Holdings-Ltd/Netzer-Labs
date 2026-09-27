@@ -151,7 +151,10 @@ export function useChatScroll({ revision, streaming }: ChatScrollInput): ChatScr
     // The sticky composer follows the end marker inside this scrollport.
     // Scrolling the marker into the viewport can leave the reply underneath
     // that plate; the scrollport's actual end reserves the plate's full height.
-    el.scrollTop = el.scrollHeight;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
     lastTopRef.current = el.scrollTop;
   }, [revision, streaming]);
 
