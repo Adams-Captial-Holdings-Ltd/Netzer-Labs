@@ -1075,7 +1075,9 @@ export async function deleteSession(
   );
   } finally {
     // Keep the lock row through parent deletion. A writer that acquires after
-    // release will re-read the parent and refuse to recreate an erased chat.
+    // release re-reads the parent consistently. Only a finalizing draft refuses a
+    // missing parent; a first-turn artifact save or a draft start re-creates the
+    // chat (known gap M1, carried to hardening by owner decision 59).
     await releaseChildLock();
   }
 }
