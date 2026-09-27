@@ -895,3 +895,58 @@ test('P6 a settled reply still scrolls smoothly when motion is allowed', async (
   await sendAndWait(page, 'Summarise the last 90 days of audit data');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __scrolls: string[] }).__scrolls)).toContain('smooth');
 });
+
+// Look critic round 2 (must-fix 1 and 2): the rename field opens with the whole title selected (the donor's
+// RenameForm selects it, so the start is visible and typing replaces it), and shows its own Save and Cancel.
+test('P6 the rename field opens with the whole title selected and its own save and cancel', async ({ page }) => {
+  const title = 'First pass at the compliance control catalogue'; // mock row 9
+  const renamed = 'Compliance control catalogue';
+  let passed = false;
+  try {
+    await openChat(page);
+    await row(page, title).hover();
+    await page.getByRole('button', { name: `Rename chat: ${title}` }).filter({ visible: true }).click();
+    const field = page.getByRole('textbox', { name: 'Chat title' });
+    await expect(field).toBeFocused();
+    expect(await field.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd, el.value.length]))
+      .toEqual([0, title.length, title.length]);
+
+    await page.getByRole('button', { name: 'Cancel rename' }).click();
+    await expect(field).toHaveCount(0);
+    await expect(row(page, title)).toBeVisible();
+
+    await row(page, title).hover();
+    await page.getByRole('button', { name: `Rename chat: ${title}` }).filter({ visible: true }).click();
+    await field.fill(renamed);
+    await page.getByRole('button', { name: 'Save title' }).click();
+    await expect(row(page, renamed)).toBeVisible();
+    passed = true;
+  } finally {
+    await resetMeta(page, 9, passed);
+  }
+});
+
+// Look critic round 2 (must-fix 3; Jev 1.0 on owner decision 61's placement): on the chat page the voice orb's
+// default sits in the house navigation's empty lower band, so it covers no part of the chat — not the composer
+// (B-17), not the landing's starters, not the conversation rail — and not the navigation's own footer controls.
+test('P6 the voice orb default covers no part of the chat', async ({ page }) => {
+  await page.route('**/api/jarvis/manifest', (route) => route.fulfill({
+    json: { generatedAt: '2026-09-27T00:00:00.000Z', routes: [], resources: [], jarvisEnabled: true, voiceEnabled: false },
+  }));
+  await page.addInitScript(() => localStorage.removeItem('cce_jarvis_widget_pos'));
+  const hit = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  for (const size of [{ width: 1024, height: 768 }, { width: 1280, height: 800 }, { width: 1440, height: 900 }]) {
+    await page.setViewportSize(size);
+    await newChat(page);
+    const orb = (await page.getByRole('button', { name: /^Jarvis \(/ }).boundingBox())!;
+    const canvas = (await page.locator('[data-tour="chat-messages"]').boundingBox())!;
+    expect(hit(orb, canvas), `the orb covers the chat at ${size.width}`).toBe(false);
+    const rail = await page.locator('aside[aria-label="Conversation history"]').boundingBox();
+    if (rail) expect(hit(orb, rail), `the orb covers the conversation rail at ${size.width}`).toBe(false);
+    for (const name of ['Sign out', 'Collapse sidebar']) {
+      const control = await page.getByRole('button', { name }).first().boundingBox();
+      if (control) expect(hit(orb, control), `the orb covers ${name} at ${size.width}`).toBe(false);
+    }
+  }
+});
