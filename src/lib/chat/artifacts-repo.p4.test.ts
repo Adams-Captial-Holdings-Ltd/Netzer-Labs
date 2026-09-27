@@ -2,7 +2,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand } from '@aws-sdk/client-s3';
 import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 const { ddbSend, scanForExfil } = vi.hoisted(() => {
   process.env.TABLE_SESSIONS = 'p4-unit-sessions';
@@ -457,4 +457,27 @@ it('P4 live finalizing draft saves through the document tool metadata key', asyn
   await expect(storage.saveArtifact(input(chatId, { source: { kind: 'draft', draftId, revision: 1, format: 'pdf' } })),
     'the real document-draft metadata key must authorize a live finalization').resolves.toMatchObject({ version: 1 });
   expect(s3Send.mock.calls.some(([cmd]) => cmd instanceof PutObjectCommand), 'valid draft bytes must reach CURATED').toBe(true);
+});
+
+it('P4 a save after a finished delete never trusts a stale conversation read', async () => {
+  const storage = await import(repoPath);
+  const chatId = chat();
+  await ownedChat(chatId);
+  const parentKey = [...table.rows.keys()].find((k) => k === `AGENT#main|CHAT#${chatId.replace(/#/g, '_')}`);
+  expect(parentKey, 'fixture must hold the conversation row').toBeDefined();
+  const stale = table.rows.get(parentKey!);
+  table.rows.delete(parentKey!);
+  // DynamoDB may still answer an eventually consistent GetItem with the row a
+  // finished delete removed; only a ConsistentRead is guaranteed to miss it.
+  ddbSend.mockImplementation((cmd) => {
+    const { Key, ConsistentRead } = (cmd as { input?: { Key?: { PK?: string; SK?: string }; ConsistentRead?: boolean } }).input ?? {};
+    if (cmd instanceof GetCommand && !ConsistentRead && `${Key?.PK}|${Key?.SK}` === parentKey) {
+      return Promise.resolve({ Item: stale });
+    }
+    return table.send(cmd);
+  });
+  await storage.saveArtifact(input(chatId)).catch(() => undefined);
+  const stored = s3Send.mock.calls.some(([cmd]) => cmd instanceof PutObjectCommand);
+  expect(!stored || table.rows.has(parentKey!),
+    'an artifact must never be stored under a conversation that no longer exists').toBe(true);
 });
