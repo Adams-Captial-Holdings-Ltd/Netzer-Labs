@@ -305,6 +305,17 @@ const transcripts = new Map<string, Array<{
 const MAX_CONVERSATIONS = 200;
 
 /** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
+function recordedReply(reply: PlayedTurn, ts: number) {
+  return {
+    role: 'assistant', text: reply.text || (reply.stopped ? '(Stopped before a reply.)' : ''), ts,
+    ...(reply.stopped ? { status: 'stopped' } : {}),
+    ...(reply.tools.length ? {
+      tools: reply.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
+    } : {}),
+    ...(reply.artifacts.length ? { artifacts: reply.artifacts } : {}),
+  };
+}
+
 function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = []): void {
   if (!chatId) {
     // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
@@ -319,14 +330,7 @@ function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachm
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
     { role: 'user', text: userText, ts, ...(files.length ? { attachments: files } : {}) },
-    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [{
-      role: 'assistant', text: reply.text || (reply.stopped ? '(Stopped before a reply.)' : ''), ts,
-      ...(reply.stopped ? { status: 'stopped' } : {}),
-      ...(reply.tools.length ? {
-        tools: reply.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
-      } : {}),
-      ...(reply.artifacts.length ? { artifacts: reply.artifacts } : {}),
-    }] : []),
+    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [recordedReply(reply, ts)] : []),
   ]);
   // Evicting in silence would be worse than not evicting at all: reopening a
   // dropped conversation returns an empty transcript, which is exactly what the
@@ -350,6 +354,16 @@ export function mockStreamPlugin(): Plugin {
         req.on('end', () => {
           const turn = parseTurn(raw);
           if (turn.regenerate) {
+            if (turn.text || turn.attachmentKeys.length) {
+              jsonStatus(res, 400, { error: 'invalid_regenerate' });
+              return;
+            }
+            const known = transcripts.has(turn.chatId) ||
+              [...Array(10).keys()].some((i) => turn.chatId === `dashboard:${SESSION_ID_BASE + i}`);
+            if (!known) {
+              jsonStatus(res, 404, { error: 'not_found' });
+              return;
+            }
             const stored = transcripts.get(turn.chatId);
             if (!stored?.length || stored.at(-1)?.role !== 'assistant') {
               jsonStatus(res, 409, { error: 'nothing_to_regenerate' });
@@ -375,10 +389,7 @@ export function mockStreamPlugin(): Plugin {
               }
               if (turn.regenerate) {
                 const stored = transcripts.get(turn.chatId)!;
-                const ts = Date.now() / 1000;
-                transcripts.set(turn.chatId, [...stored.slice(0, -1), { role: 'assistant', text: reply.text || (reply.stopped ? '(Stopped before a reply.)' : ''), ts,
-                  ...(reply.stopped ? { status: 'stopped' } : {}),
-                  ...(reply.artifacts.length ? { artifacts: reply.artifacts } : {}) }]);
+                transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000)]);
               } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
             })
             // Without this, a throw anywhere above becomes an unhandled

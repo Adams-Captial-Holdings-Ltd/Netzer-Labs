@@ -1,12 +1,11 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
-import { api, getToken, clearApiCache } from '../lib/api';
+import { api, getToken, getDashboardUser, clearApiCache } from '../lib/api';
 import type { Agent, ArtifactRef, Conversation, Message, Model, ToolCall } from '../lib/chat/types';
 import {
   MODEL_NAMES,
   freshChatId,
-  storedChatId,
-  rememberChatId,
+  ACTIVE_CHAT_KEY,
   conversationTitle,
   friendlyTurnError,
   newMessageId,
@@ -18,6 +17,7 @@ import { stageAttachment } from '../lib/chat/uploads';
 import type { StagedFile } from '../lib/chat/uploads';
 import { admitFiles } from '../lib/chat/attachment-rules';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Button } from '../components/Button';
 // The shell's mobile nav toggle. Below `lg` this page's own bar is the app bar
 // (Header.tsx stands down there), so the page is what hands the house's nav
 // toggle to it — see the ChatHeader call below.
@@ -128,6 +128,27 @@ export function Chat() {
   const [announcement, setAnnouncement] = useState('');
   const [regenerateError, setRegenerateError] = useState('');
   const shortcutActions = useRef({ newChat: () => {}, focusSearch: () => {}, focusComposer: () => {} });
+  const transcriptRequest = useRef(0);
+  const historyRequest = useRef(0);
+  const scopedAgent = (id: string) => `${encodeURIComponent(getDashboardUser() || 'unknown')}/${id}`;
+  const activeKey = () => `${ACTIVE_CHAT_KEY}:${encodeURIComponent(getDashboardUser() || 'unknown')}`;
+
+  function storedScopedChatId(id: string): string | null {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(activeKey()) ?? 'null') as
+        { owner?: string; agentId?: string; chatId?: string } | null;
+      return saved?.owner === (getDashboardUser() || 'unknown') && saved.agentId === id ? saved.chatId ?? null : null;
+    } catch { return null; }
+  }
+
+  function rememberScopedChatId(id: string, conversationId: string) {
+    try {
+      const value = JSON.stringify({ owner: getDashboardUser() || 'unknown', agentId: id, chatId: conversationId });
+      sessionStorage.setItem(activeKey(), value);
+      // Keep the current tab's pointer readable by older callers.
+      sessionStorage.setItem(ACTIVE_CHAT_KEY, value);
+    } catch { /* Resume is best-effort in private storage modes. */ }
+  }
 
   function announce(message: string) {
     setAnnouncement('');
@@ -137,6 +158,7 @@ export function Chat() {
   useLayoutEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.isComposing || e.keyCode === 229) return;
+      if (document.querySelector('[data-artifact-panel][role="dialog"][aria-modal="true"]')) return;
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
         e.preventDefault();
         shortcutActions.current.newChat();
@@ -150,6 +172,14 @@ export function Chat() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  useLayoutEffect(() => {
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const onBreakpoint = () => { if (desktop.matches) setSidebarOpen(false); };
+    desktop.addEventListener('change', onBreakpoint);
+    onBreakpoint();
+    return () => desktop.removeEventListener('change', onBreakpoint);
   }, []);
 
   // Stick to the end of a streaming answer, let go the moment the reader
@@ -195,6 +225,7 @@ export function Chat() {
   // scope it. Newest first.
   async function refreshConversations(forAgent: string, query = searchQuery) {
     if (!forAgent) return;
+    const request = ++historyRequest.current;
     setHistoryLoading(true);
     setHistoryError(false);
     try {
@@ -207,14 +238,16 @@ export function Chat() {
         // the table but have no UI to reopen them, and still expire.
         .filter((s) => s.chatId.startsWith('dashboard:'))
         .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      if (request !== historyRequest.current) return;
       setConversations(rows);
     } catch (e) {
+      if (request !== historyRequest.current) return;
       // Non-fatal: the sidebar is an aid, not a prerequisite for chatting.
       console.error('Chat: failed to load conversations', e);
       setHistoryError(true);
       setConversations([]);
     }
-    setHistoryLoading(false);
+    if (request === historyRequest.current) setHistoryLoading(false);
   }
 
   // Load the sidebar whenever the agent changes, and restore the conversation
@@ -222,9 +255,9 @@ export function Chat() {
   useEffect(() => {
     if (!agentId) return;
     void refreshConversations(agentId);
-    const remembered = storedChatId(agentId);
+    const remembered = storedScopedChatId(agentId);
     if (remembered && remembered !== chatId) void openConversation(remembered);
-    else rememberChatId(agentId, chatId);
+    else rememberScopedChatId(agentId, chatId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
@@ -255,17 +288,18 @@ export function Chat() {
     closeArtifact(false);
     setRegenerateError('');
     draftsRef.current.set(currentDraftKey(), input);
-    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`) ?? loadDraft(forAgent, id);
+    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`) ?? loadDraft(scopedAgent(forAgent), id);
     if (fresh) draftsRef.current.delete(NEW_DRAFT);
     unsentChatRef.current = fresh;
     setInput(restored ?? '');
     setChatId(id);
-    rememberChatId(forAgent, id);
+    rememberScopedChatId(forAgent, id);
   }
 
   // Reopen a stored conversation, including tool results and stopped turns.
   async function openConversation(id: string) {
     if (streaming) return;
+    const request = ++transcriptRequest.current;
     activateConversation(id);
     setStreamText('');
     setMessages([]);
@@ -276,17 +310,20 @@ export function Chat() {
       const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
         `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(id)}`,
       );
+      if (request !== transcriptRequest.current) return;
       setMessages(transcriptToMessages(d.turns ?? []));
     } catch (e) {
+      if (request !== transcriptRequest.current) return;
       console.error('Chat: failed to load transcript', e);
       setTranscriptError(true);
     } finally {
-      setTranscriptLoading(false);
+      if (request === transcriptRequest.current) setTranscriptLoading(false);
     }
   }
 
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
   function startNewChat(forAgent = agentId) {
+    ++transcriptRequest.current;
     const id = freshChatId();
     activateConversation(id, forAgent, true);
     setMessages([]);
@@ -364,6 +401,7 @@ export function Chat() {
   function selectAgent(id: string) {
     if (id === agentId) return;
     setAgentId(id);
+    ++historyRequest.current;
     startNewChat(id);
   }
 
@@ -405,7 +443,7 @@ export function Chat() {
       sendFiles.some((f) => f.status !== 'ready' || !f.signed)) return;
     const clientMessageId = newMessageId();
     setRegenerateError('');
-    if (!retry) clearDraft(agentId, chatId);
+    if (!retry) clearDraft(scopedAgent(agentId), chatId);
     if (!retry) draftsRef.current.delete(`${agentId}/${chatId}`);
     // The first send in a fresh chat: its draft slot is spent, and from here on
     // the chat has messages and an id the sidebar can reopen.
@@ -567,9 +605,11 @@ export function Chat() {
         onToolStatus: setToolStatus,
         onTools: (tools) => { streamToolsRef.current = tools; },
       }, { signal: abort.signal });
-      if (outcome.errorText) {
+      if (outcome.errorText || outcome.saved === false) {
         setMessages((prev) => [...prev, old]);
-        setRegenerateError(friendlyTurnError(outcome.errorText, outcome.errorCode));
+        setRegenerateError(outcome.errorText
+          ? friendlyTurnError(outcome.errorText, outcome.errorCode)
+          : outcome.text || 'The server did not save this reply.');
       } else {
         setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000,
           ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
@@ -625,7 +665,12 @@ export function Chat() {
       loadError={historyError}
       onRetryLoad={() => void refreshConversations(agentId)}
       search={search}
-      onSearch={setSearch}
+      onSearch={(value) => {
+        ++historyRequest.current;
+        setHistoryError(false);
+        setHistoryLoading(value.trim() !== searchQuery);
+        setSearch(value);
+      }}
       onRename={(c, title) => void updateConversation(c, { title })}
       onTogglePin={(c) => void updateConversation(c, { pinned: !c.pinned })}
       streaming={streaming}
@@ -705,7 +750,7 @@ export function Chat() {
   const composer = (
     <Composer
       value={input}
-      onInput={(value) => { setInput(value); saveDraft(agentId, chatId, value); }}
+      onInput={(value) => { setInput(value); saveDraft(scopedAgent(agentId), chatId, value); }}
       onSend={() => { void send(); }}
       onStop={stopStreaming}
       streaming={streaming}
@@ -799,14 +844,14 @@ export function Chat() {
                 {loadError}
               </div>
             )}
-            {transcriptLoading && <div role="status" class="rounded-xl border border-border bg-surface px-4 py-3 text-secondary">Loading conversation…</div>}
-            {transcriptError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">Could not load this conversation. <button type="button" class="font-medium underline" onClick={() => void openConversation(chatId)}>Try again</button></div>}
+            {transcriptLoading && <div role="status" class="flex min-h-48 items-center justify-center gap-2 text-secondary"><span class="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />Loading conversation…</div>}
+            {transcriptError && <div role="alert" class="chat-error-panel flex items-center gap-3 rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">Could not load this conversation. <Button variant="secondary" size="sm" onClick={() => void openConversation(chatId)}>Try again</Button></div>}
             {regenerateError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
             {isLanding && !transcriptLoading && !transcriptError && (
               <ChatLanding
                 agentName={agentName}
                 modelLabel={modelLabel}
-                onStarter={(text) => { setInput(text); saveDraft(agentId, chatId, text); inputRef.current?.focus(); }}
+                onStarter={(text) => { setInput(text); saveDraft(scopedAgent(agentId), chatId, text); inputRef.current?.focus(); }}
               />
             )}
           </MessagesView>

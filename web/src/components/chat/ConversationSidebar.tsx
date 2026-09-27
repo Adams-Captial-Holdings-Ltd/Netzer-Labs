@@ -132,6 +132,7 @@ import type { ComponentChildren, RefObject } from 'preact';
 import { PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Pin } from 'lucide-preact';
 import type { Conversation } from '../../lib/chat/types';
 import { conversationTitle, relativeAge } from '../../lib/chat/helpers';
+import { Button } from '../Button';
 import { groupConversationsByDate } from './conversation-groups';
 
 /*
@@ -354,7 +355,7 @@ export function ConversationSidebar({
   // ── One list, rendered into both shells ──────────────────────────────────
   const list = (
     <>
-      {loadError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-3 py-2 text-caption">Could not load your chats. <button type="button" class="font-medium underline" onClick={onRetryLoad}>Try again</button></div>}
+      {loadError && <div role="alert" class="chat-error-panel flex flex-wrap items-center gap-2 rounded-xl border border-danger-a/40 bg-danger-a/10 px-3 py-2 text-caption">Could not load your chats. <Button variant="secondary" size="sm" onClick={onRetryLoad}>Try again</Button></div>}
       {conversations.length === 0 && !loading && !loadError && (
         <p class="px-2 py-2 text-caption text-secondary">
           No past conversations yet. They appear here once you send a message.
@@ -417,7 +418,7 @@ export function ConversationSidebar({
                     value={renameTitle}
                     onInput={(e) => setRenameTitle(e.currentTarget.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Escape') { e.stopPropagation(); setRenamingId(null); }
+                      if (e.key === 'Escape') { if (!e.shiftKey) e.stopPropagation(); setRenamingId(null); }
                       if (e.key === 'Enter') { e.preventDefault(); onRename(c, renameTitle); setRenamingId(null); }
                     }}
                     class="min-w-0 flex-1 rounded-lg border border-border bg-bg px-2 py-1 text-body-sm text-primary"
