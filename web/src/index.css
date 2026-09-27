@@ -610,6 +610,12 @@
 .chat-error-panel { color: #a5251b; }
 .dark .chat-error-panel { color: var(--color-danger); }
 
+/* Chat-only rail meta ink clears 4.5:1 against each row fill. Light #55557a
+   measures 6.50:1 on panel, 5.60:1 on hover and 4.67:1 on active. Dark
+   #a6a6bd measures 5.31:1 on active #313146 and gains contrast on hover. */
+.chat-rail-meta { color: #55557a; }
+.dark .chat-rail-meta { color: #a6a6bd; }
+
 /* Out-specifies `.chat-md pre` (0,1,1 vs 0,2,1) instead of editing it: inside
    the chrome the frame belongs to the container, so the pre contributes only
    padding and its own horizontal scroll. */

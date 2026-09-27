@@ -152,10 +152,6 @@ export function Chat() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  useLayoutEffect(() => {
-    if (pageContentRef.current) pageContentRef.current.inert = sidebarOpen;
-  }, [sidebarOpen]);
-
   // Stick to the end of a streaming answer, let go the moment the reader
   // scrolls away, and offer them a way back. The rules (and why the attach and
   // detach thresholds differ) are documented in the hook.
@@ -648,6 +644,7 @@ export function Chat() {
         writeSidebarCollapsed(next);
       }}
       mobileOpen={sidebarOpen}
+      pageContentRef={pageContentRef}
       onCloseMobile={() => setSidebarOpen(false)}
     />
   );

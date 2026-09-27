@@ -240,6 +240,8 @@ interface ConversationSidebarProps {
   onToggleCollapse: () => void;
   /** Below `lg` only: is the off-canvas drawer showing? */
   mobileOpen: boolean;
+  /** Chat content that the drawer makes inert while it is open. */
+  pageContentRef: RefObject<HTMLDivElement>;
   onCloseMobile: () => void;
 }
 
@@ -261,6 +263,7 @@ export function ConversationSidebar({
   collapsed,
   onToggleCollapse,
   mobileOpen,
+  pageContentRef,
   onCloseMobile,
 }: ConversationSidebarProps) {
   const pinned = conversations.filter((c) => c.pinned);
@@ -286,7 +289,7 @@ export function ConversationSidebar({
   // because the panel is not guaranteed to hold focus (a reader can tab out of
   // it in a browser that ignores `inert`), and "Escape gets me out" has to hold
   // from wherever focus actually is. Same shape as ConfirmDialog/Modal.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!mobileOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.isComposing || e.keyCode === 229) return;
@@ -307,8 +310,8 @@ export function ConversationSidebar({
     return () => document.removeEventListener('keydown', onKey);
   }, [mobileOpen, onCloseMobile]);
 
-  // ONE effect, because `inert` and the focus handoff have to be SEQUENCED and
-  // two effects cannot promise that.
+  // ONE effect, because the drawer's and page's `inert` flips and the focus
+  // handoff have to be SEQUENCED; two effects cannot promise that.
   //
   // The drawer stays MOUNTED while closed so it can slide, and a translated
   // element is still focusable — a closed drawer would otherwise sit in the tab
@@ -324,28 +327,29 @@ export function ConversationSidebar({
   // see; closing puts it back on the control that opened it. Both directions
   // depend on the order relative to `inert`, and in opposite ways —
   //
-  //   opening: clear `inert` FIRST. `focus()` on an element inside an inert
-  //            subtree is a silent no-op, so a handoff that ran first would do
-  //            nothing at all.
+  //   opening: clear drawer `inert`, make the page inert, then focus the close
+  //            button. `focus()` inside an inert subtree is a silent no-op.
   //   closing: read `document.activeElement` BEFORE setting `inert`. Making a
   //            subtree inert blurs whatever is inside it, so a containment
-  //            check made afterwards always answers "focus was not in here" and
-  //            the opener never gets focus back.
+  //            check made afterwards always answers "focus was not in here";
+  //            then clear the page's `inert` before returning focus to opener.
   //
   // The donor drives this off the commit rather than a timer for the same
   // reason ("a wall-clock timer would race the deferred state flip"), and so
   // does this.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = drawerRef.current as (HTMLDivElement & { inert?: boolean }) | null;
     if (mobileOpen) {
       if (el) el.inert = false;
+      if (pageContentRef.current) pageContentRef.current.inert = true;
       closeRef.current?.focus();
     } else {
       const hadFocus = el?.contains(document.activeElement) ?? false;
       if (el) el.inert = true;
+      if (pageContentRef.current) pageContentRef.current.inert = false;
       if (hadFocus) document.getElementById(OPEN_SIDEBAR_ID)?.focus();
     }
-  }, [mobileOpen]);
+  }, [mobileOpen, pageContentRef]);
 
   // ── One list, rendered into both shells ──────────────────────────────────
   const list = (
@@ -441,15 +445,11 @@ export function ConversationSidebar({
                     >
                       {title}
                     </span>
-                    {/* `text-secondary`, not `text-muted`. The rail's grounds
-                        are darker now (light) and lighter (dark) than the
-                        panel, and muted ink on the active row's fill measures
-                        1.86:1 light / 2.30:1 dark — worse than the 2.82:1 it
-                        had on the old white row. Secondary ink puts the same
-                        line at 3.70:1 / 4.98:1 on the active row and 4.44:1 /
-                        5.94:1 on a hovered one, so the fill is paid for
-                        instead of charged to the metadata. */}
-                    <span class="block text-caption text-secondary">
+                    {/* Chat-scoped #55557a ink clears 4.5:1 in light: 6.50:1
+                        on the panel, 5.60:1 on hover and 4.67:1 on active.
+                        Dark uses #a6a6bd for 5.31:1 on active, with more on
+                        the darker hover fill. */}
+                    <span class="chat-rail-meta block text-caption text-secondary">
                       {relativeAge(c.updatedAt)}
                       {c.messageCount ? ` · ${c.messageCount} msg` : ''}
                     </span>
