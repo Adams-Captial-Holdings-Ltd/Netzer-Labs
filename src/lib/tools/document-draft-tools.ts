@@ -90,12 +90,12 @@ async function ownedMeta(ctx: ToolContext, draftId: string): Promise<DraftMeta |
   return meta;
 }
 async function assertStableParent(ctx: ToolContext): Promise<boolean> {
-  const session = await getSession(ctx.agentId, ctx.chatId);
+  const session = await getSession(ctx.agentId, ctx.chatId, { consistentRead: true });
   if (!session) {
     try { await appendTurns(ctx.agentId, ctx.chatId, [], undefined, { surface: 'dashboard', userId: ctx.userId, ephemeral: false }); }
     catch { return false; }
   }
-  const current = await getSession(ctx.agentId, ctx.chatId);
+  const current = await getSession(ctx.agentId, ctx.chatId, { consistentRead: true });
   return !!current && current.surface === 'dashboard' && current.userId === ctx.userId && current.ttl === undefined;
 }
 async function querySegments(ctx: ToolContext, draftId: string): Promise<Segment[]> {
