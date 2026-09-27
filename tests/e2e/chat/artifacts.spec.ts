@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Frame, type Page, type Request } from '@playwright/test';
+import { test, expect, type BrowserContext, type Frame, type Page } from '@playwright/test';
 
 // P5 (step 7) — the artifact card and panel as a person meets them, in a real browser against the chat
 // mock (CCE_CHAT_MOCK=1; web/dev/mock-stream-plugin.ts + web/dev/artifact-fixtures.ts). Written BEFORE the
@@ -33,10 +33,19 @@ test.beforeEach(async ({ page, context }) => {
   await offline(context);
 });
 
-/** Every request that leaves localhost is recorded; the two library CDNs get a stub, the rest are aborted. */
+/**
+ * What reached the network: every request for another host that got past the browser's own policy checks and
+ * arrived at this route. A request Content-Security-Policy refused never arrives here — Playwright still reports
+ * it as a `request` event (then fails it with `csp`), which is why the `request` event is NOT the measure.
+ * The two library CDNs get a stub; everything else is aborted.
+ */
+const reached = new WeakMap<BrowserContext, string[]>();
 async function offline(context: BrowserContext): Promise<void> {
+  const seen: string[] = [];
+  reached.set(context, seen);
   await context.route((url) => !LOCAL.test(url.toString()), async (route) => {
     const url = route.request().url();
+    seen.push(url);
     if (url.startsWith('https://cdn.jsdelivr.net/npm/p5-probe@')) {
       return route.fulfill({ contentType: 'application/javascript', body: "window.__cdn = (window.__cdn || []).concat('jsdelivr');" });
     }
@@ -47,10 +56,9 @@ async function offline(context: BrowserContext): Promise<void> {
   });
 }
 
+/** The requests that have reached the network so far in this test (read it after the actions under test). */
 function outbound(context: BrowserContext): string[] {
-  const seen: string[] = [];
-  context.on('request', (r: Request) => { if (!LOCAL.test(r.url())) seen.push(r.url()); });
-  return seen;
+  return reached.get(context)!;
 }
 
 const composerOf = (page: Page) => page.getByRole('textbox', { name: /^Message / });
@@ -262,18 +270,31 @@ test('P5 a hostile page preview cannot reach the parent or the network', async (
   expect(JSON.stringify(r)).not.toContain('local-dev-dashboard-token');
   // WebRTC is removed (connect-src cannot govern it).
   expect(r.rtc).toBe('undefined');
-  // No popup, no top-level navigation, and the frame never navigated itself away.
+  // No popup and no top-level navigation.
   expect(r.popup).toBe('null');
   expect(popups).toEqual([]);
+
+  // Then the page tries to navigate its own frame off-site. A frame's navigation is judged by its PARENT's
+  // policy, so the dashboard page's own frame-src must refuse it before any request leaves (measured: without
+  // that, this request left the machine although the frame's own policy held), and the panel replaces a
+  // preview that tried to leave with the fallback.
+  await expect(previewOf(page)).toHaveAttribute('data-kind', 'fallback', { timeout: 10_000 });
+  await expect(previewOf(page).getByText(/No preview available/)).toBeVisible();
+  await expect(previewOf(page).locator('iframe')).toHaveCount(0);
   expect(page.url()).toBe(parentUrl);
-  expect(frame.url()).toBe('about:srcdoc');
-  expect(frame.isDetached()).toBe(false);
   await expect(page.locator('body')).not.toContainText('PWNED');
-  // Nothing left the machine: fetch, XHR, WebSocket, beacon, images, CSS, prefetch, form, navigation.
-  expect(leaks).toEqual([]);
-  expect(sockets).toEqual([]);
   // The export channel is deferred: the page ignores the preview's message and the panel stays as it was.
   await expect(panelOf(page).getByRole('heading', { name: 'hostile page', level: 2 })).toBeVisible();
+
+  // A page that swaps itself for a blob document of its own: that document inherits the preview's policy, so its
+  // fetch and image are refused too.
+  await open(page, 'blob hop');
+  await expect(previewOf(page)).toHaveAttribute('data-kind', 'fallback', { timeout: 10_000 });
+  await page.waitForTimeout(500);
+
+  // Nothing reached the network: fetch, XHR, WebSocket, beacon, images, CSS, prefetch, form, either navigation.
+  expect(leaks).toEqual([]);
+  expect(sockets).toEqual([]);
 });
 
 test('P5 a hostile drawing preview runs no script', async ({ page, context }) => {

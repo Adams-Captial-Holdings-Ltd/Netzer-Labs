@@ -67,8 +67,19 @@ t('form', function () { document.getElementById('f').submit(); return 'sent'; })
 t('popup', function () { return window.open('https://evil.example/popup'); });
 t('topNav', function () { top.location.href = 'https://evil.example/top'; return 'sent'; });
 t('message', function () { parent.postMessage({ type: 'netzar-export', fileName: 'x.pdf', bytes: 'AAAA' }, '*'); return 'sent'; });
-setTimeout(function () { t('selfNav', function () { location.href = 'https://evil.example/self'; return 'sent'; }); }, 300);
-setTimeout(function () { r.done = 'yes'; }, 900);
+// Everything above is recorded first. The navigation comes last: a refused navigation replaces this
+// document, and the preview then tears the frame down, so the test reads the results before it.
+setTimeout(function () { r.done = 'yes'; }, 300);
+setTimeout(function () { location.href = 'https://evil.example/self'; }, 900);
+</script></body></html>`;
+
+/** A page that swaps itself for a blob document of its own making, which then tries the network. */
+const BLOB_HOP_PAGE = `<!doctype html><html><body><h1>Blob hop</h1>
+<script>
+setTimeout(function () {
+  var doc = '<script>fetch("https://evil.example/blob-hop").catch(function () {}); new Image().src = "https://evil.example/blob-hop.png";<\\/script>';
+  location.href = URL.createObjectURL(new Blob([doc], { type: 'text/html' }));
+}, 300);
 </script></body></html>`;
 
 /** An SVG that tries script, event handlers, a foreign iframe and external references. */
@@ -90,6 +101,10 @@ const REMOTE_NOTES = `# Remote notes
 <video src="https://evil.example/v.mp4"></video>
 
 <p style="background-image:url(https://evil.example/style-attr.png)">Styled words stay too.</p>
+
+<svg width="10" height="10"><image href="https://evil.example/md-svg.png" width="10" height="10"/></svg>
+
+<svg width="10" height="10"><filter id="f"><feImage href="https://evil.example/md-fe.png"/></filter><rect width="10" height="10" filter="url(#f)"/></svg>
 
 Plain words stay.
 `;
@@ -137,6 +152,7 @@ export const mockArtifacts = new Map<string, MockArtifactVersion[]>([
   one(25, { fileName: 'macro memo', contentType: DOCX, downloadName: 'macro memo.docx', bytes: OFFICE_PLACEHOLDER }),
   one(26, { fileName: 'remote notes', contentType: 'text/markdown', downloadName: 'remote notes.md', bytes: text(REMOTE_NOTES) }),
   one(27, { fileName: 'cdn page', contentType: 'text/html', downloadName: 'cdn page.html', bytes: text(CDN_PAGE) }),
+  one(28, { fileName: 'blob hop', contentType: 'text/html', downloadName: 'blob hop.html', bytes: text(BLOB_HOP_PAGE) }),
 ]);
 
 /** The URL-free descriptor the stream and the transcript carry for one stored version. */
@@ -158,6 +174,6 @@ function refsTurn(reply: string, refs: Array<ReturnType<typeof artifactRef>>): M
 export const artifactFixtures: Record<string, MockSseEvent[]> = {
   artifacts: refsTurn('Here are your files.', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => artifactRef(id(n)))),
   versions: refsTurn('Here is the first plan.', [artifactRef(id(11), 1)]),
-  hostile: refsTurn('Here are the strange files.', [21, 22, 23, 24, 25, 26].map((n) => artifactRef(id(n)))),
+  hostile: refsTurn('Here are the strange files.', [21, 22, 23, 24, 25, 26, 28].map((n) => artifactRef(id(n)))),
   cdn: refsTurn('Here is the page.', [artifactRef(id(27))]),
 };
