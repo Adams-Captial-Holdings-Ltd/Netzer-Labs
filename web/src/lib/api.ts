@@ -110,6 +110,26 @@ export async function downloadFile(path: string, filename: string): Promise<void
   URL.revokeObjectURL(url);
 }
 
+/** Authenticated artifact bytes, kept out of the JSON GET cache. */
+export async function getBytes(path: string): Promise<ArrayBuffer> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${getToken()}` };
+  const who = getDashboardUser();
+  if (who) headers['X-Dashboard-User'] = who;
+  const res = await fetch(`/api${path}`, { headers });
+  if (res.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) {
+    const msg = await res.json()
+      .then((b: { error?: string; detail?: string }) => b.detail || b.error || `HTTP ${res.status}`)
+      .catch(() => `HTTP ${res.status}`);
+    throw new Error(msg);
+  }
+  return res.arrayBuffer();
+}
+
 // ── Read-through cache (stale-while-revalidate) for GET requests ──────
 // Every tab refetches its data on mount, so without this each revisit flashes
 // a skeleton even for a page you just left. We serve the last response

@@ -54,8 +54,9 @@
  * same `N tool(s)`. CLAUDE.md's chat-surface parity rule makes that a contract:
  * change the copy here and the other surfaces have to move with it.
  */
-import type { Message, TurnMeta } from '../../lib/chat/types';
+import type { ArtifactRef, Message, TurnMeta } from '../../lib/chat/types';
 import { renderMarkdown } from '../../lib/chat/markdown';
+import { ArtifactCard } from './ArtifactCard';
 import { AgentMark, MessageRow, isoFromEpochSeconds } from './MessageRow';
 import { ToolCallsSection } from './ToolCallsSection';
 import CancelledIcon from './lc/components/Chat/Messages/Content/CancelledIcon';
@@ -157,9 +158,12 @@ function StoppedFooter() {
 interface AssistantMessageProps {
   message: Message;
   agentName: string;
+  agentId: string;
+  chatId: string;
+  onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
 }
 
-export function AssistantMessage({ message, agentName }: AssistantMessageProps) {
+export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact }: AssistantMessageProps) {
   const tools = message.tools ?? [];
 
   return (
@@ -244,7 +248,7 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
         <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
       )}
 
-      <MessageAttachments message={message} />
+      <MessageAttachments message={message} agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
 
       {/* The answer arrived but the server could not store it (`done:
           not_saved`): one caption, so the reader knows it is theirs to copy now
@@ -262,11 +266,17 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
  * container so they sit on the page ground at the column's full width, the way
  * the donor's attachment group does.
  */
-function MessageAttachments({ message }: { message: Message }) {
+function MessageAttachments({ message, agentId, chatId, onOpenArtifact }: {
+  message: Message;
+  agentId: string;
+  chatId: string;
+  onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
+}) {
   const images = message.images ?? [];
   const artifacts = message.artifacts ?? [];
+  const artifactRefs = message.artifactRefs ?? [];
   const kb = message.kb ?? [];
-  if (images.length === 0 && artifacts.length === 0 && kb.length === 0) return null;
+  if (images.length === 0 && artifacts.length === 0 && artifactRefs.length === 0 && kb.length === 0) return null;
 
   return (
     <div class="mt-3 space-y-2">
@@ -301,6 +311,11 @@ function MessageAttachments({ message }: { message: Message }) {
           <span class="min-w-0 flex-1 truncate text-body-sm text-primary">{a.name}</span>
           <span class="shrink-0 text-caption text-secondary">Download</span>
         </a>
+      ))}
+
+      {artifactRefs.map((artifact) => (
+        <ArtifactCard key={`${artifact.artifactId}:${artifact.version}`} artifact={artifact}
+          agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
       ))}
 
       {kb.map((k, j) => (

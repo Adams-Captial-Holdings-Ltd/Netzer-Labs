@@ -1,0 +1,187 @@
+import { useEffect, useRef, useState } from 'preact/hooks';
+import DOMPurify from 'dompurify';
+import { api, getBytes } from '../../lib/api';
+import { buildMermaidDocument, buildSandboxDocument, parseCsv, previewKind } from '../../lib/chat/artifacts';
+import type { PreviewKind } from '../../lib/chat/artifacts';
+import { renderMarkdown } from '../../lib/chat/markdown';
+import type { ArtifactRef } from '../../lib/chat/types';
+import { toast } from '../Toast';
+import { downloadArtifact } from './ArtifactCard';
+
+interface ArtifactPanelProps {
+  agentId: string;
+  chatId: string;
+  artifact: ArtifactRef;
+  onClose: () => void;
+}
+
+interface Preview {
+  kind: PreviewKind;
+  text?: string;
+  url?: string;
+  slides?: Array<{ index: number; text: string }>;
+}
+
+const FALLBACK = 'No preview available — download the file to open it.';
+
+function base64(bytes: Uint8Array): string {
+  let raw = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    raw += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  return btoa(raw);
+}
+
+export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPanelProps) {
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 1023px)').matches);
+  const [versions, setVersions] = useState<ArtifactRef[]>([artifact]);
+  const [version, setVersion] = useState(artifact.version);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const frameLoads = useRef(0);
+  const selected = versions.find((item) => item.version === version) ?? { ...artifact, version };
+  const kind0 = previewKind(selected.contentType, new Uint8Array());
+  const sniffedKind = selected.contentType === 'image/svg+xml' || selected.contentType === 'application/pdf' ||
+    ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(selected.contentType);
+  const textKind = selected.contentType === 'image/svg+xml' ||
+    ['html', 'markdown', 'code', 'csv', 'mermaid'].includes(kind0);
+  const query = `agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(chatId)}` +
+    `&artifactId=${encodeURIComponent(artifact.artifactId)}`;
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1023px)');
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  useEffect(() => { closeRef.current?.focus(); }, [artifact.artifactId, artifact.version]);
+
+  useEffect(() => {
+    let active = true;
+    setVersion(artifact.version);
+    setVersions([artifact]);
+    void api.get<{ versions: ArtifactRef[] }>(`/artifacts/versions?${query}`)
+      .then((result) => { if (active) setVersions(result.versions.sort((a, b) => a.version - b.version)); })
+      .catch(() => { /* The opened version remains usable if the list fails. */ });
+    return () => { active = false; };
+  }, [agentId, chatId, artifact.artifactId, artifact.version]);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | undefined;
+    frameLoads.current = 0;
+    setPreview(null);
+    const path = `/artifacts/content?${query}&version=${version}`;
+    if (kind0 === 'fallback' && !sniffedKind) {
+      setPreview({ kind: 'fallback' });
+    } else if (kind0 === 'outline') {
+      void api.get<{ slides: Array<{ index: number; text: string }> }>(`${path}&view=outline`)
+        .then((result) => { if (active) setPreview({ kind: 'outline', slides: result.slides }); })
+        .catch(() => { if (active) setPreview({ kind: 'fallback' }); });
+    } else {
+      void getBytes(path).then((buffer) => {
+        if (!active) return;
+        const bytes = new Uint8Array(buffer);
+        const kind = previewKind(selected.contentType, bytes);
+        if (kind === 'image' || kind === 'pdf') {
+          objectUrl = URL.createObjectURL(new Blob([bytes], {
+            type: kind === 'pdf' ? 'application/pdf' : selected.contentType,
+          }));
+          setPreview({ kind, url: objectUrl });
+        } else if (kind === 'svg') {
+          setPreview({ kind, url: `data:image/svg+xml;base64,${base64(bytes)}`, text: new TextDecoder().decode(bytes) });
+        } else {
+          setPreview({ kind, text: new TextDecoder().decode(bytes) });
+        }
+      }).catch(() => { if (active) setPreview({ kind: 'fallback' }); });
+    }
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [agentId, chatId, artifact.artifactId, version, selected.contentType]);
+
+  async function copySource() {
+    if (preview?.text === undefined) return;
+    try {
+      await navigator.clipboard.writeText(preview.text);
+      toast('Copied', 'success');
+    } catch {
+      toast('Could not copy that file. Please try again.', 'error');
+    }
+  }
+
+  function onFrameLoad() {
+    frameLoads.current++;
+    if (frameLoads.current > 1) setPreview({ kind: 'fallback' });
+  }
+
+  return (
+    <section data-artifact-panel aria-label={`Artifact: ${artifact.fileName}`}
+      role={mobile ? 'dialog' : undefined} aria-modal={mobile ? 'true' : undefined}
+      class="fixed inset-0 z-50 flex min-h-0 flex-col bg-bg lg:static lg:z-auto lg:w-[min(560px,45vw)] lg:shrink-0 lg:border-l lg:border-border">
+      <div class="flex flex-wrap items-center gap-2 border-b border-border bg-surface px-4 py-3">
+        <h2 class="min-w-0 flex-1 truncate text-body font-semibold text-primary">{artifact.fileName}</h2>
+        <select aria-label="Version" value={version}
+          onChange={(event) => setVersion(Number(event.currentTarget.value))}
+          class="rounded-lg border border-border bg-surface px-2 py-1 text-caption text-primary">
+          {versions.map((item) => <option key={item.version} value={item.version}>Version {item.version}</option>)}
+        </select>
+        {textKind && (
+          <button type="button" aria-label="Copy source" onClick={() => { void copySource(); }}
+            class="rounded-lg px-2 py-1 text-caption text-secondary hover:bg-surface-hover hover:text-primary">
+            Copy source
+          </button>
+        )}
+        <button type="button" aria-label={`Download ${artifact.fileName}`}
+          onClick={() => { void downloadArtifact(selected, agentId, chatId); }}
+          class="rounded-lg px-2 py-1 text-caption text-secondary hover:bg-surface-hover hover:text-primary">
+          Download
+        </button>
+        <button ref={closeRef} type="button" aria-label="Close artifact" onClick={onClose}
+          class="rounded-lg px-2 py-1 text-caption text-secondary hover:bg-surface-hover hover:text-primary">
+          Close
+        </button>
+      </div>
+      <div data-artifact-preview data-kind={preview?.kind}
+        class="min-h-0 flex-1 overflow-auto p-4 text-body-sm text-primary">
+        {!preview ? <p>Loading preview…</p> :
+          preview.kind === 'fallback' ? <p>{FALLBACK}</p> :
+          preview.kind === 'outline' ? <ol class="list-decimal space-y-2 pl-5">{preview.slides?.map((slide) =>
+            <li key={slide.index}>{slide.text}</li>)}</ol> :
+          preview.kind === 'html' || preview.kind === 'mermaid' ? (
+            <iframe title="Artifact preview" sandbox="allow-scripts" referrerPolicy="no-referrer"
+              srcdoc={buildSandboxDocument(preview.kind === 'mermaid'
+                ? buildMermaidDocument(preview.text ?? '') : preview.text ?? '')}
+              onLoad={onFrameLoad} class="h-full min-h-64 w-full border-0 bg-white" />
+          ) : preview.kind === 'svg' || preview.kind === 'image' ? (
+            <img alt={artifact.fileName} src={preview.url} class="max-h-full max-w-full" />
+          ) : preview.kind === 'pdf' ? (
+            <iframe title="PDF preview" src={preview.url} class="h-full w-full border-0 bg-white" />
+          ) : preview.kind === 'markdown' ? (
+            <div class="chat-md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(preview.text ?? ''), {
+              FORBID_TAGS: ['img', 'video', 'audio', 'source', 'picture', 'track', 'iframe', 'object', 'embed', 'link', 'style'],
+              FORBID_ATTR: ['srcset', 'poster', 'background', 'style'],
+            }) }} />
+          ) : preview.kind === 'code' ? (
+            <pre class="whitespace-pre-wrap break-words"><code>{preview.text}</code></pre>
+          ) : preview.kind === 'csv' ? (() => {
+            const csv = parseCsv(preview.text ?? '', 500);
+            return <><table class="w-full border-collapse text-left">
+              <thead><tr>{csv.rows[0]?.map((cell, i) => <th key={i} class="border-b border-border p-2">{cell}</th>)}</tr></thead>
+              <tbody>{csv.rows.slice(1).map((row, i) => <tr key={i}>{row.map((cell, j) =>
+                <td key={j} class="border-b border-border p-2">{cell}</td>)}</tr>)}</tbody>
+            </table>{csv.truncated && <p class="mt-2 text-caption text-secondary">Showing the first 500 rows</p>}</>;
+          })() : null}
+      </div>
+    </section>
+  );
+}
