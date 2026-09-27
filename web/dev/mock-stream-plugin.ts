@@ -24,6 +24,7 @@
 import type { ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { fixtures } from './fixtures';
+import { artifactFixtures, mockArtifacts } from './artifact-fixtures';
 import type { ToolCall } from '../src/lib/chat/types';
 
 /**
@@ -80,6 +81,7 @@ function parseTurn(rawBody: string): { text: string; chatId: string; attachmentK
 // The transcript records ONLY what the page actually sent with its message, so a
 // file-only message reloads with its chips if, and only if, the page sent them.
 const MOCK_S3 = '/__mock-s3/';
+const MOCK_ARTIFACTS = '/__mock-artifacts/';
 const UPLOAD_MAX_BYTES = 30 * 1024 * 1024; // the real route's ceiling (owner decision 29)
 interface MockUpload { id: string; name: string; type: string; size: number; bytes?: Buffer }
 const uploads = new Map<string, MockUpload>(); // by key
@@ -107,7 +109,7 @@ function describeUploads(keys: string[]): Array<{ id: string; name: string; type
   });
 }
 
-interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean }
+interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[] }
 
 /** Accumulate only the fields the real transcript stores, never arguments. */
 function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
@@ -132,7 +134,7 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   // Fixture selection: "/fixture <name>" picks one by name, anything else
   // (including an unknown name) plays "default".
   const name = text.startsWith('/fixture ') ? text.slice('/fixture '.length).trim() : 'default';
-  const fixture = fixtures[name] ?? fixtures.default;
+  const fixture = fixtures[name] ?? artifactFixtures[name] ?? fixtures.default;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -141,15 +143,18 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   });
   let streamed = '';
   const tools: ToolCall[] = [];
+  // P5: the URL-free references a turn published, kept on its stored turn as the real route does.
+  const artifacts: unknown[] = [];
   for (const ev of fixture) {
     await cadence(res, ev.delayMs);
-    if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed };
+    if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed, artifacts };
     sseWrite(res, ev.event, ev.data);
     if (ev.event === 'chunk' || ev.event === 'reply') streamed = ev.data;
+    if (ev.event === 'artifact_ref') artifacts.push(JSON.parse(ev.data));
     recordToolEvent(tools, ev.event, ev.data);
   }
   res.end();
-  return { text: streamed, tools, stopped: false };
+  return { text: streamed, tools, stopped: false, artifacts };
 }
 
 /** Send a JSON body with the shape the real route returns. */
@@ -272,6 +277,7 @@ function mockSessions(): unknown {
 const transcripts = new Map<string, Array<{
   role: string; text: string; ts: number; status?: string; tools?: ToolCall[];
   attachments?: Array<{ id: string; name: string; type: string; size: number }>;
+  artifacts?: unknown[];
 }>>();
 
 // The one bound on that Map. A dev server left running all day accumulates a
@@ -298,12 +304,13 @@ function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachm
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
     { role: 'user', text: userText, ts, ...(files.length ? { attachments: files } : {}) },
-    ...(reply.text || reply.stopped || reply.tools.length ? [{
+    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [{
       role: 'assistant', text: reply.text, ts,
       ...(reply.stopped ? { status: 'stopped' } : {}),
       ...(reply.tools.length ? {
         tools: reply.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
       } : {}),
+      ...(reply.artifacts.length ? { artifacts: reply.artifacts } : {}),
     }] : []),
   ]);
   // Evicting in silence would be worse than not evicting at all: reopening a
@@ -402,6 +409,62 @@ export function mockStreamPlugin(): Plugin {
           return;
         }
         next();
+      });
+
+      // P5: the three artifact reads the panel makes, with the real routes' shapes and
+      // refusals (src/adapters/dashboard/handler.ts /artifacts/versions, /download,
+      // /content). The mock has one owner, so ownership is not modelled here — the
+      // route tests prove it (src/adapters/dashboard/artifacts.p5.test.ts).
+      const artifactVersion = (req: import('node:http').IncomingMessage) => {
+        const q = new URL(req.url ?? '/', 'http://localhost').searchParams;
+        const artifactId = q.get('artifactId') ?? '';
+        const version = Number(q.get('version'));
+        return { q, artifactId, found: mockArtifacts.get(artifactId)?.find((v) => v.version === version) };
+      };
+      server.middlewares.use('/api/artifacts/versions', (req, res, next) => {
+        if (req.method !== 'GET') return next();
+        const artifactId = new URL(req.url ?? '/', 'http://localhost').searchParams.get('artifactId') ?? '';
+        const versions = mockArtifacts.get(artifactId);
+        if (!versions) return jsonStatus(res, 404, { error: 'not_found' });
+        json(res, { versions: versions.map(({ version, fileName, contentType, createdAt }) =>
+          ({ artifactId, version, fileName, contentType, createdAt })) });
+      });
+      server.middlewares.use('/api/artifacts/download', (req, res, next) => {
+        if (req.method !== 'GET') return next();
+        const { artifactId, found } = artifactVersion(req);
+        if (!found) return jsonStatus(res, 404, { error: 'not_found' });
+        json(res, { url: `${MOCK_ARTIFACTS}${artifactId}/v${found.version}`, fileName: found.downloadName, version: found.version });
+      });
+      server.middlewares.use('/api/artifacts/content', (req, res, next) => {
+        if (req.method !== 'GET') return next();
+        const { q, found } = artifactVersion(req);
+        const view = q.get('view');
+        if (view !== null && view !== 'outline') return jsonStatus(res, 400, { error: 'invalid_view' });
+        if (!found) return jsonStatus(res, 404, { error: 'not_found' });
+        if (view === 'outline') {
+          if (!found.outline) return jsonStatus(res, 400, { error: 'outline_unsupported' });
+          return jsonStatus(res, found.outline.status, found.outline.body);
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${found.downloadName.replace(/"/g, '')}"`,
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "sandbox; default-src 'none'",
+          'Cache-Control': 'no-store',
+        });
+        res.end(found.bytes);
+      });
+      // The pretend CURATED bucket a minted download link points at.
+      server.middlewares.use(MOCK_ARTIFACTS.slice(0, -1), (req, res, next) => {
+        if (req.method !== 'GET') return next();
+        const [, artifactId, v] = /^\/([^/]+)\/v(\d+)$/.exec((req.url ?? '/').split('?')[0]) ?? [];
+        const found = mockArtifacts.get(artifactId ?? '')?.find((x) => x.version === Number(v));
+        if (!found) return jsonStatus(res, 404, { error: 'NoSuchKey' });
+        res.writeHead(200, {
+          'Content-Type': found.contentType,
+          'Content-Disposition': `attachment; filename="${found.downloadName.replace(/"/g, '')}"`,
+        });
+        res.end(found.bytes);
       });
 
       // P3: the owner's download link for one stored file (GET /api/sessions/attachment).
