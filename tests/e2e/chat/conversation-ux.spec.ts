@@ -102,7 +102,8 @@ test('P6 new chat starts in one click from a conversation with messages', async 
   await expect(page.getByPlaceholder('NEW CHAT')).toHaveCount(0);
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await expect(page.getByText(LANDING)).toBeVisible();
-  await expect(page.getByText('first question in this chat')).toHaveCount(0);
+  // Gone from the transcript; the list rightly keeps the conversation as a row titled with it.
+  await expect(userBubbles(page).filter({ hasText: 'first question in this chat' })).toHaveCount(0);
   await expect(composerOf(page)).toHaveValue('');
 });
 
@@ -518,7 +519,7 @@ test('P6 shortcuts start a new chat and focus the message box and the search', a
 
   await page.keyboard.press('ControlOrMeta+Shift+O');
   await expect(page.getByText(LANDING)).toBeVisible();
-  await expect(page.getByText('something to leave behind')).toHaveCount(0);
+  await expect(userBubbles(page).filter({ hasText: 'something to leave behind' })).toHaveCount(0);
   await expect(page.getByPlaceholder('NEW CHAT')).toHaveCount(0);
 
   await page.keyboard.press('ControlOrMeta+Slash');
@@ -608,4 +609,71 @@ test('P6 a failed message that carried files asks for them again instead of retr
   await expect(failure).toBeVisible();
   await expect(failure).toContainText(/attach/i);
   await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+});
+
+// ── Found reading slice C1 (P6 hunk review): the page must agree with what the server stores. ──
+
+test('P6 only the last failed reply offers try again', async ({ page }) => {
+  let calls = 0;
+  await page.route('**/api/test-turn/stream', async (route) => {
+    calls += 1;
+    if (calls === 1) {
+      await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: FAILED_STREAM });
+      return;
+    }
+    await route.continue();
+  });
+  await newChat(page);
+  await composerOf(page).fill('the question that failed');
+  await sendOf(page).click();
+  await expect(page.getByRole('alert').filter({ hasText: FAILURE })).toBeVisible();
+  await sendAndWait(page, 'a later question');
+
+  // Re-sending the older message now would file its answer at the end, away from its question.
+  await expect(page.getByRole('alert').filter({ hasText: FAILURE })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+});
+
+test('P6 a failed regenerate keeps the reply it was replacing and offers no resend', async ({ page }) => {
+  await newChat(page);
+  await sendAndWait(page, 'a question worth asking twice');
+  await expect(replies(page)).toHaveCount(1);
+  await page.route('**/api/test-turn/stream', (route) =>
+    route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: FAILED_STREAM }));
+
+  await replies(page).last().hover();
+  await replies(page).last().getByRole('button', { name: 'Regenerate' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: FAILURE })).toBeVisible();
+  // A failed regenerate stores nothing, so the server still holds the old reply: so must the page.
+  await expect(replies(page).filter({ hasText: REPLY })).toHaveCount(1);
+  // Try again would re-send the question as a new turn: the server would hold it twice.
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+
+  await page.unroute('**/api/test-turn/stream');
+  await page.reload();
+  await expect(userBubbles(page)).toHaveCount(1);
+  await expect(replies(page)).toHaveCount(1);
+  await expect(replies(page).first()).toContainText(REPLY);
+});
+
+test('P6 a stopped regenerate keeps the text it reached, as the server saves it', async ({ page }) => {
+  await newChat(page);
+  await sendAndWait(page, '/fixture longstream');
+  await expect(replies(page).last()).toContainText('Line 200:');
+
+  // The mock answers a regenerate of a "/fixture" message with that fixture again (a long one here).
+  await replies(page).last().hover();
+  await replies(page).last().getByRole('button', { name: 'Regenerate' }).click();
+  await expect(page.getByText('Line 3:').first()).toBeVisible();
+  await stopOf(page).click();
+  await waitForEnd(page);
+
+  // The server saves what the reader saw, marked stopped (the stopped-text rule), in place of the old reply.
+  await expect(replies(page)).toHaveCount(1);
+  await expect(replies(page).last()).not.toContainText('Line 200:');
+  await expect(replies(page).last()).toContainText(/stopped/i);
+  await page.reload();
+  await expect(replies(page)).toHaveCount(1);
+  await expect(replies(page).last()).not.toContainText('Line 200:');
+  await expect(replies(page).last()).toContainText(/stopped/i);
 });
