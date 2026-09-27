@@ -477,6 +477,7 @@ async function handlePerAgentSlackEvent(
       modelOverride,
       onChunk,
       // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
+      // P6 regenerate/retry SKIP: chat clients own their messages, so there is no per-message Regenerate or Try again control (a person re-asks by sending again); rename, pin, search, drafts, export and shortcuts belong to the dashboard conversation list and page. The turn path is unchanged.
       onToolEvent,
       surface: 'slack',
       // A person typed this in a chat window. `origin` is the ONLY thing that
@@ -746,6 +747,7 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
       modelOverride,
       onChunk,
       // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
+      // P6 regenerate/retry SKIP: chat clients own their messages, so there is no per-message Regenerate or Try again control (a person re-asks by sending again); rename, pin, search, drafts, export and shortcuts belong to the dashboard conversation list and page. The turn path is unchanged.
       onToolEvent,
       surface: 'slack',
       // A person typed this in a chat window. `origin` is the ONLY thing that
