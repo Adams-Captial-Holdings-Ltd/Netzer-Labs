@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-26
-as_of_commit: c67d87360a69c49d3ca7248cf481b461acda72c3
+as_of_commit: b1e8bdd7b738d3320b540e363fcb60f8e177d819
 ---
 
 # Netzar Chat handoff
@@ -36,8 +36,8 @@ as_of_commit: c67d87360a69c49d3ca7248cf481b461acda72c3
 - **Who wrote it.** Codex coordinated and built 47 commits (fresh `codex exec`
   builders; Jev picked every rung) until its tokens ran out on 2026-09-26; its
   reviews and councils were Codex-only. Claude Opus continued as coordinator
-  (decision 49): Claude Sonnet built three small changes — the draft-key fix, one
-  CLEANUP refactor and consistent reads after a delete — each behind a committed
+  (decision 49): Claude Sonnet built four small changes — the draft-key fix, one
+  CLEANUP refactor and consistent reads after a delete (two commits) — each behind a committed
   failing test, and one Claude security review ran (no critical or high). The
   Codex inspection of Claude's commits did not run (decision 57).
 - **P4's gate** (`~/.claude/plans/netzar-chat-plan/p4-proof.sh`, 52 rows) reads

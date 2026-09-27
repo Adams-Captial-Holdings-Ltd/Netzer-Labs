@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-26
-as_of_commit: c67d87360a69c49d3ca7248cf481b461acda72c3
+as_of_commit: b1e8bdd7b738d3320b540e363fcb60f8e177d819
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -407,8 +407,8 @@ dashboard documents and images are artifacts).
   under `artifacts/` in CURATED. The bytes are written before any descriptor is
   published, a failed record write deletes the uploaded version, and an upload
   without a version id keeps its pending row for recovery. Every save and every
-  delete takes the conversation's child lock, and a save re-reads the parent
-  with a consistent read under it; a finalizing draft may never re-create a
+  delete takes the conversation's child lock, and a save (and a draft's start)
+  re-reads the parent with a consistent read under it; a finalizing draft may never re-create a
   deleted parent. No response or stored turn carries a key or a URL except the
   owner's 300 s download link.
 
