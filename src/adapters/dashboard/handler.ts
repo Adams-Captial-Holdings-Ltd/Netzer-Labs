@@ -3759,16 +3759,12 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       const versions = await listArtifactVersions({ agentId, chatId, ownerId: owner.ownerId, artifactId });
       const selected = versions.find((entry) => entry.version === version);
       if (!selected) return c.json({ error: 'not_found' }, 404);
-      if (view === 'outline') {
-        if (selected.contentType !== 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
-          return c.json({ error: 'outline_unsupported' }, 400);
-        }
-        const bytes = await readArtifactBody({ agentId, chatId, ownerId: owner.ownerId,
-          artifactId, version: selected.version });
-        return c.json(await deckOutline(bytes));
+      if (view === 'outline' && selected.contentType !== 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+        return c.json({ error: 'outline_unsupported' }, 400);
       }
       const bytes = await readArtifactBody({ agentId, chatId, ownerId: owner.ownerId,
         artifactId, version: selected.version });
+      if (view === 'outline') return c.json(await deckOutline(bytes));
       return new Response(bytes, { status: 200, headers: {
         'Content-Type': 'application/octet-stream',
         'Content-Disposition': attachmentDisposition(downloadFileName(selected.fileName, selected.contentType)),
