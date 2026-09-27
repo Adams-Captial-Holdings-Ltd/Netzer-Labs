@@ -414,10 +414,11 @@ export function mockStreamPlugin(): Plugin {
         next();
       });
 
-      // P5: the three artifact reads the panel makes, with the real routes' shapes and
-      // refusals (src/adapters/dashboard/handler.ts /artifacts/versions, /download,
-      // /content). The mock has one owner, so ownership is not modelled here — the
-      // route tests prove it (src/adapters/dashboard/artifacts.p5.test.ts).
+      // P5: the three artifact reads the panel makes, with the real routes' response
+      // shapes and the not-found / view refusals the panel meets
+      // (src/adapters/dashboard/handler.ts /artifacts/versions, /download, /content).
+      // Ownership, scope, capability and version-format checks are not modelled here —
+      // the route tests prove them (src/adapters/dashboard/artifacts.p5.test.ts).
       const artifactVersion = (req: import('node:http').IncomingMessage) => {
         const q = new URL(req.url ?? '/', 'http://localhost').searchParams;
         const artifactId = q.get('artifactId') ?? '';

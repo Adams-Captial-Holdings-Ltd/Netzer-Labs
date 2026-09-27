@@ -22,9 +22,11 @@ as_of_commit: 9905de318972d4e4be3f60aac3347d0eb4b59190
   Download mints a fresh link per click, outside the page's read cache, named
   with its type's extension (decision 58's gap is closed). The panel previews by
   content type AND file bytes: HTML and Mermaid only in an opaque-origin
-  `srcdoc` sandbox under its own policy (scripts only from jsDelivr and cdnjs,
-  decision 4), the page carrying a frames-only `frame-src 'self' blob:`; SVG as an
-  image; pictures and PDFs from revoked `blob:` URLs; markdown without remote
+  `srcdoc` sandbox under its own policy (scripts only inline or from jsDelivr and
+  cdnjs, decision 4; styles and fonts only from those two paths; nothing else),
+  the page carrying a frames-only `frame-src 'self' blob:`; SVG as an image;
+  pictures and PDFs from `blob:` URLs, revoked when the panel closes or switches
+  version; markdown without remote
   media or form controls; code, CSV and deck outlines as text. A new owner route
   `GET /api/artifacts/content` serves the bytes inertly (and a deck's bounded
   outline). On a phone the panel is a full-screen sheet that keeps focus inside

@@ -328,9 +328,12 @@ backend.
   cannot reach the page, its storage or its token — under its own
   Content-Security-Policy that loads scripts only inline or from
   `cdn.jsdelivr.net/npm/` and `cdnjs.cloudflare.com/ajax/libs/` (owner decision
-  4) and blocks every other request; Mermaid is one pinned jsDelivr build with
+  4), styles and fonts only inline or from those same two paths, pictures and
+  media only as `data:` or `blob:`, and blocks every other request; Mermaid is
+  one pinned jsDelivr build with
   integrity. SVG is shown only as an image; pictures and PDFs come from the
-  bytes as revoked `blob:` URLs; markdown is sanitised to HTML only, with remote
+  bytes as `blob:` URLs, revoked when the panel closes or switches version;
+  markdown is sanitised to HTML only, with remote
   media, form controls and popovers removed; code, CSV (100 cells a row, 1,000
   characters a cell, 500 rows) and a deck's slide text (from the server,
   `view=outline`, after the P3 ZIP check) are plain text. Anything else says
@@ -477,7 +480,7 @@ later step changed their code.
 | The guardrail's async mode lets a harmful sentence reach the screen before the guardrail blocks the rest of the reply (AWS's documented trade-off) | owner decision 50; the app's own streaming redactor still scrubs every chunk against the block-severity patterns first | none open — runtime-config `bedrock/guardrail_stream_mode = sync` restores "check first" with no redeploy |
 | P3 is proven locally only: a real browser PUT to real S3 through the signed link, the `HeadObject` preflight on real S3 and a real download have not run | the staging tier ST-1..ST-3 of `p3-proof.sh`; the grants and the staging bucket's CORS were read from `infra/`, not exercised | `P3_TIER=staging` after promotion (decision 18) |
 | The raw bucket expires objects after 365 days, so an old message's file stops downloading (the chip stays; the click opens S3's error page) | `infra/lib/storage-stack.ts` lifecycle rule | none open — deferred in the P3 session log |
-| WebRTC is not fully blocked in an HTML preview: the guard removes it from the preview's own window, but a frame the preview creates (or a `blob:` document it navigates to) gets it back, and no browser policy can block WebRTC today (CSP `webrtc` is not recognised). Every other exit — fetch, XHR, WebSocket, beacon, images, CSS, frames, forms, popups, top navigation — is blocked in every such frame | measured in the P5 session log (the sandbox probes); `web/src/lib/chat/artifacts.ts` | none open — carried in the P5 session log; revisit when browsers support a WebRTC policy |
+| WebRTC is not fully blocked in an HTML preview: the guard removes it from the preview's own window, but a frame the preview creates (or a `blob:` document it navigates to) gets it back, and no browser policy can block WebRTC today (CSP `webrtc` is not recognised). Every other exit — fetch, XHR, WebSocket, beacon, remote images, frames, forms, popups, top navigation, and any style or font not from the two library paths — is blocked in every such frame | measured in the P5 session log (the sandbox probes); `web/src/lib/chat/artifacts.ts` | none open — carried in the P5 session log; revisit when browsers support a WebRTC policy |
 | P5 is proven locally only: the browser suite runs against the dev-only mock; the deployed page's frame policy, the content route on real S3 and a real PDF viewer have not run on staging | `tests/e2e/chat/artifacts.spec.ts` against `web/dev/`; the route tests in `src/adapters/dashboard/artifacts.p5.test.ts` | after promotion (decision 18) |
 | Chat REPLY markdown (not the artifact preview) still lets a reply load a remote image in the dashboard page | found by the P5 React review (outside P5's range, pre-existing): `renderMarkdown` uses DOMPurify's default profile | carried in the P5 session log (A213) for the owner |
 | P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
