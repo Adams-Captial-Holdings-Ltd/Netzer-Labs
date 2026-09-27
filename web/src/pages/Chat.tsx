@@ -197,15 +197,15 @@ export function Chat() {
   const NEW_DRAFT = 'new';
   const currentDraftKey = () => (unsentChatRef.current ? NEW_DRAFT : `${agentId}/${chatId}`);
 
-  function closeArtifact() {
+  function closeArtifact(restoreFocus = true) {
     setOpenArtifact(null);
-    if (openArtifact?.opener.isConnected) openArtifact.opener.focus();
+    if (restoreFocus && openArtifact?.opener.isConnected) openArtifact.opener.focus({ preventScroll: true });
   }
 
   // `fresh`: a new chat restores the `new` slot and clears it; a stored
   // conversation restores its own draft, or nothing.
   function activateConversation(id: string, forAgent = agentId, fresh = false) {
-    closeArtifact();
+    closeArtifact(false);
     draftsRef.current.set(currentDraftKey(), input);
     const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`);
     if (fresh) draftsRef.current.delete(NEW_DRAFT);
@@ -674,7 +674,8 @@ export function Chat() {
         />
       </div>
       {openArtifact && (
-        <ArtifactPanel agentId={agentId} chatId={chatId} artifact={openArtifact.artifact} onClose={closeArtifact} />
+        <ArtifactPanel key={`${openArtifact.artifact.artifactId}:${openArtifact.artifact.version}`}
+          agentId={agentId} chatId={chatId} artifact={openArtifact.artifact} onClose={closeArtifact} />
       )}
     </div>
   );

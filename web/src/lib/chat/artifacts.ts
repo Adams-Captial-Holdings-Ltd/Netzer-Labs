@@ -57,7 +57,9 @@ export function previewKind(contentType: string, head: Uint8Array): PreviewKind 
 
 export const SANDBOX_CSP = "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/ https://cdnjs.cloudflare.com/ajax/libs/; style-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/ https://cdnjs.cloudflare.com/ajax/libs/; font-src data: https://cdn.jsdelivr.net/npm/ https://cdnjs.cloudflare.com/ajax/libs/; img-src data: blob:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; manifest-src 'none'";
 
-// WebRTC is the exit CSP cannot close; the frame's own navigation is refused by the page's frame-src (web/index.html).
+// Best effort: removes WebRTC (which CSP cannot govern) from the preview's own window only. A frame the
+// preview creates, or a document it navigates to, gets WebRTC back, and no browser policy can block it today
+// (measured, P5). The frame's own off-site navigation is refused by the page's frame-src (web/index.html).
 const GUARD = "(function(){['RTCPeerConnection','webkitRTCPeerConnection','RTCDataChannel','RTCSessionDescription','RTCIceCandidate'].forEach(function(k){try{Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false});}catch(x){}});})();";
 
 export function buildSandboxDocument(html: string): string {
@@ -71,6 +73,34 @@ export function buildSandboxDocument(html: string): string {
 export const MERMAID_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js';
 export const MERMAID_INTEGRITY = 'sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2';
 
+const ARTIFACT_LABELS: Record<string, string> = {
+  'text/html': 'HTML',
+  'image/svg+xml': 'SVG',
+  'image/png': 'PNG',
+  'image/jpeg': 'JPG',
+  'image/gif': 'GIF',
+  'image/webp': 'WEBP',
+  'application/pdf': 'PDF',
+  'text/markdown': 'MD',
+  'text/csv': 'CSV',
+  'text/vnd.mermaid': 'MMD',
+  'application/json': 'JSON',
+  'text/xml': 'XML',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PPTX',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLSX',
+};
+
+export function artifactLabel(contentType: string, fileName: string): string {
+  const known = ARTIFACT_LABELS[contentType];
+  if (known) return known;
+  if (contentType === 'text/plain') {
+    const extension = fileName.match(/\.([a-z0-9]{1,5})$/i)?.[1];
+    return extension ? extension.toUpperCase() : 'TXT';
+  }
+  return 'FILE';
+}
+
 function escapeHtml(source: string): string {
   return source.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -83,6 +113,9 @@ export function buildMermaidDocument(source: string): string {
     "<script>(async function(){try{if(!window.mermaid)return;mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' });var s=document.getElementById('source');var r=await mermaid.render('netzar-diagram',s.textContent);document.getElementById('diagram').innerHTML=r.svg;s.hidden=true;}catch(x){}})();</script>";
 }
 
+const MAX_CSV_CELLS_PER_ROW = 100;
+const MAX_CSV_CELL_LENGTH = 1_000;
+
 /** Parse CSV into plain text cells, stopping once one row beyond the cap is known. */
 export function parseCsv(text: string, maxRows: number): { rows: string[][]; truncated: boolean } {
   const rows: string[][] = [];
@@ -92,13 +125,30 @@ export function parseCsv(text: string, maxRows: number): { rows: string[][]; tru
   let field = '';
   let quoted = false;
   let atFieldStart = true;
+  let truncated = false;
+  let cellTruncated = false;
+
+  const cellValue = (): string => cellTruncated ? `${field}…` : field;
+
+  const append = (value: string): void => {
+    if (row.length >= MAX_CSV_CELLS_PER_ROW) {
+      truncated = true;
+    } else if (field.length < MAX_CSV_CELL_LENGTH) {
+      field += value;
+    } else {
+      truncated = true;
+      cellTruncated = true;
+    }
+  };
 
   const finishRow = (): boolean => {
-    row.push(field);
+    if (row.length < MAX_CSV_CELLS_PER_ROW) row.push(cellValue());
+    else truncated = true;
     if (rows.length >= limit) return false;
     rows.push(row);
     row = [];
     field = '';
+    cellTruncated = false;
     atFieldStart = true;
     return true;
   };
@@ -107,28 +157,30 @@ export function parseCsv(text: string, maxRows: number): { rows: string[][]; tru
     const c = text[i]!;
     if (quoted) {
       if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }
+        if (text[i + 1] === '"') { append('"'); i++; }
         else quoted = false;
       } else {
-        field += c;
+        append(c);
       }
     } else if (c === '"' && atFieldStart) {
       quoted = true;
       atFieldStart = false;
     } else if (c === ',') {
-      row.push(field);
+      if (row.length < MAX_CSV_CELLS_PER_ROW) row.push(cellValue());
+      else truncated = true;
       field = '';
+      cellTruncated = false;
       atFieldStart = true;
     } else if (c === '\r' || c === '\n') {
       if (!finishRow()) return { rows, truncated: true };
       if (c === '\r' && text[i + 1] === '\n') i++;
     } else {
-      field += c;
+      append(c);
       atFieldStart = false;
     }
   }
   if (row.length > 0 || field !== '' || !/[\r\n]$/.test(text)) {
     if (!finishRow()) return { rows, truncated: true };
   }
-  return { rows, truncated: false };
+  return { rows, truncated };
 }

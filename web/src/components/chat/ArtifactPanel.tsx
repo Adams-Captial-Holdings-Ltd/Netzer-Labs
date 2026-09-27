@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import DOMPurify from 'dompurify';
+import { Copy, Download, X } from 'lucide-preact';
 import { api, getBytes } from '../../lib/api';
 import { buildMermaidDocument, buildSandboxDocument, parseCsv, previewKind } from '../../lib/chat/artifacts';
 import type { PreviewKind } from '../../lib/chat/artifacts';
@@ -39,6 +40,7 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
   const [preview, setPreview] = useState<Preview | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const frameLoads = useRef(0);
+  const sectionRef = useRef<HTMLElement>(null);
   const selected = versions.find((item) => item.version === version) ?? { ...artifact, version };
   const kind0 = previewKind(selected.contentType, new Uint8Array());
   const sniffedKind = selected.contentType === 'image/svg+xml' || selected.contentType === 'application/pdf' ||
@@ -47,6 +49,20 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
     ['html', 'markdown', 'code', 'csv', 'mermaid'].includes(kind0);
   const query = `agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(chatId)}` +
     `&artifactId=${encodeURIComponent(artifact.artifactId)}`;
+  const derived = useMemo(() => {
+    if (!preview) return { markdownHtml: undefined, csv: undefined, srcdoc: undefined };
+    const markdownHtml = preview.kind === 'markdown' ? DOMPurify.sanitize(renderMarkdown(preview.text ?? ''), {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ['img', 'video', 'audio', 'source', 'picture', 'track', 'iframe', 'object', 'embed', 'link', 'style',
+        'form', 'input', 'button', 'textarea', 'select', 'option', 'optgroup', 'fieldset', 'legend', 'label', 'datalist', 'output'],
+      FORBID_ATTR: ['srcset', 'poster', 'background', 'style', 'popover', 'popovertarget', 'popovertargetaction'],
+    }) : undefined;
+    const csv = preview.kind === 'csv' ? parseCsv(preview.text ?? '', 500) : undefined;
+    const srcdoc = preview.kind === 'html' || preview.kind === 'mermaid'
+      ? buildSandboxDocument(preview.kind === 'mermaid' ? buildMermaidDocument(preview.text ?? '') : preview.text ?? '')
+      : undefined;
+    return { markdownHtml, csv, srcdoc };
+  }, [preview]);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1023px)');
@@ -58,7 +74,9 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
 
   // A layout effect: the listener exists as soon as the panel does, so an Escape pressed before paint is not lost.
   useLayoutEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) onClose();
+    };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
@@ -67,8 +85,6 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
 
   useEffect(() => {
     let active = true;
-    setVersion(artifact.version);
-    setVersions([artifact]);
     void api.get<{ versions: ArtifactRef[] }>(`/artifacts/versions?${query}`)
       .then((result) => { if (active) setVersions(result.versions.sort((a, b) => a.version - b.version)); })
       .catch(() => { /* The opened version remains usable if the list fails. */ });
@@ -125,31 +141,40 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
     if (frameLoads.current > 1) setPreview({ kind: 'fallback' });
   }
 
+  function focusPanelEdge(edge: 'first' | 'last') {
+    const selector = 'a[href], button:not([disabled]), select, textarea, input, iframe, [tabindex]:not([tabindex="-1"])';
+    const elements = [...(sectionRef.current?.querySelectorAll<HTMLElement>(selector) ?? [])]
+      .filter((element) => !element.hasAttribute('data-artifact-focus-sentinel'));
+    (edge === 'first' ? elements[0] : elements[elements.length - 1])?.focus();
+  }
+
   return (
-    <section data-artifact-panel aria-label={`Artifact: ${artifact.fileName}`}
+    <section ref={sectionRef} data-artifact-panel aria-label={`Artifact: ${artifact.fileName}`}
       role={mobile ? 'dialog' : undefined} aria-modal={mobile ? 'true' : undefined}
       class="fixed inset-0 z-50 flex min-h-0 flex-col bg-bg lg:static lg:z-auto lg:w-[min(560px,45vw)] lg:shrink-0 lg:border-l lg:border-border">
-      <div class="flex flex-wrap items-center gap-2 border-b border-border bg-surface px-4 py-3">
+      {mobile && <span tabIndex={0} aria-hidden="true" data-artifact-focus-sentinel class="sr-only"
+        onFocus={() => focusPanelEdge('last')} />}
+      <div class="flex flex-nowrap items-center gap-2 border-b border-border bg-surface px-4 py-3">
         <h2 class="min-w-0 flex-1 truncate text-body font-semibold text-primary">{artifact.fileName}</h2>
-        <select aria-label="Version" value={version}
+        {versions.length > 1 && <select aria-label="Version" value={version}
           onChange={(event) => setVersion(Number(event.currentTarget.value))}
           class="rounded-lg border border-border bg-surface px-2 py-1 text-caption text-primary">
           {versions.map((item) => <option key={item.version} value={item.version}>Version {item.version}</option>)}
-        </select>
+        </select>}
         {textKind && (
-          <button type="button" aria-label="Copy source" onClick={() => { void copySource(); }}
-            class="rounded-lg px-2 py-1 text-caption text-secondary hover:bg-surface-hover hover:text-primary">
-            Copy source
+          <button type="button" aria-label="Copy source" title="Copy source" onClick={() => { void copySource(); }}
+            class="flex size-9 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-hover hover:text-primary">
+            <Copy aria-hidden="true" class="size-4" />
           </button>
         )}
-        <button type="button" aria-label={`Download ${artifact.fileName}`}
+        <button type="button" aria-label={`Download ${artifact.fileName}`} title={`Download ${artifact.fileName}`}
           onClick={() => { void downloadArtifact(selected, agentId, chatId); }}
-          class="rounded-lg px-2 py-1 text-caption text-secondary hover:bg-surface-hover hover:text-primary">
-          Download
+          class="flex size-9 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-hover hover:text-primary">
+          <Download aria-hidden="true" class="size-4" />
         </button>
-        <button ref={closeRef} type="button" aria-label="Close artifact" onClick={onClose}
-          class="rounded-lg px-2 py-1 text-caption text-secondary hover:bg-surface-hover hover:text-primary">
-          Close
+        <button ref={closeRef} type="button" aria-label="Close artifact" title="Close artifact" onClick={onClose}
+          class="flex size-9 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-hover hover:text-primary">
+          <X aria-hidden="true" class="size-4" />
         </button>
       </div>
       <div data-artifact-preview data-kind={preview?.kind}
@@ -160,30 +185,27 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
             <li key={slide.index}>{slide.text}</li>)}</ol> :
           preview.kind === 'html' || preview.kind === 'mermaid' ? (
             <iframe title="Artifact preview" sandbox="allow-scripts" referrerPolicy="no-referrer"
-              srcdoc={buildSandboxDocument(preview.kind === 'mermaid'
-                ? buildMermaidDocument(preview.text ?? '') : preview.text ?? '')}
+              srcdoc={derived.srcdoc}
               onLoad={onFrameLoad} class="h-full min-h-64 w-full border-0 bg-white" />
           ) : preview.kind === 'svg' || preview.kind === 'image' ? (
             <img alt={artifact.fileName} src={preview.url} class="max-h-full max-w-full" />
           ) : preview.kind === 'pdf' ? (
             <iframe title="PDF preview" src={preview.url} class="h-full w-full border-0 bg-white" />
           ) : preview.kind === 'markdown' ? (
-            <div class="chat-md" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(preview.text ?? ''), {
-              USE_PROFILES: { html: true },
-              FORBID_TAGS: ['img', 'video', 'audio', 'source', 'picture', 'track', 'iframe', 'object', 'embed', 'link', 'style'],
-              FORBID_ATTR: ['srcset', 'poster', 'background', 'style'],
-            }) }} />
+            <div class="chat-md" dangerouslySetInnerHTML={{ __html: derived.markdownHtml ?? '' }} />
           ) : preview.kind === 'code' ? (
             <pre class="whitespace-pre-wrap break-words"><code>{preview.text}</code></pre>
           ) : preview.kind === 'csv' ? (() => {
-            const csv = parseCsv(preview.text ?? '', 500);
+            const csv = derived.csv ?? { rows: [], truncated: false };
             return <><table class="w-full border-collapse text-left">
               <thead><tr>{csv.rows[0]?.map((cell, i) => <th key={i} class="border-b border-border p-2">{cell}</th>)}</tr></thead>
               <tbody>{csv.rows.slice(1).map((row, i) => <tr key={i}>{row.map((cell, j) =>
                 <td key={j} class="border-b border-border p-2">{cell}</td>)}</tr>)}</tbody>
-            </table>{csv.truncated && <p class="mt-2 text-caption text-secondary">Showing the first 500 rows</p>}</>;
+            </table>{csv.truncated && <p class="mt-2 text-caption text-secondary">Showing part of this file — download it to see all of it.</p>}</>;
           })() : null}
       </div>
+      {mobile && <span tabIndex={0} aria-hidden="true" data-artifact-focus-sentinel class="sr-only"
+        onFocus={() => focusPanelEdge('first')} />}
     </section>
   );
 }
