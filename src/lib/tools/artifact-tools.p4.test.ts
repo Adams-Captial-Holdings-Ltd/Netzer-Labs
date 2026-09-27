@@ -263,3 +263,19 @@ it('P4 artifact read tool refuses another owner and returns bounded content', as
   expect(foreign.isError).toBe(true);
   expect(foreign.text).not.toMatch(/private storage key|s3|https?:\/\//i);
 });
+
+it('P4 a draft started after a finished delete never trusts a stale conversation read', async () => {
+  await import(draftModulePath).catch(() => null);
+  const { getSession: realGetSession } = await vi.importActual<typeof import('../state/sessions-repo.js')>('../state/sessions-repo.js');
+  const parentKey = `AGENT#main|CHAT#${CHAT}`;
+  const stale = { agentId: 'main', chatId: CHAT, userId: OWNER, surface: 'dashboard', turns: [] };
+  // The conversation row is gone (a delete finished), but DynamoDB may still
+  // answer an eventually consistent GetItem with it; a ConsistentRead cannot.
+  draftSession.mockImplementation(async (agentId: string, chatId: string, opts?: { consistentRead?: boolean }) =>
+    opts?.consistentRead ? realGetSession(agentId, chatId, opts) : stale);
+  await draftHandler()!.invoke({ action: 'start', format: 'pdf', title: 'After delete', operationId: 'start-stale' },
+    { ...dashboard }).catch(() => undefined);
+  const metaRows = [...draftTable.rows.keys()].filter((k) => k.includes('#DRAFT#') && k.endsWith('#META'));
+  expect(metaRows.length === 0 || draftTable.rows.has(parentKey),
+    'a draft must never be recorded under a conversation that no longer exists').toBe(true);
+});
