@@ -2,8 +2,8 @@
 feature: netzar-chat
 document_role: index
 status: current
-observed_at: 2026-09-24
-as_of_commit: 97f8e79b9e9c606c8e14a64ab956e272c11b8e4c
+observed_at: 2026-09-26
+as_of_commit: c67d87360a69c49d3ca7248cf481b461acda72c3
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -29,6 +29,16 @@ implemented_by:
   - web/src/lib/chat/attachment-rules.ts
   - web/src/lib/chat/uploads.ts
   - web/src/components/chat/UserMessage.tsx
+  - src/lib/chat/artifacts-repo.ts
+  - src/lib/chat/artifact-grammar.ts
+  - src/lib/chat/vendor/librechat-update.ts
+  - src/lib/documents/pptx.ts
+  - src/lib/tools/document-generation-tools.ts
+  - src/lib/tools/document-draft-tools.ts
+  - src/lib/tools/artifact-read-tools.ts
+  - src/lib/tools/nova-canvas-tools.ts
+  - src/lib/tools/privacy-tools.ts
+  - infra/lib/iam-stack.ts
 tested_by:
   - src/adapters/dashboard/chat-stream.test.ts
   - src/adapters/dashboard/chat-stream-p2.test.ts
@@ -57,6 +67,16 @@ tested_by:
   - src/lib/state/sessions-repo.p3.integration.test.ts
   - src/adapters/slack/media.p3.test.ts
   - tests/e2e/chat/attachments.spec.ts
+  - src/lib/chat/artifacts-repo.p4.test.ts
+  - src/lib/chat/artifacts-repo.p4.integration.test.ts
+  - src/lib/chat/artifact-grammar.p4.test.ts
+  - src/adapters/dashboard/artifacts.p4.test.ts
+  - src/agent/agent-loop.p4.test.ts
+  - src/lib/documents/pptx.p4.test.ts
+  - src/lib/state/sessions-repo.p4.test.ts
+  - src/lib/tools/artifact-tools.p4.test.ts
+  - src/lib/tools/privacy-tools.p4.test.ts
+  - infra/lib/iam-stack.p4.test.ts
 approved_work:
   - docs/features/netzar-chat/plan.md
 ---
@@ -247,6 +267,37 @@ backend.
   raise it) and names a file it skips for being past the third or over the size
   limit (a failed Slack download is still reported only generically).
 
+**Artifacts — files the agent makes (P4, roadmap step 6, server only):**
+
+- **A proper home.** In dashboard chat, a generated document (`generate_document`:
+  PDF, DOCX, XLSX, editable PPTX through `pptxgenjs`), a generated image, a
+  document built across turns (`document_draft`: start, append, finalize) and a
+  reply's `:::artifact{…}` block (text, markdown, HTML, SVG, Mermaid, code, JSON,
+  CSV; at most 8 a turn and 1 MiB each, parsed by the vendored, fixed LibreChat
+  parser) are saved by `saveArtifact` (`src/lib/chat/artifacts-repo.ts`) into the
+  versioned CURATED bucket under `artifacts/`, at most 30 MiB, after the
+  block-severity safety scan, under a per-conversation lock. Each save is an
+  immutable version; a revision names the version it replaces, so "make it
+  shorter" keeps the first draft. Only a stable dashboard person's durable
+  conversation can hold artifacts; Telegram and Slack keep their existing
+  24-hour file links and skip durable artifacts on purpose.
+- **Only the owner reads it.** `GET /api/artifacts`, `/api/artifacts/versions`
+  and `/api/artifacts/download` (`sessions:read`) list descriptors with no key or
+  URL and re-mint a 300 s link to one exact version; another person, a missing
+  chat and a missing file get the same 404; an admin reads through the audited
+  override, which fails closed. The stream sends `artifact_ref` (a URL-free
+  descriptor) only after the turn is saved; the transcript restores the
+  references. The model can read its owner's own artifact back
+  (`read_artifact`, up to 9,000 bytes, scanned first); the tool status and the
+  saved tool record show only a short hidden-result notice.
+- **Deleting really deletes.** Deleting a chat, and `forget_me`, erase every
+  artifact object version and delete marker, then confirm none is left, before
+  any row goes; a partial failure keeps the rows for a retry and forget-me
+  records it.
+- **Not yet:** the dashboard's chat screen does not render `artifact_ref`, so a
+  file made in dashboard chat shows no download card until P5 (owner decision
+  58); no themed builds (ART-15, its own step); no preview (P5).
+
 ## 3. Current status and current source commit
 
 The port merged into `development` as PR #129 (merge
@@ -257,9 +308,15 @@ through the branch-to-environment mapping; it is not on `origin/production`.
 P1 (roadmap step 3) merged into `development` as PR #189 (merge
 `e035f97`, 2026-09-23) and P2 (roadmap step 4) as PR #190 (merge `700821f`,
 2026-09-23); neither is on an environment branch yet (owner decision 18:
-promotion is separate work). P3 (roadmap step 5) is the change this README
-was last updated with; [HANDOFF](HANDOFF.md) and the Gauntlet state file hold
-its pull request, because a file cannot state the commit it is inside.
+promotion is separate work). P3 (roadmap step 5) merged as PR #191 (merge
+`6c49661`, 2026-09-24), on no environment branch either. P4 (roadmap step 6)
+is the change this README was last updated with; [HANDOFF](HANDOFF.md) and the
+Gauntlet state file hold its pull request, because a file cannot state the
+commit it is inside. The P4 paragraphs and rows were checked at the
+frontmatter's commit; the P1-P3 statements were last checked at `97f8e79` and
+re-derived here only where P4 changed their code (the cascading delete now
+erases artifacts first; a message record can carry artifact references;
+dashboard documents and images are artifacts).
 
 ## 4. Source of truth
 
@@ -287,6 +344,7 @@ its pull request, because a file cannot state the commit it is inside.
 | Turn lifecycle (server) | `src/adapters/dashboard/handler.ts` (the stream route), `src/agent/agent-loop.ts`, `src/lib/bedrock/client.ts`, `beginTurn`/`endTurn` in `src/lib/state/sessions-repo.ts` | Abort, heartbeat, deltas, tool start/end, typed errors, send-time checks, turn records, the stopped turn's spend, the guardrail stream mode |
 | Turn lifecycle (web) | `web/src/lib/chat/stream.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/ToolCallsSection.tsx`, `web/dev/` (the dev-only chat mock) | Protocol 2 parsing, the composer during a run, the tool panel; the mock mirrors the route for `npm run e2e:chat` |
 | Attachments (server) | `src/adapters/dashboard/handler.ts` (`/chat/uploads`, the send's preflight, `/sessions/attachment`), `src/lib/chat/attachments.ts`, `src/lib/chat/zip-check.ts`, `src/lib/media/process.ts`, `src/lib/vectors/store.ts`, `deleteSession` in `src/lib/state/sessions-repo.ts`, `src/adapters/slack/media.ts` | The format table, the signed upload link, the `HeadObject` preflight, the media rules and the knowledge opt-in, the owner's download link, the file cascade on delete, Slack's ceiling |
+| Artifacts (server) | `src/lib/chat/artifacts-repo.ts`, `src/lib/chat/artifact-grammar.ts` + `src/lib/chat/vendor/`, `src/lib/tools/{document-generation,document-draft,artifact-read,nova-canvas,privacy}-tools.ts`, `src/lib/documents/pptx.ts`, the `/artifacts*` routes and `artifact_ref` in `src/adapters/dashboard/handler.ts`, `deleteSession` in `src/lib/state/sessions-repo.ts`, `infra/lib/iam-stack.ts` | Versioned CURATED storage and its lock, the grammar, the tools, the owner routes, version-aware erasure and its IAM grant |
 | Attachments (web) | `web/src/lib/chat/attachment-rules.ts`, `web/src/lib/chat/uploads.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/UserMessage.tsx`, `web/src/pages/Chat.tsx` | The same rules in the browser, upload on attach with progress, the chips and their knowledge switch, the Download buttons |
 
 ## 6. Current business/state rules
@@ -343,6 +401,16 @@ its pull request, because a file cannot state the commit it is inside.
   or reports an error, so a retry finds it whole; a conversation without files
   makes no S3 call. An opted-in knowledge-base copy is a separate document and
   stays (decision 54).
+- An artifact's rows share its conversation's partition (`CHAT#<id>#ARTIFACT#…`:
+  a head, one immutable version per save carrying the exact S3 version id, and a
+  pending row while an upload is in flight); its bytes live at a base64url key
+  under `artifacts/` in CURATED. The bytes are written before any descriptor is
+  published, a failed record write deletes the uploaded version, and an upload
+  without a version id keeps its pending row for recovery. Every save and every
+  delete takes the conversation's child lock, and a save re-reads the parent
+  with a consistent read under it; a finalizing draft may never re-create a
+  deleted parent. No response or stored turn carries a key or a URL except the
+  owner's 300 s download link.
 
 ## 7. Known runtime risks and approved next work
 
@@ -355,6 +423,10 @@ its pull request, because a file cannot state the commit it is inside.
 | The guardrail's async mode lets a harmful sentence reach the screen before the guardrail blocks the rest of the reply (AWS's documented trade-off) | owner decision 50; the app's own streaming redactor still scrubs every chunk against the block-severity patterns first | none open — runtime-config `bedrock/guardrail_stream_mode = sync` restores "check first" with no redeploy |
 | P3 is proven locally only: a real browser PUT to real S3 through the signed link, the `HeadObject` preflight on real S3 and a real download have not run | the staging tier ST-1..ST-3 of `p3-proof.sh`; the grants and the staging bucket's CORS were read from `infra/`, not exercised | `P3_TIER=staging` after promotion (decision 18) |
 | The raw bucket expires objects after 365 days, so an old message's file stops downloading (the chip stays; the click opens S3's error page) | `infra/lib/storage-stack.ts` lifecycle rule | none open — deferred in the P3 session log |
+| A file made in dashboard chat shows no download card until P5: the stream's `artifact_ref` is URL-free (gate row R-5) and today's chat screen ignores it | `web/src/lib/chat/stream.ts` handles only the older `artifact`/`image` events; the file is stored and listed by `GET /api/artifacts` | P5 (roadmap step 7), owner decision 58; `development` is not promoted before it lands |
+| P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
+| A reply still generating when its chat is deleted re-creates the chat when it saves a file (visible and deletable); a crash mid-save leaves the chat's lock row, so delete stays "busy" until an operator clears it | the P4 Claude security review, M1 and M3 | hardening (P7), owner decision 59 |
+| `pptxgenjs` pulls `image-size` 1.2.1 with two HIGH advisories (a crafted image can hang it); the code never reaches it — slides carry text only | `npm audit`; the P4 session log, A202 | owner decision 56; re-check before slides carry images |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |
 | Conversations written before P1 still carry a token-hash owner until the migration runs, and a pre-P1 turn that leaves the 20-turn window before then has no record anywhere | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token and run the migration (dry run, then `--apply`) straight after the deploy, before anyone chats |
 | An opacity modifier on a plain semantic token still emits no CSS, so `bg-primary/10` is silently a no-op | the semantic keys in [web/tailwind.config.ts](../../../web/tailwind.config.ts) are raw `var()` strings with nowhere to inject an alpha channel; the alpha-capable `-a` siblings added by CHATUI-001 sit beside them rather than replacing them | none open — the mitigation landed in [CHATUI-001](plan.md); the standing rule is the appendix mapping (`any <color>/<opacity>` → `-a` triplet keys or `*-dim` vars only). The chat subtree observed 2026-09-20 has zero occurrences; the rest of `web/src` still has them |
@@ -368,7 +440,13 @@ src/adapters/dashboard/chat-lifecycle.test.ts src/agent/agent-loop.p2.test.ts
 src/lib/bedrock/client.p2.test.ts src/lib/state/sessions-repo.p2.test.ts
 src/adapters/dashboard/chat-uploads.test.ts src/lib/chat src/lib/media
 src/agent/agent-loop.p3.test.ts src/lib/state/sessions-repo.p3.test.ts
-src/adapters/slack/media.p3.test.ts`, plus
+src/adapters/slack/media.p3.test.ts src/lib/chat/artifacts-repo.p4.test.ts
+src/lib/chat/artifact-grammar.p4.test.ts src/adapters/dashboard/artifacts.p4.test.ts
+src/agent/agent-loop.p4.test.ts src/lib/documents/pptx.p4.test.ts
+src/lib/state/sessions-repo.p4.test.ts src/lib/tools/artifact-tools.p4.test.ts
+src/lib/tools/privacy-tools.p4.test.ts infra/lib/iam-stack.p4.test.ts`, the Floci
+artifact test `node --env-file=.env node_modules/vitest/vitest.mjs run --config
+vitest.integration.config.ts src/lib/chat/artifacts-repo.p4.integration.test.ts`, plus
 `npm --prefix web run typecheck && npm --prefix web run build` and the browser
 suite against the dev-only chat mock, `npm run e2e:chat`.
 
