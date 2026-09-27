@@ -44,7 +44,10 @@ as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
   an unsaved regenerate's alert shows the reply with no reason (**A235**); a search
   over 100 characters looks like a failed load (**A236**); two `chat.spec.ts`
   comments describe the pre-P6 reload (**A237**); a regenerate reads its stored
-  files before admission (**A238**). Still carried:
+  files before admission (**A238**, early in P7); a fast search edit can keep old
+  results (**A239**); a connection lost mid-reply is saved as a stop while the
+  page shows a failure (**A240**); after a reload Regenerate is offered on canned
+  replies (**A241**); the export's error line has no test (**A242**). Still carried:
   A212 (the WebRTC residual), ART-16, WI-5.4 / ART-10 (P7), decision 59 M1 / M3
   (P7), A209 and A213.
 - **Who wrote it.** Claude Opus coordinated; Codex wrote every production change
