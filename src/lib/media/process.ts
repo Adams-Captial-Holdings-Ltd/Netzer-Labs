@@ -88,8 +88,8 @@ export function stageLabel(stage: MediaStage, fileName: string): string {
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 const RAW_BUCKET = process.env.RAW_BUCKET ?? '';
-const MAX_IMAGE_BYTES = 3_750_000;
-const MAX_DOCUMENT_BYTES = 4_500_000;
+export const MAX_IMAGE_BYTES = 3_750_000;
+export const MAX_DOCUMENT_BYTES = 4_500_000;
 const MAX_TRANSCRIBE_BYTES = 20 * 1024 * 1024;
 
 function mediaAckText(input: {

@@ -23,9 +23,10 @@
  * Item-size budget: measured at 284-324KB worst case against DDB's 400KB cap,
  * NOT the ~50KB this comment claimed while the output ceiling was 1024 tokens.
  * TURN_MAX_TOKENS is now 8192, which multiplies every persisted assistant turn
- * by eight. MAX_TURN_WINDOW_BYTES keeps the stored window at or under 300,000
- * bytes (UTF-8 text plus 64 bytes per turn) whatever the ceiling; the remaining
- * scalar attributes and firstMessage (at most 120 chars) are small.
+ * by eight. appendTurns keeps the stored window at or under 300,000 bytes
+ * (UTF-8 text plus 64 bytes per turn). A regenerated reply may temporarily
+ * take it over that budget without evicting unsummarized turns; the next append
+ * trims it. The remaining scalar attributes and firstMessage are small.
  */
 
 import {
@@ -444,48 +445,62 @@ export async function getSession(
   };
 }
 
-/** Replace one saved assistant reply without adding a message number. */
-export async function replaceLastReply(agentId: string, chatId: string, reply: Turn): Promise<boolean> {
+/**
+ * Replace one saved assistant reply without adding a message number. Preserve
+ * the whole window so only appendTurns evicts turns, after arranging memory
+ * ingest. Rewind the ingest mark when the replaced reply was already summarized.
+ */
+export async function replaceLastReply(
+  agentId: string, chatId: string, reply: Turn,
+  expected?: { turnsTotal: number; owner: string },
+): Promise<boolean> {
   const key = { PK: pk(agentId), SK: sk(chatId) };
-  const { Item: row } = await ddb().send(new GetCommand({ TableName: TABLE, Key: key, ConsistentRead: true }));
-  if (!row) return false;
-  const turns = (row.turns as Turn[] | undefined) ?? [];
-  if (turns.at(-1)?.role !== 'assistant' || turns.at(-2)?.role !== 'user') return false;
-  const seq = ((row.turnsTotal as number | undefined) ?? turns.length) - 1;
-  const { Item: oldRecord } = await ddb().send(new GetCommand({
-    TableName: TABLE, Key: { PK: key.PK, SK: msgSk(chatId, seq) }, ConsistentRead: true,
-  }));
-  if (!oldRecord || oldRecord.role !== 'assistant') return false;
-  const stamped = row.surface && !reply.surface ? { ...reply, surface: row.surface as Turn['surface'] } : reply;
-  const { kept } = trimTurnsToBudget([...turns.slice(0, -1), stamped]);
-  const now = Math.floor(Date.now() / 1000);
-  const { text: _text, truncated: _truncated, tools: _tools, artifacts: _artifacts,
-    attachments: _attachments, status: _status, ...recordBase } = oldRecord;
-  try {
-    await ddb().send(new TransactWriteCommand({ TransactItems: [
-      { Put: {
-        TableName: TABLE,
-        Item: { ...row, turns: kept, updatedAt: now, version: ((row.version as number | undefined) ?? 0) + 1 },
-        ConditionExpression: row.version !== undefined ? '#v = :v' : 'attribute_not_exists(#v)',
-        ExpressionAttributeNames: { '#v': 'version' },
-        ...(row.version !== undefined ? { ExpressionAttributeValues: { ':v': row.version } } : {}),
-      } },
-      { Put: {
-        TableName: TABLE,
-        Item: { ...recordBase, role: 'assistant', ...capRecordContent(stamped), ts: reply.ts,
-          ...(reply.status ? { status: reply.status } : {}),
-          ...(stamped.surface ? { surface: stamped.surface } : {}) },
-        ConditionExpression: 'attribute_exists(SK) AND #r = :assistant',
-        ExpressionAttributeNames: { '#r': 'role' },
-        ExpressionAttributeValues: { ':assistant': 'assistant' },
-      } },
-    ] }));
-    return true;
-  } catch (err) {
-    const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
-    if (e.name === 'TransactionCanceledException' && e.CancellationReasons?.some((r) => r.Code === 'ConditionalCheckFailed')) return false;
-    throw err;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { Item: row } = await ddb().send(new GetCommand({ TableName: TABLE, Key: key, ConsistentRead: true }));
+    if (!row) return false;
+    const turns = (row.turns as Turn[] | undefined) ?? [];
+    const turnsTotal = (row.turnsTotal as number | undefined) ?? turns.length;
+    if (expected && (turnsTotal !== expected.turnsTotal || row.userId !== expected.owner)) return false;
+    if (turns.at(-1)?.role !== 'assistant' || turns.at(-2)?.role !== 'user') return false;
+    const seq = turnsTotal - 1;
+    const { Item: oldRecord } = await ddb().send(new GetCommand({
+      TableName: TABLE, Key: { PK: key.PK, SK: msgSk(chatId, seq) }, ConsistentRead: true,
+    }));
+    if (!oldRecord || oldRecord.role !== 'assistant') return false;
+    const stamped = row.surface && !reply.surface ? { ...reply, surface: row.surface as Turn['surface'] } : reply;
+    const turnsIngested = row.turnsIngested as number | undefined;
+    const now = Math.floor(Date.now() / 1000);
+    const { text: _text, truncated: _truncated, tools: _tools, artifacts: _artifacts,
+      attachments: _attachments, status: _status, ...recordBase } = oldRecord;
+    try {
+      await ddb().send(new TransactWriteCommand({ TransactItems: [
+        { Put: {
+          TableName: TABLE,
+          Item: { ...row, turns: [...turns.slice(0, -1), stamped],
+            ...(turnsIngested !== undefined && seq < turnsIngested ? { turnsIngested: seq } : {}),
+            updatedAt: now, version: ((row.version as number | undefined) ?? 0) + 1 },
+          ConditionExpression: row.version !== undefined ? '#v = :v' : 'attribute_not_exists(#v)',
+          ExpressionAttributeNames: { '#v': 'version' },
+          ...(row.version !== undefined ? { ExpressionAttributeValues: { ':v': row.version } } : {}),
+        } },
+        { Put: {
+          TableName: TABLE,
+          Item: { ...recordBase, role: 'assistant', ...capRecordContent(stamped), ts: reply.ts,
+            ...(reply.status ? { status: reply.status } : {}),
+            ...(stamped.surface ? { surface: stamped.surface } : {}) },
+          ConditionExpression: 'attribute_exists(SK) AND #r = :assistant',
+          ExpressionAttributeNames: { '#r': 'role' },
+          ExpressionAttributeValues: { ':assistant': 'assistant' },
+        } },
+      ] }));
+      return true;
+    } catch (err) {
+      const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
+      if (e.name !== 'TransactionCanceledException' ||
+          !e.CancellationReasons?.some((r) => r.Code === 'ConditionalCheckFailed')) throw err;
+    }
   }
+  return false;
 }
 
 /** Rename or pin a row only while it still belongs to its owner. */

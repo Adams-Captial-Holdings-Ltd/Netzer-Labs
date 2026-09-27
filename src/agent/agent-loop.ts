@@ -81,8 +81,8 @@ const TURN_MAX_TOKENS = 8192;
 
 /** Hard bounds on the runtime override. Below the floor a document cannot be
  * emitted at all; above the ceiling latency and per-turn cost climb without a
- * matching gain. Stored size is not the reason: MAX_TURN_WINDOW_BYTES in
- * sessions-repo caps the window at 300,000 bytes whatever the ceiling. */
+ * matching gain. appendTurns caps the window at MAX_TURN_WINDOW_BYTES in
+ * sessions-repo; a regenerated reply can exceed that budget until the next append. */
 const TURN_MAX_TOKENS_FLOOR = 1024;
 const TURN_MAX_TOKENS_CEILING = 32_768;
 
@@ -690,7 +690,7 @@ function buildUserContent(
 const EXFIL_SCAN_FAILED_PLACEHOLDER =
   'I could not safely deliver that reply because the outbound safety scan did not complete. Please try again in a moment.';
 
-async function scanOutboundReply(
+export async function scanOutboundReply(
   text: string,
   ctx: { agentId: string; chatId: string },
 ): Promise<string> {

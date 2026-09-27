@@ -79,9 +79,9 @@ import {
   KILL_SWITCH_META,
   type KillSwitchName,
 } from '../../lib/state/kill-switches-repo.js';
-import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { runAgentTurn, scanOutboundReply, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
 import { classifyTurnError } from '../../agent/turn-errors.js';
-import { processMedia, buildMediaBlocks, getRawObject, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment } from '../../lib/media/process.js';
+import { processMedia, buildMediaBlocks, getRawObject, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment, MAX_IMAGE_BYTES, MAX_DOCUMENT_BYTES } from '../../lib/media/process.js';
 import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
 import { attachmentDisposition, downloadFileName, listArtifactHeads, listArtifactVersions, presignArtifactDownload, readArtifactBody, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
 import { deckOutline, DeckOutlineError } from '../../lib/chat/artifact-preview.js';
@@ -611,16 +611,17 @@ async function saveChatTurn(
 
 async function saveRegeneratedReply(
   agentId: string, chatId: string,
-  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts'>, tools: ToolRecord[],
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>, tools: ToolRecord[],
+  expected: { turnsTotal: number; owner: string },
 ): Promise<boolean> {
-  if (result.blocked) return true;
+  if (result.blocked || result.refusal) return false;
   const ts = Math.floor(Date.now() / 1000);
   try {
     return await replaceLastReply(agentId, chatId, {
       role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
       ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
       ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}),
-    });
+    }, expected);
   } catch (err) {
     logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
     return false;
@@ -2260,9 +2261,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       let userText = regenerate ? stored!.turns.at(-2)!.text : text;
       let finalSent = false;
       let guardedChunks: ReturnType<typeof guardedChunkWriter> | undefined;
-      const saveReply = (result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts'>) =>
+      const saveReply = (result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>) =>
         regenerate
-          ? saveRegeneratedReply(agentId, chatId, result, tools)
+          ? saveRegeneratedReply(agentId, chatId, result, tools, {
+            turnsTotal: stored!.turnsTotal ?? stored!.turns.length, owner: stored!.userId!,
+          })
           : saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments);
       try {
         // Command? send the reply as a single event and close. Skipped for
@@ -2285,19 +2288,28 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         const kbConfirmations: string[] = [];
         const acks: string[] = [];
         if (regenerate) {
-          for (const attachment of stored!.turns.at(-2)!.attachments ?? []) {
-            if (!attachment.key) continue;
+          const replayFiles = stored!.turns.at(-2)!.attachments ?? [];
+          if (replayFiles.length > 0) {
+            const killed = await isKillSwitchActive('media_upload_disabled');
+            if (killed.active) throw new KillSwitchActiveError(killed.reason ?? 'no reason given', 'media_upload_disabled');
+          }
+          for (const attachment of replayFiles) {
+            if (abort.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+            const kind = kindForMime(attachment.type);
+            if (kind !== 'photo' && kind !== 'document') continue;
+            if (attachment.size > (kind === 'photo' ? MAX_IMAGE_BYTES : MAX_DOCUMENT_BYTES)) continue;
             try {
+              if (!attachment.key) throw new Error('Stored attachment has no key');
               const bytes = await getRawObject(attachment.key);
-              // ponytail: a video's stored transcript is in userText; replaying its keyframes
-              // needs processVideo's probe + extractKeyframes step extracted for raw bytes.
               const built = await buildMediaBlocks({
-                kind: kindForMime(attachment.type), fileName: attachment.name,
+                kind, fileName: attachment.name,
                 mimeType: attachment.type, bytes,
               });
               attachmentBlocks.push(...built.blocks);
             } catch (err) {
               logger.warn({ agentId, chatId, err }, 'dashboard chat attachment replay failed');
+              throw { code: 'attachment_unavailable',
+                message: 'A file from that message could not be read again, so the reply was not regenerated.' };
             }
           }
         }
@@ -2459,7 +2471,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         });
         if (result.stopped) {
           clearInterval(heartbeat);
-          const saved = await saveReply({ ...result, text: guardedChunks.visibleText() });
+          const text = await scanOutboundReply(guardedChunks.visibleText(), { agentId, chatId });
+          const saved = await saveReply({ ...result, text });
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           if (regenerate) await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
           return;
@@ -2523,7 +2536,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       } catch (err) {
         if ((err as { name?: string })?.name === 'AbortError') {
           clearInterval(heartbeat);
-          const saved = await saveReply({ text: guardedChunks?.visibleText() ?? '', stopped: true });
+          const text = await scanOutboundReply(guardedChunks?.visibleText() ?? '', { agentId, chatId });
+          const saved = await saveReply({ text, stopped: true });
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
           if (regenerate) await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
           return;
@@ -2532,7 +2546,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         else logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
         await finishChatTurn(agentId, chatId, clientMessageId, 'error');
         if (!finalSent) {
-          const error = classifyTurnError(err);
+          const error = (err as { code?: string })?.code === 'attachment_unavailable'
+            ? err as { code: string; message: string } : classifyTurnError(err);
           await stream.writeSSE({ event: 'error', data: body?.protocol === 2 ? JSON.stringify(error) : error.message });
         }
       } finally {
@@ -2588,12 +2603,19 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const body = await c.req.json<{ agentId?: string; chatId?: string; title?: string | null; pinned?: boolean }>().catch(() => null);
     const agentId = body?.agentId ?? 'main';
     const chatId = body?.chatId;
-    if (!chatId) return c.json({ error: 'chatId_required' }, 400);
+    if (body?.agentId !== undefined && typeof body.agentId !== 'string') return c.json({ error: 'agentId_invalid' }, 400);
+    if (typeof chatId !== 'string' || !chatId) return c.json({ error: 'chatId_required' }, 400);
     if (body?.title === undefined && body?.pinned === undefined) return c.json({ error: 'nothing_to_update' }, 400);
     let title: string | null | undefined;
     if (body.title !== undefined) {
       if (body.title !== null && typeof body.title !== 'string') return c.json({ error: 'invalid_title' }, 400);
-      if (typeof body.title === 'string' && /[\u0000-\u001f\u007f]/.test(body.title)) return c.json({ error: 'invalid_title' }, 400);
+      const titleToCheck = typeof body.title === 'string' ? body.title.replace(/^ +| +$/g, '') : '';
+      // Validate before trim(), which would erase a control at either edge.
+      // The artifact parser owns this character rule; neutralizing header
+      // punctuation preserves rename's existing allowance for quotes and backslashes.
+      if (titleToCheck && extractArtifactBlocks(`:::artifact{identifier="title" type="text/plain" title="${titleToCheck.replace(/["\\]/g, 'x')}"}\nx\n:::`).artifacts.length === 0) {
+        return c.json({ error: 'invalid_title' }, 400);
+      }
       title = typeof body.title === 'string' ? body.title.trim() || null : null;
       if (title && title.length > 120) return c.json({ error: 'invalid_title' }, 400);
     }
