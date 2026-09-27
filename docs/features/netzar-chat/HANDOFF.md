@@ -30,7 +30,7 @@ as_of_commit: b1e8bdd7b738d3320b540e363fcb60f8e177d819
 - **Known gaps, by decision.** Dashboard chat shows **no download card** for a
   new file until P5 (decision 58), so `development` is not promoted before P5
   lands. A reply still generating when its chat is deleted re-creates the chat
-  when it saves a file, and a crash mid-save can leave a chat "busy" until an
+  when it saves a file or starts a draft, and a crash mid-save can leave a chat "busy" until an
   operator clears its lock row — both carried to hardening (decision 59). The
   promotion that carries P4 must deploy the IAM stack, not only the image.
 - **Who wrote it.** Codex coordinated and built 47 commits (fresh `codex exec`
