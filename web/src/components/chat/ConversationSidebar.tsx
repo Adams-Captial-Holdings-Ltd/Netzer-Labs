@@ -129,7 +129,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren, RefObject } from 'preact';
-import { PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Pin } from 'lucide-preact';
+import { PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Pin, Check, X } from 'lucide-preact';
 import type { Conversation } from '../../lib/chat/types';
 import { conversationTitle, relativeAge } from '../../lib/chat/helpers';
 import { Button } from '../Button';
@@ -277,7 +277,9 @@ export function ConversationSidebar({
   useLayoutEffect(() => {
     if (!renamingId) return;
     const fields = document.querySelectorAll<HTMLInputElement>('input[aria-label="Chat title"]');
-    [...fields].find((field) => !field.closest('[inert]') && field.getClientRects().length > 0)?.focus();
+    const field = [...fields].find((candidate) => !candidate.closest('[inert]') && candidate.getClientRects().length > 0);
+    field?.focus();
+    field?.select();
   }, [renamingId]);
   // What the scrolling list is re-measured against (see ConversationList): the
   // rows it holds, and whether the empty-state paragraph is standing in for
@@ -506,6 +508,20 @@ export function ConversationSidebar({
                       group-focus-within:max-w-[6.75rem] group-focus-within:scale-x-100
                       group-focus-within:opacity-100"
                   >
+                    {renamingId === c.chatId ? <>
+                      <button type="button"
+                        aria-label="Save title" title="Save title"
+                        onClick={(e) => { e.stopPropagation(); onRename(c, renameTitle); setRenamingId(null); }}
+                        class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary">
+                        <Check size={15} />
+                      </button>
+                      <button type="button"
+                        aria-label="Cancel rename" title="Cancel rename"
+                        onClick={(e) => { e.stopPropagation(); setRenamingId(null); }}
+                        class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary">
+                        <X size={15} />
+                      </button>
+                    </> : <>
                     <button type="button" disabled={streaming || deleting}
                       aria-label={`Rename chat: ${title}`} title="Rename chat"
                       onClick={(e) => { e.stopPropagation(); setRenameTitle(c.title ?? c.firstMessage ?? ''); setRenamingId(c.chatId); }}
@@ -544,6 +560,7 @@ export function ConversationSidebar({
                     >
                       <Trash2 size={15} />
                     </button>
+                    </>}
                   </div>
                 </li>
               );

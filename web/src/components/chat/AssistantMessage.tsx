@@ -59,6 +59,7 @@ import { renderMarkdown } from '../../lib/chat/markdown';
 import { ArtifactCard } from './ArtifactCard';
 import { AgentMark, MessageRow, isoFromEpochSeconds } from './MessageRow';
 import { ToolCallsSection } from './ToolCallsSection';
+import { Button } from '../Button';
 import CancelledIcon from './lc/components/Chat/Messages/Content/CancelledIcon';
 import MinimalHoverButtons from './lc/components/Chat/Messages/MinimalHoverButtons';
 
@@ -244,7 +245,7 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
           <pre class="whitespace-pre-wrap break-words font-sans text-body-sm">
             {message.text}
           </pre>
-          {canRetry ? <button type="button" onClick={onRetry} class="mt-2 text-body-sm font-medium underline">Try again</button>
+          {canRetry ? <Button variant="secondary" size="sm" onClick={onRetry} class="mt-2">Try again</Button>
             : needsAttachments ? <p class="mt-2 text-body-sm">Please attach the files again.</p> : null}
         </div>
       ) : (
