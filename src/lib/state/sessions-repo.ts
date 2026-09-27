@@ -38,7 +38,9 @@ import {
   DeleteCommand,
   type UpdateCommandInput,
 } from '@aws-sdk/lib-dynamodb';
+import { randomUUID } from 'node:crypto';
 import { ddb } from './ddb.js';
+import type { ArtifactDescriptor } from '../chat/artifacts-repo.js';
 import { ingestEvictedTurns } from '../../agent/memory-ingest.js';
 import { logger } from '../../observability/logger.js';
 import { getConfig } from './runtime-config-repo.js';
@@ -69,7 +71,8 @@ const MAX_TURN_WINDOW_BYTES = 300_000;
 /** Byte size of a turn as DynamoDB will store it. */
 function turnBytes(t: Turn): number {
   return Buffer.byteLength(t.text ?? '', 'utf8') + Buffer.byteLength(JSON.stringify(t.tools ?? [])) +
-    Buffer.byteLength(JSON.stringify(t.attachments ?? [])) + 64; // 64 ~ role/ts/surface overhead
+    Buffer.byteLength(JSON.stringify(t.attachments ?? [])) + Buffer.byteLength(JSON.stringify(t.artifacts ?? [])) +
+    64; // 64 ~ role/ts/surface overhead
 }
 
 /**
@@ -139,6 +142,39 @@ const DEFAULT_INGEST_EVERY_N = 8;
  */
 export function isPersistentChat(chatId: string): boolean {
   return chatId.startsWith('dashboard:');
+}
+
+/**
+ * Serialize artifact writes with conversation erasure using a durable child
+ * row. There is deliberately no TTL: if a process dies while holding it, an
+ * operator must inspect and recover the conversation before removing the row.
+ */
+export async function acquireConversationChildLock(agentId: string, chatId: string): Promise<() => Promise<void>> {
+  const token = randomUUID();
+  const key = { PK: pk(agentId), SK: `${childPrefix(chatId)}CHILD_LOCK` };
+  try {
+    await ddb().send(new PutCommand({
+      TableName: TABLE,
+      Item: { ...key, lockToken: token, createdAt: new Date().toISOString() },
+      ConditionExpression: 'attribute_not_exists(PK)',
+    }));
+  } catch (error) {
+    if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') {
+      throw new Error('Conversation child storage is busy; retry after the active operation completes');
+    }
+    throw error;
+  }
+  let released = false;
+  return async () => {
+    if (released) return;
+    await ddb().send(new DeleteCommand({
+      TableName: TABLE,
+      Key: key,
+      ConditionExpression: 'lockToken = :token',
+      ExpressionAttributeValues: { ':token': token },
+    }));
+    released = true;
+  };
 }
 
 /** Parse + clamp the configured ingest cadence. Exported for tests. */
@@ -215,6 +251,7 @@ export interface Turn {
   status?: 'stopped';
   tools?: ToolRecord[];
   attachments?: TurnAttachment[];
+  artifacts?: ArtifactDescriptor[];
   role: 'user' | 'assistant';
   text: string;
   ts: number; // epoch seconds
@@ -328,25 +365,55 @@ function fitToolRecords(tools: ToolRecord[], budget = MAX_MESSAGE_BYTES): ToolRe
 }
 
 /** A record's text and tool results, capped so the item fits: the text takes whatever budget the results leave. */
-function capRecordContent(t: Turn): { text: string; truncated?: true; tools?: ToolRecord[]; attachments?: TurnAttachment[] } {
+const MAX_MESSAGE_ARTIFACTS = 8;
+
+function safeMessageArtifacts(values: unknown): ArtifactDescriptor[] {
+  if (!Array.isArray(values)) return [];
+  const descriptors: ArtifactDescriptor[] = [];
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const row = value as Record<string, unknown>;
+    if (typeof row.artifactId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row.artifactId) ||
+        !Number.isInteger(row.version) || (row.version as number) < 1 ||
+        typeof row.fileName !== 'string' || row.fileName.length < 1 || row.fileName.length > 255 ||
+        /[/\\\u0000-\u001f\u007f]/.test(row.fileName) ||
+        typeof row.contentType !== 'string' || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(row.contentType) ||
+        typeof row.createdAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(row.createdAt) ||
+        !Number.isFinite(Date.parse(row.createdAt))) continue;
+    descriptors.push({ artifactId: row.artifactId, version: row.version as number, fileName: row.fileName,
+      contentType: row.contentType, createdAt: row.createdAt });
+    if (descriptors.length >= MAX_MESSAGE_ARTIFACTS) break;
+  }
+  return descriptors;
+}
+
+function capRecordContent(t: Turn): {
+  text: string; truncated?: true; tools?: ToolRecord[]; attachments?: TurnAttachment[]; artifacts?: ArtifactDescriptor[];
+} {
   const attachmentBytes = Buffer.byteLength(JSON.stringify(t.attachments ?? []), 'utf8');
-  const tools = t.tools ? fitToolRecords(t.tools, MAX_MESSAGE_BYTES - attachmentBytes) : undefined;
+  const artifacts = safeMessageArtifacts(t.artifacts);
+  const artifactBytes = Buffer.byteLength(JSON.stringify(artifacts), 'utf8');
+  const tools = t.tools ? fitToolRecords(t.tools, MAX_MESSAGE_BYTES - attachmentBytes - artifactBytes) : undefined;
   const toolBytes = Buffer.byteLength(JSON.stringify(tools ?? []), 'utf8');
   return {
-    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes - attachmentBytes),
+    ...capMessageText(String(t.text ?? ''), MAX_MESSAGE_BYTES - toolBytes - attachmentBytes - artifactBytes),
     ...(tools ? { tools } : {}),
     ...(t.attachments ? { attachments: t.attachments } : {}),
+    ...(artifacts.length ? { artifacts } : {}),
   };
 }
 
 export async function getSession(
   agentId: string,
   chatId: string,
+  opts?: { consistentRead?: boolean },
 ): Promise<Session | null> {
   const out = await ddb().send(
     new GetCommand({
       TableName: TABLE,
       Key: { PK: pk(agentId), SK: sk(chatId) },
+      ...(opts?.consistentRead ? { ConsistentRead: true } : {}),
     }),
   );
   if (!out.Item) return null;
@@ -848,6 +915,7 @@ export async function getFullHistory(
         ...(r.status ? { status: r.status as Turn['status'] } : {}),
         ...(r.tools ? { tools: r.tools as ToolRecord[] } : {}),
         ...(r.attachments ? { attachments: r.attachments as TurnAttachment[] } : {}),
+        ...(r.artifacts ? { artifacts: safeMessageArtifacts(r.artifacts) } : {}),
         ...(r.surface ? { surface: r.surface as Turn['surface'] } : {}),
       });
     }
@@ -950,6 +1018,33 @@ export async function deleteSession(
   chatId: string,
 ): Promise<void> {
   await deleteSessionAttachments(agentId, chatId);
+  const releaseChildLock = await acquireConversationChildLock(agentId, chatId);
+  try {
+  // Pending, version, and head rows all live under this child prefix. Their
+  // presence is the durable signal that this chat may own CURATED objects,
+  // including an upload whose physical VersionId was never recorded.
+  let artifactRowsExist = false;
+  let artifactStartKey: Record<string, unknown> | undefined;
+  do {
+    const artifactRows = await ddb().send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: { ':pk': pk(agentId), ':prefix': `${childPrefix(chatId)}ARTIFACT#` },
+      ProjectionExpression: 'PK, SK',
+      ConsistentRead: true,
+      ExclusiveStartKey: artifactStartKey,
+    }));
+    if ((artifactRows.Items ?? []).length > 0) artifactRowsExist = true;
+    artifactStartKey = artifactRows.LastEvaluatedKey;
+  } while (!artifactRowsExist && artifactStartKey);
+
+  if (artifactRowsExist) {
+    // Load lazily to avoid an evaluation-time cycle: artifacts-repo imports
+    // the child-lock API from this module.
+    const { eraseConversationArtifacts } = await import('../chat/artifacts-repo.js');
+    await eraseConversationArtifacts(agentId, chatId);
+  }
+
   for (;;) {
     // Re-query from the top each round: the rows just deleted are gone, so the
     // next page is simply what is left.
@@ -964,11 +1059,13 @@ export async function deleteSession(
         ConsistentRead: true,
       }),
     );
-    const keys = (out.Items ?? []).map((i) => ({ PK: i.PK, SK: i.SK }));
+    const keys = (out.Items ?? [])
+      .filter((i) => i.SK !== `${childPrefix(chatId)}CHILD_LOCK`)
+      .map((i) => ({ PK: i.PK, SK: i.SK }));
     for (let i = 0; i < keys.length; i += 25) {
       await batchDelete(keys.slice(i, i + 25));
     }
-    if (keys.length === 0 || !out.LastEvaluatedKey) break;
+    if (!out.LastEvaluatedKey) break;
   }
   await ddb().send(
     new DeleteCommand({
@@ -976,6 +1073,13 @@ export async function deleteSession(
       Key: { PK: pk(agentId), SK: sk(chatId) },
     }),
   );
+  } finally {
+    // Keep the lock row through parent deletion. A writer that acquires after
+    // release re-reads the parent consistently. Only a finalizing draft refuses a
+    // missing parent; a first-turn artifact save or a draft start re-creates the
+    // chat (known gap M1, carried to hardening by owner decision 59).
+    await releaseChildLock();
+  }
 }
 
 async function deleteSessionAttachments(agentId: string, chatId: string): Promise<void> {

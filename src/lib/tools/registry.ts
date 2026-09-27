@@ -13,6 +13,7 @@
 
 import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
 import { emitToolMetric } from '../../observability/emf.js';
+import type { ArtifactDescriptor } from '../chat/artifacts-repo.js';
 
 export interface ToolContext {
   agentId: string;
@@ -58,6 +59,8 @@ export interface ToolContext {
   boardAgentId?: string;
   /** Agent-to-agent delegation depth; ask_agent refuses past 1. */
   delegationDepth?: number;
+  /** Aborts work for a turn that the caller has stopped. */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -95,6 +98,8 @@ export interface ToolResult {
   isError?: boolean;
   /** Binary artifacts for the surface to deliver after the turn. */
   media?: ToolMedia[];
+  /** URL-free durable artifact references, for owner-scoped dashboard storage. */
+  artifacts?: ArtifactDescriptor[];
 }
 
 export interface ToolHandler {

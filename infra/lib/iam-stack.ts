@@ -2,6 +2,7 @@ import { Stack } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
   Role,
+  Policy,
   ServicePrincipal,
   PolicyStatement,
   Effect,
@@ -128,6 +129,28 @@ export class IamStack extends Stack implements IamOutputs {
       assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com'),
       description: 'Application runtime role for ClaudeClaw orchestrator',
     });
+
+    // Keep artifact version erasure outside the full default inline policy.
+    // This remains attached to the existing task role and is scoped to
+    // version operations under CURATED/artifacts only.
+    const artifactVersionPolicy = new Policy(this, 'ArtifactVersionPolicy', {
+      roles: [this.taskRole],
+    });
+    artifactVersionPolicy.addStatements(
+      new PolicyStatement({
+        sid: 'S3ArtifactVersionList',
+        effect: Effect.ALLOW,
+        actions: ['s3:ListBucketVersions'],
+        resources: [props.storage.curatedBucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': 'artifacts/*' } },
+      }),
+      new PolicyStatement({
+        sid: 'S3ArtifactVersionDelete',
+        effect: Effect.ALLOW,
+        actions: ['s3:DeleteObjectVersion'],
+        resources: [`${props.storage.curatedBucket.bucketArn}/artifacts/*`],
+      }),
+    );
 
     // Bedrock model invoke + Guardrails + cross-region inference profiles.
     // Codex #3: must cover source region foundation model + every

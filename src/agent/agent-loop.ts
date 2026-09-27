@@ -30,6 +30,7 @@ import {
 import { pickDefaultModel, turnCost, resolveModel, resolveModelInvocation } from '../lib/bedrock/models.js';
 import { loadAgent } from '../lib/config/agent-loader.js';
 import { tools, type ToolMedia, type ToolResult } from '../lib/tools/registry.js';
+import type { ArtifactDescriptor } from '../lib/chat/artifacts-repo.js';
 import { mcpToolsFor, isMcpToolName, invokeMcpTool } from '../lib/mcp/mcp-tools.js';
 import { logger, truncateForLog } from '../observability/logger.js';
 import { NO_RESPONSE_NOTICE, type Turn } from '../lib/state/sessions-repo.js';
@@ -197,7 +198,9 @@ function scrubAwsIdentifiers(text: string): string {
 function toolResultForDisplay(
   name: string, result: ToolResult, redact: (text: string) => string,
 ): { output: string; truncated: boolean } {
-  if (name === 'dynamodb_query') return { output: TOOL_RESULT_HIDDEN_NOTICE, truncated: false };
+  if (name === 'dynamodb_query' || name === 'read_artifact') {
+    return { output: TOOL_RESULT_HIDDEN_NOTICE, truncated: false };
+  }
   const redacted = redact(result.text);
   const shown = result.isError ? scrubAwsIdentifiers(redacted) : redacted;
   return { output: shown.slice(0, TOOL_OUTPUT_CAP), truncated: shown.length > TOOL_OUTPUT_CAP };
@@ -330,6 +333,14 @@ const BASE_CONDUCT = [
   '- Format for a phone screen: short paragraphs, and for a list of records give each its own short line or a small card (a bold title, then the key facts) — never a Markdown table, which renders as raw pipes on mobile.',
 ].join('\n');
 
+/** Fixed dashboard-only guidance for the artifact tools and text artifact fence. */
+const DASHBOARD_ARTIFACTS_NOTE = [
+  '<dashboard_artifacts>',
+  'For downloadable files, you may use generate_document and read_artifact. For supported safe text outputs, emit a complete :::artifact fence so the dashboard can save and offer the output as a download.',
+  'Saved artifacts are immutable, owner-scoped references. Never invent or expose raw storage URLs; use the artifact tools and their references.',
+  '</dashboard_artifacts>',
+].join('\n');
+
 /**
  * When a session's history interleaves turns from more than one surface
  * (owner-aliased/claimed principals share one session row across Telegram,
@@ -369,6 +380,7 @@ async function buildSystemPrompt(
   basePrompt: string,
   extraNote?: string,
   crossSurfaceNote?: string,
+  dashboardArtifacts = false,
 ): Promise<string> {
   // Context assembly degrades gracefully — a memory/inbox/hive read failure must
   // not kill the turn — but it is NOT silent: each fallback logs a warning so a
@@ -401,6 +413,9 @@ async function buildSystemPrompt(
   // injected memory/hive/inbox context.
   if (extraNote && extraNote.trim()) {
     sections.push(extraNote.trim());
+  }
+  if (dashboardArtifacts) {
+    sections.push(DASHBOARD_ARTIFACTS_NOTE);
   }
   if (memoryCtx.text) {
     sections.push(
@@ -539,6 +554,10 @@ export interface AgentTurnResponse {
    * file upload, dashboard `image` SSE event. Capped at 4 per turn.
    */
   media?: ToolMedia[];
+  /** URL-free durable artifact references for the dashboard UI. Capped at 8 per turn. */
+  artifacts?: ArtifactDescriptor[];
+  /** True when successful writes exceeded the eight URL-free references returned for this turn. */
+  artifactRefsTruncated?: true;
 }
 
 /** A guardrail intervention replaces the model output with a block message. */
@@ -1074,6 +1093,7 @@ async function runAdmittedTurn(
     agent.systemPrompt,
     req.systemNote,
     crossSurfaceNote,
+    req.surface === 'dashboard',
   );
 
   logger.info(
@@ -1083,7 +1103,7 @@ async function runAdmittedTurn(
       modelId,
       historyLen: req.history.length,
       tools: toolList.length,
-      prompt: truncateForLog(req.userText, 80),
+      promptChars: req.userText.length,
     },
     'agent turn started',
   );
@@ -1137,6 +1157,11 @@ async function runAdmittedTurn(
   let totalCacheRead = 0;
   let totalCacheWrite = 0;
   let toolCallCount = 0;
+  // URL-free durable references are returned only to the surface. They never
+  // enter toolResult content, callbacks, logs, or audit records.
+  const turnArtifacts: ArtifactDescriptor[] = [];
+  const MAX_TURN_ARTIFACTS = 8;
+  let artifactRefsTruncated = false;
   // The call in flight, for the estimate a Stop settles with; nothing between calls.
   let inFlight: { inputTokens: number; streamed: boolean } | undefined;
   const checkStopped = (): void => {
@@ -1188,7 +1213,12 @@ async function runAdmittedTurn(
         cacheWriteInputTokens: totalCacheWrite, ...(req.runId ? { runId: req.runId } : {}) },
     });
     const text = lastEmitted ? await scanOutboundReply(lastEmitted, { agentId: req.agentId, chatId: req.chatId }) : '';
-    return { text, stopped: true, modelId, costUsd, latencyMs, inputTokens: totalIn, outputTokens: totalOut, toolCallCount, blocked: false };
+    return {
+      text, stopped: true, modelId, costUsd, latencyMs, inputTokens: totalIn, outputTokens: totalOut,
+      toolCallCount, blocked: false,
+      ...(turnArtifacts.length > 0 ? { artifacts: turnArtifacts } : {}),
+      ...(artifactRefsTruncated ? { artifactRefsTruncated: true as const } : {}),
+    };
   };
 
   // The guardrail's synchronous mode holds the whole answer until it has been
@@ -1319,7 +1349,6 @@ async function runAdmittedTurn(
   // the surface after the text reply. Capped to keep delivery bounded.
   const turnMedia: ToolMedia[] = [];
   const MAX_TURN_MEDIA = 4;
-
   const cacheEnabled = process.env.CCE_PROMPT_CACHE !== '0';
   const cachedSystem = cacheEnabled
     ? [{ text: systemPromptWithMemories }, { cachePoint: { type: 'default' as const } }]
@@ -1417,7 +1446,7 @@ async function runAdmittedTurn(
       const tu = block.toolUse;
       const args = (tu.input as Record<string, unknown> | undefined) ?? {};
       logger.info(
-        { agentId: req.agentId, chatId: req.chatId, tool: tu.name, args },
+        { agentId: req.agentId, chatId: req.chatId, tool: tu.name, argCount: Object.keys(args).length },
         'invoking tool',
       );
       try {
@@ -1441,6 +1470,7 @@ async function runAdmittedTurn(
         ...(req.replyChatId ? { replyChatId: req.replyChatId } : {}),
         ...(req.boardAgentId ? { boardAgentId: req.boardAgentId } : {}),
         ...(req.delegationDepth !== undefined ? { delegationDepth: req.delegationDepth } : {}),
+        ...(req.abortSignal ? { abortSignal: req.abortSignal } : {}),
       };
       if (req.abortSignal?.aborted) return stoppedTurn();
       const result: ToolResult = dispatchKilledMidTurn
@@ -1465,10 +1495,18 @@ async function runAdmittedTurn(
       if (result.media?.length) {
         turnMedia.push(...result.media.slice(0, MAX_TURN_MEDIA - turnMedia.length));
       }
+      if (!result.isError && result.artifacts?.length) {
+        const available = Math.max(0, MAX_TURN_ARTIFACTS - turnArtifacts.length);
+        turnArtifacts.push(...result.artifacts.slice(0, available));
+        if (result.artifacts.length > available) artifactRefsTruncated = true;
+      }
+      const artifactLimitNotice = !result.isError && result.artifacts?.length && artifactRefsTruncated
+        ? '\nNote: this turn has more saved artifacts than can be attached to its reference list; only the first eight are attached.'
+        : '';
       toolResults.push({
         toolResult: {
           toolUseId: tu.toolUseId ?? '',
-          content: [{ text: result.text }],
+          content: [{ text: `${result.text}${artifactLimitNotice}` }],
           status: result.isError ? 'error' : 'success',
         },
       });
@@ -1636,5 +1674,11 @@ async function runAdmittedTurn(
     blocked: wasBlocked,
     // Suppress media delivery on guardrail-blocked turns.
     ...(turnMedia.length > 0 && !wasBlocked ? { media: turnMedia } : {}),
+    // Keep durable references in the response channel for dashboard rendering
+    // only; a stopped turn returned earlier and guardrail blocks suppress them.
+    ...(turnArtifacts.length > 0 && !wasBlocked && req.surface === 'dashboard'
+      ? { artifacts: turnArtifacts }
+      : {}),
+    ...(artifactRefsTruncated ? { artifactRefsTruncated: true as const } : {}),
   };
 }

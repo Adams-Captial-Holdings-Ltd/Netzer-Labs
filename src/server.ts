@@ -56,9 +56,11 @@ import './lib/tools/email-tools.js';
 import './lib/tools/web-search-tools.js';
 import './lib/tools/privacy-tools.js';
 import './lib/tools/document-generation-tools.js';
+import './lib/tools/document-draft-tools.js';
 import './lib/tools/identity-tools.js';
 import './lib/tools/salesforce-tools.js';
 import './lib/tools/paperclip-tools.js';
+import './lib/tools/artifact-read-tools.js';
 
 export function buildApp(env: Env): Hono {
   const app = new Hono();

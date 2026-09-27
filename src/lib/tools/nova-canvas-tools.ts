@@ -14,8 +14,9 @@
  * bucket; we never let the model pass arbitrary http URLs to keep
  * Bedrock invocations to our own data.
  *
- * Outputs land in S3 raw bucket under
- * `generations/<chat>/<ulid>.png`, returned as a presigned URL.
+ * Bot outputs land in the raw bucket under `generations/<chat>/<ulid>.png`
+ * and are returned as a presigned URL. Dashboard outputs use durable,
+ * owner-scoped artifact storage and never expose a storage URL to the model.
  *
  * Cost: ~$0.06 per 1024x1024 image. Gated by:
  *   - tool kill switch `image_gen_disabled`
@@ -46,6 +47,8 @@ import { getEffectiveCostCap, isCostCapEnforced } from '../state/cost-cap-repo.j
 import { getConfig } from '../state/runtime-config-repo.js';
 import { checkAndConsumeStrict } from '../state/rate-limits-repo.js';
 import { captureAwsClient } from '../observability/xray.js';
+import { saveArtifact } from '../chat/artifacts-repo.js';
+import type { ToolContext, ToolResult } from './registry.js';
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 // June 2026: Amazon flagged nova-canvas-v1 (and titan-image v2) LEGACY and
@@ -86,6 +89,20 @@ function spec(name: string, description: string, schema: unknown): BedrockTool {
       inputSchema: { json: schema as any },
     },
   };
+}
+
+function isDashboardContext(ctx: ToolContext): boolean {
+  return ctx.surface === 'dashboard' || ctx.chatId.startsWith('dashboard:');
+}
+
+function hasStableDashboardOwner(ctx: ToolContext): boolean {
+  return ctx.surface === 'dashboard' &&
+    typeof ctx.userId === 'string' && ctx.userId.startsWith('dashboard:user:') &&
+    ctx.chatId.startsWith('dashboard:');
+}
+
+function abortedResult(): ToolResult {
+  return { text: 'Image generation was stopped before storage.', isError: true };
 }
 
 interface NovaCanvasResponse {
@@ -347,6 +364,13 @@ registerIfConfigured(
         },
       ),
       async invoke(args, ctx) {
+        const isDashboard = isDashboardContext(ctx);
+        if (isDashboard && !hasStableDashboardOwner(ctx)) {
+          return {
+            text: 'Image generation requires a stable, person-owned dashboard conversation.',
+            isError: true,
+          };
+        }
         const killed = await isKillSwitchActive('image_gen_disabled');
         if (killed.active) {
           return {
@@ -442,7 +466,9 @@ registerIfConfigured(
             sourceImageB64 = await loadSourceImage(src);
           } catch (err) {
             return {
-              text: err instanceof Error ? err.message : String(err),
+              text: isDashboard
+                ? 'Source image could not be loaded or validated.'
+                : err instanceof Error ? err.message : String(err),
               isError: true,
             };
           }
@@ -469,6 +495,7 @@ registerIfConfigured(
           typeof args.negative_prompt === 'string' ? args.negative_prompt : undefined;
         const width = Number.isFinite(args.width) ? Number(args.width) : 1024;
         const height = Number.isFinite(args.height) ? Number(args.height) : 1024;
+        if (ctx.abortSignal?.aborted) return abortedResult();
         const t0 = Date.now();
         try {
           const requestBody = IS_STABILITY
@@ -498,10 +525,16 @@ registerIfConfigured(
             finish_reasons?: Array<string | null>;
           };
           if (body.error) {
-            return { text: `Image model error: ${body.error}`, isError: true };
+            return {
+              text: isDashboard ? 'Image generation failed in the image model.' : `Image model error: ${body.error}`,
+              isError: true,
+            };
           }
           if (body.errors?.length) {
-            return { text: `Image model error: ${body.errors.join('; ')}`, isError: true };
+            return {
+              text: isDashboard ? 'Image generation failed in the image model.' : `Image model error: ${body.errors.join('; ')}`,
+              isError: true,
+            };
           }
           // Stability signals a content-filter hit via a non-null finish reason.
           const filtered = body.finish_reasons?.find((r) => r);
@@ -513,6 +546,49 @@ registerIfConfigured(
             return { text: 'Image model returned no image', isError: true };
           }
           const bytes = Buffer.from(base64, 'base64');
+          if (ctx.abortSignal?.aborted) return abortedResult();
+          if (isDashboard) {
+            try {
+              const descriptor = await saveArtifact({
+                agentId: ctx.agentId,
+                chatId: ctx.chatId,
+                ownerId: ctx.userId!,
+                fileName: `image-${mode.toLowerCase()}.png`,
+                contentType: 'image/png',
+                body: bytes,
+                source: { kind: 'generated', mode, prompt: prompt.slice(0, 200), width, height },
+              });
+              const latencyMs = Date.now() - t0;
+              logger.info(
+                { agentId: ctx.agentId, chatId: ctx.chatId, mode, width, height, latencyMs },
+                'dashboard image generated',
+              );
+              void writeAudit({
+                action: 'tool_invoke',
+                agentId: ctx.agentId,
+                chatId: ctx.chatId,
+                toolName: 'generate_image',
+                detail: { mode, width, height, latencyMs,
+                  artifactId: descriptor.artifactId, version: descriptor.version },
+                result: 'ok',
+              });
+              return {
+                text: `Image (${mode}, ${width}x${height}) generated and saved to this conversation's artifacts.`,
+                artifacts: [descriptor],
+              };
+            } catch {
+              logger.warn({ agentId: ctx.agentId, chatId: ctx.chatId, mode }, 'dashboard image storage failed');
+              void writeAudit({
+                action: 'tool_invoke',
+                agentId: ctx.agentId,
+                chatId: ctx.chatId,
+                toolName: 'generate_image',
+                detail: { mode },
+                result: 'error',
+              });
+              return { text: 'Image could not be saved to this conversation. Please try again.', isError: true };
+            }
+          }
           const id = randomUUID();
           const key = `generations/${ctx.chatId.replace(/[^A-Za-z0-9_-]/g, '_')}/${id}.png`;
           await s3().send(
@@ -564,6 +640,18 @@ registerIfConfigured(
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          if (isDashboard) {
+            logger.warn({ agentId: ctx.agentId, chatId: ctx.chatId, mode }, 'dashboard image generation failed');
+            void writeAudit({
+              action: 'tool_invoke',
+              agentId: ctx.agentId,
+              chatId: ctx.chatId,
+              toolName: 'generate_image',
+              detail: { mode },
+              result: 'error',
+            });
+            return { text: 'Image generation failed. Please try again.', isError: true };
+          }
           logger.warn({ errMessage: msg }, 'image generation failed');
           return { text: `Image generation failed: ${msg}`, isError: true };
         }
