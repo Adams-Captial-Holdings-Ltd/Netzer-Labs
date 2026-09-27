@@ -1013,7 +1013,11 @@ test('P6 the voice orb hint never covers the navigation', async ({ page }) => {
     return '';
   };
   expect(await covered()).toBe('');
-  await orb.hover();
+  // The idle orb breathes (jarvis-breath scales it about its centre), so it is never "stable":
+  // force skips only that wait; the pointer still lands on the orb's centre.
+  await orb.hover({ force: true });
+  // Hovered, the hint is still offered (voice is off here), just never over the navigation.
+  await expect(page.locator('.jarvis-caption')).toBeVisible();
   await page.waitForTimeout(300);
   expect(await covered()).toBe('');
 });
