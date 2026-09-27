@@ -278,6 +278,8 @@ export interface Session {
   chatId: string;
   turns: Turn[];
   modelOverride?: string;
+  title?: string;
+  pinned?: boolean;
   updatedAt: number;
   lastInputTokens?: number;
   lastOutputTokens?: number;
@@ -422,6 +424,8 @@ export async function getSession(
     chatId,
     turns: repairEmptyTurns((out.Item.turns as Turn[] | undefined) ?? []),
     modelOverride: out.Item.modelOverride as string | undefined,
+    title: out.Item.title as string | undefined,
+    pinned: out.Item.pinned as boolean | undefined,
     updatedAt: (out.Item.updatedAt as number | undefined) ?? 0,
     lastInputTokens: out.Item.lastInputTokens as number | undefined,
     lastOutputTokens: out.Item.lastOutputTokens as number | undefined,
@@ -438,6 +442,84 @@ export async function getSession(
     version: out.Item.version as number | undefined,
     ttl: out.Item.ttl as number | undefined,
   };
+}
+
+/** Replace one saved assistant reply without adding a message number. */
+export async function replaceLastReply(agentId: string, chatId: string, reply: Turn): Promise<boolean> {
+  const key = { PK: pk(agentId), SK: sk(chatId) };
+  const { Item: row } = await ddb().send(new GetCommand({ TableName: TABLE, Key: key, ConsistentRead: true }));
+  if (!row) return false;
+  const turns = (row.turns as Turn[] | undefined) ?? [];
+  if (turns.at(-1)?.role !== 'assistant' || turns.at(-2)?.role !== 'user') return false;
+  const seq = ((row.turnsTotal as number | undefined) ?? turns.length) - 1;
+  const { Item: oldRecord } = await ddb().send(new GetCommand({
+    TableName: TABLE, Key: { PK: key.PK, SK: msgSk(chatId, seq) }, ConsistentRead: true,
+  }));
+  if (!oldRecord || oldRecord.role !== 'assistant') return false;
+  const stamped = row.surface && !reply.surface ? { ...reply, surface: row.surface as Turn['surface'] } : reply;
+  const { kept } = trimTurnsToBudget([...turns.slice(0, -1), stamped]);
+  const now = Math.floor(Date.now() / 1000);
+  const { text: _text, truncated: _truncated, tools: _tools, artifacts: _artifacts,
+    attachments: _attachments, status: _status, ...recordBase } = oldRecord;
+  try {
+    await ddb().send(new TransactWriteCommand({ TransactItems: [
+      { Put: {
+        TableName: TABLE,
+        Item: { ...row, turns: kept, updatedAt: now, version: ((row.version as number | undefined) ?? 0) + 1 },
+        ConditionExpression: row.version !== undefined ? '#v = :v' : 'attribute_not_exists(#v)',
+        ExpressionAttributeNames: { '#v': 'version' },
+        ...(row.version !== undefined ? { ExpressionAttributeValues: { ':v': row.version } } : {}),
+      } },
+      { Put: {
+        TableName: TABLE,
+        Item: { ...recordBase, role: 'assistant', ...capRecordContent(stamped), ts: reply.ts,
+          ...(reply.status ? { status: reply.status } : {}),
+          ...(stamped.surface ? { surface: stamped.surface } : {}) },
+        ConditionExpression: 'attribute_exists(SK) AND #r = :assistant',
+        ExpressionAttributeNames: { '#r': 'role' },
+        ExpressionAttributeValues: { ':assistant': 'assistant' },
+      } },
+    ] }));
+    return true;
+  } catch (err) {
+    const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
+    if (e.name === 'TransactionCanceledException' && e.CancellationReasons?.some((r) => r.Code === 'ConditionalCheckFailed')) return false;
+    throw err;
+  }
+}
+
+/** Rename or pin a row only while it still belongs to its owner. */
+export async function setConversationMeta(
+  agentId: string, chatId: string, owner: string, patch: { title?: string | null; pinned?: boolean },
+): Promise<boolean> {
+  const set = ['#v = if_not_exists(#v, :zero) + :one'];
+  const remove: string[] = [];
+  const names: Record<string, string> = { '#v': 'version' };
+  const values: Record<string, unknown> = { ':zero': 0, ':one': 1, ':owner': owner };
+  if (patch.title !== undefined) {
+    names['#t'] = 'title';
+    if (patch.title === null) remove.push('#t');
+    else { set.push('#t = :t'); values[':t'] = patch.title; }
+  }
+  if (patch.pinned !== undefined) {
+    names['#p'] = 'pinned';
+    if (patch.pinned) { set.push('#p = :p'); values[':p'] = true; }
+    else remove.push('#p');
+  }
+  try {
+    await ddb().send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK: pk(agentId), SK: sk(chatId) },
+      UpdateExpression: `SET ${set.join(', ')}${remove.length ? ` REMOVE ${remove.join(', ')}` : ''}`,
+      ConditionExpression: 'attribute_exists(PK) AND userId = :owner',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    }));
+    return true;
+  } catch (err) {
+    if ((err as { name?: string })?.name === 'ConditionalCheckFailedException') return false;
+    throw err;
+  }
 }
 
 export type TurnStatus = 'streaming' | 'complete' | 'stopped' | 'error' | 'refused';
@@ -617,6 +699,8 @@ export async function appendTurns(
             SK: sk(chatId),
             turns: merged,
             ...(existing?.modelOverride ? { modelOverride: existing.modelOverride } : {}),
+            ...(existing?.title !== undefined ? { title: existing.title } : {}),
+            ...(existing?.pinned !== undefined ? { pinned: existing.pinned } : {}),
             ...(usage ? {
               lastInputTokens: usage.inputTokens,
               lastOutputTokens: usage.outputTokens,
