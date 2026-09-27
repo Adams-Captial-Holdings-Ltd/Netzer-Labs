@@ -2,8 +2,8 @@
 feature: netzar-chat
 document_role: index
 status: current
-observed_at: 2026-09-26
-as_of_commit: b1e8bdd7b738d3320b540e363fcb60f8e177d819
+observed_at: 2026-09-27
+as_of_commit: 9905de318972d4e4be3f60aac3347d0eb4b59190
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -29,8 +29,13 @@ implemented_by:
   - web/src/lib/chat/attachment-rules.ts
   - web/src/lib/chat/uploads.ts
   - web/src/components/chat/UserMessage.tsx
+  - web/src/components/chat/ArtifactCard.tsx
+  - web/src/components/chat/ArtifactPanel.tsx
+  - web/src/lib/chat/artifacts.ts
+  - web/index.html
   - src/lib/chat/artifacts-repo.ts
   - src/lib/chat/artifact-grammar.ts
+  - src/lib/chat/artifact-preview.ts
   - src/lib/chat/vendor/librechat-update.ts
   - src/lib/documents/pptx.ts
   - src/lib/tools/document-generation-tools.ts
@@ -77,6 +82,11 @@ tested_by:
   - src/lib/tools/artifact-tools.p4.test.ts
   - src/lib/tools/privacy-tools.p4.test.ts
   - infra/lib/iam-stack.p4.test.ts
+  - src/adapters/dashboard/artifacts.p5.test.ts
+  - src/adapters/dashboard/chat-artifacts-p5.test.ts
+  - src/lib/chat/artifact-preview.p5.test.ts
+  - src/lib/chat/artifacts-repo.p5.test.ts
+  - tests/e2e/chat/artifacts.spec.ts
 approved_work:
   - docs/features/netzar-chat/plan.md
 ---
@@ -100,10 +110,10 @@ layer is used.
 
 ## 2. What netzar-chat does today
 
-The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 668-line state and
-composition shell. Transport and helpers live in the nine modules under
+The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 682-line state and
+composition shell. Transport and helpers live in the ten modules under
 `web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
-17 top-level files under `web/src/components/chat/` — 15 component files plus
+19 top-level files under `web/src/components/chat/` — 17 component files plus
 the `conversation-groups.ts` helper and the `useChatScroll.ts` hook — alongside
 its `lc/` donor-derived support tree. It keeps intact:
 
@@ -294,9 +304,49 @@ backend.
   artifact object version and delete marker, then confirm none is left, before
   any row goes; a partial failure keeps the rows for a retry and forget-me
   records it.
-- **Not yet:** the dashboard's chat screen does not render `artifact_ref`, so a
-  file made in dashboard chat shows no download card until P5 (owner decision
-  58); no themed builds (ART-15, its own step); no preview (P5).
+- **Not yet:** no themed builds (ART-15, its own step). The Chat tab's card and
+  panel are P5, below.
+
+**Artifacts in the Chat tab — the card and the panel (P5, roadmap step 7):**
+
+- **A card that holds no link** (owner decision 58). Every URL-free reference —
+  the live `artifact_ref` event, or a reloaded turn's `artifacts` — becomes a
+  card (`web/src/components/chat/ArtifactCard.tsx`) with a short type badge
+  (HTML, MD, PY, PPTX, …) and a Download button; it fetches nothing until a
+  click. Download fetches `/api/artifacts/download` for that exact version on
+  every click, outside the page's read cache, and uses the link once; the file
+  is named with its type's extension (`downloadFileName`; stored names are
+  unchanged). A turn carries at most eight references. Older turns' link cards
+  keep their download.
+- **A panel that previews safely** (`web/src/components/chat/ArtifactPanel.tsx`,
+  `web/src/lib/chat/artifacts.ts`). A right-hand column on a wide screen, a
+  full-screen sheet below 1024 px that keeps keyboard focus inside it; Escape
+  closes it. A version picker (only when there is more than one version), Copy
+  for text and Download. The preview is chosen by the content type AND the
+  file's own bytes (a spoofed type falls back): HTML and Mermaid run only in an
+  `<iframe sandbox="allow-scripts">` built from `srcdoc` — an opaque origin that
+  cannot reach the page, its storage or its token — under its own
+  Content-Security-Policy that loads scripts only inline or from
+  `cdn.jsdelivr.net/npm/` and `cdnjs.cloudflare.com/ajax/libs/` (owner decision
+  4), styles only inline or from those same two paths, fonts only as `data:` or
+  from them, pictures and media only as `data:` or `blob:`, and blocks every other
+  request; Mermaid is
+  one pinned jsDelivr build with
+  integrity. SVG is shown only as an image; pictures and PDFs come from the
+  bytes as `blob:` URLs, revoked when the panel closes or switches version;
+  markdown is sanitised to HTML only, with remote
+  media, form controls and popovers removed; code, CSV (100 cells a row, 1,000
+  characters a cell, 500 rows) and a deck's slide text (from the server,
+  `view=outline`, after the P3 ZIP check) are plain text. Anything else says
+  "No preview available" and offers the download.
+- **The content route.** `GET /api/artifacts/content` repeats every guard of
+  `/artifacts/download` (`sessions:read`, the owner or an audited admin, the
+  exact version, one 404) and returns the bytes as an inert attachment
+  (`application/octet-stream`, `nosniff`, a sandbox CSP, `no-store`).
+- **Not yet:** the export bridge that lets an HTML artifact build a deliverable
+  in the browser (ART-16, deferred to its own item — the page accepts no message
+  from a preview); model capabilities (WI-5.4 / ART-10, waiting for
+  `bedrock-all-models`; carried to P7).
 
 ## 3. Current status and current source commit
 
@@ -309,14 +359,14 @@ P1 (roadmap step 3) merged into `development` as PR #189 (merge
 `e035f97`, 2026-09-23) and P2 (roadmap step 4) as PR #190 (merge `700821f`,
 2026-09-23); neither is on an environment branch yet (owner decision 18:
 promotion is separate work). P3 (roadmap step 5) merged as PR #191 (merge
-`6c49661`, 2026-09-24), on no environment branch either. P4 (roadmap step 6)
-is the change this README was last updated with; [HANDOFF](HANDOFF.md) and the
-Gauntlet state file hold its pull request, because a file cannot state the
-commit it is inside. The P4 paragraphs and rows were checked at the
-frontmatter's commit; the P1-P3 statements were last checked at `97f8e79` and
-re-derived here only where P4 changed their code (the cascading delete now
-erases artifacts first; a message record can carry artifact references;
-dashboard documents and images are artifacts).
+`6c49661`, 2026-09-24), on no environment branch either, and P4 (roadmap step
+6) as PR #192 (merge `e2cd11e`, 2026-09-26), on none either. P5 (roadmap step
+7) is the change this README was last updated with; [HANDOFF](HANDOFF.md) and
+the Gauntlet state file hold its pull request, because a file cannot state the
+commit it is inside. The P5 paragraphs and rows, and the counts in section 2,
+were checked at the frontmatter's commit; the P4 statements were last checked
+at `b1e8bdd` and the P1-P3 ones at `97f8e79`, re-derived here only where a
+later step changed their code.
 
 ## 4. Source of truth
 
@@ -345,6 +395,7 @@ dashboard documents and images are artifacts).
 | Turn lifecycle (web) | `web/src/lib/chat/stream.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/ToolCallsSection.tsx`, `web/dev/` (the dev-only chat mock) | Protocol 2 parsing, the composer during a run, the tool panel; the mock mirrors the route for `npm run e2e:chat` |
 | Attachments (server) | `src/adapters/dashboard/handler.ts` (`/chat/uploads`, the send's preflight, `/sessions/attachment`), `src/lib/chat/attachments.ts`, `src/lib/chat/zip-check.ts`, `src/lib/media/process.ts`, `src/lib/vectors/store.ts`, `deleteSession` in `src/lib/state/sessions-repo.ts`, `src/adapters/slack/media.ts` | The format table, the signed upload link, the `HeadObject` preflight, the media rules and the knowledge opt-in, the owner's download link, the file cascade on delete, Slack's ceiling |
 | Artifacts (server) | `src/lib/chat/artifacts-repo.ts`, `src/lib/chat/artifact-grammar.ts` + `src/lib/chat/vendor/`, `src/lib/tools/{document-generation,document-draft,artifact-read,nova-canvas,privacy}-tools.ts`, `src/lib/documents/pptx.ts`, the `/artifacts*` routes and `artifact_ref` in `src/adapters/dashboard/handler.ts`, `deleteSession` in `src/lib/state/sessions-repo.ts`, `infra/lib/iam-stack.ts` | Versioned CURATED storage and its lock, the grammar, the tools, the owner routes, version-aware erasure and its IAM grant |
+| Artifacts (web) | `web/src/components/chat/ArtifactCard.tsx`, `web/src/components/chat/ArtifactPanel.tsx`, `web/src/lib/chat/artifacts.ts`, `artifact_ref` in `web/src/lib/chat/stream.ts`, `transcriptToMessages` in `web/src/lib/chat/helpers.ts`, `web/index.html` (the page's frame policy); `GET /artifacts/content` in `src/adapters/dashboard/handler.ts` and `src/lib/chat/artifact-preview.ts` on the server | The card, the panel and its per-type previews, the sandbox document and its policy, the deck outline, download naming |
 | Attachments (web) | `web/src/lib/chat/attachment-rules.ts`, `web/src/lib/chat/uploads.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/UserMessage.tsx`, `web/src/pages/Chat.tsx` | The same rules in the browser, upload on attach with progress, the chips and their knowledge switch, the Download buttons |
 
 ## 6. Current business/state rules
@@ -411,6 +462,13 @@ dashboard documents and images are artifacts).
   re-reads the parent with a consistent read under it; a finalizing draft may never re-create a
   deleted parent. No response or stored turn carries a key or a URL except the
   owner's 300 s download link.
+- The dashboard never runs artifact content in its own origin (P5): HTML and
+  Mermaid only in the opaque-origin `srcdoc` sandbox whose own policy comes
+  before any artifact markup; the page itself carries a frames-only policy
+  (`frame-src 'self' blob:` in `web/index.html`) because a frame's own
+  navigation is judged by its parent's policy. The page listens to no message
+  from a preview. The artifact markdown preview uses a stricter sanitiser than
+  chat replies (no remote media, no form controls).
 
 ## 7. Known runtime risks and approved next work
 
@@ -423,7 +481,9 @@ dashboard documents and images are artifacts).
 | The guardrail's async mode lets a harmful sentence reach the screen before the guardrail blocks the rest of the reply (AWS's documented trade-off) | owner decision 50; the app's own streaming redactor still scrubs every chunk against the block-severity patterns first | none open — runtime-config `bedrock/guardrail_stream_mode = sync` restores "check first" with no redeploy |
 | P3 is proven locally only: a real browser PUT to real S3 through the signed link, the `HeadObject` preflight on real S3 and a real download have not run | the staging tier ST-1..ST-3 of `p3-proof.sh`; the grants and the staging bucket's CORS were read from `infra/`, not exercised | `P3_TIER=staging` after promotion (decision 18) |
 | The raw bucket expires objects after 365 days, so an old message's file stops downloading (the chip stays; the click opens S3's error page) | `infra/lib/storage-stack.ts` lifecycle rule | none open — deferred in the P3 session log |
-| A file made in dashboard chat shows no download card until P5: the stream's `artifact_ref` is URL-free (gate row R-5) and today's chat screen ignores it | `web/src/lib/chat/stream.ts` handles only the older `artifact`/`image` events; the file is stored and listed by `GET /api/artifacts` | P5 (roadmap step 7), owner decision 58; `development` is not promoted before it lands |
+| WebRTC is not fully blocked in an HTML preview: the guard removes it from the preview's own window, but a frame the preview creates (or a `blob:` document it navigates to) gets it back, and no browser policy can block WebRTC today (CSP `webrtc` is not recognised). Every other exit — fetch, XHR, WebSocket, beacon, remote images, frames, forms, popups, top navigation, and any style or font not from the two library paths — is blocked in every such frame | measured in the P5 session log (the sandbox probes); `web/src/lib/chat/artifacts.ts` | none open — carried in the P5 session log; revisit when browsers support a WebRTC policy |
+| P5 is proven locally only: the browser suite runs against the dev-only mock; the deployed page's frame policy, the content route on real S3 and a real PDF viewer have not run on staging | `tests/e2e/chat/artifacts.spec.ts` against `web/dev/`; the route tests in `src/adapters/dashboard/artifacts.p5.test.ts` | after promotion (decision 18) |
+| Chat REPLY markdown (not the artifact preview) still lets a reply load a remote image in the dashboard page | found by the P5 React review (outside P5's range, pre-existing): `renderMarkdown` uses DOMPurify's default profile | carried in the P5 session log (A213) for the owner |
 | P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
 | A reply still generating when its chat is deleted re-creates the chat when it saves a file (visible and deletable); a crash mid-save leaves the chat's lock row, so delete stays "busy" until an operator clears it | the P4 Claude security review, M1 and M3 | hardening (P7), owner decision 59 |
 | `pptxgenjs` pulls `image-size` 1.2.1 with two HIGH advisories (a crafted image can hang it); the code never reaches it — slides carry text only | `npm audit`; the P4 session log, A202 | owner decision 56; re-check before slides carry images |
@@ -444,7 +504,9 @@ src/adapters/slack/media.p3.test.ts src/lib/chat/artifacts-repo.p4.test.ts
 src/lib/chat/artifact-grammar.p4.test.ts src/adapters/dashboard/artifacts.p4.test.ts
 src/agent/agent-loop.p4.test.ts src/lib/documents/pptx.p4.test.ts
 src/lib/state/sessions-repo.p4.test.ts src/lib/tools/artifact-tools.p4.test.ts
-src/lib/tools/privacy-tools.p4.test.ts infra/lib/iam-stack.p4.test.ts`, the Floci
+src/lib/tools/privacy-tools.p4.test.ts infra/lib/iam-stack.p4.test.ts
+src/adapters/dashboard/artifacts.p5.test.ts src/adapters/dashboard/chat-artifacts-p5.test.ts
+src/lib/chat/artifact-preview.p5.test.ts src/lib/chat/artifacts-repo.p5.test.ts`, the Floci
 artifact test `node --env-file=.env node_modules/vitest/vitest.mjs run --config
 vitest.integration.config.ts src/lib/chat/artifacts-repo.p4.integration.test.ts`, plus
 `npm --prefix web run typecheck && npm --prefix web run build` and the browser

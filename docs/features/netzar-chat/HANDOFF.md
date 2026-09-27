@@ -2,55 +2,62 @@
 feature: netzar-chat
 document_role: handoff
 status: current
-observed_at: 2026-09-26
-as_of_commit: b1e8bdd7b738d3320b540e363fcb60f8e177d819
+observed_at: 2026-09-27
+as_of_commit: 9905de318972d4e4be3f60aac3347d0eb4b59190
 ---
 
 # Netzar Chat handoff
 
-- **CURRENT: P4 is BUILT on `feature/p4-artifacts` — step 6 of 10
-  (artifact infrastructure, server), as one step (owner decision 45) run by two
-  coordinators.** Branch cut from `origin/development` @ `6c49661` (P3's merge,
-  PR #191); merge target `development`. **At this commit: pushed no, PR none,
-  deployment none.** The landing runs the full `development.md` step 7 list on
-  this exact commit, asks the owner once with the numbers, and only on a yes
-  pushes, opens one pull request into `development` and merges it on green; the
-  pull request number and the merge commit live in the Gauntlet state file
-  (P40). Nothing is promoted (decision 18). Neither session made an AWS call.
-- **What P4 built** (detail: README sections 2, 6 and 7, and the session log
-  below). Files the agent makes in dashboard chat — generated documents
-  (including editable PowerPoint through `pptxgenjs`, decisions 42 and 56),
-  images, documents built across turns, and a reply's `:::artifact` blocks — are
-  saved as owner-only, immutable versions in the versioned CURATED bucket, after
-  the safety scan, under a per-conversation lock. Owner routes list them without
-  keys and re-mint a 300 s link to one exact version; the stream sends a URL-free
-  `artifact_ref`. Deleting a chat, and `forget_me`, erase every object version
-  and delete marker before any row. A new IAM grant (`infra/lib/iam-stack.ts`)
-  lets the task role list and delete object versions under `artifacts/` only.
-- **Known gaps, by decision.** Dashboard chat shows **no download card** for a
-  new file until P5 (decision 58), so `development` is not promoted before P5
-  lands. A reply still generating when its chat is deleted re-creates the chat
-  when it saves a file or starts a draft, and a crash mid-save can leave a chat "busy" until an
-  operator clears its lock row — both carried to hardening (decision 59). The
-  promotion that carries P4 must deploy the IAM stack, not only the image.
-- **Who wrote it.** Codex coordinated and built 47 commits (fresh `codex exec`
-  builders; Jev picked every rung) until its tokens ran out on 2026-09-26; its
-  reviews and councils were Codex-only. Claude Opus continued as coordinator
-  (decision 49): Claude Sonnet built four small changes — the draft-key fix, one
-  CLEANUP refactor and consistent reads after a delete (two commits) — each behind a committed
-  failing test, and one Claude security review ran (no critical or high). The
-  Codex inspection of Claude's commits did not run (decision 57).
-- **P4's gate** (`~/.claude/plans/netzar-chat-plan/p4-proof.sh`, 52 rows) reads
-  **`FAILS=0`, CONTROL `FAIL`** after CLEANUP; it read `FAILS=51` at the base.
-  P1-P3's frozen gates fail only their "no infra diff" and "no new package"
-  guards on this branch, by design; their P4-scope copies read P1 0/6 and 0/12,
-  P2 0/47, P3 0/60 (the session log, 6.7).
-- **Baseline recorded before any change**, re-run at `6c49661` with fake
+- **CURRENT: P5 is BUILT on `feature/p5-artifact-ui` — step 7 of 10 (artifact
+  UI: the card, the panel and safe previews), as one step (owner decision 45).**
+  Branch cut from `origin/development` @ `e2cd11e` (P4's merge, PR #192); merge
+  target `development`. **At this commit: pushed no, PR none, deployment none.**
+  The landing runs the full `development.md` step 7 list on this exact commit,
+  asks the owner once with the numbers, and only on a yes pushes, opens one pull
+  request into `development` and merges it on green; the pull request number and
+  the merge commit live in the Gauntlet state file (P40). Nothing is promoted
+  (decision 18). No AWS call was made.
+- **What P5 built** (detail: README sections 2, 5, 6 and 7, and the session log
+  below). Every URL-free artifact reference becomes a card that holds no link;
+  Download mints a fresh link per click, outside the page's read cache, named
+  with its type's extension (decision 58's gap is closed). The panel previews by
+  content type AND file bytes: HTML and Mermaid only in an opaque-origin
+  `srcdoc` sandbox under its own policy (scripts and styles only inline or from
+  jsDelivr and cdnjs, decision 4; fonts only as `data:` or from those two paths;
+  pictures and media only as `data:` or `blob:`; nothing else),
+  the page carrying a frames-only `frame-src 'self' blob:`; SVG as an image;
+  pictures and PDFs from `blob:` URLs, revoked when the panel closes or switches
+  version; markdown without remote
+  media or form controls; code, CSV and deck outlines as text. A new owner route
+  `GET /api/artifacts/content` serves the bytes inertly (and a deck's bounded
+  outline). On a phone the panel is a full-screen sheet that keeps focus inside
+  it. The page accepts no message from a preview.
+- **Known gaps, by decision or measurement.** WebRTC in an HTML preview is a
+  measured residual: the guard removes it from the preview's own window, but a
+  frame the preview makes gets it back and no browser policy blocks it today
+  (**A212**, put to the owner at landing). ART-16 (browser-built exports) is its
+  own later item (Jev 1.0); WI-5.4 / ART-10 wait for `bedrock-all-models` (P7).
+  Still carried from P4: decision 59 (M1, M3 → P7) and the IAM deploy the
+  promotion carrying P4 needs (**A209**). Found outside P5's range: chat REPLY
+  markdown can still load a remote image (**A213**).
+- **Who wrote it.** Claude Opus coordinated; Codex wrote every production change
+  (`gpt-6-sol`: the server route, the web data layer, the card and panel;
+  `gpt-6-luna`: four corrections, the docs slice and both CLEANUP builds; Jev
+  picked every rung). The review was cross-vendor: Claude security and React
+  reviewers (Opus), Codex security and correctness reviewers (`gpt-6-sol`) and a
+  Claude look-and-feel critic; two councils seated a Codex member (**P112**).
+- **P5's gate** (`~/.claude/plans/netzar-chat-plan/p5-proof.sh`, 39 rows) reads
+  **`FAILS=0`, CONTROL `FAIL`** after CLEANUP; it read `FAILS=36` at the base.
+  P4 52/0; the P1-P3 originals are green (6/0, 12/0, 47/0, 60/0) and their
+  P4-scope copies fail only their P4-scope guard rows now that P4 is merged
+  (**A210**). Browser 45/45.
+- **Baseline recorded before any change**, re-run at `e2cd11e` with fake
   credentials planted, alone in the checkout, `floci/floci:1.6.0` named first:
-  `npm test` 265 files / 3449 tests all passing, `guard-violations: 0`;
-  integration 64 passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap by
-  name; every other gate exit 0; P1 12/0 and 6/0, P2 47/0, P3 60/0; the browser
-  suite 25/25.
+  `npm test` 274 files / 3508 tests all passing, `guard-violations: 0`;
+  integration 69 passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap by
+  name; every other gate exit 0; P4 52/0; the browser suite 25/25.
+- **P4 landed** as PR #192 into `development` (merge `e2cd11e`, 2026-09-26); its
+  session log is [`handoffs/2026-09-26-p4-one-shot.md`](handoffs/2026-09-26-p4-one-shot.md).
 - **P3 landed** as PR #191 into `development` (merge `6c49661`, 2026-09-24); its
   session log is [`handoffs/2026-09-24-p3-one-shot.md`](handoffs/2026-09-24-p3-one-shot.md).
 - **P2 landed** as PR #190 into `development` (merge `700821f`, 2026-09-23); its
@@ -316,6 +323,7 @@ as_of_commit: b1e8bdd7b738d3320b540e363fcb60f8e177d819
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-27-p5-one-shot.md](handoffs/2026-09-27-p5-one-shot.md)
 - [2026-09-26-p4-one-shot.md](handoffs/2026-09-26-p4-one-shot.md)
 - [2026-09-24-p3-one-shot.md](handoffs/2026-09-24-p3-one-shot.md)
 - [2026-09-23-p2-one-shot.md](handoffs/2026-09-23-p2-one-shot.md)

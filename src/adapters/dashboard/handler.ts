@@ -83,7 +83,8 @@ import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTu
 import { classifyTurnError } from '../../agent/turn-errors.js';
 import { processMedia, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment } from '../../lib/media/process.js';
 import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
-import { listArtifactHeads, listArtifactVersions, presignArtifactDownload, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
+import { attachmentDisposition, downloadFileName, listArtifactHeads, listArtifactVersions, presignArtifactDownload, readArtifactBody, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
+import { deckOutline, DeckOutlineError } from '../../lib/chat/artifact-preview.js';
 import { extractArtifactBlocks } from '../../lib/chat/artifact-grammar.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
@@ -3724,9 +3725,56 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       const url = await presignArtifactDownload({
         agentId, chatId, ownerId: owner.ownerId, artifactId, version: selected.version,
       });
-      return c.json({ url, fileName: selected.fileName, version: selected.version });
+      return c.json({ url, fileName: downloadFileName(selected.fileName, selected.contentType), version: selected.version });
     } catch {
       return c.json({ error: 'download_unavailable' }, 503);
+    }
+  });
+
+  router.get('/artifacts/content', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    const artifactId = c.req.query('artifactId')?.trim() ?? '';
+    const versionText = c.req.query('version') ?? '';
+    const view = c.req.query('view');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
+      return c.json({ error: 'invalid_artifact_id' }, 400);
+    }
+    const version = Number(versionText);
+    if (!/^[1-9]\d*$/.test(versionText) || !Number.isSafeInteger(version)) {
+      return c.json({ error: 'invalid_version' }, 400);
+    }
+    if (view !== undefined && view !== 'outline') return c.json({ error: 'invalid_view' }, 400);
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const versions = await listArtifactVersions({ agentId, chatId, ownerId: owner.ownerId, artifactId });
+      const selected = versions.find((entry) => entry.version === version);
+      if (!selected) return c.json({ error: 'not_found' }, 404);
+      if (view === 'outline' && selected.contentType !== 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+        return c.json({ error: 'outline_unsupported' }, 400);
+      }
+      const bytes = await readArtifactBody({ agentId, chatId, ownerId: owner.ownerId,
+        artifactId, version: selected.version });
+      if (view === 'outline') return c.json(await deckOutline(bytes));
+      return new Response(bytes, { status: 200, headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': attachmentDisposition(downloadFileName(selected.fileName, selected.contentType)),
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "sandbox; default-src 'none'",
+        'Cache-Control': 'no-store',
+      } });
+    } catch (error) {
+      if (error instanceof DeckOutlineError) return c.json({ error: 'preview_unavailable' }, 422);
+      return c.json({ error: 'content_unavailable' }, 503);
     }
   });
 

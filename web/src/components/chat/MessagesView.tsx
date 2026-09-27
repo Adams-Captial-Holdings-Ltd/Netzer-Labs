@@ -20,7 +20,7 @@
  * them, and where the scroll sentinel sits.
  */
 import type { ComponentChildren } from 'preact';
-import type { Message } from '../../lib/chat/types';
+import type { ArtifactRef, Message } from '../../lib/chat/types';
 import { AssistantMessage } from './AssistantMessage';
 import { StreamingRow } from './StreamingRow';
 import { UserMessage } from './UserMessage';
@@ -32,6 +32,7 @@ interface MessagesViewProps {
   agentName: string;
   agentId: string;
   chatId: string;
+  onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
   /** Landing state: no turns yet, so hug the composer instead of filling. */
   landing: boolean;
   /** True while a turn is in flight; renders the live row. */
@@ -53,6 +54,7 @@ export function MessagesView({
   agentName,
   agentId,
   chatId,
+  onOpenArtifact,
   landing,
   streaming,
   streamText,
@@ -94,7 +96,8 @@ export function MessagesView({
           m.role === 'user' ? (
             <UserMessage key={i} message={m} agentId={agentId} chatId={chatId} />
           ) : (
-            <AssistantMessage key={i} message={m} agentName={agentName} />
+            <AssistantMessage key={i} message={m} agentName={agentName}
+              agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
           ),
         )}
         {streaming && (

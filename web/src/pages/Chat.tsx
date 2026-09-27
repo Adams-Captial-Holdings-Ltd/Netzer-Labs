@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
 import { api, getToken, clearApiCache } from '../lib/api';
-import type { Agent, Conversation, Message, Model, ToolCall } from '../lib/chat/types';
+import type { Agent, ArtifactRef, Conversation, Message, Model, ToolCall } from '../lib/chat/types';
 import {
   MODEL_NAMES,
   freshChatId,
@@ -26,6 +26,7 @@ import { toast } from '../components/Toast';
 import { ChatCanvas } from '../components/chat/ChatCanvas';
 import { ChatHeader } from '../components/chat/ChatHeader';
 import { ChatLanding } from '../components/chat/ChatLanding';
+import { ArtifactPanel } from '../components/chat/ArtifactPanel';
 import { Composer } from '../components/chat/Composer';
 import {
   ConversationSidebar,
@@ -56,6 +57,7 @@ export function Chat() {
   const [modelId, setModelId] = useState('');
   const [chatId, setChatId] = useState(freshChatId);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [openArtifact, setOpenArtifact] = useState<{ artifact: ArtifactRef; opener: HTMLButtonElement } | null>(null);
   const [input, setInput] = useState('');
   const draftsRef = useRef(new Map<string, string>());
   // True while the chat on screen is a fresh one with nothing sent yet — an id
@@ -195,9 +197,15 @@ export function Chat() {
   const NEW_DRAFT = 'new';
   const currentDraftKey = () => (unsentChatRef.current ? NEW_DRAFT : `${agentId}/${chatId}`);
 
+  function closeArtifact(restoreFocus = true) {
+    setOpenArtifact(null);
+    if (restoreFocus && openArtifact?.opener.isConnected) openArtifact.opener.focus({ preventScroll: true });
+  }
+
   // `fresh`: a new chat restores the `new` slot and clears it; a stored
   // conversation restores its own draft, or nothing.
   function activateConversation(id: string, forAgent = agentId, fresh = false) {
+    closeArtifact(false);
     draftsRef.current.set(currentDraftKey(), input);
     const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`);
     if (fresh) draftsRef.current.delete(NEW_DRAFT);
@@ -409,6 +417,7 @@ export function Chat() {
         ...(outcome.kb.length > 0 ? { kb: outcome.kb } : {}),
         ...(outcome.images.length > 0 ? { images: outcome.images } : {}),
         ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
+        ...(outcome.artifactRefs.length > 0 ? { artifactRefs: outcome.artifactRefs } : {}),
         ...(outcome.meta ? { meta: outcome.meta } : {}),
         ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
         // `done: not_saved`: the answer arrived, the server could not store it.
@@ -617,6 +626,7 @@ export function Chat() {
             agentName={agentName}
             agentId={agentId}
             chatId={chatId}
+            onOpenArtifact={(artifact, opener) => setOpenArtifact({ artifact, opener })}
             landing={isLanding}
             streaming={streaming}
             streamText={streamText}
@@ -663,6 +673,10 @@ export function Chat() {
           onCancel={() => { if (!deletingRef.current) setPendingDelete(null); }}
         />
       </div>
+      {openArtifact && (
+        <ArtifactPanel key={`${openArtifact.artifact.artifactId}:${openArtifact.artifact.version}`}
+          agentId={agentId} chatId={chatId} artifact={openArtifact.artifact} onClose={() => closeArtifact()} />
+      )}
     </div>
   );
 }

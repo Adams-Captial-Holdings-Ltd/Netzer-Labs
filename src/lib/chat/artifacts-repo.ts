@@ -488,7 +488,39 @@ export async function readArtifactBody(args: ArtifactVersionScope): Promise<Uint
   return Buffer.concat(chunks);
 }
 
-function attachmentDisposition(fileName: string): string {
+const DOWNLOAD_EXTENSIONS: Record<string, string[]> = {
+  'application/pdf': ['.pdf'],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+  'text/html': ['.html', '.htm'],
+  'image/svg+xml': ['.svg'],
+  'text/markdown': ['.md', '.markdown'],
+  'text/csv': ['.csv'],
+  'application/json': ['.json'],
+  'text/xml': ['.xml'],
+  'text/vnd.mermaid': ['.mmd', '.mermaid'],
+  'application/rtf': ['.rtf'],
+  'image/png': ['.png'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/gif': ['.gif'],
+  'image/webp': ['.webp'],
+  'text/plain': ['.txt'],
+};
+
+export function downloadFileName(fileName: string, contentType: string): string {
+  const allowed = DOWNLOAD_EXTENSIONS[contentType];
+  if (!allowed) return fileName;
+  if (allowed.some((extension) => fileName.toLowerCase().endsWith(extension))) return fileName;
+  if (contentType === 'text/plain' && /\.[A-Za-z0-9]{1,10}$/.test(fileName)) return fileName;
+  const extension = allowed[0]!;
+  const maxBaseLength = 255 - extension.length;
+  let base = fileName.slice(0, maxBaseLength);
+  if (fileName.length > maxBaseLength && /[\uD800-\uDBFF]$/.test(base)) base = base.slice(0, -1) + '_';
+  return base + extension;
+}
+
+export function attachmentDisposition(fileName: string): string {
   // Keep a conservative ASCII fallback for older clients, and preserve the
   // original UTF-8 name using the RFC 5987 filename* parameter.
   const fallback = fileName.replace(/[^A-Za-z0-9._-]+/g, '_') || 'artifact';
@@ -519,6 +551,6 @@ export async function presignArtifactDownload(args: ArtifactVersionScope): Promi
     Bucket: BUCKET,
     Key: row.storageKey,
     VersionId: row.physicalVersionId,
-    ResponseContentDisposition: attachmentDisposition(row.fileName),
+    ResponseContentDisposition: attachmentDisposition(downloadFileName(row.fileName, row.contentType)),
   }), { expiresIn: 300 });
 }
