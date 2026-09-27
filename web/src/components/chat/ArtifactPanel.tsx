@@ -81,7 +81,7 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  useEffect(() => { closeRef.current?.focus(); }, [artifact.artifactId, artifact.version]);
+  useLayoutEffect(() => { closeRef.current?.focus(); }, [artifact.artifactId, artifact.version]);
 
   useEffect(() => {
     let active = true;
