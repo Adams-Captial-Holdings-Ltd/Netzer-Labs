@@ -198,4 +198,19 @@ describe('P5 web artifact layer', () => {
     expect(capped.truncated).toBe(true);
     expect(parse('', 5)).toEqual({ rows: [], truncated: false });
   });
+
+  it('P5 csv preview caps columns and cell length', async () => {
+    // A row cap alone does not bound one very wide row or one enormous cell (found at review).
+    const artifacts = await load();
+    const parse = artifacts!.parseCsv as (text: string, maxRows: number) => { rows: string[][]; truncated: boolean };
+    const wide = parse(Array.from({ length: 5000 }, (_, i) => `c${i}`).join(','), 500);
+    expect(wide.rows).toHaveLength(1);
+    expect(wide.rows[0]).toHaveLength(100);
+    expect(wide.rows[0]![99]).toBe('c99');
+    expect(wide.truncated).toBe(true);
+    const long = parse(`${'x'.repeat(5000)},y\nshort,z\n`, 500);
+    expect(long.rows).toEqual([[`${'x'.repeat(1000)}…`, 'y'], ['short', 'z']]);
+    expect(long.truncated).toBe(true);
+    expect(parse('a,b\n', 500)).toEqual({ rows: [['a', 'b']], truncated: false });
+  });
 });

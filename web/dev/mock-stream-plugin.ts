@@ -82,6 +82,7 @@ function parseTurn(rawBody: string): { text: string; chatId: string; attachmentK
 // file-only message reloads with its chips if, and only if, the page sent them.
 const MOCK_S3 = '/__mock-s3/';
 const MOCK_ARTIFACTS = '/__mock-artifacts/';
+let mints = 0;
 const UPLOAD_MAX_BYTES = 30 * 1024 * 1024; // the real route's ceiling (owner decision 29)
 interface MockUpload { id: string; name: string; type: string; size: number; bytes?: Buffer }
 const uploads = new Map<string, MockUpload>(); // by key
@@ -148,6 +149,8 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   for (const ev of fixture) {
     await cadence(res, ev.delayMs);
     if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed, artifacts };
+    // The real route publishes at most eight references a turn (MAX_DASHBOARD_ARTIFACT_REFS).
+    if (ev.event === 'artifact_ref' && artifacts.length >= 8) continue;
     sseWrite(res, ev.event, ev.data);
     if (ev.event === 'chunk' || ev.event === 'reply') streamed = ev.data;
     if (ev.event === 'artifact_ref') artifacts.push(JSON.parse(ev.data));
@@ -433,7 +436,8 @@ export function mockStreamPlugin(): Plugin {
         if (req.method !== 'GET') return next();
         const { artifactId, found } = artifactVersion(req);
         if (!found) return jsonStatus(res, 404, { error: 'not_found' });
-        json(res, { url: `${MOCK_ARTIFACTS}${artifactId}/v${found.version}`, fileName: found.downloadName, version: found.version });
+        // Each mint is a new link, as a fresh presign is: `mint` tells two apart.
+        json(res, { url: `${MOCK_ARTIFACTS}${artifactId}/v${found.version}?mint=${++mints}`, fileName: found.downloadName, version: found.version });
       });
       server.middlewares.use('/api/artifacts/content', (req, res, next) => {
         if (req.method !== 'GET') return next();
