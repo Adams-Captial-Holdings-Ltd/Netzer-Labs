@@ -207,6 +207,19 @@ describe('P6 conversation title, pin and search — dashboard routes', () => {
     expect(setConversationMeta.mock.calls.map((c) => c[3])).toEqual([{ title: null }, { title: null }]);
   });
 
+  // Review routing (Claude security F7 and F9, LOW): the ids must be strings, and a title may not carry
+  // invisible or direction-changing characters (the artifact title rule: Cc, Cf, Cs, Zl, Zp).
+  it('P6 a rename refuses a non-string chat id and invisible or direction-changing title characters', async () => {
+    const numeric = await patch('member-a1', { chatId: 1750000001000, title: 'x' });
+    expect(numeric.status).toBe(400);
+    expect(await numeric.json()).toEqual({ error: 'chatId_required' });
+    for (const bad of ['invoice\u202Etxt.exe', 'zero\u200Bwidth', 'next\u0085line', 'para\u2029graph']) {
+      const res = await patch('member-a1', { title: bad });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_title' });
+    }
+  });
+
   it('P6 pinned conversations are listed even past the newest fifty', async () => {
     const pinned = await patch('member-a1', { pinned: true });
     expect(pinned.status).toBe(200);

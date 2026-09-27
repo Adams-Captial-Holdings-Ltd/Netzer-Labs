@@ -694,3 +694,158 @@ test('P6 a stopped regenerate keeps the text it reached, as the server saves it'
   await expect(replies(page).last()).not.toContainText('Line 200:');
   await expect(replies(page).last()).toContainText(/stopped/i);
 });
+
+test('P6 a regenerate the server did not save leaves the old reply in place', async ({ page }) => {
+  await newChat(page);
+  await sendAndWait(page, 'a question worth asking twice');
+  const refusal = 'I cannot help with that request.';
+  const notSaved = [
+    `event: chunk\ndata: ${refusal}\n\n`,
+    `event: final\ndata: ${JSON.stringify({ text: refusal, modelId: 'us.anthropic.claude-sonnet-4-5', latencyMs: 5, costUsd: 0, toolCallCount: 0 })}\n\n`,
+    'event: done\ndata: not_saved\n\n',
+  ].join('');
+  await page.route('**/api/test-turn/stream', (route) =>
+    route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: notSaved }));
+
+  await replies(page).last().hover();
+  await replies(page).last().getByRole('button', { name: 'Regenerate' }).click();
+  // The server kept the old reply (a blocked turn is never stored): so does the page, and it says why.
+  await expect(page.getByRole('alert').filter({ hasText: refusal })).toBeVisible();
+  await expect(replies(page)).toHaveCount(1);
+  await expect(replies(page).last()).toContainText(REPLY);
+
+  await page.unroute('**/api/test-turn/stream');
+  await page.reload();
+  await expect(replies(page)).toHaveCount(1);
+  await expect(replies(page).last()).toContainText(REPLY);
+});
+
+// Review routing (Codex correctness MEDIUM and LOW, M139): the dev mock answers a regenerate the
+// way the real route does, so the browser proves what production does.
+test('P6 the mock refuses a regenerate the way the route does', async ({ page }) => {
+  await openChat(page);
+  const ask = (data: Record<string, unknown>) =>
+    page.request.post('/api/test-turn/stream', { data: { agentId: 'main', protocol: 2, regenerate: true, clientMessageId: `m-${Math.random()}`, ...data } });
+  const missing = await ask({ chatId: 'dashboard:4040404040404' });
+  expect([missing.status(), await missing.json()]).toEqual([404, { error: 'not_found' }]);
+  const withText = await ask({ chatId: mockChatId(0), text: 'and this too' });
+  expect([withText.status(), await withText.json()]).toEqual([400, { error: 'invalid_regenerate' }]);
+});
+
+test('P6 a regenerated reply keeps its tool results after a reload', async ({ page }) => {
+  await newChat(page);
+  await sendAndWait(page, '/fixture tools');
+  await replies(page).last().hover();
+  await replies(page).last().getByRole('button', { name: 'Regenerate' }).click();
+  await waitForEnd(page);
+  await expect(page.getByRole('button', { name: /Used 5 tools/ })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: /Used 5 tools/ })).toBeVisible();
+});
+
+// Found reading slice C2: the page behind the phone drawer is inert while it is open, and the drawer
+// only exists below lg. Widening the window past lg (a tablet turned sideways) must not leave the
+// page inert behind a drawer nobody can see.
+test('P6 widening the window past the drawer breakpoint gives the page back', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await openChat(page);
+  await page.getByRole('button', { name: 'Show conversation history' }).click();
+  await expect(page.getByRole('dialog', { name: 'Conversation history' })).toBeVisible();
+  expect(await composerField(page).evaluate((el) => el.closest('[inert]') !== null)).toBe(true);
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect.poll(() => composerField(page).evaluate((el) => el.closest('[inert]') === null)).toBe(true);
+  await composerOf(page).fill('still typing here');
+  await expect(composerOf(page)).toHaveValue('still typing here');
+});
+
+// Review routing (Claude React MEDIUM): Shift+Escape in the rename field cancels the rename and still
+// reaches the page's "focus the message box" shortcut.
+test('P6 Shift+Escape in the rename field cancels it and moves to the message box', async ({ page }) => {
+  const title = 'Grant narrative for the Q3 renewal'; // mock row 7
+  await openChat(page);
+  await row(page, title).hover();
+  await page.getByRole('button', { name: `Rename chat: ${title}` }).filter({ visible: true }).click();
+  const field = page.getByRole('textbox', { name: 'Chat title' });
+  await expect(field).toBeFocused();
+  await field.press('Shift+Escape');
+  await expect(field).toHaveCount(0);
+  await expect(row(page, title)).toBeVisible();
+  await expect(composerOf(page)).toBeFocused();
+});
+
+// Review routing (Claude React MEDIUM, unconfirmed; P129's focus rule): on a phone the artifact panel is
+// a modal sheet, and the page's shortcuts must not pull focus out from under it.
+test.describe('with an artifact open on a phone', () => {
+  test.use({ viewport: { width: 375, height: 812 } });
+  test('P6 the shortcuts leave an open artifact sheet alone', async ({ page }) => {
+    await newChat(page);
+    await sendAndWait(page, '/fixture artifacts');
+    await page.getByRole('button', { name: 'Open Launch notes', exact: true }).click();
+    const sheet = page.locator('[data-artifact-panel]');
+    await expect(sheet).toBeVisible();
+    for (const key of ['ControlOrMeta+Slash', 'Shift+Escape']) {
+      await page.keyboard.press(key);
+      await expect(sheet).toBeVisible();
+      expect(await sheet.evaluate((el) => el.contains(document.activeElement)), key).toBe(true);
+    }
+  });
+});
+
+// Review routing (Claude React HIGH and MEDIUM): a slower answer for a conversation or a search the
+// reader has already left must never replace what is on screen now.
+test('P6 a slower conversation load never replaces the one opened after it', async ({ page }) => {
+  await newChat(page);
+  await sendAndWait(page, 'the first conversation');
+  const firstId = await page.evaluate(() => (JSON.parse(sessionStorage.getItem('cce_chat_active')!) as { chatId: string }).chatId);
+  await page.getByRole('button', { name: 'New chat' }).first().click();
+  await sendAndWait(page, 'the second conversation');
+  await page.getByRole('button', { name: 'New chat' }).first().click();
+
+  await page.route('**/api/sessions/transcript**', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('chatId') === firstId) await new Promise((r) => setTimeout(r, 2_000));
+    await route.continue();
+  });
+  await row(page, 'the first conversation').click();
+  await row(page, 'the second conversation').click();
+  await page.waitForTimeout(2_500);
+  await expect(userBubbles(page).filter({ hasText: 'the second conversation' })).toHaveCount(1);
+  await expect(userBubbles(page).filter({ hasText: 'the first conversation' })).toHaveCount(0);
+});
+
+test('P6 a slower search never replaces the search typed after it', async ({ page }) => {
+  await page.route(/\/api\/sessions\?/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get('q') === 'deploy') await new Promise((r) => setTimeout(r, 2_000));
+    await route.continue();
+  });
+  await openChat(page);
+  await searchOf(page).fill('deploy');
+  await page.waitForTimeout(400); // past the debounce: the slow request is out
+  await searchOf(page).fill('invoice');
+  await page.waitForTimeout(2_600);
+  await expect(row(page, 'Reconcile the August invoice exceptions')).toBeVisible();
+  await expect(row(page, 'Why did the deploy fail?')).toHaveCount(0);
+});
+
+// Look critic (S02, S08 at 1280): a reply that has finished, or been stopped, is left fully in view
+// above the composer, not under it behind the scroll-to-latest control. Found present on the base too.
+test('P6 a finished or stopped reply is left in view above the composer', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  // Measured in the capture: with reduced motion the end-of-turn scroll lands short (smooth scrolling hid it).
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const clear = async () => {
+    const reply = (await replies(page).last().boundingBox())!;
+    const form = (await page.locator('form').filter({ has: composerOf(page) }).boundingBox())!;
+    return reply.y + reply.height <= form.y + 1;
+  };
+  await newChat(page);
+  await sendAndWait(page, 'Summarise the last 90 days of audit data');
+  await expect.poll(clear).toBe(true);
+
+  await composerOf(page).fill('/fixture longstream');
+  await sendOf(page).click();
+  await expect(page.getByText('Line 30:').first()).toBeVisible();
+  await stopOf(page).click();
+  await waitForEnd(page);
+  await expect.poll(clear).toBe(true);
+});

@@ -41,6 +41,7 @@ const {
   processMedia,
   deleteObject,
   ingestChatMedia,
+  isKillSwitchActive,
 } = vi.hoisted(() => ({
   authenticateDashboardToken: vi.fn(),
   getSession: vi.fn(),
@@ -58,6 +59,7 @@ const {
   processMedia: vi.fn(),
   deleteObject: vi.fn(),
   ingestChatMedia: vi.fn(),
+  isKillSwitchActive: vi.fn(),
 }));
 
 const PRINCIPALS: Record<string, TokenPrincipal> = {
@@ -135,7 +137,7 @@ vi.mock('../../lib/config/agent-loader.js', async (importActual) => {
 
 vi.mock('../../lib/state/kill-switches-repo.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/state/kill-switches-repo.js')>();
-  return { ...actual, isKillSwitchActive: () => Promise.resolve({ active: false }) };
+  return { ...actual, isKillSwitchActive };
 });
 
 vi.mock('../../lib/state/runtime-config-repo.js', async (importActual) => {
@@ -238,6 +240,7 @@ describe('P6 regenerate and stopped text — stream route', () => {
     processMedia.mockRejectedValue(new Error('processMedia must not run for a regenerate'));
     deleteObject.mockResolvedValue(undefined);
     ingestChatMedia.mockRejectedValue(new Error('a regenerate must not ingest'));
+    isKillSwitchActive.mockResolvedValue({ active: false });
     vi.stubEnv('BEDROCK_DEFAULT_MODEL', SONNET);
     vi.stubEnv('BEDROCK_SONNET_MODEL', SONNET);
   });
@@ -264,6 +267,8 @@ describe('P6 regenerate and stopped text — stream route', () => {
     const [agentId, chatId, reply] = replaceLastReply.mock.calls[0]! as [string, string, T];
     expect([agentId, chatId]).toEqual([AGENT, CHAT]);
     expect(reply).toMatchObject({ role: 'assistant', text: 'Four.' });
+    // It saves against the exchange it answered (council R1): the authorized read's count and owner.
+    expect(replaceLastReply.mock.calls[0]![3]).toEqual({ turnsTotal: 4, owner: OWNER });
     expect(events.some((e) => e.event === 'final' && JSON.parse(e.data).text === 'Four.')).toBe(true);
     expect(events.at(-1)).toEqual({ event: 'done', data: 'ok' });
   });
@@ -385,6 +390,94 @@ describe('P6 regenerate and stopped text — stream route', () => {
     expect(again.status).toBe(409);
     expect(await again.json()).toEqual({ error: 'turn_duplicate', status: 'complete' });
     expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
+  // Review routing (both Codex reviewers, MEDIUM; Jev 0.91): a blocked send is never stored, so a
+  // blocked regenerate must leave the old reply stored — and say so, instead of "done: ok".
+  it('P6 a blocked regenerate keeps the old reply and says it was not saved', async () => {
+    runAgentTurn.mockResolvedValue(ok('I cannot help with that request.', { blocked: true }));
+    const events = parseSse(await (await regenerate()).text());
+    expect(replaceLastReply).not.toHaveBeenCalled();
+    expect(events.at(-1)).toEqual({ event: 'done', data: 'not_saved' });
+  });
+
+  // Review routing (Claude security F4, LOW): the loop's refusals (the kill phrase, a sessions freeze, the
+  // rate limit) return normally with `refusal`; a history writer must not store one over a real answer.
+  it('P6 a refused regenerate keeps the old reply and says it was not saved', async () => {
+    runAgentTurn.mockResolvedValue(ok('Sessions are temporarily frozen for maintenance.', {
+      refusal: { kind: 'sessions_frozen', retryable: true },
+    }));
+    const events = parseSse(await (await regenerate()).text());
+    expect(replaceLastReply).not.toHaveBeenCalled();
+    expect(events.at(-1)).toEqual({ event: 'done', data: 'not_saved' });
+  });
+
+  // Review routing (Claude security F1, MEDIUM): the media kill switch stops a regenerate that would read
+  // files again, exactly as it stops processMedia on a send.
+  it('P6 regenerate honours the media upload kill switch', async () => {
+    isKillSwitchActive.mockImplementation(async (name: string) => ({ active: name === 'media_upload_disabled' }));
+    const withFile: T = { ...LAST_USER, attachments: [
+      { id: 'f1', name: 'q3.pdf', type: 'application/pdf', size: 900, key: `dashboard/${CHAT}/2026/09/27/1-q3.pdf` },
+    ] };
+    getSession.mockResolvedValue(stored([...EARLIER, withFile, LAST_REPLY]));
+    const events = parseSse(await (await regenerate()).text());
+    expect(getRawObject).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(replaceLastReply).not.toHaveBeenCalled();
+    const error = events.find((e) => e.event === 'error');
+    expect(error && JSON.parse(error.data).code).toBe('kill_switch_active');
+  });
+
+  // Review routing (Codex correctness HIGH; council R2, unanimous): a stored file that cannot be read again
+  // refuses the regenerate before any model call, so an answer made without it never replaces one made with it.
+  it('P6 regenerate refuses when a stored file cannot be read again', async () => {
+    const withFile: T = { ...LAST_USER, attachments: [
+      { id: 'f1', name: 'q3.pdf', type: 'application/pdf', size: 900, key: `dashboard/${CHAT}/2026/09/27/1-q3.pdf` },
+    ] };
+    getSession.mockResolvedValue(stored([...EARLIER, withFile, LAST_REPLY]));
+    getRawObject.mockRejectedValue(Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' }));
+    const events = parseSse(await (await regenerate()).text());
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(replaceLastReply).not.toHaveBeenCalled();
+    const error = events.find((e) => e.event === 'error');
+    expect(error && JSON.parse(error.data)).toEqual({
+      code: 'attachment_unavailable',
+      message: 'A file from that message could not be read again, so the reply was not regenerated.',
+    });
+  });
+
+  // Review routing (Claude security F3, MEDIUM): a regenerate reads only files that can reach the model —
+  // never audio or video (their words are already in the message text) nor a file over its kind's cap.
+  it('P6 regenerate reads only the stored files that can reach the model', async () => {
+    const pdf = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n');
+    const key = (n: string) => `dashboard/${CHAT}/2026/09/27/${n}`;
+    const withFiles: T = { ...LAST_USER, text: 'Summarise these', attachments: [
+      { id: 'a', name: 'call.mp3', type: 'audio/mpeg', size: 20_000_000, key: key('a-call.mp3') },
+      { id: 'v', name: 'demo.mp4', type: 'video/mp4', size: 30_000_000, key: key('v-demo.mp4') },
+      { id: 'i', name: 'huge.png', type: 'image/png', size: 5_000_000, key: key('i-huge.png') },
+      { id: 'd', name: 'q3.pdf', type: 'application/pdf', size: pdf.length, key: key('d-q3.pdf') },
+    ] };
+    getSession.mockResolvedValue(stored([...EARLIER, withFiles, LAST_REPLY]));
+    getRawObject.mockResolvedValue(pdf);
+    await (await regenerate()).text();
+    expect(getRawObject.mock.calls.map((c) => c[0])).toEqual([key('d-q3.pdf')]);
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
+  // Review routing (Claude security F6, LOW): a stopped reply is saved through the same fail-closed
+  // outbound scan a finished one passes, not only the live redactor.
+  it('P6 a stopped reply is saved through the outbound scan', async () => {
+    const raw = 'The deploy key is AKIAIOSFODNN7EXAMPLE and that is all.';
+    runAgentTurn.mockImplementation(async (req: TurnRequest) => {
+      req.onChunk?.(raw);
+      return ok(raw, { stopped: true });
+    });
+    await (await post({ text: 'What is the deploy key?', clientMessageId: 'send-9' })).text();
+    expect(appendTurns).toHaveBeenCalledTimes(1);
+    const [, , turns] = appendTurns.mock.calls[0]! as [string, string, T[]];
+    const reply = turns.find((t) => t.role === 'assistant')!;
+    expect(reply.status).toBe('stopped');
+    expect(reply.text).not.toContain('AKIAIOSFODNN7EXAMPLE');
   });
 
   it('P6 a stop inside a file block saves only the text the reader saw', async () => {

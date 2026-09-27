@@ -125,6 +125,68 @@ describe('P6 regenerate replace and conversation meta — sessions repository', 
     expect(JSON.stringify(table.rows.get(rowKey('dashboard:1750000000802')))).toBe(before);
   });
 
+  // Review routing (Codex correctness HIGH; Jev 0.83): memory is summarised on a cadence and before
+  // a turn leaves the window (appendTurns). A replacement must not skip that summary, and must not
+  // drop an earlier turn from the window without it: the next append trims, with its summary.
+  it('P6 replacing a reply memory already summarised queues the replacement for the next summary', async () => {
+    await twoExchanges();
+    (table.rows.get(rowKey()) as Record<string, unknown>).turnsIngested = 4; // every turn summarised
+    expect(await replaceLastReply(AGENT, CHAT, { role: 'assistant', text: 'Four.', ts: 300 })).toBe(true);
+    expect((table.rows.get(rowKey()) as Record<string, unknown>).turnsIngested).toBe(3); // the replaced reply's number
+
+    (table.rows.get(rowKey()) as Record<string, unknown>).turnsIngested = 2; // not yet summarised: left alone
+    expect(await replaceLastReply(AGENT, CHAT, { role: 'assistant', text: 'Still four.', ts: 301 })).toBe(true);
+    expect((table.rows.get(rowKey()) as Record<string, unknown>).turnsIngested).toBe(2);
+  });
+
+  it('P6 replacing the last reply never drops an earlier turn from the window', async () => {
+    for (let i = 0; i < 4; i++) {
+      await appendTurns(AGENT, CHAT, [
+        { role: 'user', text: `question ${i}`, ts: 100 + i * 2 },
+        { role: 'assistant', text: 'x'.repeat(70_000), ts: 101 + i * 2 },
+      ], undefined, PERSON);
+    }
+    expect((await getSession(AGENT, CHAT))!.turns).toHaveLength(8);
+    // Over the 300 KB window budget by one longer reply (still far under DynamoDB's 400 KB item).
+    expect(await replaceLastReply(AGENT, CHAT, { role: 'assistant', text: 'y'.repeat(100_000), ts: 900 })).toBe(true);
+    const after = (await getSession(AGENT, CHAT))!;
+    expect(after.turns).toHaveLength(8);
+    expect(after.turns[0]!.text).toBe('question 0');
+    expect(after.turns.at(-1)!.text).toBe('y'.repeat(100_000));
+  });
+
+  // Review routing (Codex security HIGH, Claude security F2; council R1, unanimous): a regenerate answers
+  // the exchange the route authorized minutes earlier, so its save carries what it expects to replace —
+  // the message count and the owner — and refuses a conversation that moved on or changed hands.
+  it('P6 a replacement refuses a conversation that moved on or changed hands', async () => {
+    await twoExchanges();
+    const reply = { role: 'assistant' as const, text: 'Four.', ts: 300 };
+    expect(await replaceLastReply(AGENT, CHAT, reply, { turnsTotal: 2, owner: OWNER })).toBe(false);
+    expect(await replaceLastReply(AGENT, CHAT, reply, { turnsTotal: 4, owner: 'dashboard:user:someone-else' })).toBe(false);
+    expect(recordsOf()[3]).toMatchObject({ text: 'Five.' });
+    expect(await replaceLastReply(AGENT, CHAT, reply, { turnsTotal: 4, owner: OWNER })).toBe(true);
+    expect(recordsOf()[3]).toMatchObject({ text: 'Four.' });
+  });
+
+  // ...and a version bump from a rename or pin in between is not a reason to lose a paid answer: it
+  // re-reads and tries again while the count and the owner still match.
+  it('P6 a replacement retries a version race while the conversation is still the same', async () => {
+    await twoExchanges();
+    let raced = false;
+    send.mockImplementation((cmd: { constructor: { name: string } }) => {
+      if (!raced && cmd.constructor.name === 'TransactWriteCommand') {
+        raced = true;
+        return Promise.reject(Object.assign(new Error('race'), {
+          name: 'TransactionCanceledException', CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+        }));
+      }
+      return table.send(cmd as never);
+    });
+    expect(await replaceLastReply(AGENT, CHAT, { role: 'assistant', text: 'Four.', ts: 300 }, { turnsTotal: 4, owner: OWNER })).toBe(true);
+    expect(raced).toBe(true);
+    expect(recordsOf()[3]).toMatchObject({ text: 'Four.' });
+  });
+
   it('P6 every conversation writer keeps the title and the pin', async () => {
     await twoExchanges();
     // The row as a rename and a pin leave it (the update itself is proved on Floci).
