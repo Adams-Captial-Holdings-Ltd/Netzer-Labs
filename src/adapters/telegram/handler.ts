@@ -499,7 +499,7 @@ async function handleMessage(
     // P4 durable artifact SKIP: dashboard artifacts need a stable person-bound
     // owner, and Telegram has no such mapping; keep generated image delivery as-is.
     // P5 artifact panel SKIP: the preview panel is dashboard-only (a chat client
-    // cannot host a sandboxed preview); Telegram keeps delivering the files themselves.
+    // cannot host a sandboxed preview); Telegram keeps its photos and document links.
     for (const m of result.media ?? []) {
       // Parity gap, deliberate (see CLAUDE.md): generated documents ride the
       // same media channel but Telegram has no sendDocument helper yet, and
