@@ -9,9 +9,9 @@
 // no behaviour: nothing reads it except the agent picker, which renders it as
 // the row's descriptor and matches it when searching.
 export interface Agent { id: string; displayName: string; status: string; description?: string }
-// `error` marks an assistant turn the stream failed mid-flight. It renders in a
-// red bubble (and as a " [error: ...]" suffix when text had already streamed)
-// instead of a silent blank reply. `kb` carries knowledge-base confirmations
+// `error` marks an assistant turn the stream failed mid-flight; `failure`
+// carries its alert separately from any partial reply in `text`.
+// `kb` carries knowledge-base confirmations
 // ("Indexed report.pdf…") rendered as chips under the assistant bubble. `meta`
 // is the run footer (model · latency · cost · tools) — parity with the
 // Telegram/Slack footers, which surface the same numbers when enabled.
@@ -37,7 +37,7 @@ export interface ToolCall {
 // reply says so.
 export interface MessageAttachment { id: string; name: string; type: string; size: number }
 export interface ArtifactRef { artifactId: string; version: number; fileName: string; contentType: string; createdAt: string }
-export interface Message { role: 'user' | 'assistant'; text: string; ts: number; attachments?: MessageAttachment[]; error?: boolean; stopped?: boolean; isReply?: boolean; notSaved?: true; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; artifactRefs?: ArtifactRef[]; meta?: TurnMeta; tools?: ToolCall[] }
+export interface Message { role: 'user' | 'assistant'; text: string; ts: number; attachments?: MessageAttachment[]; error?: boolean; failure?: string; stopped?: boolean; isReply?: boolean; notSaved?: true; kb?: string[]; images?: Array<{ url: string; caption: string }>; artifacts?: Array<{ url: string; name: string }>; artifactRefs?: ArtifactRef[]; meta?: TurnMeta; tools?: ToolCall[] }
 export interface Model { label: string; id: string; contextWindow: number; family: string; isDefault: boolean }
 
 // One row of the conversation sidebar. Mirrors the shape /sessions already

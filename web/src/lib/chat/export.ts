@@ -15,6 +15,7 @@ export function conversationMarkdown({
   for (const message of messages) {
     const speaker = message.role === 'user' ? 'You' : agentName;
     const lines = [`## ${speaker}`, '', message.text];
+    if (message.failure) lines.push('', `Error: ${message.failure}`);
     const files = message.role === 'user'
       ? message.attachments?.map(({ name }) => name)
       : message.artifactRefs?.map(({ fileName }) => fileName);

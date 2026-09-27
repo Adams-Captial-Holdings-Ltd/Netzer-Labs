@@ -120,6 +120,16 @@ const MD_QUERY = '(min-width: 768px)';
  */
 const TEXTAREA_MAX = 'max-h-[min(9.5rem,30vh)] md:max-h-[min(15rem,45vh)]';
 
+function ImageThumbnail({ file }: { file: File }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+  return url ? <img src={url} alt={file.name} class="size-8 shrink-0 rounded object-cover" /> : null;
+}
+
 /**
  * The turn's one primary control, in both of its states. Same height, same
  * fill, same radius — what changes is the glyph and, deliberately, the width.
@@ -349,7 +359,9 @@ export function Composer({
                 <div class="flex min-w-0 items-center gap-1.5">
                 {/* `bg-bg` rather than `bg-surface`: the card is surface, so a
                     surface chip on it would have no edge of its own. */}
-                <Paperclip size={12} class="shrink-0 text-muted" aria-hidden="true" />
+                {f.file.type.startsWith('image/')
+                  ? <ImageThumbnail file={f.file} />
+                  : <Paperclip size={12} class="shrink-0 text-muted" aria-hidden="true" />}
                 {/* `min-w-0` or a long filename refuses to shrink and pushes
                     its own remove button off the chip. */}
                 <span class="min-w-0 truncate">{f.file.name}</span>

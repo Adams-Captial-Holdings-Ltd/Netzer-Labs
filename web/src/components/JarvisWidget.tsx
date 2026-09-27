@@ -69,7 +69,7 @@ export function JarvisWidget(): preact.JSX.Element | null {
 
   const collapsed = sidebarCollapsed.value;
   const chatRoute = location.startsWith('/chat');
-  const [chatSidebarAnchor, setChatSidebarAnchor] = useState<{ left: number; top: number } | null>(null);
+  const [chatSidebarAnchor, setChatSidebarAnchor] = useState<{ left: number; top: number; right: number } | null>(null);
   useLayoutEffect(() => {
     if (!chatRoute || window.innerWidth < 1024) {
       setChatSidebarAnchor(null);
@@ -98,6 +98,7 @@ export function JarvisWidget(): preact.JSX.Element | null {
     setChatSidebarAnchor({
       left: rail.left + (rail.width - HALO) / 2,
       top: centerY - HALO / 2,
+      right: rail.right,
     });
   }, [chatRoute, collapsed, viewportTick]);
 
@@ -111,6 +112,7 @@ export function JarvisWidget(): preact.JSX.Element | null {
   // live exchange. The container is pointer-events-none, so hover lives on the
   // interactive elements with a short grace timer to bridge the gap between them.
   const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   function hoverIn() {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -192,20 +194,24 @@ export function JarvisWidget(): preact.JSX.Element | null {
         y: Math.max(4, Math.min(window.innerHeight - HALO - 4, rawPos.y)),
       }
     : null;
+  const inChatNavigation = !pos && chatRoute && window.innerWidth >= 1024 && chatSidebarAnchor !== null;
 
   // Float the caption off the orb box so it never overlaps the glow ring and never
   // runs off-screen: above by default, flipped below when the orb is near the top;
   // left-aligned by default, right-aligned when the orb is near the right edge.
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
-  const effectivePos = pos ?? (chatRoute && window.innerWidth >= 1024 && chatSidebarAnchor
-    ? { x: chatSidebarAnchor.left, y: chatSidebarAnchor.top }
+  const effectivePos = pos ?? (inChatNavigation
+    ? { x: chatSidebarAnchor!.left, y: chatSidebarAnchor!.top }
     : null);
   const captionBelow = !!effectivePos && effectivePos.y < 170;
   const captionRight = !!effectivePos && effectivePos.x > vw - 300;
-  const captionPos = {
-    [captionBelow ? 'top' : 'bottom']: 'calc(100% + 8px)',
-    [captionRight ? 'right' : 'left']: '0',
-  } as Record<string, string>;
+  const captionPos = inChatNavigation
+    ? { left: `${chatSidebarAnchor!.right - chatSidebarAnchor!.left + 8}px`, top: '50%', transform: 'translateY(-50%)' }
+    : {
+        [captionBelow ? 'top' : 'bottom']: 'calc(100% + 8px)',
+        [captionRight ? 'right' : 'left']: '0',
+      } as Record<string, string>;
+  const showHints = !inChatNavigation || hovered || focused;
 
   // ── Drag-to-move (coexists with click-to-talk and push-to-talk) ──────
   function onOrbPointerDown(e: PointerEvent) {
@@ -290,6 +296,8 @@ export function JarvisWidget(): preact.JSX.Element | null {
         onLostPointerCapture={onOrbPointerCancel}
         onMouseEnter={hoverIn}
         onMouseLeave={hoverOut}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
       >
         {icon}
       </button>
@@ -309,7 +317,7 @@ export function JarvisWidget(): preact.JSX.Element | null {
         <X class="w-3 h-3" />
       </button>
 
-      {hovered && state === 'idle' && !caption && (
+      {hovered && showHints && state === 'idle' && !caption && (
         <div
           data-testid="jarvis-suggestions"
           class="jarvis-suggestions"
@@ -374,13 +382,13 @@ export function JarvisWidget(): preact.JSX.Element | null {
         </div>
       )}
 
-      {perm === 'denied' && (
+      {showHints && perm === 'denied' && (
         <div class="jarvis-caption jarvis-caption-float text-caption" style={captionPos}>Microphone blocked. Allow it in your browser, or use the /jarvis text box.</div>
       )}
-      {perm === 'unavailable' && (
+      {showHints && perm === 'unavailable' && (
         <div class="jarvis-caption jarvis-caption-float text-caption" style={captionPos}>Microphone needs HTTPS. Use the /jarvis text box instead.</div>
       )}
-      {voiceOff && (
+      {showHints && voiceOff && (
         <div class="jarvis-caption jarvis-caption-float text-caption" style={captionPos}>Voice is disabled right now. Type to Jarvis on the /jarvis tab.</div>
       )}
 

@@ -504,12 +504,9 @@ export function Chat() {
       );
 
       if (outcome.errorText) {
-        // Mid-stream failure. If text had already streamed, keep it and append a
-        // clear error suffix; otherwise show the error on its own. Either way it
-        // renders in a red bubble, never as a silent blank reply.
+        // Keep any streamed reply separate from the failure notice.
         const msg = friendlyTurnError(outcome.errorText, outcome.errorCode);
-        const partial = (!outcome.isReply && outcome.text) ? `${outcome.text}\n\n${msg}` : msg;
-        setMessages((prev) => [...prev, { role: 'assistant', text: partial, ts: Date.now() / 1000, error: true }]);
+        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, failure: msg, ts: Date.now() / 1000, error: true }]);
         setStreamText('');
         streamTextRef.current = '';
         setToolStatus('');
@@ -569,7 +566,7 @@ export function Chat() {
       // long or token-like collapses to the generic line.
       console.error('Chat: send failed', e);
       const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', (e as { code?: string } | null)?.code);
-      setMessages((prev) => [...prev, { role: 'assistant', text: msg, ts: Date.now() / 1000, error: true }]);
+      setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current, failure: msg, ts: Date.now() / 1000, error: true }]);
     }
     setStreamText('');
     streamTextRef.current = '';
@@ -860,7 +857,7 @@ export function Chat() {
         <ConfirmDialog
           open={pendingDelete !== null}
           title="Delete chat?"
-          message="This will permanently delete this chat and its messages. This action cannot be undone."
+          message={`This will permanently delete "${pendingDelete ? conversationTitle(pendingDelete) : ''}" and its messages. This action cannot be undone.`}
           confirmPhrase="DELETE"
           confirmLabel={deleting ? 'Deleting…' : 'Delete'}
           danger

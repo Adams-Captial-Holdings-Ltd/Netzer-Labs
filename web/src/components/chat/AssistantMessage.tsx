@@ -236,22 +236,21 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
           no tool array, and the footer's count stands in for it. */}
       {tools.length > 0 && <ToolCallsSection tools={tools} />}
 
-      {message.error ? (
-        // The one assistant turn that IS boxed. A failure has to be visibly a
-        // failure and not mistakable for a short answer, so it keeps the
-        // donor's bordered danger panel — and stays a `<pre>`, because the text
-        // is a sanitized error string, never markdown.
-        <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">
+      {message.text && (!message.error || message.failure) && (
+        // DOMPurify runs inside renderMarkdown, last, immediately before this
+        // is handed to dangerouslySetInnerHTML (web/src/lib/chat/markdown.ts).
+        <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
+      )}
+      {message.error && (
+        // Only the failure sentence belongs in the alert; any partial answer
+        // above uses the same markdown treatment as a complete reply.
+        <div role="alert" class={`chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3 ${message.text && message.failure ? 'mt-3' : ''}`}>
           <pre class="whitespace-pre-wrap break-words font-sans text-body-sm">
-            {message.text}
+            {message.failure ?? message.text}
           </pre>
           {canRetry ? <Button variant="secondary" size="sm" onClick={onRetry} class="mt-2">Try again</Button>
             : needsAttachments ? <p class="mt-2 text-body-sm">Please attach the files again.</p> : null}
         </div>
-      ) : (
-        // DOMPurify runs inside renderMarkdown, last, immediately before this
-        // is handed to dangerouslySetInnerHTML (web/src/lib/chat/markdown.ts).
-        <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
       )}
 
       <MessageAttachments message={message} agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
