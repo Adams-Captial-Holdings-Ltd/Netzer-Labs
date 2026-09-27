@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-27
-as_of_commit: 25f141cc26d4e585be43d6fe63443bd6ae97c467
+as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -123,7 +123,7 @@ layer is used.
 
 ## 2. What netzar-chat does today
 
-The shipped Chat tab uses `web/src/pages/Chat.tsx` as an 880-line state and
+The shipped Chat tab uses `web/src/pages/Chat.tsx` as an 877-line state and
 composition shell. Transport and helpers live in the thirteen modules under
 `web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
 19 top-level files under `web/src/components/chat/` — 17 component files plus
@@ -363,8 +363,10 @@ backend.
 
 **Conversation controls, regenerate and accessibility (P6, roadmap step 8):**
 
-- **Try again and Regenerate.** A failed reply is an alert; the LAST one offers
-  Try again, which re-sends its text as a new turn with a new message id (a
+- **Try again and Regenerate.** A failed reply is an alert (text that arrived
+  before the failure stays above it as an ordinary reply, and in the export);
+  the LAST one offers Try again, which re-sends its text as a new turn with a
+  new message id (a
   failed turn stores nothing); one whose message carried files asks for them
   again instead. The last saved reply offers Regenerate: `POST
   /api/test-turn/stream` with `regenerate: true` (no text, no files) answers the
@@ -397,7 +399,9 @@ backend.
   past the newest fifty, and takes an optional `q` (at most 100 characters, a
   plain case-insensitive match on the title and the first message). The rail and
   the drawer have Rename and Pin beside Delete, a Pinned group and a debounced
-  server search.
+  server search; the rename field opens with its title selected and shows its
+  own Save title and Cancel rename, and the delete confirmation names the
+  conversation it deletes.
 - **The page.** One-click New chat (the "type NEW CHAT" confirmation is gone); a
   loading status while a conversation opens and load-failure alerts with Try
   again for the transcript and the list, a slower load never replacing a newer
@@ -406,9 +410,11 @@ backend.
   and closes at the lg breakpoint; an `h1` at every width; bound `aria-expanded`;
   chat-scoped contrast fixes (the global tokens are unchanged); tables that
   scroll inside the reply; the end of a finished or stopped reply left in view
-  above the composer (reduced motion included); the voice orb's default lifted
-  above the composer on the chat route (owner decision 61; a dragged position
-  still wins).
+  above the composer (reduced motion included); the voice orb's default moved
+  off the chat on the chat route — at 1024 px and up into the house
+  navigation's empty lower band, its hint beside it on hover or focus and never
+  over the navigation, below that lifted above the composer (owner decision 61;
+  a dragged position still wins); a staged image shows its thumbnail.
 - **Drafts, shortcuts and downloads.** Unsent drafts per conversation in the
   tab's sessionStorage, restored across a reload and cleared on send, keyed —
   with the remembered conversation — by the signed-in identity; the
