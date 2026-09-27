@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-27
-as_of_commit: 9905de318972d4e4be3f60aac3347d0eb4b59190
+as_of_commit: 25f141cc26d4e585be43d6fe63443bd6ae97c467
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -33,6 +33,13 @@ implemented_by:
   - web/src/components/chat/ArtifactPanel.tsx
   - web/src/lib/chat/artifacts.ts
   - web/index.html
+  - web/src/components/chat/ConversationSidebar.tsx
+  - web/src/components/chat/useChatScroll.ts
+  - web/src/lib/chat/export.ts
+  - web/src/lib/chat/drafts.ts
+  - web/src/lib/chat/model-label.ts
+  - web/src/lib/api.ts
+  - web/src/components/JarvisWidget.tsx
   - src/lib/chat/artifacts-repo.ts
   - src/lib/chat/artifact-grammar.ts
   - src/lib/chat/artifact-preview.ts
@@ -87,6 +94,12 @@ tested_by:
   - src/lib/chat/artifact-preview.p5.test.ts
   - src/lib/chat/artifacts-repo.p5.test.ts
   - tests/e2e/chat/artifacts.spec.ts
+  - src/adapters/dashboard/chat-regenerate.p6.test.ts
+  - src/adapters/dashboard/sessions-meta.p6.test.ts
+  - src/lib/state/sessions-repo.p6.test.ts
+  - src/lib/state/sessions-repo.p6.integration.test.ts
+  - src/adapters/dashboard/chat-ux-p6.test.ts
+  - tests/e2e/chat/conversation-ux.spec.ts
 approved_work:
   - docs/features/netzar-chat/plan.md
 ---
@@ -110,8 +123,8 @@ layer is used.
 
 ## 2. What netzar-chat does today
 
-The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 682-line state and
-composition shell. Transport and helpers live in the ten modules under
+The shipped Chat tab uses `web/src/pages/Chat.tsx` as an 880-line state and
+composition shell. Transport and helpers live in the thirteen modules under
 `web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
 19 top-level files under `web/src/components/chat/` — 17 component files plus
 the `conversation-groups.ts` helper and the `useChatScroll.ts` hook — alongside
@@ -348,6 +361,67 @@ backend.
   from a preview); model capabilities (WI-5.4 / ART-10, waiting for
   `bedrock-all-models`; carried to P7).
 
+**Conversation controls, regenerate and accessibility (P6, roadmap step 8):**
+
+- **Try again and Regenerate.** A failed reply is an alert; the LAST one offers
+  Try again, which re-sends its text as a new turn with a new message id (a
+  failed turn stores nothing); one whose message carried files asks for them
+  again instead. The last saved reply offers Regenerate: `POST
+  /api/test-turn/stream` with `regenerate: true` (no text, no files) answers the
+  stored last message again and replaces that reply in place —
+  `replaceLastReply`, one version-fenced transaction over the window row and the
+  reply's own record, the same message number, `turnsTotal` unchanged, nothing
+  trimmed (the next append trims, with its memory summary; a reply memory had
+  already summarised is queued again). The save names the message count and the
+  owner the route authorized, retries a version race while both still match, and
+  is refused if the conversation moved on or changed hands. Only stored images
+  and documents under their caps are re-read from the raw bucket (nothing
+  archived, transcribed or ingested again; audio and video contribute their
+  stored text, and a video's keyframes are not replayed); the media kill switch
+  stops it, and a file that cannot be read again refuses it as
+  `attachment_unavailable` before any model call. A blocked, refused or unsaved
+  regenerate leaves the old reply, and the page says why. Owner only (a
+  stranger's or missing conversation: one 404), metered and idempotent like a
+  send.
+- **The stopped text.** Both stop paths — during the model call, and a stop that
+  interrupts a tool round — save only what the reader saw (the guarded writer's
+  visible text, so a withheld `:::artifact` block is never saved), after the same
+  fail-closed outbound scan a finished reply passes.
+- **Rename, pin and search.** `PATCH /api/sessions {agentId, chatId, title?,
+  pinned?}` is the owner's only (anyone else, an admin included, gets the
+  missing-conversation 404): one conditional update that never creates a row and
+  bumps the version. A title is refused if it holds a control, format, surrogate
+  or separator character (the artifact title rule), then trimmed and capped at
+  120; an empty title clears it. Every conversation writer carries the title and
+  the pin forward. `GET /api/sessions` lists pinned conversations first, even
+  past the newest fifty, and takes an optional `q` (at most 100 characters, a
+  plain case-insensitive match on the title and the first message). The rail and
+  the drawer have Rename and Pin beside Delete, a Pinned group and a debounced
+  server search.
+- **The page.** One-click New chat (the "type NEW CHAT" confirmation is gone); a
+  loading status while a conversation opens and load-failure alerts with Try
+  again for the transcript and the list, a slower load never replacing a newer
+  one; one polite announcer ("Reply finished." / "Reply stopped."); the phone
+  drawer traps focus with the page behind it inert, both set in layout effects,
+  and closes at the lg breakpoint; an `h1` at every width; bound `aria-expanded`;
+  chat-scoped contrast fixes (the global tokens are unchanged); tables that
+  scroll inside the reply; the end of a finished or stopped reply left in view
+  above the composer (reduced motion included); the voice orb's default lifted
+  above the composer on the chat route (owner decision 61; a dragged position
+  still wins).
+- **Drafts, shortcuts and downloads.** Unsent drafts per conversation in the
+  tab's sessionStorage, restored across a reload and cleared on send, keyed —
+  with the remembered conversation — by the signed-in identity; the
+  not-yet-known identity's slot is wiped at every sign-in and sign-out. Ctrl/Cmd
+  + Shift + O starts a new chat, Shift + Escape focuses the message box, Ctrl/Cmd
+  + / focuses the search (none of them while an artifact sheet is open on a
+  phone). A code block's Download code names the file by its language
+  (`snippet.<ext>`); Export chat downloads the conversation as Markdown built in
+  the page (no links or keys). The model picker's trigger shows the family and
+  the context size (no capability badges, decision 36).
+- **Not yet:** edit and branch (P6b, excluded from this step); a video's
+  keyframes on a regenerate (carried).
+
 ## 3. Current status and current source commit
 
 The port merged into `development` as PR #129 (merge
@@ -359,14 +433,17 @@ P1 (roadmap step 3) merged into `development` as PR #189 (merge
 `e035f97`, 2026-09-23) and P2 (roadmap step 4) as PR #190 (merge `700821f`,
 2026-09-23); neither is on an environment branch yet (owner decision 18:
 promotion is separate work). P3 (roadmap step 5) merged as PR #191 (merge
-`6c49661`, 2026-09-24), on no environment branch either, and P4 (roadmap step
-6) as PR #192 (merge `e2cd11e`, 2026-09-26), on none either. P5 (roadmap step
-7) is the change this README was last updated with; [HANDOFF](HANDOFF.md) and
-the Gauntlet state file hold its pull request, because a file cannot state the
-commit it is inside. The P5 paragraphs and rows, and the counts in section 2,
-were checked at the frontmatter's commit; the P4 statements were last checked
-at `b1e8bdd` and the P1-P3 ones at `97f8e79`, re-derived here only where a
-later step changed their code.
+`6c49661`, 2026-09-24), on no environment branch either, P4 (roadmap step 6)
+as PR #192 (merge `e2cd11e`, 2026-09-26) and P5 (roadmap step 7) as PR #193
+(merge `ed8a3dc`, 2026-09-27), on none either. P6 (roadmap step 8) is the
+change this README was last updated with; [HANDOFF](HANDOFF.md) and the
+Gauntlet state file hold its pull request, because a file cannot state the
+commit it is inside. The P6 paragraphs and rows, and the counts in section 2,
+were checked at the frontmatter's commit; the P5 statements were last checked
+at `9905de3`, the P4 ones at `b1e8bdd` and the P1-P3 ones at `97f8e79`,
+re-derived here only where a later step changed their code (P6 changed the
+remembered conversation's key, the new-chat control and the rule that a taken
+message number is never overwritten).
 
 ## 4. Source of truth
 
@@ -396,13 +473,24 @@ later step changed their code.
 | Attachments (server) | `src/adapters/dashboard/handler.ts` (`/chat/uploads`, the send's preflight, `/sessions/attachment`), `src/lib/chat/attachments.ts`, `src/lib/chat/zip-check.ts`, `src/lib/media/process.ts`, `src/lib/vectors/store.ts`, `deleteSession` in `src/lib/state/sessions-repo.ts`, `src/adapters/slack/media.ts` | The format table, the signed upload link, the `HeadObject` preflight, the media rules and the knowledge opt-in, the owner's download link, the file cascade on delete, Slack's ceiling |
 | Artifacts (server) | `src/lib/chat/artifacts-repo.ts`, `src/lib/chat/artifact-grammar.ts` + `src/lib/chat/vendor/`, `src/lib/tools/{document-generation,document-draft,artifact-read,nova-canvas,privacy}-tools.ts`, `src/lib/documents/pptx.ts`, the `/artifacts*` routes and `artifact_ref` in `src/adapters/dashboard/handler.ts`, `deleteSession` in `src/lib/state/sessions-repo.ts`, `infra/lib/iam-stack.ts` | Versioned CURATED storage and its lock, the grammar, the tools, the owner routes, version-aware erasure and its IAM grant |
 | Artifacts (web) | `web/src/components/chat/ArtifactCard.tsx`, `web/src/components/chat/ArtifactPanel.tsx`, `web/src/lib/chat/artifacts.ts`, `artifact_ref` in `web/src/lib/chat/stream.ts`, `transcriptToMessages` in `web/src/lib/chat/helpers.ts`, `web/index.html` (the page's frame policy); `GET /artifacts/content` in `src/adapters/dashboard/handler.ts` and `src/lib/chat/artifact-preview.ts` on the server | The card, the panel and its per-type previews, the sandbox document and its policy, the deck outline, download naming |
+| Conversation controls and regenerate (server, P6) | `src/adapters/dashboard/handler.ts` (the stream route's `regenerate`, `replayStoredAttachments`, `saveRegeneratedReply`, the stopped paths, `PATCH /sessions`, the list's `q` and pins), `replaceLastReply` and `setConversationMeta` in `src/lib/state/sessions-repo.ts`, `buildMediaBlocks` in `src/lib/media/process.ts`, `AttachmentUnavailableError` in `src/agent/turn-errors.ts`, `scanOutboundReply` in `src/agent/agent-loop.ts`, `UNSAFE_ARTIFACT_TITLE_PATTERN` in `src/lib/chat/artifact-grammar.ts` | Regenerate in place and its refusals, the stopped text through the outbound scan, rename, pin, search |
+| Conversation controls and accessibility (web, P6) | `web/src/pages/Chat.tsx`, `web/src/components/chat/{ConversationSidebar,MessagesView,AssistantMessage,ChatHeader,ModelMenu,CommandMenu,Composer}.tsx`, `web/src/components/chat/useChatScroll.ts`, `web/src/lib/chat/{export,drafts,model-label,code-block,markdown}.ts`, `web/src/lib/api.ts` (the identity slots wiped at sign-in and sign-out), `web/src/components/JarvisWidget.tsx`, `web/dev/` (the mock mirrors the new routes) | Try again, Regenerate, rename, pin, search, load states, the announcer, the drawer, drafts, shortcuts, downloads, the model pill, the orb |
 | Attachments (web) | `web/src/lib/chat/attachment-rules.ts`, `web/src/lib/chat/uploads.ts`, `web/src/components/chat/Composer.tsx`, `web/src/components/chat/UserMessage.tsx`, `web/src/pages/Chat.tsx` | The same rules in the browser, upload on attach with progress, the chips and their knowledge switch, the Download buttons |
 
 ## 6. Current business/state rules
 
 - Conversation ids are `dashboard:<epoch-ms>`; the sidebar filters on that
   prefix and the server's `safeDashboardChatId` depends on it.
-- The active conversation is remembered in `sessionStorage['cce_chat_active']`.
+- The active conversation is remembered per signed-in identity in
+  `sessionStorage['cce_chat_active:<identity>']` and an unsent draft in
+  `sessionStorage['cce_chat_draft:<identity>/<agentId>/<chatId>']` (P6); before
+  the identity is known both use the slot `unknown`, which sign-in and sign-out
+  wipe, together with the unscoped `cce_chat_active` the page also keeps.
+- Regenerate replaces only the LAST reply, in place, and only the one it
+  answered (the authorized message count and owner); that replacement is the one
+  write that may overwrite a taken message number (P6). Rename and pin are the
+  owner's only and never create a row; every conversation writer carries `title`
+  and `pinned`.
 - Switching agents mints a fresh chatId (guardrail false-positive fix).
 - Delete uses a synchronous ref guard against double-click plus an
   in-state-updater snapshot for rollback (documented bug fixes — preserved
@@ -484,6 +572,10 @@ later step changed their code.
 | WebRTC is not fully blocked in an HTML preview: the guard removes it from the preview's own window, but a frame the preview creates (or a `blob:` document it navigates to) gets it back, and no browser policy can block WebRTC today (CSP `webrtc` is not recognised). Every other exit — fetch, XHR, WebSocket, beacon, remote images, frames, forms, popups, top navigation, and any style or font not from the two library paths — is blocked in every such frame | measured in the P5 session log (the sandbox probes); `web/src/lib/chat/artifacts.ts` | none open — carried in the P5 session log; revisit when browsers support a WebRTC policy |
 | P5 is proven locally only: the browser suite runs against the dev-only mock; the deployed page's frame policy, the content route on real S3 and a real PDF viewer have not run on staging | `tests/e2e/chat/artifacts.spec.ts` against `web/dev/`; the route tests in `src/adapters/dashboard/artifacts.p5.test.ts` | after promotion (decision 18) |
 | Chat REPLY markdown (not the artifact preview) still lets a reply load a remote image in the dashboard page | found by the P5 React review (outside P5's range, pre-existing): `renderMarkdown` uses DOMPurify's default profile | carried in the P5 session log (A213) for the owner |
+| P6 is proven locally only: the browser suite runs against the dev-only mock; a regenerate against real Bedrock and S3, the rename race on real DynamoDB (proved on Floci) and the deployed page have not run on staging | `tests/e2e/chat/conversation-ux.spec.ts` against `web/dev/`; `src/lib/state/sessions-repo.p6.integration.test.ts` on Floci | after promotion (decision 18) |
+| A regenerated question that carried a video is answered from its stored transcript without the video's keyframes | `replayStoredAttachments` in `src/adapters/dashboard/handler.ts` | carried in the P6 session log (Jev 0.86: extracting keyframes from raw bytes needs processVideo's probe step) |
+| The list search term travels in the GET URL, so it reaches the load balancer's access logs | `router.get('/sessions')` in `src/adapters/dashboard/handler.ts` | carried in the P6 session log — a POST search if those logs ever leave the account |
+| An admin's list shows every member's pinned conversations first, and the audited list override does not record `q` | `visibleConversations` in `src/adapters/dashboard/handler.ts`; the P6 security review, INFO-1 | carried in the P6 session log (decision 1: an admin sees every conversation, audited) |
 | P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
 | A reply still generating when its chat is deleted re-creates the chat when it saves a file (visible and deletable); a crash mid-save leaves the chat's lock row, so delete stays "busy" until an operator clears it | the P4 Claude security review, M1 and M3 | hardening (P7), owner decision 59 |
 | `pptxgenjs` pulls `image-size` 1.2.1 with two HIGH advisories (a crafted image can hang it); the code never reaches it — slides carry text only | `npm audit`; the P4 session log, A202 | owner decision 56; re-check before slides carry images |
@@ -506,9 +598,12 @@ src/agent/agent-loop.p4.test.ts src/lib/documents/pptx.p4.test.ts
 src/lib/state/sessions-repo.p4.test.ts src/lib/tools/artifact-tools.p4.test.ts
 src/lib/tools/privacy-tools.p4.test.ts infra/lib/iam-stack.p4.test.ts
 src/adapters/dashboard/artifacts.p5.test.ts src/adapters/dashboard/chat-artifacts-p5.test.ts
-src/lib/chat/artifact-preview.p5.test.ts src/lib/chat/artifacts-repo.p5.test.ts`, the Floci
-artifact test `node --env-file=.env node_modules/vitest/vitest.mjs run --config
-vitest.integration.config.ts src/lib/chat/artifacts-repo.p4.integration.test.ts`, plus
+src/lib/chat/artifact-preview.p5.test.ts src/lib/chat/artifacts-repo.p5.test.ts
+src/adapters/dashboard/chat-regenerate.p6.test.ts src/adapters/dashboard/sessions-meta.p6.test.ts
+src/lib/state/sessions-repo.p6.test.ts src/adapters/dashboard/chat-ux-p6.test.ts`, the Floci
+tests `node --env-file=.env node_modules/vitest/vitest.mjs run --config
+vitest.integration.config.ts src/lib/chat/artifacts-repo.p4.integration.test.ts
+src/lib/state/sessions-repo.p6.integration.test.ts`, plus
 `npm --prefix web run typecheck && npm --prefix web run build` and the browser
 suite against the dev-only chat mock, `npm run e2e:chat`.
 
