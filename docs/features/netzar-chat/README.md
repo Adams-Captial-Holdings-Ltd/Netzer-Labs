@@ -328,8 +328,9 @@ backend.
   cannot reach the page, its storage or its token — under its own
   Content-Security-Policy that loads scripts only inline or from
   `cdn.jsdelivr.net/npm/` and `cdnjs.cloudflare.com/ajax/libs/` (owner decision
-  4), styles and fonts only inline or from those same two paths, pictures and
-  media only as `data:` or `blob:`, and blocks every other request; Mermaid is
+  4), styles only inline or from those same two paths, fonts only as `data:` or
+  from them, pictures and media only as `data:` or `blob:`, and blocks every other
+  request; Mermaid is
   one pinned jsDelivr build with
   integrity. SVG is shown only as an image; pictures and PDFs come from the
   bytes as `blob:` URLs, revoked when the panel closes or switches version;
