@@ -362,7 +362,8 @@ describe('P6 regenerate and stopped text — stream route', () => {
       modelOverride: SONNET,
     });
 
-    // A spend refusal reads exactly as it does for a send of the same conversation.
+    // A spend refusal reads exactly as it does for a send of the same conversation, and saves nothing.
+    replaceLastReply.mockClear();
     runAgentTurn.mockReset();
     runAgentTurn.mockRejectedValue(new CostCapExceededError(10, 10.5));
     const regenerated = parseSse(await (await regenerate({ clientMessageId: 'regen-2' })).text());
