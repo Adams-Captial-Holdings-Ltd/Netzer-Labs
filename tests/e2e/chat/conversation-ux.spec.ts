@@ -950,3 +950,70 @@ test('P6 the voice orb default covers no part of the chat', async ({ page }) => 
     }
   }
 });
+
+// Look critic round 3 (S26): the delete confirmation names the conversation it will delete (the donor bolds
+// it); the list can hold several near-identical titles.
+test('P6 the delete confirmation names the conversation it deletes', async ({ page }) => {
+  const title = 'Kill-switch audit rows from yesterday'; // mock row 4
+  await openChat(page);
+  await row(page, title).hover();
+  await page.getByRole('button', { name: `Delete chat: ${title}` }).filter({ visible: true }).click();
+  const dialog = page.getByRole('dialog').filter({ hasText: /Delete chat\?/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(title);
+  await page.keyboard.press('Escape');
+});
+
+// Look critic round 3 (S10): a staged image shows a thumbnail, so a person can see which picture they attached.
+test('P6 a staged image shows its thumbnail', async ({ page }) => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVR4nGNkYPj/n4GBgYGJgYGBgQEAHgQCAWkK3lUAAAAASUVORK5CYII=', 'base64');
+  await newChat(page);
+  await page.locator('input[type="file"]').setInputFiles({ name: 'chart.png', mimeType: 'image/png', buffer: png });
+  const thumbnail = page.getByRole('list', { name: 'Attached files' }).getByRole('img', { name: /chart\.png/ });
+  await expect(thumbnail).toBeVisible();
+  expect(await thumbnail.getAttribute('src')).toMatch(/^blob:/);
+});
+
+// Look critic round 3 (S07): a reply that fails after some text keeps that text as the reply; the alert
+// carries only the failure (and Try again), so a reader can tell the answer from the error.
+test('P6 a reply that fails after some text keeps the text apart from the error', async ({ page }) => {
+  await newChat(page);
+  await composerOf(page).fill('/fixture error-partial');
+  await sendOf(page).click();
+  const alert = page.getByRole('alert');
+  await expect(alert).toHaveCount(1);
+  await expect(alert).not.toContainText('The report covers three regions');
+  await expect(replies(page).last()).toContainText('The report covers three regions');
+});
+
+// Look critic round 3 (must-fix): in the navigation's lower band the orb's hint must not cover the navigation,
+// shown or hovered.
+test('P6 the voice orb hint never covers the navigation', async ({ page }) => {
+  await page.route('**/api/jarvis/manifest', (route) => route.fulfill({
+    json: { generatedAt: '2026-09-27T00:00:00.000Z', routes: [], resources: [], jarvisEnabled: true, voiceEnabled: false },
+  }));
+  await page.addInitScript(() => localStorage.removeItem('cce_jarvis_widget_pos'));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await newChat(page);
+  const orb = page.getByRole('button', { name: /^Jarvis \(/ });
+  await expect(orb).toBeVisible();
+  const hit = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  const covered = async () => {
+    const hints = page.locator('.jarvis-caption');
+    const links = page.locator('nav[aria-label="Main"] a');
+    for (let i = 0; i < await hints.count(); i++) {
+      const h = await hints.nth(i).boundingBox();
+      if (!h) continue;
+      for (let j = 0; j < await links.count(); j++) {
+        const l = await links.nth(j).boundingBox();
+        if (l && hit(h, l)) return `${await hints.nth(i).innerText()} covers ${await links.nth(j).innerText()}`;
+      }
+    }
+    return '';
+  };
+  expect(await covered()).toBe('');
+  await orb.hover();
+  await page.waitForTimeout(300);
+  expect(await covered()).toBe('');
+});
