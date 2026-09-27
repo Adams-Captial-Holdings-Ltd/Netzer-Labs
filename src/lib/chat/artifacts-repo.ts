@@ -100,7 +100,7 @@ async function assertOwner({ agentId, chatId, ownerId }: ArtifactScope): Promise
   if (!agentId || !chatId.startsWith('dashboard:') || !ownerId?.startsWith('dashboard:user:')) {
     throw new Error('Artifact access requires a stable dashboard conversation owner');
   }
-  const session = await getSession(agentId, chatId);
+  const session = await getSession(agentId, chatId, { consistentRead: true });
   if (!session || session.surface !== 'dashboard' || session.userId !== ownerId || session.ttl !== undefined) {
     throw new Error('Artifact conversation is missing, ephemeral, or owned by another user');
   }
@@ -213,8 +213,10 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
   const releaseLock = await acquireConversationChildLock(args.agentId, args.chatId);
   try {
   // The parent can be deleted while content is being scanned, so ownership is
-  // checked only after acquiring the same lock used by deleteSession.
-  const session = await getSession(args.agentId, args.chatId);
+  // checked only after acquiring the same lock used by deleteSession. Both this
+  // read and assertOwner's below must be strongly consistent: a GetItem without
+  // ConsistentRead can still return a row a just-finished delete removed.
+  const session = await getSession(args.agentId, args.chatId, { consistentRead: true });
   const draftSource = args.source && typeof args.source === 'object' &&
     (args.source as { kind?: unknown }).kind === 'draft'
     ? args.source as { kind: 'draft'; draftId?: unknown; revision?: unknown }

@@ -407,11 +407,13 @@ function capRecordContent(t: Turn): {
 export async function getSession(
   agentId: string,
   chatId: string,
+  opts?: { consistentRead?: boolean },
 ): Promise<Session | null> {
   const out = await ddb().send(
     new GetCommand({
       TableName: TABLE,
       Key: { PK: pk(agentId), SK: sk(chatId) },
+      ...(opts?.consistentRead ? { ConsistentRead: true } : {}),
     }),
   );
   if (!out.Item) return null;
