@@ -2,8 +2,8 @@
 feature: netzar-chat
 document_role: index
 status: current
-observed_at: 2026-09-27
-as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
+observed_at: 2026-09-28
+as_of_commit: 0583a63d3354eb33287e5386b469702afe1db41b
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -51,6 +51,15 @@ implemented_by:
   - src/lib/tools/nova-canvas-tools.ts
   - src/lib/tools/privacy-tools.ts
   - infra/lib/iam-stack.ts
+  - src/adapters/slack/handler.ts
+  - src/adapters/telegram/handler.ts
+  - src/lib/tools/registry.ts
+  - web/src/components/InfoTooltip.tsx
+  - web/src/components/chat/ChatHeader.tsx
+  - web/src/lib/chat/helpers.ts
+  - web/src/lib/chat/librechat-client-shim.tsx
+  - web/src/lib/chat/types.ts
+  - web/src/pages/AgentDetail.tsx
 tested_by:
   - src/adapters/dashboard/chat-stream.test.ts
   - src/adapters/dashboard/chat-stream-p2.test.ts
@@ -117,13 +126,18 @@ Source code is the ultimate truth for present behavior.
 
 Donor: **danny-avila/LibreChat, MIT license, pinned at commit
 `6d499ba3ce17f906a7762429c61018f230ecd64e` (main, 2026-08-25).** Ported files
-carry a header comment naming this SHA and the donor path. LibreChat is the
-visual/structural donor only; no LibreChat runtime code, state library, or data
-layer is used.
+carry a header comment naming this SHA and the donor path. LibreChat's state
+library and data layer are not used. Some LibreChat code does run: the files
+under `web/src/components/chat/lc/` are ported from LibreChat, five of them as
+zero-edit copies (each marked "VERBATIM COPY" in its header, for example
+`HeaderLabel.tsx` and `useTimeTick.ts`), and the server's artifact update parser,
+`src/lib/chat/vendor/librechat-update.ts`, is vendored unmodified from
+LibreChat's fix commit `fe351ee171bf545a499b9464878864ff3cf16992` (source,
+license and copyright in `src/lib/chat/vendor/NOTICE.md`).
 
 ## 2. What netzar-chat does today
 
-The shipped Chat tab uses `web/src/pages/Chat.tsx` as an 877-line state and
+The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 906-line state and
 composition shell. Transport and helpers live in the thirteen modules under
 `web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
 19 top-level files under `web/src/components/chat/` — 17 component files plus
@@ -359,7 +373,8 @@ backend.
 - **Not yet:** the export bridge that lets an HTML artifact build a deliverable
   in the browser (ART-16, deferred to its own item — the page accepts no message
   from a preview); model capabilities (WI-5.4 / ART-10, waiting for
-  `bedrock-all-models`; carried to P7).
+  `bedrock-all-models`, still not merged — out of P7's scope for the same
+  reason).
 
 **Conversation controls, regenerate and accessibility (P6, roadmap step 8):**
 
@@ -367,9 +382,10 @@ backend.
   before the failure stays above it as an ordinary reply, and in the export);
   the LAST one offers Try again, which re-sends its text as a new turn with a
   new message id (a turn that ends in an error event stores nothing; a
-  connection lost mid-reply is saved as a stop instead, so Try again then
-  stores the question twice, carried to P7); one whose message carried files asks for them
-  again instead. The last saved reply offers Regenerate: `POST
+  connection lost mid-reply is saved as a stop instead — the page re-reads the
+  conversation and shows that saved stopped reply when it is this request's,
+  so Try again no longer stores the question twice for it); one whose message
+  carried files asks for them again instead. The last saved reply offers Regenerate: `POST
   /api/test-turn/stream` with `regenerate: true` (no text, no files) answers the
   stored last message again and replaces that reply in place —
   `replaceLastReply`, one version-fenced transaction over the window row and the
@@ -386,8 +402,9 @@ backend.
   `attachment_unavailable` before any model call. A blocked, refused or unsaved
   regenerate leaves the old reply in place and shows an alert: for a block or a
   refusal it holds the notice; for a reply the server could not save (say, the
-  conversation moved on or changed hands, or the write failed) it holds that
-  unsaved reply itself, with no reason given (carried to P7). Owner only (a
+  conversation moved on or changed hands, or the write failed) it shows the
+  fixed line "The new reply wasn't saved, so the previous one is kept." above
+  the unsaved reply's own text, when the server sent any. Owner only (a
   stranger's or missing conversation: one 404), metered and idempotent like a
   send.
 - **The stopped text.** Both stop paths — during the model call, and a stop that
@@ -435,6 +452,109 @@ backend.
 - **Not yet:** edit and branch (P6b, excluded from this step); a video's
   keyframes on a regenerate (carried).
 
+**Hardening (P7, roadmap step 9):**
+
+- **Regenerate is tied to the reply shown.** The page sends the `requestId` of
+  the reply it is regenerating (`replyTo`, or `null` for a reply saved before
+  this change); the server refuses a mismatch with 409 `reply_changed` before
+  any stored-file read or model call, and the page reloads the chat and says
+  "This chat changed in another tab, so it was reloaded." Both Stop paths now
+  stamp the stopped reply with its own request's id, so Regenerate right after
+  Stop works instead of tripping this refusal; the save also re-checks the
+  expected id at write time, so two tabs regenerating the same reply at once no
+  longer race past it silently (**A233**; the Stop and two-tab fixes were added
+  after the security review).
+- **A dropped connection shows what was actually saved.** If the connection
+  drops mid-reply, the server still saves the partial answer as a stopped
+  reply; the page now re-reads the conversation and shows that saved reply
+  when it carries this request's id, instead of a plain failure that invites a
+  duplicate Try again (**A240**).
+- **The file-only note cannot be regenerated.** A reply that only records
+  "file stored but not read" is saved with `status: 'notice'`; the page shows
+  it with no Regenerate button, and the server refuses to regenerate one (409
+  `nothing_to_regenerate`), before or after a reload (**A241**). The
+  kill-phrase confirmation is now saved the same way, so Regenerate can never
+  replay it and re-trigger the fleet-wide halt (added after the security
+  review).
+- **A regenerate reads its stored files only after admission.** The rate
+  limit, cost cap and the global kill switch are all checked before the server
+  re-reads any stored file, closing the gap where a regenerate could read up
+  to three 30 MB files before any of those checks ran (**A238**).
+- **An unsaved regenerate says why.** When the server could not save a
+  regenerated reply (the conversation moved on or changed hands, or the write
+  failed), the page shows the fixed line "The new reply wasn't saved, so the
+  previous one is kept." above the reply text, when the server sent any
+  (**A235**).
+- **A whole-row write can no longer undo an unseen setting change.**
+  `/newchat`, a model override and a war-room change each bump the
+  conversation row's version, so a regenerate or an append racing one of them
+  is fenced the same way a rename already was (**A232**).
+- **A rename pre-fill is always a valid title.** Line breaks and tabs in the
+  first message are collapsed to a single space before the rename box opens,
+  and a title the server still refuses says why: "A title can be up to 120
+  characters, with no tabs or line breaks." (**A234**).
+- **A long title's rename box opens at its start.** The field still selects
+  the whole title on open (typing replaces it), but its scroll position now
+  starts at the title's first character rather than its last (**A229**).
+- **The chat search box stops at 100 characters.** The field itself now caps
+  input at the route's own limit, so a search over it can no longer look like
+  a failed list load (**A236**).
+- **A quick search edit no longer drops its own answer.** The page compares
+  trimmed queries instead of counting keystrokes, so a search resolved after
+  the field has already changed is no longer discarded — it is re-sent to
+  match what the field shows (**A239**).
+- **A chat deleted mid-turn stays deleted.** Every dashboard save that could
+  re-create a conversation — a turn's own append, a document draft's `start`,
+  and a stored file (a draft's `finalize`, a generated document or image) —
+  now requires the turn's own marker row to still exist; a conversation
+  deleted mid-turn refuses the save instead of quietly reappearing with the
+  model's reply, or a generated file, inside it. A draft's `append` cannot
+  re-create one: its draft row goes with the conversation, so it is refused
+  (**M1**; the draft `start` case was added after the security review).
+  Telegram, Slack, the fallback page (`public/app.js`) and the non-streaming
+  `POST /test-turn` send no request id, so they sit outside this check and
+  declare the skip in a parity comment.
+- **A crashed save no longer strands a chat indefinitely.** The conversation's
+  child lock row carries a 15-minute lease from its `createdAt`; the next save
+  or delete after that window takes the lock over and logs the takeover with
+  the old lock's age, instead of waiting for an operator to remove the row by
+  hand (**M3**). The lock's own doc comment now says this, in place of the
+  stale "no TTL … an operator must recover" (added after the security review).
+- **The agent page's own chat client is gone.** `AgentDetail.tsx` no longer
+  runs its own turn/stream/test-chat panel; its Chat entry is a plain link to
+  `/chat/<agentId>`, which the Chat tab already knew how to preselect
+  (**AGENTCHAT**).
+- **The web reader speaks only protocol 2.** The browser's stream reader no
+  longer parses the old cumulative `chunk` event or the old plain-text error
+  frame; the server keeps sending that older format only to the fallback page,
+  `public/app.js`, which still reads it (**WIRE**).
+- **Dead pointer state is gone.** The unused `storedChatId` and
+  `rememberChatId` helpers and the legacy write to the unscoped
+  `cce_chat_active` key are removed; sign-out still clears that key in
+  `web/src/lib/api.ts`, since an older tab may still hold it. The reply
+  message built at send and at regenerate now shares one `replyMessage()`
+  builder (**A223**).
+- **Two behaviour-free blemishes in the voice orb widget are gone.** The
+  spliced comment and the repeated `inChatNavigation` condition noted after P6
+  are cleaned up; nothing about the orb's placement or behaviour changed
+  (**A230**).
+- **Two stale test comments now describe today's reload.** The two
+  `tests/e2e/chat/chat.spec.ts` comments that still described the pre-P6
+  reload are corrected (**A237**).
+- **A turn refused for a deleted chat deletes what it uploaded** (added after
+  the security review). When a save is refused because its conversation was
+  deleted mid-turn, the files that turn had already uploaded to the raw bucket
+  are deleted too, instead of sitting there until the bucket's 365-day
+  lifecycle rule catches them.
+- **The chat ID's help box opens where it can be read** (owner decision 70).
+  The chat header's chip shows the conversation's raw id; its question-mark
+  help used to always open upward, so inside the chat page's clipped header it
+  landed off-screen. `InfoTooltip` gained an optional `side` prop (`'top'` by
+  default, unchanged everywhere else); the chip's help now opens below and
+  reads "This chat's ID. Its transcript, costs and audit records are filed
+  under it." — replacing the glossary's audit-action text — set in the page's
+  own font rather than the id chip's monospace one.
+
 ## 3. Current status and current source commit
 
 The port merged into `development` as PR #129 (merge
@@ -447,16 +567,20 @@ P1 (roadmap step 3) merged into `development` as PR #189 (merge
 2026-09-23); neither is on an environment branch yet (owner decision 18:
 promotion is separate work). P3 (roadmap step 5) merged as PR #191 (merge
 `6c49661`, 2026-09-24), on no environment branch either, P4 (roadmap step 6)
-as PR #192 (merge `e2cd11e`, 2026-09-26) and P5 (roadmap step 7) as PR #193
-(merge `ed8a3dc`, 2026-09-27), on none either. P6 (roadmap step 8) is the
+as PR #192 (merge `e2cd11e`, 2026-09-26), P5 (roadmap step 7) as PR #193
+(merge `ed8a3dc`, 2026-09-27) and P6 (roadmap step 8) as PR #194 (merge
+`77c58d9`, 2026-09-27), on none either. P7 (roadmap step 9, hardening) is the
 change this README was last updated with; [HANDOFF](HANDOFF.md) and the
 Gauntlet state file hold its pull request, because a file cannot state the
-commit it is inside. The P6 paragraphs and rows, and the counts in section 2,
-were checked at the frontmatter's commit; the P5 statements were last checked
-at `9905de3`, the P4 ones at `b1e8bdd` and the P1-P3 ones at `97f8e79`,
-re-derived here only where a later step changed their code (P6 changed the
-remembered conversation's key, the new-chat control and the rule that a taken
-message number is never overwritten).
+commit it is inside. The P7 paragraphs and rows — the hardening block in
+section 2 and the amended P6 sentences there and in the risk table — were
+checked at the frontmatter's commit; the P6 paragraphs were last checked at
+`f824039`, the P5 statements at `9905de3`, the P4 ones at `b1e8bdd` and the
+P1-P3 ones at `97f8e79`, re-derived here only where a later step changed their
+code (P7 tied Regenerate to the reply shown, added the notice status, fixed
+rename and search, bumped the version on more conversation writers, removed
+the agent page's own chat client, and retired the web reader's old stream
+format).
 
 ## 4. Source of truth
 
@@ -500,9 +624,11 @@ message number is never overwritten).
   the identity is known both use the slot `unknown`, which sign-in and sign-out
   wipe, together with the unscoped `cce_chat_active` the page also keeps.
 - Regenerate replaces only the LAST reply, in place, and only the one it
-  answered (the authorized message count and owner) — the stored last reply,
-  which is not always the one on screen (two tabs; a stopped reply whose save
-  failed; carried to P7); that replacement is the one
+  answered (the authorized message count and owner, and — since P7 — the
+  `requestId` of the reply the page shows, re-checked again at the save),
+  refusing with 409 `reply_changed` when the stored last reply is not the one
+  on screen (two tabs; a stopped reply whose save failed) instead of silently
+  replacing a different reply; that replacement is the one
   write that may overwrite a taken message number (P6). Rename and pin are the
   owner's only and never create a row; every conversation writer carries `title`
   and `pinned`.
@@ -591,14 +717,14 @@ message number is never overwritten).
 | A regenerated question that carried a video is answered from its stored transcript without the video's keyframes | `replayStoredAttachments` in `src/adapters/dashboard/handler.ts` | carried in the P6 session log (Jev 0.86: extracting keyframes from raw bytes needs processVideo's probe step) |
 | The list search term travels in the GET URL, so it reaches the load balancer's access logs | `router.get('/sessions')` in `src/adapters/dashboard/handler.ts` | carried in the P6 session log — a POST search if those logs ever leave the account |
 | An admin's list shows every member's pinned conversations first, and the audited list override does not record `q` | `visibleConversations` in `src/adapters/dashboard/handler.ts`; the P6 security review, INFO-1 | carried in the P6 session log (decision 1: an admin sees every conversation, audited) |
-| Regenerate re-answers the conversation's stored last exchange, which is not always the one on screen (the same chat open in two tabs, or a stopped reply whose save failed); the page then shows the new answer under its own older question until a reload | the regenerate branch of `router.post('/test-turn/stream')` in `src/adapters/dashboard/handler.ts` and `regenerate()` in `web/src/pages/Chat.tsx`; the P6 fresh critic's F-1 | carried to P7 as its first item (the P6 session log, A233): tie the request to the reply shown and refuse a mismatch |
-| A whole-row conversation write (regenerate's `replaceLastReply`, and `appendTurns`) can undo a /newchat, /model or war-room change that lands between its read and its write, because those three writers never bump the version | `updateIfExists` in `src/lib/state/sessions-repo.ts`; the P6 fresh critic's F-7 (a code trace, not reproduced) | carried to P7 (the P6 session log, A232) |
-| Renaming a chat whose first message has a line break or tab fails when saved untouched, and the page says "Please try again" | the rename pre-fill in `web/src/components/chat/ConversationSidebar.tsx`; the P6 fresh critic's F-8 | carried to P7 (the P6 session log, A234) |
-| A conversation search can keep an older query's results under newer text: a trailing space, or a letter typed and deleted within the 250 ms debounce while a search is in flight, drops that search's answer and never asks again | the search's request counter in `web/src/pages/Chat.tsx`; the P6 fresh critic's T-3 | carried to P7 (owner decision 62; the P6 session log, A239) |
-| A connection that drops mid-reply (not a Stop, not a server error) is saved by the server as a stopped reply but shown by the page as a failure, so a regenerate looks undone and Try again stores the question twice | the stop paths in `src/adapters/dashboard/handler.ts` and `send()` / `regenerate()` in `web/src/pages/Chat.tsx`; the P6 fresh critic's T-4 | carried to P7 with the Regenerate fix (owner decision 62; A240) |
-| After a reload, Regenerate is offered on canned replies such as the "file too large, stored but not read" note, and replacing it answers the question without the file | the `isReply` flag in `web/src/pages/Chat.tsx`, which the saved transcript does not carry; the P6 fresh critic's T-5 | carried to P7 (owner decision 62; A241) |
+| P7 is proven locally only: the browser suite runs against the dev-only mock, and the lock lease, the turn-marker check and the version race are proved on Floci, not real DynamoDB or a real process crash | `tests/e2e/chat/hardening.spec.ts` against `web/dev/`; `src/lib/state/sessions-repo.p7.integration.test.ts` on Floci | after promotion (decision 18) |
+| Telegram and Slack turns carry no request id, so the mid-turn delete check (M1) does not cover them: a dashboard chat deleted while one of their turns is in flight can still be re-created by that turn's save | the parity skip comments in `src/adapters/telegram/handler.ts` and `src/adapters/slack/handler.ts`; ADR 0011 | none open — declared, by design (surface parity: neither surface sends a `clientMessageId` to the save path) |
+| A crashed save or delete leaves the conversation's child lock held for up to 15 minutes: any other save or delete on that chat is refused as busy until the lease expires and the next operation takes the lock over | the lease in `acquireConversationChildLock`, `src/lib/state/sessions-repo.ts` (`CHILD_LOCK_LEASE_MS`); ADR 0011, decision 67 | none open — the takeover is automatic and logs the old lock's age; a shorter lease was rejected as a new stored field for no gain (ADR 0011, alternatives) |
+| A regenerate sent from a tab opened before P7 carries no `replyTo`; the server reads a missing field as `null`, which matches a reply stored before P7 (also `null`) — such a stale tab keeps the pre-P7 risk of regenerating a reply it is not showing, until it reloads | `replyTo` handling in the regenerate route, `src/adapters/dashboard/handler.ts`; ADR 0011, decision 65 | none open — a reload picks up the new tie; by design, so an old tab is not simply refused outright |
+| A dashboard turn that saves in the last moment of a chat delete can still leave two unlisted message records behind: `appendTurns` takes no child lock, and its turn-marker check is not serialised with `deleteSession`'s last batch (pre-existing; P7's marker check narrows the window but does not close it) | the P7 security review, LOW-3 (`sessions-repo.ts`); council `council-sec`, 3-0 carry | carried: delete the turn markers before the messages, or repeat `deleteSession`'s query until it returns no deletable keys |
+| Any turn save can silently clear war-room mode: `appendTurns`' row `Put` does not carry `activeWarroomId`, so A232's version bump protects every other field but not this one (pre-existing, found by the P7 security review) | the P7 security review, INFO-7 (`appendTurns` in `src/lib/state/sessions-repo.ts`) | none open — carried for the owner |
+| The fallback page (`public/app.js`, still served at `/app.js`) and the non-streaming `POST /test-turn` send no request id, so their dashboard turns get no M1 protection and can still re-create a chat deleted mid-turn; ADR 0011 declares only the Telegram/Slack skip | the P7 security review, INFO-9 | none open — carried for the owner; removing the agent page's own chat client (AGENTCHAT) already shrank this set by one caller |
 | P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
-| A reply still generating when its chat is deleted re-creates the chat when it saves a file (visible and deletable); a crash mid-save leaves the chat's lock row, so delete stays "busy" until an operator clears it | the P4 Claude security review, M1 and M3 | hardening (P7), owner decision 59 |
 | `pptxgenjs` pulls `image-size` 1.2.1 with two HIGH advisories (a crafted image can hang it); the code never reaches it — slides carry text only | `npm audit`; the P4 session log, A202 | owner decision 56; re-check before slides carry images |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |
 | Conversations written before P1 still carry a token-hash owner until the migration runs, and a pre-P1 turn that leaves the 20-turn window before then has no record anywhere | `src/lib/state/legacy-chat-migration.ts`; decision 46 | the S1 promotion: link the master token and run the migration (dry run, then `--apply`) straight after the deploy, before anyone chats |
