@@ -40,6 +40,7 @@ const stopOf = (page: Page) => page.getByRole('button', { name: 'Stop generating
 const tryAgainOf = (page: Page) => page.getByRole('button', { name: 'Try again', exact: true });
 const userBubbles = (page: Page) => page.getByRole('group', { name: 'Your message' });
 const replies = (page: Page) => page.getByRole('group', { name: 'Assistant message' });
+const fileInputOf = (page: Page) => page.locator('input[type="file"]');
 // The scrolling column the conversation lives in (ChatCanvas); the screen-reader announcer is outside it.
 const transcriptOf = (page: Page) => page.locator('[data-tour="chat-messages"]');
 // `:visible` — the conversation list is rendered twice (the desktop rail and the hidden mobile drawer).
@@ -183,4 +184,33 @@ test('P7 a reply cut off by a dropped connection shows what the server saved', a
   await expect(replies(page).last()).toContainText(DROP_TEXT);
   await expect(replies(page).last()).toContainText(/stopped/i);
   await expect(userBubbles(page).filter({ hasText: DROP })).toHaveCount(1);
+});
+
+// P7 (step 9) — work order B: the file note is a notice (A241). A file-only
+// send with nothing the model can see is saved as a notice (C-1/C-2, unit and
+// route level); here, as a person meets it: the note offers no Regenerate,
+// including after a reload. The mock's file-only trigger (mock-stream-plugin.ts)
+// mirrors today's plain-reply shape; it does NOT mark the note `status:
+// 'notice'` server-side (the builder's job), which is why this is red: on
+// reload, transcriptToMessages does not know the reply was a notice, and
+// Regenerate reappears.
+test('P7 after a reload the file note offers no Regenerate', async ({ page }) => {
+  await newChat(page);
+  await fileInputOf(page).setInputFiles({ name: 'plan.txt', mimeType: 'text/plain', buffer: Buffer.from('the plan') });
+  await expect(page.getByRole('progressbar', { name: /^Uploading /})).toHaveCount(0);
+  await expect(sendOf(page)).toBeEnabled();
+  await sendOf(page).click();
+  await waitForEnd(page);
+
+  const live = replies(page).last();
+  await expect(live).toContainText(/stored/i);
+  await live.hover();
+  await expect(live.getByRole('button', { name: 'Regenerate' })).toHaveCount(0);
+
+  await page.reload();
+  await expect(replies(page)).toHaveCount(1);
+  const reloaded = replies(page).last();
+  await expect(reloaded).toContainText(/stored/i);
+  await reloaded.hover();
+  await expect(reloaded.getByRole('button', { name: 'Regenerate' })).toHaveCount(0);
 });

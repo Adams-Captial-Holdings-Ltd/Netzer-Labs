@@ -368,6 +368,26 @@ export function mockStreamPlugin(): Plugin {
         req.on('data', (c: Buffer) => { raw += c; });
         req.on('end', () => {
           const turn = parseTurn(raw);
+          // P7 (A241): a file-only send with no caption has nothing the model can
+          // see, so the real route answers with a canned "stored but not read"
+          // acknowledgement (event: reply, done: media_only) instead of a model
+          // turn (handler.ts's media-only branch). Mirrors that shape as a plain
+          // reply, matching today's server behaviour — marking it `status:
+          // 'notice'` server-side is the builder's job (A241), which is why C-4
+          // is red: on reload the note still offers Regenerate.
+          if (!turn.regenerate && !turn.text && turn.attachmentKeys.length > 0) {
+            const note = 'Stored the file.';
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+            });
+            sseWrite(res, 'reply', note);
+            recordTurn(turn.chatId, turn.text, { text: note, tools: [], stopped: false, artifacts: [], failed: false }, turn.attachmentKeys);
+            sseWrite(res, 'done', 'media_only');
+            res.end();
+            return;
+          }
           if (turn.regenerate) {
             if (turn.text || turn.attachmentKeys.length ||
               (turn.replyToPresent && turn.replyTo !== null && typeof turn.replyTo !== 'string')) {

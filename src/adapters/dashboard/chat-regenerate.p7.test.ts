@@ -48,6 +48,9 @@ const {
   deleteObject,
   ingestChatMedia,
   isKillSwitchActive,
+  headChatUpload,
+  getObjectBuffer,
+  isUploadKey,
   log,
   actualRepo,
 } = vi.hoisted(() => ({
@@ -68,6 +71,12 @@ const {
   deleteObject: vi.fn(),
   ingestChatMedia: vi.fn(),
   isKillSwitchActive: vi.fn(),
+  // B (C-1): a fresh (non-regenerate) file-only send goes through the upload
+  // preflight and read, never through getRawObject (that is the STORED-replay
+  // read used by a regenerate; see work order A's mocks above).
+  headChatUpload: vi.fn(),
+  getObjectBuffer: vi.fn(),
+  isUploadKey: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   actualRepo: { current: undefined as unknown },
 }));
@@ -121,7 +130,13 @@ vi.mock('../../lib/media/process.js', async (importActual) => {
 
 vi.mock('../../lib/vectors/store.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/vectors/store.js')>();
-  return { ...actual, deleteObject: (...a: unknown[]) => deleteObject(...a) };
+  return {
+    ...actual,
+    deleteObject: (...a: unknown[]) => deleteObject(...a),
+    headChatUpload: (...a: unknown[]) => headChatUpload(...a),
+    getObjectBuffer: (...a: unknown[]) => getObjectBuffer(...a),
+    isUploadKey: (...a: unknown[]) => isUploadKey(...a),
+  };
 });
 
 vi.mock('../../lib/media/chat-kb-ingest.js', async (importActual) => {
@@ -167,11 +182,20 @@ vi.mock('../../observability/logger.js', () => ({
 }));
 
 import { buildDashboardRouter } from './handler.js';
+// The real error class the admission step throws (KillSwitchActiveError is
+// re-exported from agent-loop.js); passes through unchanged since only
+// runAgentTurn itself is replaced above.
+import { KillSwitchActiveError } from '../../agent/agent-loop.js';
+import { createHash } from 'node:crypto';
 
 const AGENT = 'main';
 const SONNET = 'us.anthropic.claude-sonnet-4-6';
 const OWNER = 'dashboard:user:user-a';
 const PERSON = { surface: 'dashboard' as const, userId: OWNER, ephemeral: false };
+
+// handler.ts's chatUploadPrefix(c): uploads/chat/<sha256(dashboardIdentity)[:16]>/.
+// dashboardIdentity() for PRINCIPALS['member-a1'] (userId: 'user-a') is OWNER.
+const uploadPrefix = () => `uploads/chat/${createHash('sha256').update(OWNER).digest('hex').slice(0, 16)}/`;
 
 const repo = () => actualRepo.current as Repo;
 
@@ -289,6 +313,11 @@ describe('P7 work order A — stream route', () => {
     deleteObject.mockResolvedValue(undefined);
     ingestChatMedia.mockRejectedValue(new Error('nothing is ingested in these tests'));
     isKillSwitchActive.mockResolvedValue({ active: false });
+    // Harmless defaults (M95): only C-1 exercises a fresh file-only send, which
+    // overrides these; everything else never reaches the upload preflight.
+    isUploadKey.mockReturnValue(true);
+    headChatUpload.mockResolvedValue(null);
+    getObjectBuffer.mockRejectedValue(new Error('no staged upload is read in these tests'));
     vi.stubEnv('BEDROCK_DEFAULT_MODEL', SONNET);
     vi.stubEnv('BEDROCK_SONNET_MODEL', SONNET);
   });
@@ -443,5 +472,96 @@ describe('P7 work order A — stream route', () => {
     for (const text of texts) expect(written).not.toContain(text);
     // It is the refusal that was logged.
     expect([res.status, jsonOrText(body)]).toEqual([409, { error: 'reply_changed' }]);
+  });
+
+  // ── work order B: the file note is a notice (A241) ────────────────────────
+  //
+  // A241 (owner decision 66): the dashboard's file-only path (handler.ts's
+  // media-only branch, ~:2380-2391) saves its canned acknowledgement with
+  // `status: 'notice'` (today Turn.status is only 'stopped'). The regenerate
+  // route refuses a stored notice with the EXISTING structural refusal (409
+  // nothing_to_regenerate), before beginTurn and before any model call.
+
+  it('P7 the file stored but not read note is saved as a notice', async () => {
+    const chatId = 'dashboard:1750000000801';
+    const key = `${uploadPrefix()}c1-upload/notes.pdf`;
+    headChatUpload.mockResolvedValue({ size: 900, type: 'application/pdf' });
+    getObjectBuffer.mockResolvedValue(Buffer.from('%PDF-1.4 test'));
+    // Nothing the model can see: no inline block, only a canned ack — the same
+    // shape a KB-only or unreadable document produces today.
+    processMedia.mockResolvedValue({
+      s3Key: undefined, blocks: [], ackText: 'notes.pdf was stored but not read.', kb: null, kind: 'document',
+    });
+
+    const res = await post({
+      chatId, text: '', clientMessageId: 'send-notice-1',
+      attachments: [{ s3Key: key, fileName: 'notes.pdf', mimeType: 'application/pdf' }],
+    });
+    expect(res.status).toBe(200);
+    const sse = await res.text();
+    // The existing media-only shape is unchanged: a plain reply, done: media_only.
+    expect(sse).toContain('event: reply');
+    expect(sse).toContain('media_only');
+    expect(runAgentTurn).not.toHaveBeenCalled();
+
+    const turns = await transcript(chatId);
+    const reply = turns.find((t) => t.role === 'assistant');
+    expect(reply, `stored turns: ${JSON.stringify(turns)}`).toMatchObject({ status: 'notice' });
+  });
+
+  it('P7 regenerate refuses a notice', async () => {
+    const chatId = 'dashboard:1750000000802';
+    await seed(chatId, [['Here is the file', 'Stored the file.']]);
+    // Stamp the last reply as a notice, the way A241 will save it (a manual
+    // poke, like O-1's requestId stamping above: no builder code exists yet).
+    const row = table.rows.get(rowKey(chatId))!;
+    const turns = row.turns as Item[];
+    const stamped = turns.map((t, i) => (i === turns.length - 1 ? { ...t, status: 'notice' } : t));
+    table.rows.set(rowKey(chatId), { ...row, turns: stamped });
+
+    const res = await regenerate(chatId, { clientMessageId: 'regen-notice-1' });
+    const body = await res.text();
+    expect([res.status, jsonOrText(body)], 'a stored notice must be refused like any other structural refusal')
+      .toEqual([409, { error: 'nothing_to_regenerate' }]);
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(beginTurn).not.toHaveBeenCalled();
+    expect(replaceLastReply).not.toHaveBeenCalled();
+  });
+
+  // ── work order B: admission before the stored-file replay (A238) ─────────
+  //
+  // Today replayStoredAttachments (handler.ts:667-697, called at :2331) runs
+  // BEFORE runAgentTurn, so a regenerate refused at admission has already read
+  // every stored file. Decided: the route must pass the replay to runAgentTurn
+  // as a function it calls only after its own admission checks.
+  //
+  // Driven via the real KillSwitchActiveError class (imported from
+  // agent-loop.js, unmocked) rather than a hand-rolled rejection: this is
+  // exactly the error runAgentTurn's own bedrock_global admission check
+  // throws, so the route's isOperatorRefusal/classifyTurnError handling
+  // exercises the same path a genuine kill-switch refusal takes. runAgentTurn
+  // itself stays mocked in this suite (as in every other test above) rather
+  // than delegated to the real implementation, which would also exercise
+  // loadAgent's S3 read and the rate limiter for no added value here.
+  it('P7 a regenerate refused at admission reads no stored file', async () => {
+    const chatId = 'dashboard:1750000000803';
+    const pdf = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n');
+    await repo().appendTurns(AGENT, chatId, [
+      { role: 'user', text: 'Summarize this', ts: 100, attachments: [
+        { id: 'f1', name: 'q3.pdf', type: 'application/pdf', size: pdf.length, key: `dashboard/${chatId}/2026/09/27/1-q3.pdf` },
+      ] },
+      { role: 'assistant', text: 'Here you go.', ts: 101 },
+    ], undefined, PERSON);
+    getRawObject.mockResolvedValue(pdf);
+    runAgentTurn.mockRejectedValue(new KillSwitchActiveError('maintenance window', 'bedrock_global'));
+
+    const res = await regenerate(chatId, { clientMessageId: 'regen-g1' });
+    const events = parseSse(await res.text());
+    const error = events.find((e) => e.event === 'error');
+    expect(error, `no error event; events: ${JSON.stringify(events)}`).toBeDefined();
+    expect(JSON.parse(error!.data).code, 'refused by the real admission error, not a generic failure').toBe('kill_switch_active');
+
+    expect(getRawObject, 'a regenerate refused at admission must read no stored file').not.toHaveBeenCalled();
+    expect(replaceLastReply).not.toHaveBeenCalled();
   });
 });
