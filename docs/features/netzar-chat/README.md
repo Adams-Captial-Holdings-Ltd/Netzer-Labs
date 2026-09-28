@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-28
-as_of_commit: 8b22a219cfb7363777ec96c144966f6a627239f6
+as_of_commit: fbcf47fffdc6190ee8fa719c1aa55bd9892a7742
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -481,8 +481,10 @@ backend.
   it with no Regenerate button, and the server refuses to regenerate one (409
   `nothing_to_regenerate`), before or after a reload (**A241**). The
   kill-phrase confirmation is now saved the same way, and reaches the page as
-  a canned reply, so Regenerate can never replay it and re-trigger the
+  a canned reply, so Regenerate cannot replay a new one and re-trigger the
   fleet-wide halt, live or after a reload (added after the security review).
+  A note or confirmation saved before this change has no status and stays
+  regenerable, as it was before.
 - **A regenerate reads its stored files only after admission.** The rate
   limit, cost cap and the global kill switch are all checked before the server
   re-reads any stored file, closing the gap where a regenerate could read up

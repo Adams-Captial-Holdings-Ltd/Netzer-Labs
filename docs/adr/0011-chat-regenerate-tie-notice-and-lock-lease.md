@@ -32,6 +32,7 @@
    regenerable. The same step extended the rule to the kill-phrase confirmation (the decision's revisit trigger, "another
    canned reply type is stored", fired in the security review, INFO-8; council 3-0): it is saved as a notice and reaches
    the page as a canned `reply` event, so it is never offered for Regenerate.
+   Confirmations saved before the change stay regenerable, as older notes do.
 3. **Decision 67.** Acquiring the child lock succeeds when no lock exists or the existing lock's `createdAt` is older
    than 15 minutes (`attribute_not_exists(PK) OR createdAt < :cutoff`, one conditional Put); a takeover writes a warn
    log with the old lock's age in seconds; a late release that finds another holder's token logs instead of throwing.

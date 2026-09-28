@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-28
-as_of_commit: 8b22a219cfb7363777ec96c144966f6a627239f6
+as_of_commit: fbcf47fffdc6190ee8fa719c1aa55bd9892a7742
 ---
 
 # Netzar Chat handoff
@@ -23,7 +23,8 @@ as_of_commit: 8b22a219cfb7363777ec96c144966f6a627239f6
   Stop paths stamp their own reply's id; a regenerate save re-checked again at
   write time); a dropped connection's page re-read shows what the server
   actually saved; the file-only note and the kill-phrase confirmation both saved
-  as a `notice` (never regenerable, before or after a reload); a regenerate's
+  as a `notice` (never regenerable, before or after a reload; one saved before
+  P7 stays regenerable); a regenerate's
   stored-file replay moved to after admission; an unsaved regenerate's fixed
   alert line below the kept reply; `/newchat`, a model override and a war-room
   change all bump the conversation row's version; the rename pre-fill collapses
