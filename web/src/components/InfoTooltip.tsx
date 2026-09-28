@@ -77,7 +77,7 @@ export function InfoTooltip({ text, term, side = 'top', children }: InfoTooltipP
           role="tooltip"
           class={`absolute left-1/2 ${side === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'} z-50 -translate-x-1/2 w-max max-w-xs
             px-3 py-2 rounded-lg bg-surface-elevated border border-border shadow-lg
-            text-caption text-secondary leading-snug pointer-events-none page-enter`}
+            text-caption text-secondary font-sans leading-snug pointer-events-none page-enter`}
         >
           {body}
         </span>
