@@ -161,6 +161,31 @@ test('P7 regenerate in a second tab that is behind is refused and the page reloa
   await waitForEnd(page);
 });
 
+// The second fresh critic: the sentence above sat ABOVE the messages while the view rests at the bottom, so on a
+// chat taller than the screen nobody saw it; `seenText` only proves a non-empty box, not a place on the screen.
+test('P7 after a stale tab is refused, the reload sentence is on screen', async ({ page, context }) => {
+  const question = `Which region failed first in run ${Date.now()}?`;
+  await newChat(page);
+  await sendAndWait(page, question);
+
+  const behind = await context.newPage();
+  await openChat(behind);
+  await row(behind, question).click();
+  await expect(replies(behind)).toHaveCount(1);
+
+  // Tab A moves on by two exchanges, so the reloaded chat is taller than the screen.
+  await page.bringToFront();
+  await sendAndWait(page, 'And which one failed second?');
+  await sendAndWait(page, 'And which one failed third?');
+
+  await behind.bringToFront();
+  const refused = await regenerateLast(behind);
+  expect(refused.status).toBe(409);
+  await expect(replies(behind)).toHaveCount(3);
+  const sentence = behind.getByRole('alert').filter({ hasText: 'This chat changed in another tab, so it was reloaded.' });
+  await expect(sentence).toBeInViewport({ ratio: 1 });
+});
+
 test('P7 a reply cut off by a dropped connection shows what the server saved', async ({ page }) => {
   await newChat(page);
   await composerOf(page).fill(DROP);
@@ -278,6 +303,32 @@ test('P7 a chat whose first message has a line break renames without edits', asy
   expect(response.status(), `PATCH body: ${await response.text()}`).toBe(200);
   await expect(page.getByText('Could not update that chat', { exact: false })).toHaveCount(0);
   await expect(row(page, collapsed), 'the list shows the saved (collapsed) title').toBeVisible();
+});
+
+// A234 (the second fresh critic): the server refuses every Unicode control, format, surrogate and line or paragraph
+// separator in a title (UNSAFE_ARTIFACT_TITLE_PATTERN, src/lib/chat/artifact-grammar.ts), and stores `firstMessage`
+// cut at 120 UTF-16 units (sessions-repo.ts), which can split an emoji. A pre-fill must never offer what the server
+// refuses. The dev mock now applies the server's rule and cut (web/dev/mock-stream-plugin.ts).
+test('P7 a chat whose first message has invisible characters renames without edits', async ({ page }) => {
+  const head = 'Deploy review \u{1F468}‍\u{1F4BB} soft­hyphen line sep next\u0085line ';
+  // The emoji's first half sits at index 119, so the stored 120-unit cut keeps half of it.
+  const text = `${head}${'a'.repeat(119 - head.length)}\u{1F600} tail`;
+  await newChat(page);
+  await composerOf(page).fill(text);
+  await expect(sendOf(page)).toBeEnabled();
+  await sendOf(page).click();
+  await waitForEnd(page);
+
+  const activeRow = activeRowOf(page);
+  await activeRow.hover();
+  await activeRow.getByRole('button', { name: /^Rename chat:/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Chat title' })).toBeVisible();
+
+  const saved = page.waitForResponse((r) => r.request().method() === 'PATCH' && r.url().endsWith('/api/sessions'));
+  await page.getByRole('button', { name: 'Save title' }).click();
+  const response = await saved;
+  expect(response.status(), `PATCH body: ${await response.text()}`).toBe(200);
+  await expect(page.getByText('Could not update that chat', { exact: false })).toHaveCount(0);
 });
 
 // A234 (council 3-0): a title a person actively types with a tab is refused

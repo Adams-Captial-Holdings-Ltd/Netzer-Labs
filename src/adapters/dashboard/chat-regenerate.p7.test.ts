@@ -540,6 +540,31 @@ describe('P7 work order A — stream route', () => {
     expect(reply, 'Regenerate must never replay the kill phrase').toMatchObject({ status: 'notice' });
   });
 
+  // The second fresh critic: stored as a notice, the confirmation still reached the page live as a `final` answer,
+  // so the page offered Regenerate until a reload (and a click met 409 nothing_to_regenerate). The page never offers
+  // Regenerate on a canned `reply` event (web/src/lib/chat/stream.ts), which is how the file note is already sent.
+  it('P7 the kill-phrase confirmation reaches the page as a canned reply, not a regenerable answer', async () => {
+    const chatId = 'dashboard:1750000000804';
+    runAgentTurn.mockResolvedValue(ok('Emergency halt engaged.', { refusal: { kind: 'kill_phrase', retryable: false } }));
+    const res = await post({ chatId, text: 'the kill phrase', clientMessageId: 'kill-2' });
+    expect(res.status).toBe(200);
+    const events = parseSse(await res.text());
+    expect(events.find((e) => e.event === 'reply')?.data, 'sent as a canned reply').toBe('Emergency halt engaged.');
+    expect(events.some((e) => e.event === 'final'), 'never as a regenerable final answer').toBe(false);
+  });
+
+  // The second fresh critic: a chat deleted mid-turn is an expected outcome that sessions-repo already logs at WARN
+  // (E-4); the route's save helper logged it again at ERROR ("transcript save failed"), which error alarms would count.
+  it('P7 a save refused because its chat was deleted mid-turn is not logged as a route error', async () => {
+    const chatId = 'dashboard:1750000000805';
+    runAgentTurn.mockResolvedValue(ok('A reply nobody will see.'));
+    appendTurns.mockRejectedValueOnce(new (repo().ConversationDeletedError)());
+    const res = await post({ chatId, text: 'hello', clientMessageId: 'deleted-1' });
+    await res.text();
+    expect(appendTurns, 'the turn reached its save').toHaveBeenCalled();
+    expect(log.error.mock.calls.map((call) => call[1])).not.toContain('dashboard chat transcript save failed');
+  });
+
   // ── work order B: admission before the stored-file replay (A238) ─────────
   //
   // Today replayStoredAttachments (handler.ts:667-697, called at :2331) runs

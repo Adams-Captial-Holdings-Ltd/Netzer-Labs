@@ -290,7 +290,8 @@ function mockSessions(q = ''): unknown {
       },
       ...[...transcripts].filter(([chatId]) => !rows.some((_, i) => chatId === `dashboard:${SESSION_ID_BASE + i}`))
         .map(([chatId, turns]) => ({ agentId: 'main', chatId, updatedAt: turns.at(-1)?.ts ?? nowMs / 1000,
-          messageCount: turns.length, firstMessage: turns.find((t) => t.role === 'user')?.text ?? null,
+          // P7 (A234): cut at 120 UTF-16 units, as the repository stores it (sessions-repo.ts), which can split an emoji.
+          messageCount: turns.length, firstMessage: turns.find((t) => t.role === 'user')?.text.slice(0, 120) ?? null,
           title: sessionMeta.get(chatId)?.title ?? null, pinned: sessionMeta.get(chatId)?.pinned ?? false })),
     ];
   return { sessions: sessions.filter((s) => !q || (s.title ?? '').toLowerCase().includes(q) ||
@@ -608,8 +609,9 @@ export function mockStreamPlugin(): Plugin {
             const chatId = body.chatId;
             if (typeof chatId !== 'string' || !chatId) { jsonStatus(res, 400, { error: 'chatId_required' }); return; }
             if (body.title === undefined && body.pinned === undefined) { jsonStatus(res, 400, { error: 'nothing_to_update' }); return; }
+            // P7 (A234): the server's own title rule, UNSAFE_ARTIFACT_TITLE_PATTERN in src/lib/chat/artifact-grammar.ts.
             if (body.title !== undefined && body.title !== null && (typeof body.title !== 'string' ||
-              /[\x00-\x1f\x7f]/.test(body.title) || body.title.trim().length > 120)) {
+              /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(body.title) || body.title.trim().length > 120)) {
               jsonStatus(res, 400, { error: 'invalid_title' }); return;
             }
             if (body.pinned !== undefined && typeof body.pinned !== 'boolean') { jsonStatus(res, 400, { error: 'invalid_pinned' }); return; }
