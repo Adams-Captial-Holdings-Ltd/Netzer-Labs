@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-28
-as_of_commit: 70c3ee4ba07ae36f1ccacbf53c23fd3a2509d109
+as_of_commit: 8b22a219cfb7363777ec96c144966f6a627239f6
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -15,6 +15,9 @@ implemented_by:
   - src/lib/state/sessions-repo.ts
   - src/adapters/dashboard/handler.ts
   - src/adapters/dashboard/public/app.js
+  - web/src/components/chat/MessagesView.tsx
+  - src/agent/scheduler.ts
+  - src/lib/scheduler/queue-drain.ts
   - src/adapters/dashboard/jarvis.ts
   - src/agent/agent-loop.ts
   - src/agent/turn-errors.ts
@@ -459,7 +462,8 @@ backend.
   the reply it is regenerating (`replyTo`, or `null` for a reply saved before
   this change); the server refuses a mismatch with 409 `reply_changed` before
   any stored-file read or model call, and the page reloads the chat and says
-  "This chat changed in another tab, so it was reloaded." Both Stop paths now
+  "This chat changed in another tab, so it was reloaded." below the last
+  message, where the view rests. Both Stop paths now
   stamp the stopped reply with its own request's id, so Regenerate right after
   Stop works instead of tripping this refusal; the save also re-checks the
   expected id at write time, so two tabs regenerating the same reply at once no
@@ -476,26 +480,30 @@ backend.
   "file stored but not read" is saved with `status: 'notice'`; the page shows
   it with no Regenerate button, and the server refuses to regenerate one (409
   `nothing_to_regenerate`), before or after a reload (**A241**). The
-  kill-phrase confirmation is now saved the same way, so Regenerate can never
-  replay it and re-trigger the fleet-wide halt (added after the security
-  review).
+  kill-phrase confirmation is now saved the same way, and reaches the page as
+  a canned reply, so Regenerate can never replay it and re-trigger the
+  fleet-wide halt, live or after a reload (added after the security review).
 - **A regenerate reads its stored files only after admission.** The rate
   limit, cost cap and the global kill switch are all checked before the server
   re-reads any stored file, closing the gap where a regenerate could read up
-  to three 30 MB files before any of those checks ran (**A238**).
+  to three stored files (at most about 13.5 MB within their replay caps)
+  before any of those checks ran (**A238**).
 - **An unsaved regenerate says why.** When the server could not save a
   regenerated reply (the conversation moved on or changed hands, or the write
   failed), the page shows the fixed line "The new reply wasn't saved, so the
-  previous one is kept." above the reply text, when the server sent any
-  (**A235**).
-- **A whole-row write can no longer undo an unseen setting change.**
-  `/newchat`, a model override and a war-room change each bump the
-  conversation row's version, so a regenerate or an append racing one of them
-  is fenced the same way a rename already was (**A232**).
-- **A rename pre-fill is always a valid title.** Line breaks and tabs in the
-  first message are collapsed to a single space before the rename box opens,
-  and a title the server still refuses says why: "A title can be up to 120
-  characters, with no tabs or line breaks." (**A234**).
+  previous one is kept." below the last message, followed by the unsaved
+  reply's text when the server sent any (**A235**).
+- **Settings changes are fenced like a rename.** `/newchat`, a model
+  override and a war-room change each bump the conversation row's version, so
+  a regenerate or an append racing one of them is fenced the same way a rename
+  already was (**A232**). One gap stays: any turn save still clears war-room
+  mode (section 7, INFO-7).
+- **A rename pre-fill is always a valid title.** Every character the server
+  refuses in a title (line breaks, tabs and other control or invisible
+  characters, and half an emoji left by the stored 120-unit cut) becomes a
+  single space before the rename box opens. A title a person types that the
+  server still refuses says: "A title can be up to 120 characters, with no
+  tabs or line breaks." (**A234**; the sentence names only the common causes).
 - **A long title's rename box opens at its start.** The field still selects
   the whole title on open (typing replaces it), but its scroll position now
   starts at the title's first character rather than its last (**A229**).
@@ -514,9 +522,9 @@ backend.
   model's reply, or a generated file, inside it. A draft's `append` cannot
   re-create one: its draft row goes with the conversation, so it is refused
   (**M1**; the draft `start` case was added after the security review).
-  Telegram, Slack, the fallback page (`public/app.js`) and the non-streaming
-  `POST /test-turn` send no request id, so they sit outside this check and
-  declare the skip in a parity comment.
+  Telegram, Slack, scheduled tasks, the fallback page (`public/app.js`) and
+  the non-streaming `POST /test-turn` send no request id, so they sit outside
+  this check and declare the skip in a parity comment.
 - **A crashed save no longer strands a chat indefinitely.** The conversation's
   child lock row carries a 15-minute lease from its `createdAt`; the next save
   or delete after that window takes the lock over and logs the takeover with
@@ -723,11 +731,11 @@ format).
 | An admin's list shows every member's pinned conversations first, and the audited list override does not record `q` | `visibleConversations` in `src/adapters/dashboard/handler.ts`; the P6 security review, INFO-1 | carried in the P6 session log (decision 1: an admin sees every conversation, audited) |
 | P7 is proven locally only: the browser suite runs against the dev-only mock, and the lock lease, the turn-marker check and the version race are proved on Floci, not real DynamoDB or a real process crash | `tests/e2e/chat/hardening.spec.ts` against `web/dev/`; `src/lib/state/sessions-repo.p7.integration.test.ts` on Floci | after promotion (decision 18) |
 | Telegram and Slack turns carry no request id, so the mid-turn delete check (M1) does not cover them: a dashboard chat deleted while one of their turns is in flight can still be re-created by that turn's save | the parity skip comments in `src/adapters/telegram/handler.ts` and `src/adapters/slack/handler.ts`; the P7 M1 council's condition (session log) | none open — declared, by design (surface parity: neither surface sends a `clientMessageId` to the save path) |
-| A crashed save or delete leaves the conversation's child lock held for up to 15 minutes: any other save or delete on that chat is refused as busy until the lease expires and the next operation takes the lock over | the lease in `acquireConversationChildLock`, `src/lib/state/sessions-repo.ts` (`CHILD_LOCK_LEASE_MS`); ADR 0011, decision 67 | none open — the takeover is automatic and logs the old lock's age; a shorter lease was rejected as a new stored field for no gain (ADR 0011, alternatives) |
+| A crashed save or delete leaves the conversation's child lock held for up to 15 minutes: any other save or delete on that chat is refused as busy until the lease expires and the next operation takes the lock over | the lease in `acquireConversationChildLock`, `src/lib/state/sessions-repo.ts` (`CHILD_LOCK_LEASE_MS`); ADR 0011, decision 67 | none open — the takeover is automatic and logs the old lock's age; a new `leaseUntil` field was rejected as a new stored field for no gain over `createdAt` (ADR 0011, alternatives) |
 | A regenerate sent from a tab opened before P7 carries no `replyTo`, and the server skips the tie for it: it regenerates the stored last reply, whichever reply that tab shows (the pre-P7 behaviour), until the tab reloads. Only a `replyTo` of `null` matches a reply stored before P7 | `replyTo` handling in the regenerate route, `src/adapters/dashboard/handler.ts`, and `replaceLastReply`'s `expected.replyTo`, `src/lib/state/sessions-repo.ts`; ADR 0011, decision 65; the gate's T-6 | none open — a reload picks up the tie; by design, so an old tab is not simply refused outright |
 | A dashboard turn that saves in the last moment of a chat delete can still leave two unlisted message records behind: `appendTurns` takes no child lock, and its turn-marker check is not serialised with `deleteSession`'s last batch (pre-existing; P7's marker check narrows the window but does not close it) | the P7 security review, LOW-3 (`sessions-repo.ts`); council `council-sec`, 3-0 carry | carried: delete the turn markers before the messages, or repeat `deleteSession`'s query until it returns no deletable keys |
 | Any turn save can silently clear war-room mode: `appendTurns`' row `Put` does not carry `activeWarroomId`, so A232's version bump protects every other field but not this one (pre-existing, found by the P7 security review) | the P7 security review, INFO-7 (`appendTurns` in `src/lib/state/sessions-repo.ts`) | none open — carried for the owner |
-| The fallback page (`public/app.js`, still served at `/app.js`) and the non-streaming `POST /test-turn` send no request id, so their dashboard turns get no M1 protection and can still re-create a chat deleted mid-turn; both declare the skip in a parity comment, as Telegram and Slack do | the P7 security review, INFO-9; the parity comments in `src/adapters/dashboard/public/app.js` and `src/adapters/dashboard/handler.ts` | none open — carried for the owner; removing the agent page's own chat client (AGENTCHAT) already shrank this set by one caller |
+| The fallback page (`public/app.js`, still served at `/app.js`), the non-streaming `POST /test-turn` and scheduled tasks (a task scheduled from a dashboard chat saves its turn into that chat) send no request id, so those turns get no M1 protection and can still re-create a chat deleted mid-turn; each declares the skip in a parity comment, as Telegram and Slack do | the P7 security review, INFO-9, and the second fresh critic; the parity comments in `src/adapters/dashboard/public/app.js`, `src/adapters/dashboard/handler.ts`, `src/agent/scheduler.ts` and `src/lib/scheduler/queue-drain.ts` | none open — carried for the owner; removing the agent page's own chat client (AGENTCHAT) already shrank this set by one caller |
 | P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
 | `pptxgenjs` pulls `image-size` 1.2.1 with two HIGH advisories (a crafted image can hang it); the code never reaches it — slides carry text only | `npm audit`; the P4 session log, A202 | owner decision 56; re-check before slides carry images |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |

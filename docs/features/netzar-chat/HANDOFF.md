@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-28
-as_of_commit: 70c3ee4ba07ae36f1ccacbf53c23fd3a2509d109
+as_of_commit: 8b22a219cfb7363777ec96c144966f6a627239f6
 ---
 
 # Netzar Chat handoff
@@ -25,7 +25,7 @@ as_of_commit: 70c3ee4ba07ae36f1ccacbf53c23fd3a2509d109
   actually saved; the file-only note and the kill-phrase confirmation both saved
   as a `notice` (never regenerable, before or after a reload); a regenerate's
   stored-file replay moved to after admission; an unsaved regenerate's fixed
-  alert line above the kept reply; `/newchat`, a model override and a war-room
+  alert line below the kept reply; `/newchat`, a model override and a war-room
   change all bump the conversation row's version; the rename pre-fill collapses
   control characters and a refused title says why; the rename box opens at the
   title's start; the search field caps at 100 characters and a quick edit no
@@ -54,7 +54,7 @@ as_of_commit: 70c3ee4ba07ae36f1ccacbf53c23fd3a2509d109
   by P7; council 3-0 carry); **INFO-7** (any turn save can clear war-room mode —
   pre-existing); **INFO-9** (`public/app.js` and `POST /test-turn` send no
   request id, so their dashboard turns sit outside the mid-turn delete check) —
-  Telegram and Slack are the same; all four declare the skip in a parity
+  Telegram, Slack and scheduled tasks are the same; all five declare the skip in a parity
   comment.
   Still carried, unchanged by P7: A212 (the WebRTC residual), A213 (chat reply
   markdown can still load a remote image), A172 (who `dynamodb_query` may

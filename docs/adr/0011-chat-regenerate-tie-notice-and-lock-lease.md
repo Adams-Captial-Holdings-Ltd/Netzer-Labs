@@ -29,7 +29,9 @@
    "a missing id counts as `null`" (Jev 0.98), which is exact after the deploy. The stored field is unchanged.
 2. **Decision 66.** The file-only note is saved with `status: 'notice'`. The page shows a notice without Regenerate,
    and the server refuses to regenerate one (409 `nothing_to_regenerate`). Notes saved before the change stay
-   regenerable.
+   regenerable. The same step extended the rule to the kill-phrase confirmation (the decision's revisit trigger, "another
+   canned reply type is stored", fired in the security review, INFO-8; council 3-0): it is saved as a notice and reaches
+   the page as a canned `reply` event, so it is never offered for Regenerate.
 3. **Decision 67.** Acquiring the child lock succeeds when no lock exists or the existing lock's `createdAt` is older
    than 15 minutes (`attribute_not_exists(PK) OR createdAt < :cutoff`, one conditional Put); a takeover writes a warn
    log with the old lock's age in seconds; a late release that finds another holder's token logs instead of throwing.
