@@ -137,10 +137,12 @@ function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
 
 /**
  * Play one fixture, and return the assistant text that actually reached the
- * client. `chunk` and `reply` events carry the reply CUMULATIVELY (the client
- * assigns, never appends — see web/src/lib/chat/stream.ts), so the last one
- * written is the whole reply. A client that leaves mid-stream is returned what
- * it had received, which is then exactly what its transcript replays.
+ * client. Fixture `chunk` and `reply` events carry the reply CUMULATIVELY, so
+ * the last one written is the whole reply. The page reads only protocol 2
+ * (P7, WIRE), so each `chunk` goes out as a `delta` at position 0, which
+ * replaces the text (web/src/lib/chat/stream.ts). A client that leaves
+ * mid-stream is returned what it had received, which is then exactly what its
+ * transcript replays.
  */
 async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   // Fixture selection: "/fixture <name>" picks one by name, anything else
@@ -165,7 +167,8 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
     if (ev.event === 'drop') return { text: streamed, tools, stopped: true, artifacts, failed, dropped: true };
     // The real route publishes at most eight references a turn (MAX_DASHBOARD_ARTIFACT_REFS).
     if (ev.event === 'artifact_ref' && artifacts.length >= 8) continue;
-    sseWrite(res, ev.event, ev.data);
+    if (ev.event === 'chunk') sseWrite(res, 'delta', JSON.stringify({ i: 0, t: ev.data }));
+    else sseWrite(res, ev.event, ev.data);
     if (ev.event === 'chunk' || ev.event === 'reply') streamed = ev.data;
     if (ev.event === 'artifact_ref') artifacts.push(JSON.parse(ev.data));
     if (ev.event === 'error') failed = true;
