@@ -110,7 +110,7 @@ function describeUploads(keys: string[]): Array<{ id: string; name: string; type
   });
 }
 
-interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[]; failed: boolean }
+interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[]; failed: boolean; dropped?: true }
 
 /** Accumulate only the fields the real transcript stores, never arguments. */
 function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
@@ -150,6 +150,8 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   for (const ev of fixture) {
     await cadence(res, ev.delayMs);
     if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed, artifacts, failed };
+    // P7 (A240): the `drop` fixture's marker. Left open: the caller records the reply, then drops the connection.
+    if (ev.event === 'drop') return { text: streamed, tools, stopped: true, artifacts, failed, dropped: true };
     // The real route publishes at most eight references a turn (MAX_DASHBOARD_ARTIFACT_REFS).
     if (ev.event === 'artifact_ref' && artifacts.length >= 8) continue;
     sseWrite(res, ev.event, ev.data);
@@ -384,13 +386,16 @@ export function mockStreamPlugin(): Plugin {
               // A cut stream records what the client actually received, which is
               // the honest transcript — but a mysteriously short reply on replay
               // is worth a word here rather than a puzzle later.
-              if (reply.stopped) {
+              if (reply.stopped && !reply.dropped) {
                 console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.text.length} chars)`);
               }
               if (turn.regenerate) {
                 const stored = transcripts.get(turn.chatId)!;
                 transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000)]);
               } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
+              // P7 (A240): saved as stopped first, as the real route saves a reply whose connection dropped;
+              // then the connection drops with the body unfinished, which the page reads as a network failure.
+              if (reply.dropped) res.destroy();
             })
             // Without this, a throw anywhere above becomes an unhandled
             // rejection that takes the whole dev server down and blames
