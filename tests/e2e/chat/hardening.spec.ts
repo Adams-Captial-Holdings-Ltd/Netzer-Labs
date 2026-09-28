@@ -485,3 +485,26 @@ test('P7 Regenerate right after Stop answers the stopped reply', async ({ page }
   await waitForEnd(page);
   await expect(page.getByText('This chat changed in another tab')).toHaveCount(0);
 });
+
+// The owner, 2026-09-28 (a staging screenshot): hovering the (?) beside the chat's ID in the header showed only
+// a sliver of odd help text. The box opened upward, past the chat page's top edge, which the page clips
+// (overflow hidden), and its glossary text described audit actions, not this chat.
+test('P7 the chat ID help opens where it can be read and says what the ID is', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await newChat(page);
+  await page.locator('[data-tour="chat-new-chat"]').getByRole('button', { name: 'More information' }).hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toContainText("This chat's ID");
+  const hidden = await tip.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    if (r.top < 0 || r.left < 0 || r.bottom > innerHeight || r.right > innerWidth) return 'off screen';
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      const s = getComputedStyle(a);
+      if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
+      const b = a.getBoundingClientRect();
+      if (r.top < b.top || r.left < b.left || r.bottom > b.bottom || r.right > b.right) return `clipped by <${a.tagName.toLowerCase()} class="${a.className}">`;
+    }
+    return '';
+  });
+  expect(hidden, 'the whole help box is on screen').toBe('');
+});
