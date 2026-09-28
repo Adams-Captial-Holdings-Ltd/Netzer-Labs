@@ -46,6 +46,9 @@ const transcriptOf = (page: Page) => page.locator('[data-tour="chat-messages"]')
 // `:visible` — the conversation list is rendered twice (the desktop rail and the hidden mobile drawer).
 const row = (page: Page, title: string) => page.locator(`button[title="${title}"]:visible`);
 const isTurnPost = (r: Request) => r.method() === 'POST' && r.url().endsWith('/api/test-turn/stream');
+const searchOf = (page: Page) => page.getByRole('searchbox', { name: 'Search chats' });
+/** The one row currently marked as the open conversation, in whichever of the two rendered copies is visible (M96: every new-chat test finds its OWN row this way, never a shared fixture row). */
+const activeRowOf = (page: Page) => page.locator('li:visible').filter({ has: page.locator('button[aria-current="true"]') });
 
 /** Open the chat and start a fresh conversation, the way a person does (P56). */
 async function newChat(page: Page) {
@@ -213,4 +216,214 @@ test('P7 after a reload the file note offers no Regenerate', async ({ page }) =>
   await expect(reloaded).toContainText(/stored/i);
   await reloaded.hover();
   await expect(reloaded.getByRole('button', { name: 'Regenerate' })).toHaveCount(0);
+});
+
+// P7 (step 9) — work order D: rename and search hardening (A229, A231, A234,
+// A236, A239) and the not-saved regenerate alert (A235). Written BEFORE the
+// change, as the bar (netzar-chat-plan/p7-proof.sh rows M-2..M-6, A-1). Each
+// test opens a chat of its own (M96) rather than mutating a shared fixture
+// row, so ordering and the suite's single worker never matter.
+
+// A234 (council 3-0): pre-filling the rename box collapses whitespace control
+// characters (line breaks, tabs) into single spaces, so a chat whose first
+// message has a line break renames when saved UNTOUCHED. Today the raw `\n`
+// in the first message flows unedited into the rename box and then into the
+// PATCH body, which the route (and the dev mock, mock-stream-plugin.ts
+// ~:596-599) refuses as `invalid_title` (a control character) — the generic
+// failure toast this test proves absent.
+test('P7 a chat whose first message has a line break renames without edits', async ({ page }) => {
+  const firstLine = 'Weekly incident summary';
+  const secondLine = 'keep it concise please';
+  const collapsed = `${firstLine} ${secondLine}`;
+  await newChat(page);
+  await composerOf(page).fill(`${firstLine}\n${secondLine}`);
+  await expect(sendOf(page)).toBeEnabled();
+  await sendOf(page).click();
+  await waitForEnd(page);
+
+  const activeRow = activeRowOf(page);
+  await activeRow.hover();
+  await activeRow.getByRole('button', { name: /^Rename chat:/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Chat title' })).toBeVisible();
+
+  const saved = page.waitForResponse((r) => r.request().method() === 'PATCH' && r.url().endsWith('/api/sessions'));
+  await page.getByRole('button', { name: 'Save title' }).click();
+  const response = await saved;
+
+  // Saved untouched: the pre-fill already collapsed the line break, so the
+  // server never sees a control character and never refuses it.
+  expect(response.status(), `PATCH body: ${await response.text()}`).toBe(200);
+  await expect(page.getByText('Could not update that chat', { exact: false })).toHaveCount(0);
+  await expect(row(page, collapsed), 'the list shows the saved (collapsed) title').toBeVisible();
+});
+
+// A234 (council 3-0): a title a person actively types with a tab is refused
+// by the server exactly as today (control characters are never accepted),
+// but the alert now says WHY in the words the finding pins, instead of
+// today's generic "Could not update that chat. Please try again." — this is
+// a client-side wording change only: the collapse-on-prefill fix above does
+// not touch a value the person edits by hand.
+test('P7 a refused title says why', async ({ page }) => {
+  await newChat(page);
+  await sendAndWait(page, 'Quick question about pricing');
+
+  const activeRow = activeRowOf(page);
+  await activeRow.hover();
+  await activeRow.getByRole('button', { name: /^Rename chat:/ }).click();
+  const field = page.getByRole('textbox', { name: 'Chat title' });
+  await expect(field).toBeVisible();
+  // Playwright `fill` keeps the tab character (a real keypress would move
+  // focus instead of inserting one).
+  await field.fill('Bad\ttitle');
+
+  const refused = page.waitForResponse((r) => r.request().method() === 'PATCH' && r.url().endsWith('/api/sessions'));
+  await page.getByRole('button', { name: 'Save title' }).click();
+  const response = await refused;
+  expect(response.status(), await response.text()).toBe(400);
+
+  await expect(page.getByText('A title can be up to 120 characters, with no tabs or line breaks.', { exact: true }))
+    .toBeVisible();
+  await expect(page.getByText('Could not update that chat', { exact: false })).toHaveCount(0);
+});
+
+// A229: the rename box for a long title opens showing the title's START
+// (scrollLeft 0) with the whole title selected, so typing replaces it. Today
+// `.select()` leaves the native scroll position at the END of an overflowing
+// field.
+test('P7 a long title opens in the rename box from its start', async ({ page }) => {
+  const LONG_TITLE = (
+    'The quarterly compliance review covers access management, encryption at ' +
+    'rest, logging retention, incident response drills and vendor risk ' +
+    'assessments end to end'
+  ).slice(0, 118);
+  await newChat(page);
+  await sendAndWait(page, LONG_TITLE);
+
+  const activeRow = activeRowOf(page);
+  await activeRow.hover();
+  await activeRow.getByRole('button', { name: /^Rename chat:/ }).click();
+  const field = page.getByRole('textbox', { name: 'Chat title' });
+  await expect(field).toBeFocused();
+
+  const metrics = await field.evaluate((el: HTMLInputElement) => ({
+    scrollLeft: el.scrollLeft,
+    selectionStart: el.selectionStart,
+    selectionEnd: el.selectionEnd,
+    valueLength: el.value.length,
+    overflowing: el.scrollWidth > el.clientWidth,
+  }));
+  expect(metrics.overflowing, `field did not overflow its box: ${JSON.stringify(metrics)}`).toBe(true);
+  expect(metrics, `field metrics: ${JSON.stringify(metrics)}`)
+    .toMatchObject({ scrollLeft: 0, selectionStart: 0, selectionEnd: metrics.valueLength });
+});
+
+// A236 (decided: maxLength={100} on the search field): typing, with the
+// keyboard as a person does, a query longer than 100 characters whose first
+// 100 characters match a chat still lists it, with no load-failure message.
+// Today the field has no maxLength, so the full (>100) value reaches the
+// server, which refuses it with 400 invalid_query (mock-stream-plugin.ts
+// ~:615) — `fill()` would not prove this (it bypasses the native maxLength
+// enforcement a real keypress respects), so this uses `pressSequentially`.
+test('P7 a search longer than one hundred characters still lists chats', async ({ page }) => {
+  const LONG_TITLE = (
+    'Infrastructure review covering network security posture, access control ' +
+    'audits, logging retention, backup drills and vendor risk assessments ' +
+    'across every region we operate in'
+  ).slice(0, 100);
+  await newChat(page);
+  await sendAndWait(page, LONG_TITLE);
+  await expect(row(page, LONG_TITLE)).toBeVisible();
+
+  // The chat this test just created is visible from the moment it is
+  // created, unfiltered — so the row alone is not a safe anchor (P135): wait
+  // for the search itself to actually answer before judging the outcome.
+  const searched = page.waitForResponse((r) =>
+    r.request().method() === 'GET' && r.url().includes('/api/sessions?') &&
+    (new URL(r.url()).searchParams.get('q')?.length ?? 0) > 0, { timeout: 15_000 });
+  await searchOf(page).pressSequentially(`${LONG_TITLE}EXTRAEXTRA`, { delay: 15 });
+  const response = await searched;
+
+  expect(response.status(), `search response: ${await response.text()}`).toBe(200);
+  await expect(row(page, LONG_TITLE), 'a query whose first 100 characters match must still list the chat')
+    .toBeVisible();
+  await expect(page.getByText('Could not load your chats', { exact: false })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+});
+
+// A239 (owner decision 62: compare trimmed queries, and re-send when the
+// answered query differs from the field): a quick edit that leaves the same
+// TRIMMED query (a trailing space here) while a search is in flight must
+// still end with the list matching the search box. Today the in-flight
+// answer is invalidated (correctly, by the request counter) but nothing ever
+// re-fires for the field's current content, because `setSearchQuery` bails
+// when the trimmed value is unchanged (Chat.tsx ~:230-275) — so the list is
+// left stale.
+test('P7 the list matches the search box after a quick edit during a search', async ({ page }) => {
+  const target = 'Reconcile the August invoice exceptions'; // mock row 8
+  const other = 'Wiring the turn stream'; // mock row 0
+  let releaseFirst: () => void = () => {};
+  const firstHeld = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let firstSeen = false;
+  await page.route(/\/api\/sessions\?/, async (route) => {
+    const q = new URL(route.request().url()).searchParams.get('q');
+    if (q === 'invoice' && !firstSeen) {
+      firstSeen = true;
+      await firstHeld;
+    }
+    await route.continue();
+  });
+
+  await openChat(page);
+  await expect(row(page, other)).toBeVisible();
+
+  await searchOf(page).fill('invoice');
+  await page.waitForRequest((r) => r.url().includes('q=invoice'));
+  // A quick edit that leaves the same trimmed query, well inside the 250ms
+  // debounce and while the first answer is still held.
+  await page.waitForTimeout(60);
+  await searchOf(page).fill('invoice ');
+  // Comfortably longer than the 250ms debounce, so any re-send would have
+  // been dispatched by now.
+  await page.waitForTimeout(500);
+  releaseFirst();
+
+  await expect(row(page, target), 'the list must match the search box ("invoice ")').toBeVisible({ timeout: 10_000 });
+  await expect(row(page, other)).toHaveCount(0);
+
+  await page.unroute(/\/api\/sessions\?/);
+  await searchOf(page).fill('');
+});
+
+// A235 (council fixed_line, web only): a regenerate whose save the server
+// refused (`done: not_saved` after a normal reply — not a block or a
+// refusal) shows the fixed line above any reply text, and the old reply
+// stays. Today the alert is just the raw reply text (Chat.tsx's regenerate()
+// catch: `outcome.text || 'The server did not save this reply.'`), never
+// this sentence. The P6 test "P6 a regenerate the server did not save leaves
+// the old reply in place" (conversation-ux.spec.ts ~:698) is unaffected: it
+// only asserts the alert CONTAINS its refusal text, which stays true once
+// the fixed line is added above it — this test does not touch it.
+test('P7 an unsaved regenerate says the reply was not saved', async ({ page }) => {
+  const NOT_SAVED_LINE = "The new reply wasn't saved, so the previous one is kept.";
+  await newChat(page);
+  await sendAndWait(page, 'a question worth asking twice');
+  await expect(replies(page)).toHaveCount(1);
+
+  const freshReply = 'Here is a different answer to the same question.';
+  const notSavedBody = [
+    `event: chunk\ndata: ${freshReply}\n\n`,
+    `event: final\ndata: ${JSON.stringify({ text: freshReply, modelId: 'us.anthropic.claude-sonnet-4-5', latencyMs: 5, costUsd: 0, toolCallCount: 0 })}\n\n`,
+    'event: done\ndata: not_saved\n\n',
+  ].join('');
+  await page.route('**/api/test-turn/stream', (route) =>
+    route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: notSavedBody }));
+
+  await regenerateLast(page);
+
+  const alertText = (await page.getByRole('alert').innerText()).trim();
+  expect(alertText.startsWith(NOT_SAVED_LINE), `alert text: ${JSON.stringify(alertText)}`).toBe(true);
+  await expect(replies(page)).toHaveCount(1);
+  await expect(replies(page).last()).toContainText(REPLY);
+
+  await page.unroute('**/api/test-turn/stream');
 });
