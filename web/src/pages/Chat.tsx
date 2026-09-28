@@ -876,6 +876,7 @@ export function Chat() {
             toolStatus={toolStatus}
             streamStartedAt={streamStartedAt}
             endRef={endRef}
+            footer={regenerateError && <div role="alert" class="chat-error-panel whitespace-pre-line rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
           >
             {loadError && agents.length === 0 && (
               <div class="text-caption text-danger bg-danger-a/10 border border-danger-a/40 rounded-lg px-3 py-2">
@@ -884,7 +885,6 @@ export function Chat() {
             )}
             {transcriptLoading && <div role="status" class="flex min-h-48 items-center justify-center gap-2 text-secondary"><span class="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />Loading conversation…</div>}
             {transcriptError && <div role="alert" class="chat-error-panel flex items-center gap-3 rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">Could not load this conversation. <Button variant="secondary" size="sm" onClick={() => void openConversation(chatId)}>Try again</Button></div>}
-            {regenerateError && <div role="alert" class="chat-error-panel whitespace-pre-line rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
             {isLanding && !transcriptLoading && !transcriptError && (
               <ChatLanding
                 agentName={agentName}

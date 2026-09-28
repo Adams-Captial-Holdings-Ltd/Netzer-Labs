@@ -527,7 +527,8 @@ export function ConversationSidebar({
                       aria-label={`Rename chat: ${title}`} title="Rename chat"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setRenameTitle((c.title ?? c.firstMessage ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 120));
+                        // Match the server's UNSAFE_ARTIFACT_TITLE_PATTERN after cutting the stored UTF-16 text.
+                        setRenameTitle((c.title ?? c.firstMessage ?? '').slice(0, 120).replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]+/gu, ' ').trim());
                         setRenamingId(c.chatId);
                       }}
                       class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40">

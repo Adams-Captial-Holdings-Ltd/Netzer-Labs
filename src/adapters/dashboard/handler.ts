@@ -96,6 +96,7 @@ import {
   appendTurns,
   beginTurn,
   endTurn,
+  ConversationDeletedError,
   type ToolRecord,
   type TurnStatus,
   getSession,
@@ -604,7 +605,9 @@ async function saveChatTurn(
     ], undefined, { ...owner, ...(typeof requestId === 'string' ? { requestId } : {}) });
     return true;
   } catch (err) {
-    logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    if (!(err instanceof ConversationDeletedError)) {
+      logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    }
     return false;
   }
 }
@@ -630,6 +633,10 @@ async function saveRegeneratedReply(
 }
 
 async function writeChatAnswer(stream: SSEStreamingApi, result: AgentTurnResponse, confirmations: string[]): Promise<void> {
+  if (result.refusal?.kind === 'kill_phrase') {
+    await stream.writeSSE({ event: 'reply', data: result.text });
+    return;
+  }
   await stream.writeSSE({
     event: 'final',
     data: JSON.stringify({ text: result.text, modelId: result.modelId, latencyMs: result.latencyMs,

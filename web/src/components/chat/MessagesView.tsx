@@ -49,6 +49,8 @@ interface MessagesViewProps {
   endRef: { current: HTMLDivElement | null };
   /** Pre-transcript slot: the load-error notice and the landing block. */
   children?: ComponentChildren;
+  /** Notice rendered at the bottom of the transcript. */
+  footer?: ComponentChildren;
 }
 
 export function MessagesView({
@@ -66,6 +68,7 @@ export function MessagesView({
   streamStartedAt,
   endRef,
   children,
+  footer,
 }: MessagesViewProps) {
   return (
     // `flex-1` claims the column's free height so the block below can push
@@ -117,6 +120,7 @@ export function MessagesView({
           />
         )}
       </div>
+      {footer}
       {/* OUTSIDE the gap container on purpose: a zero-height sentinel inside a
           `gap-7` stack still takes a 28px gap before it, which is dead space
           the composer then sits on top of. */}
