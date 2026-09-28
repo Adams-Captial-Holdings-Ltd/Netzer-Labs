@@ -1021,3 +1021,23 @@ test('P6 the voice orb hint never covers the navigation', async ({ page }) => {
   await page.waitForTimeout(300);
   expect(await covered()).toBe('');
 });
+
+// CI on PR #194: the page's shortcut listener searched the whole page for an open artifact sheet on EVERY keystroke,
+// so typing with a long file open fell behind P5's typing budget. Plain typing must not search the page.
+test('P6 plain typing never searches the page for an open artifact sheet', async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = Document.prototype.querySelector;
+    const counter = window as unknown as { sheetQueries: number };
+    counter.sheetQueries = 0;
+    Document.prototype.querySelector = function (this: Document, selector: string) {
+      if (selector.includes('[data-artifact-panel]')) counter.sheetQueries++;
+      return original.call(this, selector);
+    } as typeof original;
+  });
+  await newChat(page);
+  await composerOf(page).focus();
+  await page.evaluate(() => { (window as unknown as { sheetQueries: number }).sheetQueries = 0; });
+  await composerOf(page).pressSequentially('plain words', { delay: 0 });
+  await expect(composerOf(page)).toHaveValue('plain words');
+  expect(await page.evaluate(() => (window as unknown as { sheetQueries: number }).sheetQueries)).toBe(0);
+});
