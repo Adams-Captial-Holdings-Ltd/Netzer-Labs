@@ -62,7 +62,7 @@ function sseWrite(res: ServerResponse, event: string, data: string): void {
  */
 function parseTurn(rawBody: string): {
   text: string; chatId: string; attachmentKeys: string[]; regenerate: boolean;
-  clientMessageId?: string; replyToPresent: boolean; replyTo?: unknown;
+  clientMessageId?: string; replyTo?: unknown;
 } {
   try {
     const body = JSON.parse(rawBody) as {
@@ -76,11 +76,10 @@ function parseTurn(rawBody: string): {
       text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys,
       regenerate: body.regenerate === true,
       ...(typeof body.clientMessageId === 'string' ? { clientMessageId: body.clientMessageId } : {}),
-      replyToPresent: Object.prototype.hasOwnProperty.call(body, 'replyTo'),
       ...(Object.prototype.hasOwnProperty.call(body, 'replyTo') ? { replyTo: body.replyTo } : {}),
     };
   } catch {
-    return { text: '', chatId: '', attachmentKeys: [], regenerate: false, replyToPresent: false };
+    return { text: '', chatId: '', attachmentKeys: [], regenerate: false };
   }
 }
 
@@ -392,7 +391,7 @@ export function mockStreamPlugin(): Plugin {
           }
           if (turn.regenerate) {
             if (turn.text || turn.attachmentKeys.length ||
-              (turn.replyToPresent && turn.replyTo !== null && typeof turn.replyTo !== 'string')) {
+              (turn.replyTo !== undefined && turn.replyTo !== null && typeof turn.replyTo !== 'string')) {
               jsonStatus(res, 400, { error: 'invalid_regenerate' });
               return;
             }
@@ -407,7 +406,7 @@ export function mockStreamPlugin(): Plugin {
               jsonStatus(res, 409, { error: 'nothing_to_regenerate' });
               return;
             }
-            if (turn.replyToPresent && (stored.at(-1)?.requestId ?? null) !== turn.replyTo) {
+            if (turn.replyTo !== undefined && (stored.at(-1)?.requestId ?? null) !== turn.replyTo) {
               jsonStatus(res, 409, { error: 'reply_changed' });
               return;
             }

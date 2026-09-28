@@ -2313,11 +2313,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       const saveReply = (result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>) =>
         regenerate
           ? saveRegeneratedReply(agentId, chatId, result, tools,
-            typeof clientMessageId === 'string' ? clientMessageId : undefined, {
+            clientMessageId, {
             turnsTotal: stored!.turnsTotal ?? stored!.turns.length, owner: stored!.userId!,
           })
           : saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments,
-            typeof clientMessageId === 'string' ? clientMessageId : undefined);
+            clientMessageId);
       try {
         // Command? send the reply as a single event and close. Skipped for
         // attachment turns — a caption starting with '/' is data, not a command
@@ -2391,7 +2391,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           userText = 'What is this?';
           const reply = acks.join('\n') || 'Stored the file.';
           const saved = await saveChatTurn(agentId, chatId, userText, { text: reply, notice: true }, tools, conversationOwner(c), savedAttachments,
-            typeof clientMessageId === 'string' ? clientMessageId : undefined);
+            clientMessageId);
           await stream.writeSSE({ event: 'reply', data: reply });
           for (const k of kbConfirmations) {
             await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
@@ -2456,7 +2456,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           abortSignal: abort.signal,
           agentId,
           chatId,
-          ...(typeof clientMessageId === 'string' ? { requestId: clientMessageId } : {}),
+          ...(clientMessageId ? { requestId: clientMessageId } : {}),
           userText: modelUserText,
           history,
           modelOverride,
@@ -2523,7 +2523,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
                   agentId,
                   chatId,
                   ownerId,
-                  ...(typeof clientMessageId === 'string' ? { clientMessageId } : {}),
+                  ...(clientMessageId ? { clientMessageId } : {}),
                   fileName: artifact.title,
                   contentType: artifact.mimeType,
                   body: Buffer.from(artifact.body),

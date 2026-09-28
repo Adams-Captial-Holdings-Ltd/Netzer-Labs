@@ -166,8 +166,7 @@ export async function acquireConversationChildLock(agentId: string, chatId: stri
     }));
     const old = out.Attributes as { createdAt?: string } | undefined;
     if (old) {
-      const ageSeconds = old.createdAt ? Math.floor((now - Date.parse(old.createdAt)) / 1000) : undefined;
-      logger.warn({ agentId, chatId, ...(ageSeconds !== undefined ? { ageSeconds } : {}) }, 'sessions: took over stale child lock');
+      logger.warn({ agentId, chatId, ageSeconds: Math.floor((now - Date.parse(old.createdAt!)) / 1000) }, 'sessions: took over stale child lock');
     }
   } catch (error) {
     if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') {
@@ -906,6 +905,7 @@ async function adoptRecords(conversationPk: string, chatId: string, owner: strin
  * here too: it is settled when the conversation is created (appendTurns).
  */
 type ExistingItemUpdate = Pick<UpdateCommandInput, 'UpdateExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'> & { UpdateExpression: string };
+const VERSION_BUMP = '#version = if_not_exists(#version, :zero) + :one';
 
 async function updateIfExists(
   Key: Record<string, string>,
@@ -924,13 +924,8 @@ async function updateRowIfExists(
   Key: Record<string, string>,
   update: ExistingItemUpdate,
 ): Promise<boolean> {
-  const UpdateExpression = update.UpdateExpression.replace(
-    /(SET\s+)(.*?)(\s+(?:REMOVE|ADD|DELETE)\s+|$)/,
-    (_match, start: string, set: string, end: string) => `${start}${set}, #version = if_not_exists(#version, :zero) + :one${end}`,
-  );
   return updateIfExists(Key, {
     ...update,
-    UpdateExpression,
     ExpressionAttributeNames: { ...update.ExpressionAttributeNames, '#version': 'version' },
     ExpressionAttributeValues: { ...update.ExpressionAttributeValues, ':zero': 0, ':one': 1 },
   });
@@ -957,8 +952,8 @@ export async function setModelOverride(
   await updateRowIfExists(
     Key,
     modelId
-      ? refreshTtl(chatId, 'SET modelOverride = :m, updatedAt = :u', { ':m': modelId, ':u': now })
-      : { UpdateExpression: 'REMOVE modelOverride SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } },
+      ? refreshTtl(chatId, `SET modelOverride = :m, updatedAt = :u, ${VERSION_BUMP}`, { ':m': modelId, ':u': now })
+      : { UpdateExpression: `REMOVE modelOverride SET updatedAt = :u, ${VERSION_BUMP}`, ExpressionAttributeValues: { ':u': now } },
   );
 }
 
@@ -976,11 +971,11 @@ export async function setWarroomMode(
   const now = Math.floor(Date.now() / 1000);
   const Key = { PK: pk(agentId), SK: sk(chatId) };
   if (!meetingId) {
-    await updateRowIfExists(Key, { UpdateExpression: 'REMOVE activeWarroomId SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } });
+    await updateRowIfExists(Key, { UpdateExpression: `REMOVE activeWarroomId SET updatedAt = :u, ${VERSION_BUMP}`, ExpressionAttributeValues: { ':u': now } });
     return;
   }
   const entered = await updateRowIfExists(Key, {
-    UpdateExpression: 'SET activeWarroomId = :w, updatedAt = :u',
+    UpdateExpression: `SET activeWarroomId = :w, updatedAt = :u, ${VERSION_BUMP}`,
     ExpressionAttributeValues: { ':w': meetingId, ':u': now },
   });
   if (entered) return;
@@ -1027,7 +1022,7 @@ export async function clearSession(agentId: string, chatId: string): Promise<voi
   // so far as ingested gives the zero pending count the old reset gave.
   await updateRowIfExists(
     { PK: pk(agentId), SK: sk(chatId) },
-    refreshTtl(chatId, 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u', {
+    refreshTtl(chatId, `SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u, ${VERSION_BUMP}`, {
       ':empty': [],
       ':z': 0,
       ':u': Math.floor(Date.now() / 1000),

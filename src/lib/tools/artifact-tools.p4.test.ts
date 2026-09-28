@@ -279,3 +279,38 @@ it('P4 a draft started after a finished delete never trusts a stale conversation
   expect(metaRows.length === 0 || draftTable.rows.has(parentKey),
     'a draft must never be recorded under a conversation that no longer exists').toBe(true);
 });
+
+it('P7 a file a tool saves during a dashboard turn names the turn\'s request id', async () => {
+  const turnDashboard = { ...dashboard, requestId: 'req-p7' };
+  // generate_document
+  expect(documentHandler(), 'generate_document must be registered').toBeDefined();
+  await documentHandler()!.invoke({ format: 'pdf', spec: spec('First edition') }, turnDashboard);
+  expect(saveArtifact, 'generate_document must have saved once').toHaveBeenCalledOnce();
+  expect(saveArtifact.mock.calls[0]![0], 'generate_document must name the turn\'s request id')
+    .toMatchObject({ clientMessageId: 'req-p7' });
+
+  // generate_image
+  saveArtifact.mockClear();
+  const imageHandler = registered.get('generate_image') as ToolHandler | undefined;
+  expect(imageHandler, 'generate_image must be registered').toBeDefined();
+  await imageHandler!.invoke({ prompt: 'blue horizon' }, turnDashboard);
+  expect(saveArtifact, 'generate_image must have saved once').toHaveBeenCalledOnce();
+  expect(saveArtifact.mock.calls[0]![0], 'generate_image must name the turn\'s request id')
+    .toMatchObject({ clientMessageId: 'req-p7' });
+
+  // document_draft (finalize is the call that reaches saveArtifact)
+  saveArtifact.mockClear();
+  await import(draftModulePath).catch(() => null);
+  expect(draftHandler(), 'document_draft must be registered').toBeDefined();
+  const start = await draftHandler()!.invoke(
+    { action: 'start', format: 'pdf', title: 'Report', operationId: 'p7-start' }, turnDashboard);
+  const { draftId } = JSON.parse(start.text) as { draftId: string };
+  await draftHandler()!.invoke(
+    { action: 'append', draftId, expectedRevision: 0, operationId: 'p7-section', section: { heading: 'Opening', body: 'first chapter' } },
+    turnDashboard);
+  await draftHandler()!.invoke(
+    { action: 'finalize', draftId, expectedRevision: 1, operationId: 'p7-final' }, turnDashboard);
+  expect(saveArtifact, 'document_draft must have saved once, at finalize').toHaveBeenCalledOnce();
+  expect(saveArtifact.mock.calls[0]![0], 'document_draft must name the turn\'s request id')
+    .toMatchObject({ clientMessageId: 'req-p7' });
+});
