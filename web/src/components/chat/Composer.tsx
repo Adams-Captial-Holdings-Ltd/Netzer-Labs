@@ -255,9 +255,11 @@ export function Composer({
   const wasStreaming = useRef(streaming);
 
   // The cursor comes back to the composer when a reply ends — unless something
-  // else took the focus while the reply streamed, which is theirs to keep.
+  // else took the focus while the reply streamed, which is theirs to keep. No
+  // scroll: the composer is always on screen, and a scrolling focus cancels
+  // useChatScroll's smooth scroll to the end.
   useEffect(() => {
-    if (wasStreaming.current && !streaming && focusIsFree(formRef.current)) area.current?.focus();
+    if (wasStreaming.current && !streaming && focusIsFree(formRef.current)) area.current?.focus({ preventScroll: true });
     wasStreaming.current = streaming;
   }, [streaming]);
 

@@ -259,8 +259,8 @@ export async function streamTurn(
 
   let meta: TurnMeta | undefined;
   if (!errorText && fullText && !isReply) {
-    // chunk/final payloads carry the assistant turn as JSON {text,...}. The
-    // `final` event also carries the run metadata for the footer.
+    // Only `final` carries the assistant turn as JSON {text,...}, with the run
+    // metadata for the footer; text built from deltas is raw.
     try {
       const parsed = JSON.parse(fullText);
       fullText = parsed.text ?? fullText;
@@ -272,7 +272,7 @@ export async function streamTurn(
           toolCallCount: parsed.toolCallCount ?? 0,
         };
       }
-    } catch { /* not JSON (e.g. a raw chunk); use raw text */ }
+    } catch { /* not JSON (text built from deltas); use raw text */ }
   }
 
   return { text: fullText, isReply, errorText, errorCode, saved, meta, kb: kbChips, images, artifacts, artifactRefs, tools };
