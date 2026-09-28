@@ -331,7 +331,9 @@ function recordedReply(reply: PlayedTurn, ts: number, requestId?: string) {
   };
 }
 
-function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = [], requestId?: string): void {
+function recordTurn(
+  chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = [], requestId?: string, notice = false,
+): void {
   if (!chatId) {
     // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
     // either an unparseable body or a caller that is not the chat page.
@@ -345,7 +347,9 @@ function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachm
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
     { role: 'user', text: userText, ts, ...(files.length ? { attachments: files } : {}) },
-    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [recordedReply(reply, ts, requestId)] : []),
+    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length
+      ? [{ ...recordedReply(reply, ts, requestId), ...(notice ? { status: 'notice' } : {}) }]
+      : []),
   ]);
   // Evicting in silence would be worse than not evicting at all: reopening a
   // dropped conversation returns an empty transcript, which is exactly what the
@@ -371,10 +375,8 @@ export function mockStreamPlugin(): Plugin {
           // P7 (A241): a file-only send with no caption has nothing the model can
           // see, so the real route answers with a canned "stored but not read"
           // acknowledgement (event: reply, done: media_only) instead of a model
-          // turn (handler.ts's media-only branch). Mirrors that shape as a plain
-          // reply, matching today's server behaviour — marking it `status:
-          // 'notice'` server-side is the builder's job (A241), which is why C-4
-          // is red: on reload the note still offers Regenerate.
+          // turn (handler.ts's media-only branch). The stored turn is a notice,
+          // so it remains non-regenerable after a reload.
           if (!turn.regenerate && !turn.text && turn.attachmentKeys.length > 0) {
             const note = 'Stored the file.';
             res.writeHead(200, {
@@ -383,7 +385,7 @@ export function mockStreamPlugin(): Plugin {
               Connection: 'keep-alive',
             });
             sseWrite(res, 'reply', note);
-            recordTurn(turn.chatId, turn.text, { text: note, tools: [], stopped: false, artifacts: [], failed: false }, turn.attachmentKeys);
+            recordTurn(turn.chatId, turn.text, { text: note, tools: [], stopped: false, artifacts: [], failed: false }, turn.attachmentKeys, turn.clientMessageId, true);
             sseWrite(res, 'done', 'media_only');
             res.end();
             return;
@@ -401,7 +403,7 @@ export function mockStreamPlugin(): Plugin {
               return;
             }
             const stored = transcripts.get(turn.chatId);
-            if (!stored?.length || stored.at(-1)?.role !== 'assistant') {
+            if (!stored?.length || stored.at(-1)?.role !== 'assistant' || stored.at(-1)?.status === 'notice') {
               jsonStatus(res, 409, { error: 'nothing_to_regenerate' });
               return;
             }

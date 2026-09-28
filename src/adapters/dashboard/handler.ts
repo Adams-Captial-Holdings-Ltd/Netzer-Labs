@@ -590,7 +590,7 @@ async function finishChatTurn(agentId: string, chatId: string, id: string | unde
 
 async function saveChatTurn(
   agentId: string, chatId: string, userText: string,
-  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts'>, tools: ToolRecord[], owner: SessionEnrichment,
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts'> & { notice?: true }, tools: ToolRecord[], owner: SessionEnrichment,
   attachments: TurnAttachment[] = [], requestId?: string,
 ): Promise<boolean> {
   if (result.blocked) return true;
@@ -599,7 +599,7 @@ async function saveChatTurn(
     await appendTurns(agentId, chatId, [
       { role: 'user', text: userText, ts, ...(attachments.length ? { attachments } : {}) },
       { role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
-        ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
+        ...(result.notice ? { status: 'notice' as const } : result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
         ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}) },
     ], undefined, { ...owner, ...(typeof requestId === 'string' ? { requestId } : {}) });
     return true;
@@ -2255,7 +2255,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if ((regenerate && !stored) || (stored && !ownsConversation(c, stored.userId))) {
       return c.json({ error: 'not_found' }, 404);
     }
-    if (regenerate && (stored!.turns.at(-1)?.role !== 'assistant' || stored!.turns.at(-2)?.role !== 'user')) {
+    if (regenerate && (stored!.turns.at(-1)?.role !== 'assistant' || stored!.turns.at(-2)?.role !== 'user' ||
+      stored!.turns.at(-1)?.status === 'notice')) {
       return c.json({ error: 'nothing_to_regenerate' }, 409);
     }
     if (regenerate && body?.replyTo !== undefined && (stored!.turns.at(-1)?.requestId ?? null) !== body.replyTo) {
@@ -2337,10 +2338,6 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         const attachmentBlocks: AttachmentBlock[] = [];
         const kbConfirmations: string[] = [];
         const acks: string[] = [];
-        if (regenerate) {
-          const replayFiles = stored!.turns.at(-2)!.attachments ?? [];
-          attachmentBlocks.push(...await replayStoredAttachments(replayFiles, abort.signal, agentId, chatId));
-        }
         for (const [index, a] of rawAttachments.entries()) {
           const s3Key = a.s3Key as string;
           const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
@@ -2393,7 +2390,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // already carry the "indexed, ask me anything" line).
           userText = 'What is this?';
           const reply = acks.join('\n') || 'Stored the file.';
-          const saved = await saveChatTurn(agentId, chatId, userText, { text: reply }, tools, conversationOwner(c), savedAttachments,
+          const saved = await saveChatTurn(agentId, chatId, userText, { text: reply, notice: true }, tools, conversationOwner(c), savedAttachments,
             typeof clientMessageId === 'string' ? clientMessageId : undefined);
           await stream.writeSSE({ event: 'reply', data: reply });
           for (const k of kbConfirmations) {
@@ -2485,6 +2482,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // none and attribute nothing.
           ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
           ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
+          ...(regenerate ? { loadAttachments: () => replayStoredAttachments(
+            stored!.turns.at(-2)!.attachments ?? [], abort.signal, agentId, chatId,
+          ) } : {}),
           ...(peekNote ? { systemNote: peekNote } : {}),
           onChunk: guardedChunks.onChunk,
           onToolEvent: ({ name, callIndex, toolUseId, input, inputTruncated }) => {

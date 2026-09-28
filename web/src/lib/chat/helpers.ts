@@ -23,6 +23,7 @@ export function transcriptToMessages(
       ts: turn.ts,
       ...(turn.requestId !== undefined ? { requestId: turn.requestId } : {}),
       ...(turn.status === 'stopped' ? { stopped: true } : {}),
+      ...(turn.status === 'notice' ? { isReply: true } : {}),
       ...(turn.tools?.length ? {
         tools: turn.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
       } : {}),

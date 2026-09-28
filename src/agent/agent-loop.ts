@@ -235,6 +235,8 @@ export interface AgentTurnRequest {
   origin?: TurnOrigin;
   /** Inline attachments (image, PDF) sent with the user message. */
   attachments?: AttachmentBlock[];
+  /** Called only after this turn's admission checks pass, immediately before user content is built. */
+  loadAttachments?: () => Promise<AttachmentBlock[]>;
   /**
    * Extra, surface-specific guidance appended to the agent's system prompt for
    * this turn only (e.g. the War Room etiquette note). It rides in the SYSTEM
@@ -1113,6 +1115,7 @@ async function runAdmittedTurn(
   // to use a tool, we resend non-streaming with the same context and
   // dispatch from there.
   const t0 = Date.now();
+  if (req.loadAttachments) req.attachments = [...(req.attachments ?? []), ...await req.loadAttachments()];
   const userContent = buildUserContent(req.userText, req.attachments);
   // Scrub guardrail-blocked exchanges (legacy sessions persisted them) so one
   // tripped message can never poison every turn after it.

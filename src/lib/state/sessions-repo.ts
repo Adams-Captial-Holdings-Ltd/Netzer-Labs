@@ -249,7 +249,8 @@ export interface ToolRecord {
 }
 
 export interface Turn {
-  status?: 'stopped';
+  /** 'notice' = a fixed note the server wrote, not a model reply; it cannot be regenerated. */
+  status?: 'stopped' | 'notice';
   /** The clientMessageId of the request that produced this reply; assistant turns only. Absent on replies saved before P7. */
   requestId?: string;
   tools?: ToolRecord[];
