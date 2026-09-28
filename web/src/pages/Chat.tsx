@@ -13,6 +13,7 @@ import {
 } from '../lib/chat/helpers';
 import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
+import type { TurnOutcome } from '../lib/chat/stream';
 import { stageAttachment } from '../lib/chat/uploads';
 import type { StagedFile } from '../lib/chat/uploads';
 import { admitFiles } from '../lib/chat/attachment-rules';
@@ -455,6 +456,21 @@ export function Chat() {
     }
   }
 
+  const replyMessage = (outcome: TurnOutcome, requestId: string): Message => ({
+    role: 'assistant',
+    text: outcome.text,
+    ts: Date.now() / 1000,
+    requestId,
+    ...(outcome.kb.length > 0 ? { kb: outcome.kb } : {}),
+    ...(outcome.images.length > 0 ? { images: outcome.images } : {}),
+    ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
+    ...(outcome.artifactRefs.length > 0 ? { artifactRefs: outcome.artifactRefs } : {}),
+    ...(outcome.meta ? { meta: outcome.meta } : {}),
+    ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
+    // `done: not_saved`: the answer arrived, the server could not store it.
+    ...(outcome.saved === false ? { notSaved: true as const } : {}),
+  });
+
   async function send(retryIndex?: number) {
     const retry = retryIndex !== undefined;
     const text = retry ? messages[retryIndex - 1]?.text ?? '' : input.trim();
@@ -536,19 +552,8 @@ export function Chat() {
       }
 
       setMessages((prev) => [...prev, {
-        role: 'assistant',
-        text: outcome.text,
-        ts: Date.now() / 1000,
-        requestId: clientMessageId,
-        ...(outcome.kb.length > 0 ? { kb: outcome.kb } : {}),
-        ...(outcome.images.length > 0 ? { images: outcome.images } : {}),
-        ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
-        ...(outcome.artifactRefs.length > 0 ? { artifactRefs: outcome.artifactRefs } : {}),
-        ...(outcome.meta ? { meta: outcome.meta } : {}),
+        ...replyMessage(outcome, clientMessageId),
         ...(outcome.isReply ? { isReply: true } : {}),
-        ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
-        // `done: not_saved`: the answer arrived, the server could not store it.
-        ...(outcome.saved === false ? { notSaved: true as const } : {}),
       }]);
       announce('Reply finished.');
     } catch (e) {
@@ -635,15 +640,7 @@ export function Chat() {
           ? friendlyTurnError(outcome.errorText, outcome.errorCode)
           : `The new reply wasn't saved, so the previous one is kept.${outcome.text ? `\n${outcome.text}` : ''}`);
       } else {
-        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000, requestId: clientMessageId,
-          ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
-          ...(outcome.kb.length ? { kb: outcome.kb } : {}),
-          ...(outcome.images.length ? { images: outcome.images } : {}),
-          ...(outcome.artifacts.length ? { artifacts: outcome.artifacts } : {}),
-          ...(outcome.meta ? { meta: outcome.meta } : {}),
-          ...(outcome.tools.length ? { tools: outcome.tools } : {}),
-          ...(outcome.saved === false ? { notSaved: true as const } : {}),
-        }]);
+        setMessages((prev) => [...prev, replyMessage(outcome, clientMessageId)]);
         announce('Reply finished.');
       }
     } catch (e) {
