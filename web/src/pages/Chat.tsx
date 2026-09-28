@@ -145,8 +145,6 @@ export function Chat() {
     try {
       const value = JSON.stringify({ owner: getDashboardUser() || 'unknown', agentId: id, chatId: conversationId });
       sessionStorage.setItem(activeKey(), value);
-      // Keep the current tab's pointer readable by older callers.
-      sessionStorage.setItem(ACTIVE_CHAT_KEY, value);
     } catch { /* Resume is best-effort in private storage modes. */ }
   }
 

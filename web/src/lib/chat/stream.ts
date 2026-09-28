@@ -143,7 +143,7 @@ export async function streamTurn(
   const artifactRefs: ArtifactRef[] = [];
   const tools: ToolCall[] = [];
   const publishTools = () => cb.onTools?.(tools.map((tool) => ({ ...tool })));
-  let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
+  let curEvent = '';
   let curData = '';
   let buffer = '';
 
@@ -158,10 +158,6 @@ export async function streamTurn(
       cb.onChunk(curData);
     } else if (curEvent === 'final') {
       fullText = curData; // JSON; parsed after the loop
-    } else if (curEvent === 'chunk') {
-      fullText = curData; // cumulative plain text for the live preview
-      cb.onChunk(curData);
-      cb.onToolStatus(''); // text resumed; drop the tool-status line
     } else if (curEvent === 'delta') {
       const delta = wellFormedDelta(curData, fullText.length);
       if (delta) {
@@ -226,7 +222,7 @@ export async function streamTurn(
           errorText = error.message;
           errorCode = error.code;
         }
-      } catch { /* legacy errors are plain text */ }
+      } catch { /* plain-text errors remain available to friendlyTurnError */ }
     }
     // done / unknown events carry no assistant text we surface here.
     curData = '';
@@ -250,7 +246,7 @@ export async function streamTurn(
       if (line === '') {
         // Blank line terminates an SSE event.
         flushEvent();
-        curEvent = 'chunk';
+        curEvent = '';
       } else if (line.startsWith('event: ')) {
         curEvent = line.slice(7).trim();
       } else if (line.startsWith('data: ')) {

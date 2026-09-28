@@ -66,25 +66,6 @@ export function freshChatId(): string {
 // — which is what made history feel non-existent even though it was stored.
 export const ACTIVE_CHAT_KEY = 'cce_chat_active';
 
-export function storedChatId(agentId: string): string | null {
-  try {
-    const raw = sessionStorage.getItem(ACTIVE_CHAT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { agentId?: string; chatId?: string };
-    return parsed.agentId === agentId && parsed.chatId ? parsed.chatId : null;
-  } catch {
-    return null;
-  }
-}
-
-export function rememberChatId(agentId: string, chatId: string): void {
-  try {
-    sessionStorage.setItem(ACTIVE_CHAT_KEY, JSON.stringify({ agentId, chatId }));
-  } catch {
-    /* private mode or quota — the sidebar still works, only resume-on-reload is lost */
-  }
-}
-
 /** Sidebar label for a conversation: its opening message, else the raw id. */
 export function conversationTitle(c: Conversation): string {
   if (c.title?.trim()) return c.title.trim();
