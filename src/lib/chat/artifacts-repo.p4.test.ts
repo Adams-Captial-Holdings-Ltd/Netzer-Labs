@@ -242,6 +242,22 @@ it('P4 storage excludes writes while conversation erasure holds the lock', async
   expect(storage?.saveArtifact, 'artifact writes must serialize with conversation erasure').toBeTypeOf('function');
   const chatId = chat();
   await ownedChat(chatId);
+  // P7 (M3): the lock's Put is conditioned 'attribute_not_exists(PK) OR createdAt < :cutoff' (a 15-minute lease),
+  // which the fake table does not evaluate (A170). Answer that one Put as DynamoDB does: a lock that is held and
+  // not past its lease refuses the next holder.
+  ddbSend.mockImplementation(async (cmd: { constructor: { name: string }; input: Record<string, any> }) => {
+    const { Item, ConditionExpression, ExpressionAttributeValues } = cmd.input;
+    if (cmd.constructor.name === 'PutCommand' && String(Item?.SK).endsWith('#CHILD_LOCK')) {
+      const held = table.rows.get(`${String(Item.PK)}|${String(Item.SK)}`);
+      const cutoff = ExpressionAttributeValues?.[':cutoff'];
+      const expired = /createdAt\s*<\s*:cutoff/.test(String(ConditionExpression)) &&
+        typeof held?.createdAt === 'string' && typeof cutoff === 'string' && held.createdAt < cutoff;
+      if (held && !expired) {
+        throw Object.assign(new Error('The conditional request failed'), { name: 'ConditionalCheckFailedException' });
+      }
+    }
+    return table.send(cmd as never);
+  });
   let finishPut: ((value: { VersionId: string }) => void) | undefined;
   s3Send.mockImplementationOnce(() => new Promise((resolve) => { finishPut = resolve as typeof finishPut; }) as never);
   const pending = storage!.saveArtifact(input(chatId));
