@@ -21,6 +21,7 @@ export interface TurnBody {
   chatId: string;
   modelOverride?: string;
   clientMessageId?: string;
+  replyTo?: string | null;
   protocol?: 2;
   attachments?: TurnAttachment[];
 }
@@ -117,6 +118,7 @@ export async function streamTurn(
       chatId: body.chatId,
       ...(body.modelOverride ? { modelOverride: body.modelOverride } : {}),
       ...(body.clientMessageId !== undefined ? { clientMessageId: body.clientMessageId } : {}),
+      ...(body.regenerate && body.replyTo !== undefined ? { replyTo: body.replyTo } : {}),
       ...(body.protocol !== undefined ? { protocol: body.protocol } : {}),
       ...(!body.regenerate && body.attachments && body.attachments.length > 0 ? { attachments: body.attachments } : {}),
     }),
@@ -231,7 +233,14 @@ export async function streamTurn(
   };
 
   while (true) {
-    const { done, value } = await reader.read();
+    let chunk: Awaited<ReturnType<typeof reader.read>>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === 'AbortError') throw err;
+      throw Object.assign(new Error('Stream failed'), { code: 'connection_lost' });
+    }
+    const { done, value } = chunk;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');

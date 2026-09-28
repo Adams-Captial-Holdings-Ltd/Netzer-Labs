@@ -9,7 +9,7 @@ import type { Conversation, Message, MessageAttachment, Model, ToolCall } from '
 
 /** Restore transcript results and stopped state; arguments belong only to the live tab. */
 export function transcriptToMessages(
-  turns: Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[]; artifacts?: unknown[] }>,
+  turns: Array<{ role: string; text: string; ts: number; requestId?: string; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[]; artifacts?: unknown[] }>,
 ): Message[] {
   return turns.map((turn) => {
     if (turn.role === 'user') return {
@@ -21,6 +21,7 @@ export function transcriptToMessages(
       role: 'assistant',
       text: turn.text,
       ts: turn.ts,
+      ...(turn.requestId !== undefined ? { requestId: turn.requestId } : {}),
       ...(turn.status === 'stopped' ? { stopped: true } : {}),
       ...(turn.tools?.length ? {
         tools: turn.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),

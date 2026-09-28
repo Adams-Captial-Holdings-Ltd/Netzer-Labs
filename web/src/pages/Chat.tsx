@@ -301,8 +301,8 @@ export function Chat() {
   }
 
   // Reopen a stored conversation, including tool results and stopped turns.
-  async function openConversation(id: string) {
-    if (streaming) return;
+  async function openConversation(id: string, force = false) {
+    if (streaming && !force) return;
     const request = ++transcriptRequest.current;
     activateConversation(id);
     setStreamText('');
@@ -322,6 +322,22 @@ export function Chat() {
       setTranscriptError(true);
     } finally {
       if (request === transcriptRequest.current) setTranscriptLoading(false);
+    }
+  }
+
+  async function reloadIfSaved(requestId: string): Promise<boolean> {
+    try {
+      clearApiCache();
+      const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
+        `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(chatId)}`,
+      );
+      const turns = d.turns ?? [];
+      const last = turns.at(-1);
+      if (last?.role !== 'assistant' || last.requestId !== requestId) return false;
+      setMessages(transcriptToMessages(turns));
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -523,6 +539,7 @@ export function Chat() {
         role: 'assistant',
         text: outcome.text,
         ts: Date.now() / 1000,
+        requestId: clientMessageId,
         ...(outcome.kb.length > 0 ? { kb: outcome.kb } : {}),
         ...(outcome.images.length > 0 ? { images: outcome.images } : {}),
         ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
@@ -568,9 +585,14 @@ export function Chat() {
       // before the stream (its `code`) says what to do about it, short clean
       // causes still surface ("Something went wrong: Upload failed"), anything
       // long or token-like collapses to the generic line.
-      console.error('Chat: send failed', e);
-      const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', (e as { code?: string } | null)?.code);
-      setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current, failure: msg, ts: Date.now() / 1000, error: true }]);
+      const code = (e as { code?: string } | null)?.code;
+      if (code === 'connection_lost' && await reloadIfSaved(clientMessageId)) {
+        // The reply committed before the connection dropped; the transcript is authoritative.
+      } else {
+        console.error('Chat: send failed', e);
+        const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', code);
+        setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current, failure: msg, ts: Date.now() / 1000, error: true }]);
+      }
     }
     setStreamText('');
     streamTextRef.current = '';
@@ -589,6 +611,7 @@ export function Chat() {
     if (streaming || messages.at(-1)?.role !== 'assistant') return;
     const old = messages.at(-1)!;
     if (old.error || old.notSaved || old.isReply) return;
+    const clientMessageId = newMessageId();
     setRegenerateError('');
     setMessages((prev) => prev.slice(0, -1));
     setStreaming(true);
@@ -600,7 +623,7 @@ export function Chat() {
     const abort = new AbortController();
     abortRef.current = abort;
     try {
-      const outcome = await streamTurn({ regenerate: true, agentId, chatId, clientMessageId: newMessageId(), protocol: 2,
+      const outcome = await streamTurn({ regenerate: true, agentId, chatId, clientMessageId, replyTo: old.requestId ?? null, protocol: 2,
         ...(modelId ? { modelOverride: modelId } : {}) }, getToken(), {
         onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
         onToolStatus: setToolStatus,
@@ -612,7 +635,7 @@ export function Chat() {
           ? friendlyTurnError(outcome.errorText, outcome.errorCode)
           : outcome.text || 'The server did not save this reply.');
       } else {
-        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000,
+        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000, requestId: clientMessageId,
           ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
           ...(outcome.kb.length ? { kb: outcome.kb } : {}),
           ...(outcome.images.length ? { images: outcome.images } : {}),
@@ -628,6 +651,11 @@ export function Chat() {
         setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current || '(Stopped before a reply.)', ts: Date.now() / 1000,
           stopped: true, ...(streamToolsRef.current.length ? { tools: streamToolsRef.current } : {}) }]);
         announce('Reply stopped.');
+      } else if ((e as { code?: string } | null)?.code === 'reply_changed') {
+        await openConversation(chatId, true);
+        setRegenerateError('This chat changed in another tab, so it was reloaded.');
+      } else if ((e as { code?: string } | null)?.code === 'connection_lost' && await reloadIfSaved(clientMessageId)) {
+        // The regenerated reply committed before the connection dropped; the transcript is authoritative.
       } else {
         setMessages((prev) => [...prev, old]);
         setRegenerateError(friendlyTurnError(e instanceof Error ? e.message : ''));

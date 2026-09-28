@@ -250,6 +250,8 @@ export interface ToolRecord {
 
 export interface Turn {
   status?: 'stopped';
+  /** The clientMessageId of the request that produced this reply; assistant turns only. Absent on replies saved before P7. */
+  requestId?: string;
   tools?: ToolRecord[];
   attachments?: TurnAttachment[];
   artifacts?: ArtifactDescriptor[];
@@ -471,7 +473,7 @@ export async function replaceLastReply(
     const turnsIngested = row.turnsIngested as number | undefined;
     const now = Math.floor(Date.now() / 1000);
     const { text: _text, truncated: _truncated, tools: _tools, artifacts: _artifacts,
-      attachments: _attachments, status: _status, ...recordBase } = oldRecord;
+      attachments: _attachments, status: _status, requestId: _requestId, ...recordBase } = oldRecord;
     try {
       await ddb().send(new TransactWriteCommand({ TransactItems: [
         { Put: {
@@ -487,6 +489,7 @@ export async function replaceLastReply(
           TableName: TABLE,
           Item: { ...recordBase, role: 'assistant', ...capRecordContent(stamped), ts: reply.ts,
             ...(reply.status ? { status: reply.status } : {}),
+            ...(stamped.requestId !== undefined ? { requestId: stamped.requestId } : {}),
             ...(stamped.surface ? { surface: stamped.surface } : {}) },
           ConditionExpression: 'attribute_exists(SK) AND #r = :assistant',
           ExpressionAttributeNames: { '#r': 'role' },
@@ -587,6 +590,7 @@ export interface ContextUsage {
 
 export interface SessionEnrichment {
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
+  requestId?: string;
   /**
    * The conversation's owner. Stamped when the row is CREATED and never changed
    * afterwards (owner decision 1): the dashboard used to overwrite it with
@@ -615,9 +619,12 @@ export async function appendTurns(
 ): Promise<void> {
   // Stamp each turn with the producing surface (from the enrichment every
   // call site already passes) so merged cross-surface sessions stay legible.
-  const newTurns = enrichment?.surface
-    ? turnsIn.map((t) => (t.surface ? t : { ...t, surface: enrichment.surface }))
-    : turnsIn;
+  const newTurns = turnsIn.map((t) => ({
+    ...t,
+    ...(enrichment?.surface && !t.surface ? { surface: enrichment.surface } : {}),
+    ...(t.role === 'assistant' && enrichment?.requestId !== undefined && t.requestId === undefined
+      ? { requestId: enrichment.requestId } : {}),
+  }));
   // Optimistic concurrency: three ECS tasks share this table, and a blind
   // read-then-put let two near-simultaneous turns for the same chat (webhook
   // retry, a scheduled fire racing a live turn, a merged cross-surface
@@ -698,6 +705,7 @@ export async function appendTurns(
           ...capRecordContent(t),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
+          ...(t.requestId !== undefined ? { requestId: t.requestId } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           ...(owner ? { userId: owner } : {}),
           ...(ttl ? { ttl } : {}),
@@ -1012,6 +1020,7 @@ export async function getFullHistory(
         text: r.text as string,
         ts: r.ts as number,
         ...(r.status ? { status: r.status as Turn['status'] } : {}),
+        ...(r.requestId !== undefined ? { requestId: r.requestId as string } : {}),
         ...(r.tools ? { tools: r.tools as ToolRecord[] } : {}),
         ...(r.attachments ? { attachments: r.attachments as TurnAttachment[] } : {}),
         ...(r.artifacts ? { artifacts: safeMessageArtifacts(r.artifacts) } : {}),
@@ -1076,6 +1085,7 @@ export async function reownLegacyConversation(
           ...capRecordContent(t),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
+          ...(t.requestId !== undefined ? { requestId: t.requestId } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           userId: newOwner,
         },

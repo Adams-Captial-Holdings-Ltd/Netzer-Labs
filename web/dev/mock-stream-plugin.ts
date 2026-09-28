@@ -60,15 +60,27 @@ function sseWrite(res: ServerResponse, event: string, data: string): void {
  * record — and a missing or unparseable body is still a valid request that
  * plays "default".
  */
-function parseTurn(rawBody: string): { text: string; chatId: string; attachmentKeys: string[]; regenerate: boolean } {
+function parseTurn(rawBody: string): {
+  text: string; chatId: string; attachmentKeys: string[]; regenerate: boolean;
+  clientMessageId?: string; replyToPresent: boolean; replyTo?: unknown;
+} {
   try {
-    const body = JSON.parse(rawBody) as { text?: unknown; chatId?: unknown; attachments?: unknown; regenerate?: unknown };
+    const body = JSON.parse(rawBody) as {
+      text?: unknown; chatId?: unknown; attachments?: unknown; regenerate?: unknown;
+      clientMessageId?: unknown; replyTo?: unknown;
+    };
     const attachmentKeys = Array.isArray(body.attachments)
       ? body.attachments.map((a) => String((a as { s3Key?: unknown }).s3Key ?? ''))
       : [];
-    return { text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys, regenerate: body.regenerate === true };
+    return {
+      text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys,
+      regenerate: body.regenerate === true,
+      ...(typeof body.clientMessageId === 'string' ? { clientMessageId: body.clientMessageId } : {}),
+      replyToPresent: Object.prototype.hasOwnProperty.call(body, 'replyTo'),
+      ...(Object.prototype.hasOwnProperty.call(body, 'replyTo') ? { replyTo: body.replyTo } : {}),
+    };
   } catch {
-    return { text: '', chatId: '', attachmentKeys: [], regenerate: false };
+    return { text: '', chatId: '', attachmentKeys: [], regenerate: false, replyToPresent: false };
   }
 }
 
@@ -292,7 +304,7 @@ function mockSessions(q = ''): unknown {
 // carry. The milliseconds mistake this file made once for `updatedAt` is
 // written up above the sidebar fixture; it is not repeated here.
 const transcripts = new Map<string, Array<{
-  role: string; text: string; ts: number; status?: string; tools?: ToolCall[];
+  role: string; text: string; ts: number; requestId?: string; status?: string; tools?: ToolCall[];
   attachments?: Array<{ id: string; name: string; type: string; size: number }>;
   artifacts?: unknown[];
 }>>();
@@ -307,9 +319,10 @@ const transcripts = new Map<string, Array<{
 const MAX_CONVERSATIONS = 200;
 
 /** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
-function recordedReply(reply: PlayedTurn, ts: number) {
+function recordedReply(reply: PlayedTurn, ts: number, requestId?: string) {
   return {
     role: 'assistant', text: reply.text || (reply.stopped ? '(Stopped before a reply.)' : ''), ts,
+    ...(typeof requestId === 'string' ? { requestId } : {}),
     ...(reply.stopped ? { status: 'stopped' } : {}),
     ...(reply.tools.length ? {
       tools: reply.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
@@ -318,7 +331,7 @@ function recordedReply(reply: PlayedTurn, ts: number) {
   };
 }
 
-function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = []): void {
+function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = [], requestId?: string): void {
   if (!chatId) {
     // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
     // either an unparseable body or a caller that is not the chat page.
@@ -332,7 +345,7 @@ function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachm
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
     { role: 'user', text: userText, ts, ...(files.length ? { attachments: files } : {}) },
-    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [recordedReply(reply, ts)] : []),
+    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [recordedReply(reply, ts, requestId)] : []),
   ]);
   // Evicting in silence would be worse than not evicting at all: reopening a
   // dropped conversation returns an empty transcript, which is exactly what the
@@ -356,7 +369,8 @@ export function mockStreamPlugin(): Plugin {
         req.on('end', () => {
           const turn = parseTurn(raw);
           if (turn.regenerate) {
-            if (turn.text || turn.attachmentKeys.length) {
+            if (turn.text || turn.attachmentKeys.length ||
+              (turn.replyToPresent && turn.replyTo !== null && typeof turn.replyTo !== 'string')) {
               jsonStatus(res, 400, { error: 'invalid_regenerate' });
               return;
             }
@@ -369,6 +383,10 @@ export function mockStreamPlugin(): Plugin {
             const stored = transcripts.get(turn.chatId);
             if (!stored?.length || stored.at(-1)?.role !== 'assistant') {
               jsonStatus(res, 409, { error: 'nothing_to_regenerate' });
+              return;
+            }
+            if (turn.replyToPresent && (stored.at(-1)?.requestId ?? null) !== turn.replyTo) {
+              jsonStatus(res, 409, { error: 'reply_changed' });
               return;
             }
           }
@@ -391,8 +409,8 @@ export function mockStreamPlugin(): Plugin {
               }
               if (turn.regenerate) {
                 const stored = transcripts.get(turn.chatId)!;
-                transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000)]);
-              } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
+                transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000, turn.clientMessageId)]);
+              } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys, turn.clientMessageId);
               // P7 (A240): saved as stopped first, as the real route saves a reply whose connection dropped;
               // then the connection drops with the body unfinished, which the page reads as a network failure.
               if (reply.dropped) res.destroy();
