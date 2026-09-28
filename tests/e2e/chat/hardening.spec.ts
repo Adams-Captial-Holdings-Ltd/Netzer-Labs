@@ -507,4 +507,6 @@ test('P7 the chat ID help opens where it can be read and says what the ID is', a
     return '';
   });
   expect(hidden, 'the whole help box is on screen').toBe('');
+  // It sits inside the monospace ID chip; help prose must not inherit the code font.
+  expect(await tip.evaluate((el) => getComputedStyle(el).fontFamily), 'help text in the page font').not.toMatch(/mono/i);
 });
