@@ -158,6 +158,10 @@ export function Chat() {
   useLayoutEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.isComposing || e.keyCode === 229) return;
+      const isShortcut = ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') ||
+        ((e.ctrlKey || e.metaKey) && e.key === '/') ||
+        (e.shiftKey && e.key === 'Escape');
+      if (!isShortcut) return;
       if (document.querySelector('[data-artifact-panel][role="dialog"][aria-modal="true"]')) return;
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
         e.preventDefault();
