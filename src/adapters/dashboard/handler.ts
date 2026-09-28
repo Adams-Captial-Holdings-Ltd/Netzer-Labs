@@ -2251,7 +2251,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // history — with the 404 DELETE /sessions gives a missing chat. A send still
     // tells a stored chat from a missing one (a missing one simply starts), so
     // this hides the conversation, not whether its id is taken.
-    const stored = await getSession(agentId, chatId);
+    const stored = await getSession(agentId, chatId, regenerate ? { consistentRead: true } : undefined);
     if ((regenerate && !stored) || (stored && !ownsConversation(c, stored.userId))) {
       return c.json({ error: 'not_found' }, 404);
     }
@@ -2860,6 +2860,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       });
       if (persist && !result.blocked) {
         const now = Math.floor(Date.now() / 1000);
+        // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
         await appendTurns(agentId, chatId, [
           { role: 'user', text: body.text, ts: now },
           { role: 'assistant', text: result.text, ts: now },

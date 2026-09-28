@@ -1244,8 +1244,9 @@ export async function deleteSession(
   } finally {
     // Keep the lock row through parent deletion. A writer that acquires after
     // release re-reads the parent consistently. Only a finalizing draft refuses a
-    // missing parent; a first-turn artifact save or a draft start re-creates the
-    // chat (known gap M1, carried to hardening by owner decision 59).
+    // missing parent; a first-turn artifact save or a draft start refuses one when its
+    // turn has a request id and that turn's marker is gone (M1). A turn with no request id
+    // (public/app.js, POST /test-turn) still re-creates the chat.
     await releaseChildLock();
   }
 }

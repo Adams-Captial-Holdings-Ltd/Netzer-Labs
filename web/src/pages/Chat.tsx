@@ -325,19 +325,31 @@ export function Chat() {
   }
 
   async function reloadIfSaved(requestId: string): Promise<boolean> {
-    try {
-      clearApiCache();
-      const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
-        `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(chatId)}`,
-      );
-      const turns = d.turns ?? [];
-      const last = turns.at(-1);
-      if (last?.role !== 'assistant' || last.requestId !== requestId) return false;
-      setMessages(transcriptToMessages(turns));
-      return true;
-    } catch {
-      return false;
+    const request = transcriptRequest.current;
+    // The save waits for the outbound scan, so retry the transcript read.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (request !== transcriptRequest.current) return true;
+      try {
+        clearApiCache();
+        const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
+          `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(chatId)}`,
+        );
+        if (request !== transcriptRequest.current) return true;
+        const turns = d.turns ?? [];
+        const last = turns.at(-1);
+        if (last?.role === 'assistant' && last.requestId === requestId) {
+          setMessages(transcriptToMessages(turns));
+          return true;
+        }
+      } catch {
+        if (request !== transcriptRequest.current) return true;
+      }
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (request !== transcriptRequest.current) return true;
+      }
     }
+    return false;
   }
 
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
