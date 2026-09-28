@@ -149,8 +149,8 @@ export function isPersistentChat(chatId: string): boolean {
 
 /**
  * Serialize artifact writes with conversation erasure using a durable child
- * row. There is deliberately no TTL: if a process dies while holding it, an
- * operator must inspect and recover the conversation before removing the row.
+ * row. A lock older than 15 minutes from createdAt is taken over, and the
+ * takeover is logged with its age.
  */
 export async function acquireConversationChildLock(agentId: string, chatId: string): Promise<() => Promise<void>> {
   const token = randomUUID();
@@ -469,7 +469,7 @@ export async function getSession(
  */
 export async function replaceLastReply(
   agentId: string, chatId: string, reply: Turn,
-  expected?: { turnsTotal: number; owner: string },
+  expected?: { turnsTotal: number; owner: string; replyTo?: string | null },
 ): Promise<boolean> {
   const key = { PK: pk(agentId), SK: sk(chatId) };
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -477,7 +477,8 @@ export async function replaceLastReply(
     if (!row) return false;
     const turns = (row.turns as Turn[] | undefined) ?? [];
     const turnsTotal = (row.turnsTotal as number | undefined) ?? turns.length;
-    if (expected && (turnsTotal !== expected.turnsTotal || row.userId !== expected.owner)) return false;
+    if (expected && (turnsTotal !== expected.turnsTotal || row.userId !== expected.owner ||
+      (expected.replyTo !== undefined && (turns.at(-1)?.requestId ?? null) !== expected.replyTo))) return false;
     if (turns.at(-1)?.role !== 'assistant' || turns.at(-2)?.role !== 'user') return false;
     const seq = turnsTotal - 1;
     const { Item: oldRecord } = await ddb().send(new GetCommand({
@@ -806,6 +807,11 @@ export async function appendTurns(
       const cancelled = e.name === 'TransactionCanceledException';
       if (cancelled && markerIndex !== undefined && reasons[markerIndex]?.Code === 'ConditionalCheckFailed') {
         logger.warn({ agentId, chatId }, 'sessions: refused turn save after conversation deletion');
+        try {
+          await deleteRawFiles(turnsIn.flatMap((turn) => turn.attachments?.map((attachment) => attachment.key) ?? []));
+        } catch (err) {
+          logger.error({ agentId, chatId, err }, 'sessions: failed to delete files from refused turn');
+        }
         throw new ConversationDeletedError();
       }
       const markerConflict = markerIndex !== undefined && reasons[markerIndex]?.Code === 'TransactionConflict';
@@ -1265,18 +1271,21 @@ async function deleteSessionAttachments(agentId: string, chatId: string): Promis
     startKey = out.LastEvaluatedKey;
   } while (startKey);
 
-  if (fileKeys.size > 0) {
-    const bucket = process.env.RAW_BUCKET;
-    if (!bucket) throw new Error('RAW_BUCKET not configured');
-    const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-east-1' });
-    const files = [...fileKeys];
-    for (let i = 0; i < files.length; i += 1000) {
-      const result = await s3.send(new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: files.slice(i, i + 1000).map((Key) => ({ Key })) },
-      }));
-      if (result.Errors?.length) throw new Error(`Failed to delete ${result.Errors.length} stored attachment(s)`);
-    }
+  await deleteRawFiles([...fileKeys]);
+}
+
+async function deleteRawFiles(keys: string[]): Promise<void> {
+  const files = [...new Set(keys.filter(Boolean))];
+  if (files.length === 0) return;
+  const bucket = process.env.RAW_BUCKET;
+  if (!bucket) throw new Error('RAW_BUCKET not configured');
+  const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-east-1' });
+  for (let i = 0; i < files.length; i += 1000) {
+    const result = await s3.send(new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: { Objects: files.slice(i, i + 1000).map((Key) => ({ Key })) },
+    }));
+    if (result.Errors?.length) throw new Error(`Failed to delete ${result.Errors.length} stored attachment(s)`);
   }
 }
 

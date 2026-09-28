@@ -92,7 +92,8 @@ async function ownedMeta(ctx: ToolContext, draftId: string): Promise<DraftMeta |
 async function assertStableParent(ctx: ToolContext): Promise<boolean> {
   const session = await getSession(ctx.agentId, ctx.chatId, { consistentRead: true });
   if (!session) {
-    try { await appendTurns(ctx.agentId, ctx.chatId, [], undefined, { surface: 'dashboard', userId: ctx.userId, ephemeral: false }); }
+    try { await appendTurns(ctx.agentId, ctx.chatId, [], undefined, { surface: 'dashboard', userId: ctx.userId, ephemeral: false,
+      ...(ctx.requestId ? { requestId: ctx.requestId } : {}) }); }
     catch { return false; }
   }
   const current = await getSession(ctx.agentId, ctx.chatId, { consistentRead: true });

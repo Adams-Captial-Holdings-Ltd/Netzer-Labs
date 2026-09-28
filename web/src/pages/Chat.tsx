@@ -571,6 +571,7 @@ export function Chat() {
           text: streamTextRef.current || '(Stopped before a reply.)',
           ts: Date.now() / 1000,
           stopped: true,
+          requestId: clientMessageId,
           ...(streamToolsRef.current.length > 0 ? { tools: streamToolsRef.current } : {}),
         }]);
         setStreamText('');
@@ -646,7 +647,7 @@ export function Chat() {
     } catch (e) {
       if ((e as { name?: string })?.name === 'AbortError') {
         setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current || '(Stopped before a reply.)', ts: Date.now() / 1000,
-          stopped: true, ...(streamToolsRef.current.length ? { tools: streamToolsRef.current } : {}) }]);
+          stopped: true, requestId: clientMessageId, ...(streamToolsRef.current.length ? { tools: streamToolsRef.current } : {}) }]);
         announce('Reply stopped.');
       } else if ((e as { code?: string } | null)?.code === 'reply_changed') {
         await openConversation(chatId, true);

@@ -590,7 +590,7 @@ async function finishChatTurn(agentId: string, chatId: string, id: string | unde
 
 async function saveChatTurn(
   agentId: string, chatId: string, userText: string,
-  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts'> & { notice?: true }, tools: ToolRecord[], owner: SessionEnrichment,
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts' | 'refusal'> & { notice?: true }, tools: ToolRecord[], owner: SessionEnrichment,
   attachments: TurnAttachment[] = [], requestId?: string,
 ): Promise<boolean> {
   if (result.blocked) return true;
@@ -599,7 +599,7 @@ async function saveChatTurn(
     await appendTurns(agentId, chatId, [
       { role: 'user', text: userText, ts, ...(attachments.length ? { attachments } : {}) },
       { role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
-        ...(result.notice ? { status: 'notice' as const } : result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
+        ...(result.notice || result.refusal?.kind === 'kill_phrase' ? { status: 'notice' as const } : result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
         ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}) },
     ], undefined, { ...owner, ...(typeof requestId === 'string' ? { requestId } : {}) });
     return true;
@@ -612,7 +612,7 @@ async function saveChatTurn(
 async function saveRegeneratedReply(
   agentId: string, chatId: string,
   result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>, tools: ToolRecord[],
-  requestId: string | undefined, expected: { turnsTotal: number; owner: string },
+  requestId: string | undefined, expected: { turnsTotal: number; owner: string; replyTo?: string | null },
 ): Promise<boolean> {
   if (result.blocked || result.refusal) return false;
   const ts = Math.floor(Date.now() / 1000);
@@ -2315,6 +2315,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           ? saveRegeneratedReply(agentId, chatId, result, tools,
             clientMessageId, {
             turnsTotal: stored!.turnsTotal ?? stored!.turns.length, owner: stored!.userId!,
+            ...(body?.replyTo !== undefined ? { replyTo: body.replyTo as string | null } : {}),
           })
           : saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments,
             clientMessageId);
