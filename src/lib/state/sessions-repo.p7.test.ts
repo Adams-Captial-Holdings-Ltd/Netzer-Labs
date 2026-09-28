@@ -172,6 +172,34 @@ describe('P7 work order A — sessions repository', () => {
   const markerKey = (chatId: string, clientMessageId: string) =>
     `AGENT#${AGENT}|CHAT#${chatId}#TURN#${clientMessageId}`;
 
+  /**
+   * A DynamoDB stand-in for appendTurns' transaction (E-1, E-4): the fake table
+   * (A170) applies a transaction's writes without evaluating any condition, so
+   * it cannot refuse a save whose turn marker is gone. This answers as real
+   * DynamoDB would for a TransactWriteCommand carrying a ConditionCheck that
+   * the item exists: when that key is missing, the whole transaction is
+   * cancelled, with ConditionalCheckFailed at that item's index and None
+   * elsewhere, and nothing is written. Every transaction is recorded (shape
+   * and retries); every other command falls through to the fake table.
+   */
+  function markerAwareSend(rows: Map<string, Item>, transactions: Array<{ TransactItems: Item[] }>) {
+    return async (cmd: { constructor: { name: string }; input: Record<string, any> }) => {
+      if (cmd.constructor.name === 'TransactWriteCommand') {
+        const items = cmd.input.TransactItems as Array<{ ConditionCheck?: { Key: Item; ConditionExpression?: string } }>;
+        transactions.push(cmd.input as { TransactItems: Item[] });
+        const reasons = items.map(({ ConditionCheck: check }) =>
+          check && /^attribute_exists\((?:PK|SK)\)$/.test(String(check.ConditionExpression ?? '')) &&
+          !rows.has(`${String(check.Key.PK)}|${String(check.Key.SK)}`)
+            ? { Code: 'ConditionalCheckFailed' } : { Code: 'None' });
+        if (reasons.some((r) => r.Code === 'ConditionalCheckFailed')) {
+          throw Object.assign(new Error('Transaction cancelled, please refer cancellation reasons for specific reasons'),
+            { name: 'TransactionCanceledException', CancellationReasons: reasons });
+        }
+      }
+      return table.send(cmd as never);
+    };
+  }
+
   it('P7 a dashboard save whose turn marker is gone writes nothing', async () => {
     const chatId = 'dashboard:e1-marker-gone';
     // A conversation already exists, so the row's OWN version fence trivially
@@ -183,6 +211,8 @@ describe('P7 work order A — sessions repository', () => {
     ], undefined, PERSON);
     const before = { window: windowOf(chatId), records: recordsOf(chatId), row: table.rows.get(rowKey(chatId)) };
     expect(table.rows.has(markerKey(chatId, 'gone-marker-1')), 'the marker must not already exist').toBe(false);
+    const transactions: Array<{ TransactItems: Item[] }> = [];
+    send.mockImplementation(markerAwareSend(table.rows, transactions));
 
     let refused = false;
     try {
@@ -195,6 +225,14 @@ describe('P7 work order A — sessions repository', () => {
     }
     expect(refused, 'a save whose turn marker is gone must refuse, not silently succeed').toBe(true);
     expect({ window: windowOf(chatId), records: recordsOf(chatId), row: table.rows.get(rowKey(chatId)) }).toEqual(before);
+    // The shape that makes DynamoDB refuse it: the save's own transaction checks the turn's marker exists,
+    // after the row (item 0), and a refused check is not retried.
+    expect(transactions, 'one transaction, no retry').toHaveLength(1);
+    const checks = transactions[0]!.TransactItems.slice(1).filter((t) => t.ConditionCheck);
+    expect(checks).toEqual([{ ConditionCheck: expect.objectContaining({
+      Key: { PK: `AGENT#${AGENT}`, SK: `CHAT#${chatId}#TURN#gone-marker-1` },
+      ConditionExpression: expect.stringMatching(/^attribute_exists\((?:PK|SK)\)$/),
+    }) }]);
   });
 
   it('P7 a save refused because its chat was deleted mid-turn is logged', async () => {
@@ -205,6 +243,7 @@ describe('P7 work order A — sessions repository', () => {
       { role: 'assistant', text: 'seed reply', ts: 2 },
     ], undefined, PERSON);
     log.warn.mockClear(); log.error.mockClear(); log.info.mockClear(); log.debug.mockClear();
+    send.mockImplementation(markerAwareSend(table.rows, []));
 
     await appendTurns(AGENT, chatId, [
       { role: 'user', text: secretText, ts: 3 },
