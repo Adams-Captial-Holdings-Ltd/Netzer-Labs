@@ -314,3 +314,18 @@ it('P7 a file a tool saves during a dashboard turn names the turn\'s request id'
   expect(saveArtifact.mock.calls[0]![0], 'document_draft must name the turn\'s request id')
     .toMatchObject({ clientMessageId: 'req-p7' });
 });
+
+// P7, the security review's first MEDIUM (M1): a draft start that has to create its chat (the chat was deleted
+// mid-turn) ties that write to the turn marker, so the delete wins instead of the chat coming back.
+it('P7 a draft start that must create its chat checks the turn marker', async () => {
+  await import(draftModulePath).catch(() => null);
+  expect(draftHandler(), 'document_draft must be registered').toBeDefined();
+  draftSession.mockResolvedValueOnce(null);
+  await draftHandler()!.invoke(
+    { action: 'start', format: 'pdf', title: 'Report', operationId: 'p7-gone' }, { ...dashboard, requestId: 'req-p7' });
+  const checkedKeys = ddbSend.mock.calls
+    .flatMap(([cmd]) => (cmd as { input?: { TransactItems?: Array<{ ConditionCheck?: { Key?: { SK?: string } } }> } }).input?.TransactItems ?? [])
+    .map((item) => item.ConditionCheck?.Key?.SK);
+  expect(checkedKeys, 'the chat a draft start creates must be conditioned on the turn marker')
+    .toContainEqual(expect.stringMatching(/#TURN#req-p7$/));
+});

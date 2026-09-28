@@ -466,3 +466,22 @@ test('P7 the agent page opens this agent in the Chat tab', async ({ page }) => {
 
   await page.unroute(`**/api/agents/${agentId}/detail`);
 });
+
+// P7, the security review's second MEDIUM (A233): a stopped reply keeps its request id on the page, so
+// Regenerate names it. Without it the page sent `replyTo: null` and the server refused every Stop-then-Regenerate
+// as "this chat changed in another tab".
+test('P7 Regenerate right after Stop answers the stopped reply', async ({ page }) => {
+  await newChat(page);
+  await composerOf(page).fill('/fixture longstream');
+  await sendOf(page).click();
+  await expect(page.getByText('Line 3:').first()).toBeVisible();
+  await stopOf(page).click();
+  await waitForEnd(page);
+  await expect(replies(page).last()).toContainText(/stopped/i);
+
+  const { sent, status } = await regenerateLast(page);
+  expect(sent.replyTo, 'Regenerate names the stopped reply the page shows').toEqual(expect.any(String));
+  expect(status, 'the server answers the stopped reply instead of refusing it as changed').toBe(200);
+  await waitForEnd(page);
+  await expect(page.getByText('This chat changed in another tab')).toHaveCount(0);
+});
