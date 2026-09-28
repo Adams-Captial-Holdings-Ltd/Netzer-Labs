@@ -79,13 +79,13 @@ import {
   KILL_SWITCH_META,
   type KillSwitchName,
 } from '../../lib/state/kill-switches-repo.js';
-import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
-import { classifyTurnError } from '../../agent/turn-errors.js';
-import { processMedia, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment } from '../../lib/media/process.js';
+import { runAgentTurn, scanOutboundReply, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { AttachmentUnavailableError, classifyTurnError } from '../../agent/turn-errors.js';
+import { processMedia, buildMediaBlocks, getRawObject, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment, MAX_IMAGE_BYTES, MAX_DOCUMENT_BYTES } from '../../lib/media/process.js';
 import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
 import { attachmentDisposition, downloadFileName, listArtifactHeads, listArtifactVersions, presignArtifactDownload, readArtifactBody, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
 import { deckOutline, DeckOutlineError } from '../../lib/chat/artifact-preview.js';
-import { extractArtifactBlocks } from '../../lib/chat/artifact-grammar.js';
+import { extractArtifactBlocks, UNSAFE_ARTIFACT_TITLE_PATTERN } from '../../lib/chat/artifact-grammar.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
 import { listAvailableModels, pickDefaultModel, resolveModel } from '../../lib/bedrock/models.js';
@@ -99,6 +99,8 @@ import {
   type ToolRecord,
   type TurnStatus,
   getSession,
+  replaceLastReply,
+  setConversationMeta,
   getFullHistory,
   deleteSession,
   type SessionEnrichment,
@@ -543,6 +545,7 @@ function safeArtifactDescriptors(values: unknown): ArtifactDescriptor[] {
 function guardedChunkWriter(stream: SSEStreamingApi, protocol: number | undefined): {
   onChunk: (text: string) => void;
   finish: (safeFinalText: string) => void;
+  visibleText: () => string;
 } {
   const write = chunkWriter(stream, protocol);
   let withheld = false;
@@ -568,6 +571,7 @@ function guardedChunkWriter(stream: SSEStreamingApi, protocol: number | undefine
   };
   return {
     onChunk: emit,
+    visibleText: () => lastVisible,
     finish: (safeFinalText) => {
       if (safeFinalText !== lastVisible) writeVisible(safeFinalText);
     },
@@ -605,6 +609,25 @@ async function saveChatTurn(
   }
 }
 
+async function saveRegeneratedReply(
+  agentId: string, chatId: string,
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>, tools: ToolRecord[],
+  expected: { turnsTotal: number; owner: string },
+): Promise<boolean> {
+  if (result.blocked || result.refusal) return false;
+  const ts = Math.floor(Date.now() / 1000);
+  try {
+    return await replaceLastReply(agentId, chatId, {
+      role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
+      ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
+      ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}),
+    }, expected);
+  } catch (err) {
+    logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    return false;
+  }
+}
+
 async function writeChatAnswer(stream: SSEStreamingApi, result: AgentTurnResponse, confirmations: string[]): Promise<void> {
   await stream.writeSSE({
     event: 'final',
@@ -634,6 +657,45 @@ function safeDashboardChatId(input: string | undefined): string {
   const sanitized = raw.replace(/[^A-Za-z0-9_:.-]/g, '_').slice(0, 100);
   return `dashboard:${sanitized}`;
 }
+
+/**
+ * Replay only stored attachments that can become model blocks. Audio, voice
+ * and video yield no block because their words are already in the stored message text;
+ * video keyframes are not replayed because that needs processVideo's probe and
+ * keyframe step for raw bytes, carried to a later step.
+ */
+async function replayStoredAttachments(
+  attachments: TurnAttachment[],
+  signal: AbortSignal,
+  agentId: string,
+  chatId: string,
+): Promise<AttachmentBlock[]> {
+  const attachmentBlocks: AttachmentBlock[] = [];
+  if (attachments.length > 0) {
+    const killed = await isKillSwitchActive('media_upload_disabled');
+    if (killed.active) throw new KillSwitchActiveError(killed.reason ?? 'no reason given', 'media_upload_disabled');
+  }
+  for (const attachment of attachments) {
+    if (signal.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+    const kind = kindForMime(attachment.type);
+    if (kind !== 'photo' && kind !== 'document') continue;
+    if (attachment.size > (kind === 'photo' ? MAX_IMAGE_BYTES : MAX_DOCUMENT_BYTES)) continue;
+    try {
+      if (!attachment.key) throw new Error('Stored attachment has no key');
+      const bytes = await getRawObject(attachment.key);
+      const built = await buildMediaBlocks({
+        kind, fileName: attachment.name,
+        mimeType: attachment.type, bytes,
+      });
+      attachmentBlocks.push(...built.blocks);
+    } catch (err) {
+      logger.warn({ agentId, chatId, err }, 'dashboard chat attachment replay failed');
+      throw new AttachmentUnavailableError();
+    }
+  }
+  return attachmentBlocks;
+}
+
 const TABLE_TOKEN_USAGE = process.env.TABLE_TOKEN_USAGE ?? 'claudeclaw-token-usage';
 const TABLE_AUDIT_LOG = process.env.TABLE_AUDIT_LOG ?? 'claudeclaw-audit-log';
 
@@ -2142,6 +2204,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const body = await c.req
       .json<{
         text?: string;
+        regenerate?: boolean;
         agentId?: string;
         chatId?: string;
         modelOverride?: string;
@@ -2152,12 +2215,15 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       }>()
       .catch(() => null);
     const text = body?.text ?? '';
+    const regenerate = body?.regenerate === true;
     const agentId = body?.agentId ?? 'main';
     const chatId = safeDashboardChatId(body?.chatId);
     const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
+    if (regenerate && (text !== '' || (body?.attachments !== undefined &&
+      (!Array.isArray(body.attachments) || body.attachments.length > 0)))) return c.json({ error: 'invalid_regenerate' }, 400);
     if (rawAttachments.length > CHAT_ATTACHMENT_MAX_FILES) return c.json({ error: 'too_many_attachments' }, 400);
     // File-only sends are allowed (parity with Telegram/Slack file drops).
-    if (!text && rawAttachments.length === 0) {
+    if (!regenerate && !text && rawAttachments.length === 0) {
       return c.json({ error: 'missing_text' }, 400);
     }
     // Validate staging keys up front — only presigned-upload keys are ever
@@ -2181,8 +2247,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // tells a stored chat from a missing one (a missing one simply starts), so
     // this hides the conversation, not whether its id is taken.
     const stored = await getSession(agentId, chatId);
-    if (stored && !ownsConversation(c, stored.userId)) {
+    if ((regenerate && !stored) || (stored && !ownsConversation(c, stored.userId))) {
       return c.json({ error: 'not_found' }, 404);
+    }
+    if (regenerate && (stored!.turns.at(-1)?.role !== 'assistant' || stored!.turns.at(-2)?.role !== 'user')) {
+      return c.json({ error: 'nothing_to_regenerate' }, 409);
     }
     const staged: Array<{ size: number; type: string }> = [];
     for (const a of rawAttachments) {
@@ -2207,6 +2276,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       const payloadHash = createHash('sha256').update(JSON.stringify({
         text, agentId, chatId, modelOverride: body?.modelOverride ?? null,
         attachments: rawAttachments.map((a) => a.s3Key),
+        ...(regenerate ? { regenerate: true } : {}),
       })).digest('hex');
       // A turn record that cannot be written is a typed 503, named by its turn:
       // no model call, and not an anonymous "unhandled error".
@@ -2227,13 +2297,20 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       const tools: ToolRecord[] = [];
       const savedAttachments: TurnAttachment[] = [];
       const toolStarts = new Map<string, Pick<ToolRecord, 'label' | 'step'>>();
-      let userText = text;
+      let userText = regenerate ? stored!.turns.at(-2)!.text : text;
       let finalSent = false;
+      let guardedChunks: ReturnType<typeof guardedChunkWriter> | undefined;
+      const saveReply = (result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>) =>
+        regenerate
+          ? saveRegeneratedReply(agentId, chatId, result, tools, {
+            turnsTotal: stored!.turnsTotal ?? stored!.turns.length, owner: stored!.userId!,
+          })
+          : saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments);
       try {
         // Command? send the reply as a single event and close. Skipped for
         // attachment turns — a caption starting with '/' is data, not a command
         // (parity with Telegram/Slack).
-        if (rawAttachments.length === 0) {
+        if (!regenerate && rawAttachments.length === 0) {
           const cmd = await runCommand(agentId, chatId, text, { owner: conversationOwner(c) });
           if (cmd?.reply) {
             await stream.writeSSE({ event: 'reply', data: cmd.reply });
@@ -2249,6 +2326,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         const attachmentBlocks: AttachmentBlock[] = [];
         const kbConfirmations: string[] = [];
         const acks: string[] = [];
+        if (regenerate) {
+          const replayFiles = stored!.turns.at(-2)!.attachments ?? [];
+          attachmentBlocks.push(...await replayStoredAttachments(replayFiles, abort.signal, agentId, chatId));
+        }
         for (const [index, a] of rawAttachments.entries()) {
           const s3Key = a.s3Key as string;
           const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
@@ -2353,15 +2434,15 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // Peek is best-effort context; never fail the turn over it.
         }
 
-        const session = await getSession(agentId, chatId);
-        const history = session?.turns ?? [];
+        const session = regenerate ? stored : await getSession(agentId, chatId);
+        const history = regenerate ? stored!.turns.slice(0, -2) : session?.turns ?? [];
         // Per-turn model: an explicit picker choice wins, else the chat's sticky
         // /model override, else the agent's configured model (resolved in the
         // loop). The non-stream /test-turn already does this; the stream path used
         // to drop the override entirely, so a /model switch (or the new Chat model
         // picker) silently had no effect on the streamed Chat tab.
         const modelOverride = body?.modelOverride ?? session?.modelOverride;
-        const guardedChunks = guardedChunkWriter(stream, body?.protocol);
+        guardedChunks = guardedChunkWriter(stream, body?.protocol);
         const result = await runAgentTurn({
           abortSignal: abort.signal,
           agentId,
@@ -2407,8 +2488,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         });
         if (result.stopped) {
           clearInterval(heartbeat);
-          await saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments);
+          const text = await scanOutboundReply(guardedChunks.visibleText(), { agentId, chatId });
+          const saved = await saveReply({ ...result, text });
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
+          if (regenerate) await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
           return;
         }
         let displayText = result.text;
@@ -2457,7 +2540,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         guardedChunks.finish(displayText);
         // The save and the turn record come first: an awaited write to a body
         // nobody reads never resolves, and must not gate either.
-        const saved = await saveChatTurn(agentId, chatId, userText, displayResult, tools, conversationOwner(c), savedAttachments);
+        const saved = await saveReply(displayResult);
         await finishChatTurn(agentId, chatId, clientMessageId, result.blocked ? 'refused' : 'complete');
         finalSent = true;
         await writeChatAnswer(stream, displayResult, [...kbConfirmations, ...acks]);
@@ -2470,8 +2553,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       } catch (err) {
         if ((err as { name?: string })?.name === 'AbortError') {
           clearInterval(heartbeat);
-          await saveChatTurn(agentId, chatId, userText || 'What is this?', { text: '', stopped: true }, tools, conversationOwner(c), savedAttachments);
+          const text = await scanOutboundReply(guardedChunks?.visibleText() ?? '', { agentId, chatId });
+          const saved = await saveReply({ text, stopped: true });
           await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
+          if (regenerate) await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
           return;
         }
         if (isOperatorRefusal(err)) logger.warn({ agentId, chatId, err }, 'dashboard chat turn refused');
@@ -2492,8 +2577,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
     }
     const projection =
-      'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId';
+      'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId, title, pinned';
     const agentId = c.req.query('agentId')?.trim();
+    const q = c.req.query('q')?.trim() ?? '';
+    if (q.length > 100) return c.json({ error: 'invalid_query' }, 400);
 
     // Per-agent (e.g. the Agent detail Sessions tab) is a Query of one
     // partition; cross-agent Scans the table. Both read to the END — every
@@ -2512,12 +2599,45 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       modelOverride: (i.modelOverride as string | undefined) ?? null,
       messageCount: (i.messageCount as number | undefined) ?? null,
       firstMessage: (i.firstMessage as string | undefined) ?? null,
+      title: (i.title as string | undefined) ?? null,
+      pinned: i.pinned === true,
       createdAt: (i.createdAt as number | undefined) ?? null,
       surface: (i.surface as string | undefined) ?? null,
       userId: (i.userId as string | undefined) ?? null,
     }));
     rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    return c.json({ sessions: rows.slice(0, 50), truncated });
+    const needle = q.toLowerCase();
+    const matching = needle ? rows.filter((row) =>
+      row.title?.toLowerCase().includes(needle) || row.firstMessage?.toLowerCase().includes(needle)) : rows;
+    return c.json({ sessions: [...matching.filter((row) => row.pinned), ...matching.filter((row) => !row.pinned).slice(0, 50)], truncated });
+  });
+
+  router.patch('/sessions', async (c) => {
+    if (!(await hasCapability(c, 'chat:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'chat:read' }, 403);
+    }
+    const body = await c.req.json<{ agentId?: string; chatId?: string; title?: string | null; pinned?: boolean }>().catch(() => null);
+    const agentId = body?.agentId ?? 'main';
+    const chatId = body?.chatId;
+    if (body?.agentId !== undefined && typeof body.agentId !== 'string') return c.json({ error: 'agentId_invalid' }, 400);
+    if (typeof chatId !== 'string' || !chatId) return c.json({ error: 'chatId_required' }, 400);
+    if (body?.title === undefined && body?.pinned === undefined) return c.json({ error: 'nothing_to_update' }, 400);
+    let title: string | null | undefined;
+    if (body.title !== undefined) {
+      if (body.title !== null && typeof body.title !== 'string') return c.json({ error: 'invalid_title' }, 400);
+      if (typeof body.title === 'string' && UNSAFE_ARTIFACT_TITLE_PATTERN.test(body.title)) {
+        return c.json({ error: 'invalid_title' }, 400);
+      }
+      title = typeof body.title === 'string' ? body.title.trim() || null : null;
+      if (title && title.length > 120) return c.json({ error: 'invalid_title' }, 400);
+    }
+    if (body.pinned !== undefined && typeof body.pinned !== 'boolean') return c.json({ error: 'invalid_pinned' }, 400);
+    const session = await getSession(agentId, chatId);
+    if (!session || !ownsConversation(c, session.userId)) return c.json({ error: 'not_found' }, 404);
+    const patch = { ...(title !== undefined ? { title } : {}), ...(body.pinned !== undefined ? { pinned: body.pinned } : {}) };
+    if (!(await setConversationMeta(agentId, chatId, session.userId!, patch))) return c.json({ error: 'not_found' }, 404);
+    return c.json({ agentId, chatId, title: title !== undefined ? title : session.title ?? null,
+      pinned: body.pinned ?? session.pinned === true });
   });
 
   router.get('/usage', async (c) => {

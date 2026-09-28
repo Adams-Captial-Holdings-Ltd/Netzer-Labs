@@ -26,10 +26,7 @@
  *      the keys to the English strings this product ships (there is no
  *      localizer here) and trims the year.
  *
- * The donor also drops PINNED rows out of the date groups into a section of
- * their own. This product has no pinning, so `pinned` is never set and that
- * filter is inert rather than removed — it stays in the copied code where a
- * reader can see it.
+ * The sidebar separates pinned rows before calling this date grouping adapter.
  *
  * ── One deliberate loss ────────────────────────────────────────────────────
  *

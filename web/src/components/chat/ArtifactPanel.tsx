@@ -72,7 +72,7 @@ export function ArtifactPanel({ agentId, chatId, artifact, onClose }: ArtifactPa
   // A layout effect: the listener exists as soon as the panel does, so an Escape pressed before paint is not lost.
   useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) onClose();
+      if (event.key === 'Escape' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) onClose();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);

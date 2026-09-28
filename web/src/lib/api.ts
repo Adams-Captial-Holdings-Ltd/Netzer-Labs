@@ -43,7 +43,19 @@ export function getToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? localStorage.getItem(TOKEN_KEY) ?? '';
 }
 
+function clearUnknownChatSlot(): void {
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key?.startsWith('cce_chat_draft:unknown/')) sessionStorage.removeItem(key);
+    }
+    sessionStorage.removeItem('cce_chat_active:unknown');
+  } catch { /* Storage is best-effort. */ }
+}
+
 export function setToken(token: string, remember = false): void {
+  clearUnknownChatSlot();
+  sessionStorage.removeItem('cce_chat_active');
   if (remember) {
     localStorage.setItem(TOKEN_KEY, token);
     sessionStorage.removeItem(TOKEN_KEY);
@@ -54,6 +66,8 @@ export function setToken(token: string, remember = false): void {
 }
 
 export function clearToken(): void {
+  clearUnknownChatSlot();
+  sessionStorage.removeItem('cce_chat_active');
   sessionStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(TOKEN_KEY);
   // Never let one session's cached reads bleed into the next.

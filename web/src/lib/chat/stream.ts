@@ -15,7 +15,8 @@ import type { ArtifactRef, ToolCall, TurnMeta } from './types.js';
 export interface TurnAttachment { s3Key: string; fileName: string; mimeType?: string; addToKnowledge?: true }
 
 export interface TurnBody {
-  text: string;
+  text?: string;
+  regenerate?: true;
   agentId: string;
   chatId: string;
   modelOverride?: string;
@@ -111,13 +112,13 @@ export async function streamTurn(
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      text: body.text,
+      ...(body.regenerate ? { regenerate: true } : { text: body.text }),
       agentId: body.agentId,
       chatId: body.chatId,
       ...(body.modelOverride ? { modelOverride: body.modelOverride } : {}),
       ...(body.clientMessageId !== undefined ? { clientMessageId: body.clientMessageId } : {}),
       ...(body.protocol !== undefined ? { protocol: body.protocol } : {}),
-      ...(body.attachments && body.attachments.length > 0 ? { attachments: body.attachments } : {}),
+      ...(!body.regenerate && body.attachments && body.attachments.length > 0 ? { attachments: body.attachments } : {}),
     }),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });

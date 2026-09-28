@@ -59,6 +59,7 @@ import { renderMarkdown } from '../../lib/chat/markdown';
 import { ArtifactCard } from './ArtifactCard';
 import { AgentMark, MessageRow, isoFromEpochSeconds } from './MessageRow';
 import { ToolCallsSection } from './ToolCallsSection';
+import { Button } from '../Button';
 import CancelledIcon from './lc/components/Chat/Messages/Content/CancelledIcon';
 import MinimalHoverButtons from './lc/components/Chat/Messages/MinimalHoverButtons';
 
@@ -161,9 +162,14 @@ interface AssistantMessageProps {
   agentId: string;
   chatId: string;
   onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
+  canRetry: boolean;
+  needsAttachments: boolean;
+  onRetry: () => void;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
 }
 
-export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact }: AssistantMessageProps) {
+export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact, canRetry, needsAttachments, onRetry, canRegenerate, onRegenerate }: AssistantMessageProps) {
   const tools = message.tools ?? [];
 
   return (
@@ -188,9 +194,7 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
           ) : message.stopped ? (
             <StoppedFooter />
           ) : null}
-          {/* The action row this product did not have. Copy only — see the
-              copied file's header for why regenerate and feedback are absent
-              rather than disabled.
+          {/* The action row: Copy on replies, Regenerate on the last saved reply.
 
               ── ROUND 3: `chat-row-actions` IS WHAT MAKES IT EXIST ON TOUCH ──
 
@@ -222,7 +226,7 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
               because it is an action, but because it is already visible on a
               phone and there is no reason for a 900px window to disagree. */}
           <div class="chat-row-actions">
-            <MinimalHoverButtons message={message} />
+            <MinimalHoverButtons message={message} onRegenerate={canRegenerate ? onRegenerate : undefined} />
           </div>
         </div>
       }
@@ -232,20 +236,21 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
           no tool array, and the footer's count stands in for it. */}
       {tools.length > 0 && <ToolCallsSection tools={tools} />}
 
-      {message.error ? (
-        // The one assistant turn that IS boxed. A failure has to be visibly a
-        // failure and not mistakable for a short answer, so it keeps the
-        // donor's bordered danger panel — and stays a `<pre>`, because the text
-        // is a sanitized error string, never markdown.
-        <div class="rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">
-          <pre class="whitespace-pre-wrap break-words font-sans text-body-sm text-danger">
-            {message.text}
-          </pre>
-        </div>
-      ) : (
+      {message.text && (!message.error || message.failure) && (
         // DOMPurify runs inside renderMarkdown, last, immediately before this
         // is handed to dangerouslySetInnerHTML (web/src/lib/chat/markdown.ts).
         <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
+      )}
+      {message.error && (
+        // Only the failure sentence belongs in the alert; any partial answer
+        // above uses the same markdown treatment as a complete reply.
+        <div role="alert" class={`chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3 ${message.text && message.failure ? 'mt-3' : ''}`}>
+          <pre class="whitespace-pre-wrap break-words font-sans text-body-sm">
+            {message.failure ?? message.text}
+          </pre>
+          {canRetry ? <Button variant="secondary" size="sm" onClick={onRetry} class="mt-2">Try again</Button>
+            : needsAttachments ? <p class="mt-2 text-body-sm">Please attach the files again.</p> : null}
+        </div>
       )}
 
       <MessageAttachments message={message} agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
@@ -254,7 +259,7 @@ export function AssistantMessage({ message, agentName, agentId, chatId, onOpenAr
           not_saved`): one caption, so the reader knows it is theirs to copy now
           and will not be here after a reload. */}
       {message.notSaved && (
-        <p class="mt-2 text-caption text-muted">This reply wasn't saved, so it won't be here after a reload.</p>
+        <p class="mt-2 text-caption text-secondary">This reply wasn't saved, so it won't be here after a reload.</p>
       )}
     </MessageRow>
   );
@@ -288,7 +293,7 @@ function MessageAttachments({ message, agentId, chatId, onOpenArtifact }: {
             class="max-h-96 max-w-full rounded-xl border border-border"
             loading="lazy"
           />
-          {im.caption && <span class="mt-1 block text-caption text-muted">{im.caption}</span>}
+          {im.caption && <span class="mt-1 block text-caption text-secondary">{im.caption}</span>}
         </a>
       ))}
 

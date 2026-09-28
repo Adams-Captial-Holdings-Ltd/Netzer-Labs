@@ -88,8 +88,8 @@ export function stageLabel(stage: MediaStage, fileName: string): string {
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 const RAW_BUCKET = process.env.RAW_BUCKET ?? '';
-const MAX_IMAGE_BYTES = 3_750_000;
-const MAX_DOCUMENT_BYTES = 4_500_000;
+export const MAX_IMAGE_BYTES = 3_750_000;
+export const MAX_DOCUMENT_BYTES = 4_500_000;
 const MAX_TRANSCRIBE_BYTES = 20 * 1024 * 1024;
 
 function mediaAckText(input: {
@@ -167,6 +167,55 @@ export interface ProcessedMedia {
   docFormat?: DocFormat;
 }
 
+/** Build the inline model blocks from one file without storing or ingesting it. */
+export async function buildMediaBlocks(input: Pick<RawMediaInput, 'kind' | 'fileName' | 'mimeType' | 'bytes'>): Promise<{
+  blocks: AttachmentBlock[];
+  docFormat?: DocFormat;
+  imageFormat?: ImageFormat;
+  unsafeDocument: boolean;
+  zipCheckCode?: ZipCheckError['code'];
+  pptxError?: string;
+}> {
+  const bytes = input.bytes;
+  const safeName = (input.fileName ?? `${input.kind}.bin`).replace(/[^A-Za-z0-9._-]/g, '_');
+  const docFormat = recognizeDoc(input.mimeType, safeName);
+  const imageFormat = input.kind === 'document' && docFormat
+    ? undefined
+    : recognizeImage(input.kind, input.mimeType, safeName, bytes);
+  const blocks: AttachmentBlock[] = [];
+  let unsafeDocument = false;
+  let zipCheckCode: ZipCheckError['code'] | undefined;
+  let pptxError: string | undefined;
+  if (input.kind === 'document' && (docFormat === 'docx' || docFormat === 'pptx')) {
+    try {
+      checkZip(bytes);
+    } catch (err) {
+      if (!(err instanceof ZipCheckError)) throw err;
+      unsafeDocument = true;
+      zipCheckCode = err.code;
+    }
+  }
+  if (imageFormat && bytes.length <= MAX_IMAGE_BYTES) {
+    blocks.push({ kind: 'image', format: imageFormat, bytes });
+  } else if (input.kind === 'document' && docFormat && !unsafeDocument && bytes.length <= MAX_DOCUMENT_BYTES) {
+    if (docFormat === 'pptx') {
+      try {
+        const extracted = await extractPptxText(bytes);
+        const text = Buffer.from(extracted.text, 'utf8');
+        if (text.length > 0 && text.length <= MAX_DOCUMENT_BYTES) {
+          blocks.push({ kind: 'document', format: 'txt', name: safeName, bytes: text });
+        }
+      } catch (err) {
+        unsafeDocument = true;
+        pptxError = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      blocks.push({ kind: 'document', format: docFormat, name: safeName, bytes });
+    }
+  }
+  return { blocks, docFormat, imageFormat, unsafeDocument, zipCheckCode, pptxError };
+}
+
 export async function processMedia(
   input: RawMediaInput,
   onStage?: (stage: MediaStage) => void,
@@ -230,41 +279,10 @@ export async function processMedia(
   }
 
   // 2. classify
-  const docFormat = recognizeDoc(input.mimeType, safeName);
-  const imageFormat = input.kind === 'document' && docFormat
-    ? undefined
-    : recognizeImage(input.kind, input.mimeType, safeName, bytes);
-  const blocks: AttachmentBlock[] = [];
-  let unsafeDocument = false;
-  let zipCheckCode: ZipCheckError['code'] | undefined;
-  if (input.kind === 'document' && (docFormat === 'docx' || docFormat === 'pptx')) {
-    try {
-      checkZip(bytes);
-    } catch (err) {
-      if (!(err instanceof ZipCheckError)) throw err;
-      unsafeDocument = true;
-      zipCheckCode = err.code;
-      logger.warn({ fileName: safeName, code: err.code }, 'zip check failed');
-    }
-  }
-  if (imageFormat && bytes.length <= MAX_IMAGE_BYTES) {
-    blocks.push({ kind: 'image', format: imageFormat, bytes });
-  } else if (input.kind === 'document' && docFormat && !unsafeDocument && bytes.length <= MAX_DOCUMENT_BYTES) {
-    if (docFormat === 'pptx') {
-      try {
-        const extracted = await extractPptxText(bytes);
-        const text = Buffer.from(extracted.text, 'utf8');
-        if (text.length > 0 && text.length <= MAX_DOCUMENT_BYTES) {
-          blocks.push({ kind: 'document', format: 'txt', name: safeName, bytes: text });
-        }
-      } catch (err) {
-        unsafeDocument = true;
-        logger.warn({ fileName: safeName, errMessage: err instanceof Error ? err.message : String(err) }, 'pptx extraction failed');
-      }
-    } else {
-      blocks.push({ kind: 'document', format: docFormat, name: safeName, bytes });
-    }
-  }
+  const { blocks, docFormat, imageFormat, unsafeDocument, zipCheckCode, pptxError } =
+    await buildMediaBlocks({ kind: input.kind, fileName: baseName, mimeType: input.mimeType, bytes });
+  if (zipCheckCode) logger.warn({ fileName: safeName, code: zipCheckCode }, 'zip check failed');
+  if (pptxError) logger.warn({ fileName: safeName, errMessage: pptxError }, 'pptx extraction failed');
 
   // 3. voice/audio -> Transcribe (needs the object in S3)
   let transcript: string | undefined;

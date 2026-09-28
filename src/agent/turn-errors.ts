@@ -7,6 +7,14 @@
 
 import { CostCapExceededError, KillSwitchActiveError } from './agent-loop.js';
 
+/** A stored attachment could not be read while replaying a message for regeneration. */
+export class AttachmentUnavailableError extends Error {
+  constructor() {
+    super('A file from that message could not be read again, so the reply was not regenerated.');
+    this.name = 'AttachmentUnavailableError';
+  }
+}
+
 /** Bedrock's own failures: the model could not answer this time, and trying again is the remedy. */
 const MODEL_ERROR_NAMES = new Set([
   'ValidationException', 'ThrottlingException', 'ServiceUnavailableException', 'ModelTimeoutException',
@@ -15,6 +23,12 @@ const MODEL_ERROR_NAMES = new Set([
 ]);
 
 export function classifyTurnError(err: unknown): { code: string; message: string } {
+  if (err instanceof AttachmentUnavailableError) {
+    return {
+      code: 'attachment_unavailable',
+      message: 'A file from that message could not be read again, so the reply was not regenerated.',
+    };
+  }
   if (err instanceof CostCapExceededError) {
     return Number.isNaN(err.spendUsd)
       ? { code: 'cost_cap_unverifiable', message: 'The daily spending check could not run, so this message was not sent.' }

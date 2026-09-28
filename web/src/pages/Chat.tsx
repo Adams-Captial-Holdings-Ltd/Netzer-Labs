@@ -1,12 +1,11 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useRoute } from 'wouter-preact';
-import { api, getToken, clearApiCache } from '../lib/api';
+import { api, getToken, getDashboardUser, clearApiCache } from '../lib/api';
 import type { Agent, ArtifactRef, Conversation, Message, Model, ToolCall } from '../lib/chat/types';
 import {
   MODEL_NAMES,
   freshChatId,
-  storedChatId,
-  rememberChatId,
+  ACTIVE_CHAT_KEY,
   conversationTitle,
   friendlyTurnError,
   newMessageId,
@@ -18,10 +17,13 @@ import { stageAttachment } from '../lib/chat/uploads';
 import type { StagedFile } from '../lib/chat/uploads';
 import { admitFiles } from '../lib/chat/attachment-rules';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Button } from '../components/Button';
 // The shell's mobile nav toggle. Below `lg` this page's own bar is the app bar
 // (Header.tsx stands down there), so the page is what hands the house's nav
 // toggle to it — see the ChatHeader call below.
-import { toggleMobileMenu } from '../components/Sidebar';
+import { toggleMobileMenu, mobileMenuOpen } from '../components/Sidebar';
+import { loadDraft, saveDraft, clearDraft } from '../lib/chat/drafts';
+import { conversationMarkdown, exportFileName } from '../lib/chat/export';
 import { toast } from '../components/Toast';
 import { ChatCanvas } from '../components/chat/ChatCanvas';
 import { ChatHeader } from '../components/chat/ChatHeader';
@@ -85,8 +87,12 @@ export function Chat() {
   // Live tool-call status, mirroring Telegram/Slack (CLAUDE.md "Chat surface
   // parity"). Shown while the agent works a tool; cleared when text resumes.
   const [toolStatus, setToolStatus] = useState('');
-  const [newChatOpen, setNewChatOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [historyError, setHistoryError] = useState(false);
+  const [search, setSearch] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState(false);
   // Desktop conversation rail: collapsed or expanded, remembered across
   // reloads (localStorage, not sessionStorage — a layout preference outlives
   // the tab, unlike `cce_chat_active`, which is deliberately per-tab).
@@ -118,6 +124,67 @@ export function Chat() {
   // Focused after a landing starter chip drops its text into the composer, so
   // the caret is already where the user will keep typing.
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pageContentRef = useRef<HTMLDivElement>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const [regenerateError, setRegenerateError] = useState('');
+  const shortcutActions = useRef({ newChat: () => {}, focusSearch: () => {}, focusComposer: () => {} });
+  const transcriptRequest = useRef(0);
+  const historyRequest = useRef(0);
+  const scopedAgent = (id: string) => `${encodeURIComponent(getDashboardUser() || 'unknown')}/${id}`;
+  const activeKey = () => `${ACTIVE_CHAT_KEY}:${encodeURIComponent(getDashboardUser() || 'unknown')}`;
+
+  function storedScopedChatId(id: string): string | null {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(activeKey()) ?? 'null') as
+        { owner?: string; agentId?: string; chatId?: string } | null;
+      return saved?.owner === (getDashboardUser() || 'unknown') && saved.agentId === id ? saved.chatId ?? null : null;
+    } catch { return null; }
+  }
+
+  function rememberScopedChatId(id: string, conversationId: string) {
+    try {
+      const value = JSON.stringify({ owner: getDashboardUser() || 'unknown', agentId: id, chatId: conversationId });
+      sessionStorage.setItem(activeKey(), value);
+      // Keep the current tab's pointer readable by older callers.
+      sessionStorage.setItem(ACTIVE_CHAT_KEY, value);
+    } catch { /* Resume is best-effort in private storage modes. */ }
+  }
+
+  function announce(message: string) {
+    setAnnouncement('');
+    window.setTimeout(() => setAnnouncement(message), 0);
+  }
+
+  useLayoutEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      const isShortcut = ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') ||
+        ((e.ctrlKey || e.metaKey) && e.key === '/') ||
+        (e.shiftKey && e.key === 'Escape');
+      if (!isShortcut) return;
+      if (document.querySelector('[data-artifact-panel][role="dialog"][aria-modal="true"]')) return;
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        shortcutActions.current.newChat();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        shortcutActions.current.focusSearch();
+      } else if (e.shiftKey && e.key === 'Escape') {
+        e.preventDefault();
+        shortcutActions.current.focusComposer();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  useLayoutEffect(() => {
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const onBreakpoint = () => { if (desktop.matches) setSidebarOpen(false); };
+    desktop.addEventListener('change', onBreakpoint);
+    onBreakpoint();
+    return () => desktop.removeEventListener('change', onBreakpoint);
+  }, []);
 
   // Stick to the end of a streaming answer, let go the moment the reader
   // scrolls away, and offer them a way back. The rules (and why the attach and
@@ -160,24 +227,31 @@ export function Chat() {
   // Conversation sidebar. /sessions with an agentId is a single Query on
   // PK=AGENT#<id> (without it the route Scans the whole table), so always
   // scope it. Newest first.
-  async function refreshConversations(forAgent: string) {
+  async function refreshConversations(forAgent: string, query = searchQuery) {
     if (!forAgent) return;
+    const request = ++historyRequest.current;
     setHistoryLoading(true);
+    setHistoryError(false);
     try {
+      clearApiCache();
       const d = await api.get<{ sessions: Conversation[] }>(
-        `/sessions?agentId=${encodeURIComponent(forAgent)}`,
+        `/sessions?agentId=${encodeURIComponent(forAgent)}${query ? `&q=${encodeURIComponent(query)}` : ''}`,
       );
       const rows = (d.sessions ?? [])
         // Only dashboard chats are browsable here; Telegram/Slack rows share
         // the table but have no UI to reopen them, and still expire.
         .filter((s) => s.chatId.startsWith('dashboard:'))
-        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+        .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      if (request !== historyRequest.current) return;
       setConversations(rows);
     } catch (e) {
+      if (request !== historyRequest.current) return;
       // Non-fatal: the sidebar is an aid, not a prerequisite for chatting.
       console.error('Chat: failed to load conversations', e);
+      setHistoryError(true);
+      setConversations([]);
     }
-    setHistoryLoading(false);
+    if (request === historyRequest.current) setHistoryLoading(false);
   }
 
   // Load the sidebar whenever the agent changes, and restore the conversation
@@ -185,10 +259,20 @@ export function Chat() {
   useEffect(() => {
     if (!agentId) return;
     void refreshConversations(agentId);
-    const remembered = storedChatId(agentId);
+    const remembered = storedScopedChatId(agentId);
     if (remembered && remembered !== chatId) void openConversation(remembered);
+    else rememberScopedChatId(agentId, chatId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (agentId) void refreshConversations(agentId, searchQuery);
+  }, [searchQuery]);
 
   // Where the chat on screen files its draft on the way out. A chat with nothing
   // sent yet shares ONE slot: its fresh id is never reopened, so a draft filed
@@ -206,38 +290,61 @@ export function Chat() {
   // conversation restores its own draft, or nothing.
   function activateConversation(id: string, forAgent = agentId, fresh = false) {
     closeArtifact(false);
+    setRegenerateError('');
     draftsRef.current.set(currentDraftKey(), input);
-    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`);
+    const restored = fresh ? draftsRef.current.get(NEW_DRAFT) : draftsRef.current.get(`${forAgent}/${id}`) ?? loadDraft(scopedAgent(forAgent), id);
     if (fresh) draftsRef.current.delete(NEW_DRAFT);
     unsentChatRef.current = fresh;
     setInput(restored ?? '');
     setChatId(id);
-    rememberChatId(forAgent, id);
+    rememberScopedChatId(forAgent, id);
   }
 
   // Reopen a stored conversation, including tool results and stopped turns.
   async function openConversation(id: string) {
     if (streaming) return;
+    const request = ++transcriptRequest.current;
     activateConversation(id);
     setStreamText('');
     setMessages([]);
+    setTranscriptError(false);
+    setTranscriptLoading(true);
     try {
+      clearApiCache();
       const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
         `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(id)}`,
       );
+      if (request !== transcriptRequest.current) return;
       setMessages(transcriptToMessages(d.turns ?? []));
     } catch (e) {
+      if (request !== transcriptRequest.current) return;
       console.error('Chat: failed to load transcript', e);
-      setLoadError('Could not load that conversation. It may have been deleted.');
+      setTranscriptError(true);
+    } finally {
+      if (request === transcriptRequest.current) setTranscriptLoading(false);
     }
   }
 
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
   function startNewChat(forAgent = agentId) {
+    ++transcriptRequest.current;
     const id = freshChatId();
     activateConversation(id, forAgent, true);
     setMessages([]);
     setStreamText('');
+    setTranscriptLoading(false);
+    setTranscriptError(false);
+  }
+
+  async function updateConversation(c: Conversation, patch: { title?: string | null; pinned?: boolean }) {
+    try {
+      await api.patch('/sessions', { agentId: c.agentId, chatId: c.chatId, ...patch });
+      clearApiCache();
+      await refreshConversations(c.agentId);
+    } catch (e) {
+      console.error('Chat: could not update conversation', e);
+      toast('Could not update that chat. Please try again.', 'error');
+    }
   }
 
   // Permanently delete a conversation. The row IS the conversation (turns are an
@@ -298,6 +405,7 @@ export function Chat() {
   function selectAgent(id: string) {
     if (id === agentId) return;
     setAgentId(id);
+    ++historyRequest.current;
     startNewChat(id);
   }
 
@@ -331,20 +439,25 @@ export function Chat() {
     }
   }
 
-  async function send() {
-    const text = input.trim();
-    const sendFiles = filesRef.current;
+  async function send(retryIndex?: number) {
+    const retry = retryIndex !== undefined;
+    const text = retry ? messages[retryIndex - 1]?.text ?? '' : input.trim();
+    const sendFiles = retry ? [] : filesRef.current;
     if ((!text && sendFiles.length === 0) || streaming || !agentId ||
       sendFiles.some((f) => f.status !== 'ready' || !f.signed)) return;
     const clientMessageId = newMessageId();
-    draftsRef.current.delete(`${agentId}/${chatId}`);
+    setRegenerateError('');
+    if (!retry) clearDraft(scopedAgent(agentId), chatId);
+    if (!retry) draftsRef.current.delete(`${agentId}/${chatId}`);
     // The first send in a fresh chat: its draft slot is spent, and from here on
     // the chat has messages and an id the sidebar can reopen.
-    if (unsentChatRef.current) draftsRef.current.delete(NEW_DRAFT);
+    if (!retry && unsentChatRef.current) draftsRef.current.delete(NEW_DRAFT);
     unsentChatRef.current = false;
-    setInput('');
-    updateFiles(() => []);
-    setAttachmentAlert('');
+    if (!retry) {
+      setInput('');
+      updateFiles(() => []);
+      setAttachmentAlert('');
+    }
     const userMsg: Message = {
       role: 'user',
       text,
@@ -353,7 +466,7 @@ export function Chat() {
         id: f.signed!.id, name: f.file.name, type: f.signed!.headers['Content-Type'], size: f.file.size,
       })) } : {}),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => retry ? prev.filter((_, i) => i !== retryIndex) : [...prev, userMsg]);
     setStreaming(true);
     setStreamText('');
     streamTextRef.current = '';
@@ -390,18 +503,14 @@ export function Chat() {
           onToolStatus: setToolStatus,
           onTools: (tools) => { streamToolsRef.current = tools; },
         },
-        // Stop is the only thing this signal does; every other exit path from
-        // streamTurn is unchanged.
+        // Stop travels through the request signal.
         { signal: abort.signal },
       );
 
       if (outcome.errorText) {
-        // Mid-stream failure. If text had already streamed, keep it and append a
-        // clear error suffix; otherwise show the error on its own. Either way it
-        // renders in a red bubble, never as a silent blank reply.
+        // Keep any streamed reply separate from the failure notice.
         const msg = friendlyTurnError(outcome.errorText, outcome.errorCode);
-        const partial = (!outcome.isReply && outcome.text) ? `${outcome.text}\n\n${msg}` : msg;
-        setMessages((prev) => [...prev, { role: 'assistant', text: partial, ts: Date.now() / 1000, error: true }]);
+        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, failure: msg, ts: Date.now() / 1000, error: true }]);
         setStreamText('');
         streamTextRef.current = '';
         setToolStatus('');
@@ -419,10 +528,12 @@ export function Chat() {
         ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
         ...(outcome.artifactRefs.length > 0 ? { artifactRefs: outcome.artifactRefs } : {}),
         ...(outcome.meta ? { meta: outcome.meta } : {}),
+        ...(outcome.isReply ? { isReply: true } : {}),
         ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
         // `done: not_saved`: the answer arrived, the server could not store it.
         ...(outcome.saved === false ? { notSaved: true as const } : {}),
       }]);
+      announce('Reply finished.');
     } catch (e) {
       // Stop, not a failure. streamTurn rejects with an AbortError the moment
       // the reader hits Stop, and the partial answer is theirs to keep: commit
@@ -435,7 +546,7 @@ export function Chat() {
       if ((e as { name?: string } | null)?.name === 'AbortError') {
         setMessages((prev) => [...prev, {
           role: 'assistant',
-          text: streamTextRef.current,
+          text: streamTextRef.current || '(Stopped before a reply.)',
           ts: Date.now() / 1000,
           stopped: true,
           ...(streamToolsRef.current.length > 0 ? { tools: streamToolsRef.current } : {}),
@@ -447,6 +558,7 @@ export function Chat() {
         abortRef.current = null;
         clearApiCache();
         void refreshConversations(agentId);
+        announce('Reply stopped.');
         return;
       }
       // Log the raw cause for debugging, but render only sanitized copy: the
@@ -458,7 +570,7 @@ export function Chat() {
       // long or token-like collapses to the generic line.
       console.error('Chat: send failed', e);
       const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', (e as { code?: string } | null)?.code);
-      setMessages((prev) => [...prev, { role: 'assistant', text: msg, ts: Date.now() / 1000, error: true }]);
+      setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current, failure: msg, ts: Date.now() / 1000, error: true }]);
     }
     setStreamText('');
     streamTextRef.current = '';
@@ -471,6 +583,63 @@ export function Chat() {
     // list that omits the conversation just created.
     clearApiCache();
     void refreshConversations(agentId);
+  }
+
+  async function regenerate() {
+    if (streaming || messages.at(-1)?.role !== 'assistant') return;
+    const old = messages.at(-1)!;
+    if (old.error || old.notSaved || old.isReply) return;
+    setRegenerateError('');
+    setMessages((prev) => prev.slice(0, -1));
+    setStreaming(true);
+    setStreamText('');
+    streamTextRef.current = '';
+    streamToolsRef.current = [];
+    setToolStatus('');
+    setStreamStartedAt(Date.now());
+    const abort = new AbortController();
+    abortRef.current = abort;
+    try {
+      const outcome = await streamTurn({ regenerate: true, agentId, chatId, clientMessageId: newMessageId(), protocol: 2,
+        ...(modelId ? { modelOverride: modelId } : {}) }, getToken(), {
+        onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
+        onToolStatus: setToolStatus,
+        onTools: (tools) => { streamToolsRef.current = tools; },
+      }, { signal: abort.signal });
+      if (outcome.errorText || outcome.saved === false) {
+        setMessages((prev) => [...prev, old]);
+        setRegenerateError(outcome.errorText
+          ? friendlyTurnError(outcome.errorText, outcome.errorCode)
+          : outcome.text || 'The server did not save this reply.');
+      } else {
+        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000,
+          ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
+          ...(outcome.kb.length ? { kb: outcome.kb } : {}),
+          ...(outcome.images.length ? { images: outcome.images } : {}),
+          ...(outcome.artifacts.length ? { artifacts: outcome.artifacts } : {}),
+          ...(outcome.meta ? { meta: outcome.meta } : {}),
+          ...(outcome.tools.length ? { tools: outcome.tools } : {}),
+          ...(outcome.saved === false ? { notSaved: true as const } : {}),
+        }]);
+        announce('Reply finished.');
+      }
+    } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') {
+        setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current || '(Stopped before a reply.)', ts: Date.now() / 1000,
+          stopped: true, ...(streamToolsRef.current.length ? { tools: streamToolsRef.current } : {}) }]);
+        announce('Reply stopped.');
+      } else {
+        setMessages((prev) => [...prev, old]);
+        setRegenerateError(friendlyTurnError(e instanceof Error ? e.message : ''));
+      }
+    } finally {
+      setStreamText('');
+      setToolStatus('');
+      setStreaming(false);
+      abortRef.current = null;
+      clearApiCache();
+      void refreshConversations(agentId);
+    }
   }
 
   // Cancel the turn in flight. The abort travels through streamTurn's optional
@@ -487,15 +656,24 @@ export function Chat() {
   // below it. Every row, every group heading and the delete control live in
   // ../components/chat/ConversationSidebar.
   //
-  // THE DELETE FLOW STAYS HERE, deliberately and untouched. `confirmDelete`
-  // below, `deletingRef`, the snapshot-inside-the-updater rollback and the
-  // ConfirmDialog are the paid-for fixes; the sidebar only reports which row's
-  // trash icon was clicked. Nothing about them changed in this phase.
+  // The delete flow stays here: the sidebar reports the row, and this page
+  // owns the confirmation and rollback.
   const sidebar = (
     <ConversationSidebar
       conversations={conversations}
       activeChatId={chatId}
       loading={historyLoading}
+      loadError={historyError}
+      onRetryLoad={() => void refreshConversations(agentId)}
+      search={search}
+      onSearch={(value) => {
+        ++historyRequest.current;
+        setHistoryError(false);
+        setHistoryLoading(value.trim() !== searchQuery);
+        setSearch(value);
+      }}
+      onRename={(c, title) => void updateConversation(c, { title })}
+      onTogglePin={(c) => void updateConversation(c, { pinned: !c.pinned })}
       streaming={streaming}
       deleting={deleting}
       // Picking a conversation in the drawer closes it — the donor's
@@ -503,13 +681,8 @@ export function Chat() {
       // there is no drawer and this is a no-op.
       onOpen={(id) => { void openConversation(id); setSidebarOpen(false); }}
       onRequestDelete={(c) => setPendingDelete(c)}
-      // The SAME handler the header's New chat uses, confirm dialog included:
-      // two controls for one action must not disagree about whether an
-      // in-progress conversation is about to be abandoned. Only a fresh chat
-      // with nothing sent yet is left without asking; a stored conversation is
-      // confirmed whether or not its transcript has arrived (an empty one
-      // reopens all the same).
-      onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
+      // The same one-click action the header uses.
+      onNewChat={() => startNewChat()}
       collapsed={sidebarCollapsed}
       onToggleCollapse={() => {
         const next = !sidebarCollapsed;
@@ -517,6 +690,7 @@ export function Chat() {
         writeSidebarCollapsed(next);
       }}
       mobileOpen={sidebarOpen}
+      pageContentRef={pageContentRef}
       onCloseMobile={() => setSidebarOpen(false)}
     />
   );
@@ -540,6 +714,32 @@ export function Chat() {
   // No turns and nothing in flight: the deliberate landing state.
   const isLanding = messages.length === 0 && !streaming;
 
+  shortcutActions.current = {
+    newChat: () => { if (!streaming) startNewChat(); },
+    focusSearch: () => {
+      if (window.innerWidth < 1024) setSidebarOpen(true);
+      else if (sidebarCollapsed) { setSidebarCollapsed(false); writeSidebarCollapsed(false); }
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        const fields = [...document.querySelectorAll<HTMLInputElement>('input[aria-label="Search chats"]')];
+        fields.find((field) => field.getClientRects().length > 0 && !field.closest('[inert]'))?.focus();
+      }));
+    },
+    focusComposer: () => {
+      if (sidebarOpen) setSidebarOpen(false);
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => inputRef.current?.focus()));
+    },
+  };
+
+  function exportChat() {
+    const content = conversationMarkdown({ title: headerTitle, agentName, messages });
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = exportFileName(headerTitle);
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   // Composer CONTENT only. It declares no width, no centring and no padding of
   // its own: ChatCanvas parents it into the shared content column beside the
   // transcript, which is what makes the two share one left and one right edge
@@ -551,7 +751,7 @@ export function Chat() {
   const composer = (
     <Composer
       value={input}
-      onInput={setInput}
+      onInput={(value) => { setInput(value); saveDraft(scopedAgent(agentId), chatId, value); }}
       onSend={() => { void send(); }}
       onStop={stopStreaming}
       streaming={streaming}
@@ -581,6 +781,7 @@ export function Chat() {
     // 56px it costs a phone — measured, first content y=131.5 against the
     // donor's 57.0), so the subtraction has nothing left to subtract.
     <div class="-m-4 sm:-m-6 lg:-m-8 flex h-screen overflow-hidden bg-bg">
+      <div data-chat-announcer role="status" aria-live="polite" class="sr-only">{announcement}</div>
       {sidebar}
       {/* This page carries NO layout contract of its own — no measured header
           height, no custom property, no reading measure. ChatCanvas declares
@@ -591,7 +792,7 @@ export function Chat() {
           ResizeObserver in ChatHeader, with two breakpointed fallbacks for the
           frames before the first measurement) is gone: a sticky header takes
           its own height in the flow, so there is nothing left to measure. */}
-      <div class="relative flex flex-col flex-1 min-w-0">
+      <div ref={pageContentRef} class="relative flex flex-col flex-1 min-w-0">
         <ChatCanvas
           header={
             <ChatHeader
@@ -600,12 +801,14 @@ export function Chat() {
               // live outside it. Above `lg` the button is hidden and the rail's
               // own collapse toggle governs.
               onOpenSidebar={() => setSidebarOpen(true)}
+              sidebarOpen={sidebarOpen}
               // Below `lg` this bar IS the app bar (the house header stands
               // down — Header.tsx), so it carries the house's nav toggle too.
               // The page hands it down rather than the header reaching for the
               // shell itself: ChatHeader stays a component of this surface, not
               // a component that knows about the product's navigation.
               onOpenAppNav={toggleMobileMenu}
+              appNavOpen={mobileMenuOpen.value}
               agents={agents}
               agentId={agentId}
               onSelectAgent={selectAgent}
@@ -614,7 +817,8 @@ export function Chat() {
               onSelectModel={setModelId}
               chatId={chatId}
               streaming={streaming}
-              onNewChat={() => { if (unsentChatRef.current) startNewChat(); else setNewChatOpen(true); }}
+              onNewChat={() => startNewChat()}
+              onExport={exportChat}
             />
           }
           composer={composer}
@@ -627,7 +831,9 @@ export function Chat() {
             agentId={agentId}
             chatId={chatId}
             onOpenArtifact={(artifact, opener) => setOpenArtifact({ artifact, opener })}
-            landing={isLanding}
+            onRetry={(i) => void send(i)}
+            onRegenerate={() => void regenerate()}
+            landing={isLanding && !transcriptLoading && !transcriptError}
             streaming={streaming}
             streamText={streamText}
             toolStatus={toolStatus}
@@ -639,30 +845,23 @@ export function Chat() {
                 {loadError}
               </div>
             )}
-            {isLanding && (
+            {transcriptLoading && <div role="status" class="flex min-h-48 items-center justify-center gap-2 text-secondary"><span class="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />Loading conversation…</div>}
+            {transcriptError && <div role="alert" class="chat-error-panel flex items-center gap-3 rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">Could not load this conversation. <Button variant="secondary" size="sm" onClick={() => void openConversation(chatId)}>Try again</Button></div>}
+            {regenerateError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
+            {isLanding && !transcriptLoading && !transcriptError && (
               <ChatLanding
                 agentName={agentName}
                 modelLabel={modelLabel}
-                onStarter={(text) => { setInput(text); inputRef.current?.focus(); }}
+                onStarter={(text) => { setInput(text); saveDraft(scopedAgent(agentId), chatId, text); inputRef.current?.focus(); }}
               />
             )}
           </MessagesView>
         </ChatCanvas>
 
         <ConfirmDialog
-          open={newChatOpen}
-          title="Start a new chat"
-          message="This starts a fresh chat session. The current conversation stays in the sidebar and can be reopened."
-          confirmPhrase="NEW CHAT"
-          confirmLabel="Start new chat"
-          onConfirm={() => { startNewChat(); setNewChatOpen(false); }}
-          onCancel={() => setNewChatOpen(false)}
-        />
-
-        <ConfirmDialog
           open={pendingDelete !== null}
           title="Delete chat?"
-          message="This will permanently delete this chat and its messages. This action cannot be undone."
+          message={`This will permanently delete "${pendingDelete ? conversationTitle(pendingDelete) : ''}" and its messages. This action cannot be undone.`}
           confirmPhrase="DELETE"
           confirmLabel={deleting ? 'Deleting…' : 'Delete'}
           danger

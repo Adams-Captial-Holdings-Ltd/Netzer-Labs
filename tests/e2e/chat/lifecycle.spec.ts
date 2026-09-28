@@ -171,17 +171,8 @@ test('keeps a draft typed in a new chat', async ({ page }) => {
   // A look at an older conversation, then back to a new chat: the words come back.
   await page.locator('button[title="Wiring the turn stream"]:visible').click();
   await expect(composer).toHaveValue('');
+  // One click, no confirmation (P6 retired the "type NEW CHAT" dialog).
   await page.getByRole('button', { name: 'New chat' }).first().click();
-  // The dialog clears its field just after it opens (ConfirmDialog's effect on
-  // `open`), so a phrase typed faster than any person can is wiped: type again
-  // until the confirm button takes it.
-  const phrase = page.getByPlaceholder('NEW CHAT');
-  const start = page.getByRole('button', { name: 'Start new chat' });
-  await expect(async () => {
-    await phrase.fill('NEW CHAT');
-    await expect(start).toBeEnabled({ timeout: 250 });
-  }).toPass({ timeout: 5_000 });
-  await start.click();
   await expect(composer).toHaveValue('a question for a brand-new chat');
 });
 

@@ -33,6 +33,8 @@ interface MessagesViewProps {
   agentId: string;
   chatId: string;
   onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
+  onRetry: (index: number) => void;
+  onRegenerate: () => void;
   /** Landing state: no turns yet, so hug the composer instead of filling. */
   landing: boolean;
   /** True while a turn is in flight; renders the live row. */
@@ -55,6 +57,8 @@ export function MessagesView({
   agentId,
   chatId,
   onOpenArtifact,
+  onRetry,
+  onRegenerate,
   landing,
   streaming,
   streamText,
@@ -97,7 +101,11 @@ export function MessagesView({
             <UserMessage key={i} message={m} agentId={agentId} chatId={chatId} />
           ) : (
             <AssistantMessage key={i} message={m} agentName={agentName}
-              agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
+              agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact}
+              canRetry={!streaming && i === messages.length - 1 && !messages[i - 1]?.attachments?.length} onRetry={() => onRetry(i)}
+              needsAttachments={!!messages[i - 1]?.attachments?.length}
+              canRegenerate={!streaming && i === messages.length - 1 && !m.error && !m.notSaved && !m.isReply}
+              onRegenerate={onRegenerate} />
           ),
         )}
         {streaming && (
