@@ -15,6 +15,10 @@ interface InfoTooltipProps {
    */
   term?: string;
   /**
+   * Side of the trigger where the tooltip opens. Defaults to `top`.
+   */
+  side?: 'top' | 'bottom';
+  /**
    * Optional custom trigger. Defaults to a small question-mark affordance.
    * Whatever you pass becomes the hover/focus target.
    */
@@ -31,7 +35,7 @@ interface InfoTooltipProps {
  *
  * Resolution order for the tooltip body: `text` prop, else glossary[`term`].
  */
-export function InfoTooltip({ text, term, children }: InfoTooltipProps) {
+export function InfoTooltip({ text, term, side = 'top', children }: InfoTooltipProps) {
   const [open, setOpen] = useState(false);
   const tooltipId = useId();
 
@@ -71,9 +75,9 @@ export function InfoTooltip({ text, term, children }: InfoTooltipProps) {
         <span
           id={tooltipId}
           role="tooltip"
-          class="absolute left-1/2 bottom-full z-50 mb-2 -translate-x-1/2 w-max max-w-xs
+          class={`absolute left-1/2 ${side === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'} z-50 -translate-x-1/2 w-max max-w-xs
             px-3 py-2 rounded-lg bg-surface-elevated border border-border shadow-lg
-            text-caption text-secondary leading-snug pointer-events-none page-enter"
+            text-caption text-secondary leading-snug pointer-events-none page-enter`}
         >
           {body}
         </span>

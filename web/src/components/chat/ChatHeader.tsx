@@ -413,7 +413,7 @@ export function ChatHeader({
                 font-mono text-caption text-secondary xl:inline-flex"
             >
               {chatId}
-              <InfoTooltip term="dashboard:" />
+              <InfoTooltip side="bottom" text="This chat's ID. Its transcript, costs and audit records are filed under it." />
             </span>
             <Button
               variant="secondary"
