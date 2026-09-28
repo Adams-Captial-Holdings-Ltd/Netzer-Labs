@@ -359,7 +359,9 @@ export function Chat() {
       await refreshConversations(c.agentId);
     } catch (e) {
       console.error('Chat: could not update conversation', e);
-      toast('Could not update that chat. Please try again.', 'error');
+      toast(e instanceof Error && e.message.startsWith('invalid_title')
+        ? 'A title can be up to 120 characters, with no tabs or line breaks.'
+        : 'Could not update that chat. Please try again.', 'error');
     }
   }
 
@@ -633,7 +635,7 @@ export function Chat() {
         setMessages((prev) => [...prev, old]);
         setRegenerateError(outcome.errorText
           ? friendlyTurnError(outcome.errorText, outcome.errorCode)
-          : outcome.text || 'The server did not save this reply.');
+          : `The new reply wasn't saved, so the previous one is kept.${outcome.text ? `\n${outcome.text}` : ''}`);
       } else {
         setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000, requestId: clientMessageId,
           ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
@@ -695,7 +697,6 @@ export function Chat() {
       onRetryLoad={() => void refreshConversations(agentId)}
       search={search}
       onSearch={(value) => {
-        ++historyRequest.current;
         setHistoryError(false);
         setHistoryLoading(value.trim() !== searchQuery);
         setSearch(value);
@@ -875,7 +876,7 @@ export function Chat() {
             )}
             {transcriptLoading && <div role="status" class="flex min-h-48 items-center justify-center gap-2 text-secondary"><span class="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />Loading conversation…</div>}
             {transcriptError && <div role="alert" class="chat-error-panel flex items-center gap-3 rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">Could not load this conversation. <Button variant="secondary" size="sm" onClick={() => void openConversation(chatId)}>Try again</Button></div>}
-            {regenerateError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
+            {regenerateError && <div role="alert" class="chat-error-panel whitespace-pre-line rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
             {isLanding && !transcriptLoading && !transcriptError && (
               <ChatLanding
                 agentName={agentName}

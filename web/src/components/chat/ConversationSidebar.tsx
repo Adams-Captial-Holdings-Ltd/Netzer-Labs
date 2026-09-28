@@ -279,7 +279,8 @@ export function ConversationSidebar({
     const fields = document.querySelectorAll<HTMLInputElement>('input[aria-label="Chat title"]');
     const field = [...fields].find((candidate) => !candidate.closest('[inert]') && candidate.getClientRects().length > 0);
     field?.focus();
-    field?.select();
+    field?.setSelectionRange(0, field.value.length, 'backward');
+    if (field) field.scrollLeft = 0;
   }, [renamingId]);
   // What the scrolling list is re-measured against (see ConversationList): the
   // rows it holds, and whether the empty-state paragraph is standing in for
@@ -524,7 +525,11 @@ export function ConversationSidebar({
                     </> : <>
                     <button type="button" disabled={streaming || deleting}
                       aria-label={`Rename chat: ${title}`} title="Rename chat"
-                      onClick={(e) => { e.stopPropagation(); setRenameTitle(c.title ?? c.firstMessage ?? ''); setRenamingId(c.chatId); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenameTitle((c.title ?? c.firstMessage ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 120));
+                        setRenamingId(c.chatId);
+                      }}
                       class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40">
                       <Pencil size={15} />
                     </button>
@@ -571,7 +576,7 @@ export function ConversationSidebar({
     </>
   );
 
-  const searchField = <input type="search" aria-label="Search chats" value={search}
+  const searchField = <input type="search" aria-label="Search chats" maxLength={100} value={search}
     onInput={(e) => onSearch(e.currentTarget.value)} placeholder="Search chats"
     class="mx-3 my-2 w-[calc(100%-1.5rem)] rounded-lg border border-border bg-bg px-2 py-1.5 text-body-sm text-primary" />;
 
