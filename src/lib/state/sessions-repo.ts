@@ -38,6 +38,7 @@ import {
   UpdateCommand,
   DeleteCommand,
   type UpdateCommandInput,
+  type TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
 import { ddb } from './ddb.js';
@@ -49,6 +50,7 @@ import { DeleteObjectsCommand, S3Client } from '@aws-sdk/client-s3';
 
 const TABLE = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 const MAX_TURNS = 20;
+const CHILD_LOCK_LEASE_MS = 15 * 60 * 1000;
 /**
  * Byte budget for the stored turn window, on top of the MAX_TURNS count cap.
  *
@@ -153,12 +155,20 @@ export function isPersistentChat(chatId: string): boolean {
 export async function acquireConversationChildLock(agentId: string, chatId: string): Promise<() => Promise<void>> {
   const token = randomUUID();
   const key = { PK: pk(agentId), SK: `${childPrefix(chatId)}CHILD_LOCK` };
+  const now = Date.now();
   try {
-    await ddb().send(new PutCommand({
+    const out = await ddb().send(new PutCommand({
       TableName: TABLE,
-      Item: { ...key, lockToken: token, createdAt: new Date().toISOString() },
-      ConditionExpression: 'attribute_not_exists(PK)',
+      Item: { ...key, lockToken: token, createdAt: new Date(now).toISOString() },
+      ConditionExpression: 'attribute_not_exists(PK) OR createdAt < :cutoff',
+      ExpressionAttributeValues: { ':cutoff': new Date(now - CHILD_LOCK_LEASE_MS).toISOString() },
+      ReturnValues: 'ALL_OLD',
     }));
+    const old = out.Attributes as { createdAt?: string } | undefined;
+    if (old) {
+      const ageSeconds = old.createdAt ? Math.floor((now - Date.parse(old.createdAt)) / 1000) : undefined;
+      logger.warn({ agentId, chatId, ...(ageSeconds !== undefined ? { ageSeconds } : {}) }, 'sessions: took over stale child lock');
+    }
   } catch (error) {
     if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') {
       throw new Error('Conversation child storage is busy; retry after the active operation completes');
@@ -168,12 +178,17 @@ export async function acquireConversationChildLock(agentId: string, chatId: stri
   let released = false;
   return async () => {
     if (released) return;
-    await ddb().send(new DeleteCommand({
-      TableName: TABLE,
-      Key: key,
-      ConditionExpression: 'lockToken = :token',
-      ExpressionAttributeValues: { ':token': token },
-    }));
+    try {
+      await ddb().send(new DeleteCommand({
+        TableName: TABLE,
+        Key: key,
+        ConditionExpression: 'lockToken = :token',
+        ExpressionAttributeValues: { ':token': token },
+      }));
+    } catch (error) {
+      if ((error as { name?: string })?.name !== 'ConditionalCheckFailedException') throw error;
+      logger.warn({ agentId, chatId }, 'sessions: late child-lock release found another holder');
+    }
     released = true;
   };
 }
@@ -607,6 +622,13 @@ export interface SessionEnrichment {
   ephemeral?: boolean;
 }
 
+export class ConversationDeletedError extends Error {
+  constructor() {
+    super('Conversation was deleted while the turn was running');
+    this.name = 'ConversationDeletedError';
+  }
+}
+
 /**
  * Append two turns (user + assistant) to the session, trimming to
  * MAX_TURNS most recent. Creates the session if missing. Refreshes TTL.
@@ -714,8 +736,8 @@ export async function appendTurns(
         ConditionExpression: 'attribute_not_exists(SK)',
       },
     }));
-    try {
-      await ddb().send(new TransactWriteCommand({ TransactItems: [{
+    const markerIndex = typeof enrichment?.requestId === 'string' ? 1 + records.length : undefined;
+    const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [{
         Put: {
           TableName: TABLE,
           Item: {
@@ -762,7 +784,18 @@ export async function appendTurns(
                 }
             : { ConditionExpression: 'attribute_not_exists(PK)' }),
         },
-      }, ...records] }));
+      }, ...records];
+    if (markerIndex !== undefined) {
+      transactItems.push({
+        ConditionCheck: {
+          TableName: TABLE,
+          Key: { PK: pk(agentId), SK: `${childPrefix(chatId)}TURN#${enrichment!.requestId}` },
+          ConditionExpression: 'attribute_exists(SK)',
+        },
+      });
+    }
+    try {
+      await ddb().send(new TransactWriteCommand({ TransactItems: transactItems }));
     } catch (err) {
       // Re-read only when the conversation's own fence (item 0) lost a race or
       // another transaction was in flight. A record whose sequence number is
@@ -772,8 +805,13 @@ export async function appendTurns(
       const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
       const reasons = e.CancellationReasons ?? [];
       const cancelled = e.name === 'TransactionCanceledException';
+      if (cancelled && markerIndex !== undefined && reasons[markerIndex]?.Code === 'ConditionalCheckFailed') {
+        logger.warn({ agentId, chatId }, 'sessions: refused turn save after conversation deletion');
+        throw new ConversationDeletedError();
+      }
+      const markerConflict = markerIndex !== undefined && reasons[markerIndex]?.Code === 'TransactionConflict';
       const fenced =
-        cancelled && (reasons[0]?.Code === 'ConditionalCheckFailed' || reasons[0]?.Code === 'TransactionConflict');
+        cancelled && (reasons[0]?.Code === 'ConditionalCheckFailed' || reasons[0]?.Code === 'TransactionConflict' || markerConflict);
       // A throttled item cancels the whole transaction, and the SDK does not
       // retry a cancelled transaction (it did retry the single Put this
       // replaced), so back off and try again rather than lose the turn.
@@ -786,7 +824,8 @@ export async function appendTurns(
       // has not expired is never cleared. A lost race (the fence) just re-reads:
       // the records it collided with are the winner's (the third critic's C3-4).
       let staleNumbers = false;
-      if (cancelled && !fenced && attempt < MAX_ATTEMPTS - 1 && reasons.slice(1).some((r) => r.Code === 'ConditionalCheckFailed')) {
+      const recordEnd = markerIndex ?? reasons.length;
+      if (cancelled && !fenced && attempt < MAX_ATTEMPTS - 1 && reasons.slice(1, recordEnd).some((r) => r.Code === 'ConditionalCheckFailed')) {
         try {
           staleNumbers = (await deleteExpiredRecords(agentId, chatId)) > 0;
         } catch (sweepErr) {
@@ -866,9 +905,11 @@ async function adoptRecords(conversationPk: string, chatId: string, owner: strin
  * good (the first critic's F2). A dashboard conversation's expiry is left alone
  * here too: it is settled when the conversation is created (appendTurns).
  */
+type ExistingItemUpdate = Pick<UpdateCommandInput, 'UpdateExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'> & { UpdateExpression: string };
+
 async function updateIfExists(
   Key: Record<string, string>,
-  update: Pick<UpdateCommandInput, 'UpdateExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'>,
+  update: ExistingItemUpdate,
 ): Promise<boolean> {
   try {
     await ddb().send(new UpdateCommand({ TableName: TABLE, Key, ...update, ConditionExpression: 'attribute_exists(PK)' }));
@@ -877,6 +918,22 @@ async function updateIfExists(
     if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return false;
     throw err;
   }
+}
+
+async function updateRowIfExists(
+  Key: Record<string, string>,
+  update: ExistingItemUpdate,
+): Promise<boolean> {
+  const UpdateExpression = update.UpdateExpression.replace(
+    /(SET\s+)(.*?)(\s+(?:REMOVE|ADD|DELETE)\s+|$)/,
+    (_match, start: string, set: string, end: string) => `${start}${set}, #version = if_not_exists(#version, :zero) + :one${end}`,
+  );
+  return updateIfExists(Key, {
+    ...update,
+    UpdateExpression,
+    ExpressionAttributeNames: { ...update.ExpressionAttributeNames, '#version': 'version' },
+    ExpressionAttributeValues: { ...update.ExpressionAttributeValues, ':zero': 0, ':one': 1 },
+  });
 }
 
 /** The update that refreshes a bot chat's expiry; a dashboard chat's is left alone. */
@@ -897,7 +954,7 @@ export async function setModelOverride(
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const Key = { PK: pk(agentId), SK: sk(chatId) };
-  await updateIfExists(
+  await updateRowIfExists(
     Key,
     modelId
       ? refreshTtl(chatId, 'SET modelOverride = :m, updatedAt = :u', { ':m': modelId, ':u': now })
@@ -919,10 +976,10 @@ export async function setWarroomMode(
   const now = Math.floor(Date.now() / 1000);
   const Key = { PK: pk(agentId), SK: sk(chatId) };
   if (!meetingId) {
-    await updateIfExists(Key, { UpdateExpression: 'REMOVE activeWarroomId SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } });
+    await updateRowIfExists(Key, { UpdateExpression: 'REMOVE activeWarroomId SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } });
     return;
   }
-  const entered = await updateIfExists(Key, {
+  const entered = await updateRowIfExists(Key, {
     UpdateExpression: 'SET activeWarroomId = :w, updatedAt = :u',
     ExpressionAttributeValues: { ':w': meetingId, ':u': now },
   });
@@ -968,7 +1025,7 @@ export async function clearSession(agentId: string, chatId: string): Promise<voi
   // per-message records (WI-1.2), which /newchat keeps, and a reset would hand
   // the next message a sequence number that is already taken. Marking every turn
   // so far as ingested gives the zero pending count the old reset gave.
-  await updateIfExists(
+  await updateRowIfExists(
     { PK: pk(agentId), SK: sk(chatId) },
     refreshTtl(chatId, 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u', {
       ':empty': [],

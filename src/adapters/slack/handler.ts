@@ -550,6 +550,7 @@ async function handlePerAgentSlackEvent(
     if (result.blocked) return;
     const now = Math.floor(Date.now() / 1000);
     const spec = resolveModel(result.modelId);
+    // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
     await appendTurns(agentId, chatId, [
       { role: 'user', text: userText, ts: now },
       { role: 'assistant', text: result.text, ts: now },
@@ -819,6 +820,7 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
     if (result.blocked) return;
     const now = Math.floor(Date.now() / 1000);
     const spec = resolveModel(result.modelId);
+    // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
     await appendTurns(targetAgentId, chatId, [
       { role: 'user', text: userText, ts: now },
       { role: 'assistant', text: result.text, ts: now },

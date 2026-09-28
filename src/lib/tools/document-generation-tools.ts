@@ -311,6 +311,7 @@ registerIfConfigured(
               agentId: ctx.agentId,
               chatId: ctx.chatId,
               ownerId: ctx.userId!,
+              clientMessageId: ctx.requestId,
               fileName,
               contentType: CONTENT_TYPES[format],
               body: bytes,

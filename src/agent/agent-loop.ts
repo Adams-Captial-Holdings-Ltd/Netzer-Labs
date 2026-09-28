@@ -210,6 +210,7 @@ export interface AgentTurnRequest {
   abortSignal?: AbortSignal;
   agentId: string;
   chatId: string;
+  requestId?: string;
   /** Genuine caller-held Paperclip run id. Chat turns leave this absent. */
   runId?: string;
   userText: string;
@@ -1470,6 +1471,7 @@ async function runAdmittedTurn(
         ...(req.userId ? { userId: req.userId } : {}),
         ...(req.surface ? { surface: req.surface } : {}),
         ...(req.runId ? { runId: req.runId } : {}),
+        ...(req.requestId ? { requestId: req.requestId } : {}),
         ...(req.replyChatId ? { replyChatId: req.replyChatId } : {}),
         ...(req.boardAgentId ? { boardAgentId: req.boardAgentId } : {}),
         ...(req.delegationDepth !== undefined ? { delegationDepth: req.delegationDepth } : {}),

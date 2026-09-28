@@ -46,6 +46,7 @@ export interface SaveArtifactArgs {
   source: unknown;
   artifactId?: string;
   expectedVersion?: number;
+  clientMessageId?: string;
 }
 
 type ArtifactScope = { agentId: string; chatId: string; ownerId: string };
@@ -228,6 +229,14 @@ export async function saveArtifact(args: SaveArtifactArgs): Promise<ArtifactDesc
     // bot, token-only principal, or a non-dashboard chat into durable history.
     if (!args.chatId.startsWith('dashboard:') || !args.ownerId?.startsWith('dashboard:user:')) {
       throw new Error('Artifact access requires a stable dashboard conversation owner');
+    }
+    if (typeof args.clientMessageId === 'string') {
+      const marker = await ddb().send(new GetCommand({
+        TableName: TABLE,
+        Key: { PK: pk(args.agentId), SK: `CHAT#${mappedChatId(args.chatId)}#TURN#${args.clientMessageId}` },
+        ConsistentRead: true,
+      }));
+      if (!marker.Item) throw new Error('Dashboard turn marker is missing; refusing to recreate artifact conversation');
     }
     try {
       await appendTurns(args.agentId, args.chatId, [], undefined, {

@@ -565,6 +565,7 @@ async function handleMessage(
     if (result.blocked) return;
     const now = Math.floor(Date.now() / 1000);
     const spec = resolveModel(result.modelId);
+    // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
     await appendTurns(targetAgentId, chatId, [
       { role: 'user', text: userText, ts: now },
       { role: 'assistant', text: result.text, ts: now },
