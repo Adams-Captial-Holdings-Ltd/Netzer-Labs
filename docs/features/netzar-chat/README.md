@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: index
 status: current
 observed_at: 2026-09-28
-as_of_commit: 0583a63d3354eb33287e5386b469702afe1db41b
+as_of_commit: 70c3ee4ba07ae36f1ccacbf53c23fd3a2509d109
 implemented_by:
   - web/src/pages/Chat.tsx
   - web/src/index.css
@@ -14,6 +14,7 @@ implemented_by:
   - web/src/components/chat/ToolCallsSection.tsx
   - src/lib/state/sessions-repo.ts
   - src/adapters/dashboard/handler.ts
+  - src/adapters/dashboard/public/app.js
   - src/adapters/dashboard/jarvis.ts
   - src/agent/agent-loop.ts
   - src/agent/turn-errors.ts
@@ -137,7 +138,7 @@ license and copyright in `src/lib/chat/vendor/NOTICE.md`).
 
 ## 2. What netzar-chat does today
 
-The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 906-line state and
+The shipped Chat tab uses `web/src/pages/Chat.tsx` as a 918-line state and
 composition shell. Transport and helpers live in the thirteen modules under
 `web/src/lib/chat/`; the LibreChat-structured, product-themed UI lives in the
 19 top-level files under `web/src/components/chat/` — 17 component files plus
@@ -468,7 +469,9 @@ backend.
   drops mid-reply, the server still saves the partial answer as a stopped
   reply; the page now re-reads the conversation and shows that saved reply
   when it carries this request's id, instead of a plain failure that invites a
-  duplicate Try again (**A240**).
+  duplicate Try again. The server saves it only after its outbound scan, so
+  the page tries up to three reads over about two seconds before it falls back
+  to the failure line (**A240**).
 - **The file-only note cannot be regenerated.** A reply that only records
   "file stored but not read" is saved with `status: 'notice'`; the page shows
   it with no Regenerate button, and the server refuses to regenerate one (409
@@ -525,9 +528,10 @@ backend.
   `/chat/<agentId>`, which the Chat tab already knew how to preselect
   (**AGENTCHAT**).
 - **The web reader speaks only protocol 2.** The browser's stream reader no
-  longer parses the old cumulative `chunk` event or the old plain-text error
-  frame; the server keeps sending that older format only to the fallback page,
-  `public/app.js`, which still reads it (**WIRE**).
+  longer parses the old cumulative `chunk` event; the server keeps sending that
+  older format only to the fallback page, `public/app.js`, which still reads
+  it. An error frame whose data is not JSON is still read as plain text, so a
+  malformed frame cannot break the reader (**WIRE**).
 - **Dead pointer state is gone.** The unused `storedChatId` and
   `rememberChatId` helpers and the legacy write to the unscoped
   `cce_chat_active` key are removed; sign-out still clears that key in
@@ -718,12 +722,12 @@ format).
 | The list search term travels in the GET URL, so it reaches the load balancer's access logs | `router.get('/sessions')` in `src/adapters/dashboard/handler.ts` | carried in the P6 session log — a POST search if those logs ever leave the account |
 | An admin's list shows every member's pinned conversations first, and the audited list override does not record `q` | `visibleConversations` in `src/adapters/dashboard/handler.ts`; the P6 security review, INFO-1 | carried in the P6 session log (decision 1: an admin sees every conversation, audited) |
 | P7 is proven locally only: the browser suite runs against the dev-only mock, and the lock lease, the turn-marker check and the version race are proved on Floci, not real DynamoDB or a real process crash | `tests/e2e/chat/hardening.spec.ts` against `web/dev/`; `src/lib/state/sessions-repo.p7.integration.test.ts` on Floci | after promotion (decision 18) |
-| Telegram and Slack turns carry no request id, so the mid-turn delete check (M1) does not cover them: a dashboard chat deleted while one of their turns is in flight can still be re-created by that turn's save | the parity skip comments in `src/adapters/telegram/handler.ts` and `src/adapters/slack/handler.ts`; ADR 0011 | none open — declared, by design (surface parity: neither surface sends a `clientMessageId` to the save path) |
+| Telegram and Slack turns carry no request id, so the mid-turn delete check (M1) does not cover them: a dashboard chat deleted while one of their turns is in flight can still be re-created by that turn's save | the parity skip comments in `src/adapters/telegram/handler.ts` and `src/adapters/slack/handler.ts`; the P7 M1 council's condition (session log) | none open — declared, by design (surface parity: neither surface sends a `clientMessageId` to the save path) |
 | A crashed save or delete leaves the conversation's child lock held for up to 15 minutes: any other save or delete on that chat is refused as busy until the lease expires and the next operation takes the lock over | the lease in `acquireConversationChildLock`, `src/lib/state/sessions-repo.ts` (`CHILD_LOCK_LEASE_MS`); ADR 0011, decision 67 | none open — the takeover is automatic and logs the old lock's age; a shorter lease was rejected as a new stored field for no gain (ADR 0011, alternatives) |
-| A regenerate sent from a tab opened before P7 carries no `replyTo`; the server reads a missing field as `null`, which matches a reply stored before P7 (also `null`) — such a stale tab keeps the pre-P7 risk of regenerating a reply it is not showing, until it reloads | `replyTo` handling in the regenerate route, `src/adapters/dashboard/handler.ts`; ADR 0011, decision 65 | none open — a reload picks up the new tie; by design, so an old tab is not simply refused outright |
+| A regenerate sent from a tab opened before P7 carries no `replyTo`, and the server skips the tie for it: it regenerates the stored last reply, whichever reply that tab shows (the pre-P7 behaviour), until the tab reloads. Only a `replyTo` of `null` matches a reply stored before P7 | `replyTo` handling in the regenerate route, `src/adapters/dashboard/handler.ts`, and `replaceLastReply`'s `expected.replyTo`, `src/lib/state/sessions-repo.ts`; ADR 0011, decision 65; the gate's T-6 | none open — a reload picks up the tie; by design, so an old tab is not simply refused outright |
 | A dashboard turn that saves in the last moment of a chat delete can still leave two unlisted message records behind: `appendTurns` takes no child lock, and its turn-marker check is not serialised with `deleteSession`'s last batch (pre-existing; P7's marker check narrows the window but does not close it) | the P7 security review, LOW-3 (`sessions-repo.ts`); council `council-sec`, 3-0 carry | carried: delete the turn markers before the messages, or repeat `deleteSession`'s query until it returns no deletable keys |
 | Any turn save can silently clear war-room mode: `appendTurns`' row `Put` does not carry `activeWarroomId`, so A232's version bump protects every other field but not this one (pre-existing, found by the P7 security review) | the P7 security review, INFO-7 (`appendTurns` in `src/lib/state/sessions-repo.ts`) | none open — carried for the owner |
-| The fallback page (`public/app.js`, still served at `/app.js`) and the non-streaming `POST /test-turn` send no request id, so their dashboard turns get no M1 protection and can still re-create a chat deleted mid-turn; ADR 0011 declares only the Telegram/Slack skip | the P7 security review, INFO-9 | none open — carried for the owner; removing the agent page's own chat client (AGENTCHAT) already shrank this set by one caller |
+| The fallback page (`public/app.js`, still served at `/app.js`) and the non-streaming `POST /test-turn` send no request id, so their dashboard turns get no M1 protection and can still re-create a chat deleted mid-turn; both declare the skip in a parity comment, as Telegram and Slack do | the P7 security review, INFO-9; the parity comments in `src/adapters/dashboard/public/app.js` and `src/adapters/dashboard/handler.ts` | none open — carried for the owner; removing the agent page's own chat client (AGENTCHAT) already shrank this set by one caller |
 | P4's erasure needs its new IAM grant (`s3:ListBucketVersions` on `artifacts/*`, `s3:DeleteObjectVersion` on `CURATED/artifacts/*`); an image-only `npm run deploy:cloud` would ship the code without it and erasure would fail | `infra/lib/iam-stack.ts`, `npm run synth` only; P4 is proven locally only (Floci versioning, no real presigned download) | the promotion that carries P4 deploys the IAM stack (a `qa -> staging` merge runs `cdk deploy --all`) |
 | `pptxgenjs` pulls `image-size` 1.2.1 with two HIGH advisories (a crafted image can hang it); the code never reaches it — slides carry text only | `npm audit`; the P4 session log, A202 | owner decision 56; re-check before slides carry images |
 | Listing reads every message row it skips (no index, owner decision 11) | `readConversationRows` in `src/adapters/dashboard/handler.ts`; ceiling 100,000 items, then `truncated` | none open — a GSI means reopening decision 11 with the owner |

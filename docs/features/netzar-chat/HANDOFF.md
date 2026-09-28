@@ -3,7 +3,7 @@ feature: netzar-chat
 document_role: handoff
 status: current
 observed_at: 2026-09-28
-as_of_commit: 0583a63d3354eb33287e5386b469702afe1db41b
+as_of_commit: 70c3ee4ba07ae36f1ccacbf53c23fd3a2509d109
 ---
 
 # Netzar Chat handoff
@@ -54,7 +54,8 @@ as_of_commit: 0583a63d3354eb33287e5386b469702afe1db41b
   by P7; council 3-0 carry); **INFO-7** (any turn save can clear war-room mode —
   pre-existing); **INFO-9** (`public/app.js` and `POST /test-turn` send no
   request id, so their dashboard turns sit outside the mid-turn delete check) —
-  Telegram and Slack are the same, but by design, declared in a parity comment.
+  Telegram and Slack are the same; all four declare the skip in a parity
+  comment.
   Still carried, unchanged by P7: A212 (the WebRTC residual), A213 (chat reply
   markdown can still load a remote image), A172 (who `dynamodb_query` may
   read), ART-16 (the artifact export bridge), A209.
