@@ -56,7 +56,8 @@ as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
   follow-ups and the three CLEANUP refactors; Jev picked every rung but four luna
   runs, **M154**). The review was cross-vendor: Claude security (Opus) and React
   (Sonnet), Codex security and correctness (`gpt-6-sol`), and four look-critic
-  rounds (Sonnet); two councils seated a Codex member (**P112**).
+  rounds (Sonnet); five councils seated a Codex member (**P112**); three fresh
+  critics FAILED the docs on wording and the owner waived a fourth (decision 63).
 - **P6's gate** (`~/.claude/plans/netzar-chat-plan/p6-proof.sh`, 60 rows) reads
   **`FAILS=0`, CONTROL `FAIL`** at the final code (`f824039`); it read
   `FAILS=56` at the base. P5 39/0, P4 52/0; the P1-P3 originals are green (6/0,
