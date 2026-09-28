@@ -502,6 +502,32 @@ test('P7 an unsaved regenerate says the reply was not saved', async ({ page }) =
   await page.unroute('**/api/test-turn/stream');
 });
 
+// The third fresh critic: CR3 moved the alert below the messages, where the view comes to rest. But when the reply
+// ends the composer takes the focus back, and that focus cancels the smooth scroll to the end, so on a reply taller
+// than the screen the line sat below the fold (y≈1002 of 900). The first reply here is already taller than
+// 1440×900, and the browser's default motion setting is the one that shows it (reduced motion scrolls instantly).
+test('P7 after an unsaved regenerate of a long reply, the not-saved line is on screen', async ({ page }) => {
+  await newChat(page);
+  await sendAndWait(page, 'a question worth asking twice, on a long reply');
+  await expect(replies(page)).toHaveCount(1);
+
+  const freshReply = 'Here is a different answer to the same question.';
+  const notSavedBody = [
+    `event: chunk\ndata: ${freshReply}\n\n`,
+    `event: final\ndata: ${JSON.stringify({ text: freshReply, modelId: 'us.anthropic.claude-sonnet-4-5', latencyMs: 5, costUsd: 0, toolCallCount: 0 })}\n\n`,
+    'event: done\ndata: not_saved\n\n',
+  ].join('');
+  await page.route('**/api/test-turn/stream', (route) =>
+    route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: notSavedBody }));
+
+  await regenerateLast(page);
+
+  const line = page.getByRole('alert').filter({ hasText: "The new reply wasn't saved, so the previous one is kept." });
+  await expect(line).toBeInViewport({ ratio: 1 });
+
+  await page.unroute('**/api/test-turn/stream');
+});
+
 // P7 (step 9) — work order E: the agent page's Chat entry becomes a link
 // (AGENTCHAT remove_link; council 3-0). Written BEFORE the change, as the
 // bar (netzar-chat-plan/p7-proof.sh row U-2).
