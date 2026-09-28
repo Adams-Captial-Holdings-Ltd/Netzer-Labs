@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createFakeDynamo } from '../../__test-utils__/fake-dynamo.js';
+import { S3Client, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 
 const { send, log } = vi.hoisted(() => ({
   send: vi.fn(),
@@ -257,6 +258,33 @@ describe('P7 work order A — sessions repository', () => {
     const written = serialized(lines);
     expect(written).not.toContain(secretText);
     expect(written).not.toContain('a reply that must never be logged either');
+  });
+
+  // The security review's LOW-4: a turn refused because its chat was deleted mid-turn must not leave its
+  // uploaded files in the raw bucket. Nothing references them any more, so nothing would ever delete them.
+  it('P7 a save refused because its chat was deleted mid-turn leaves none of its files behind', async () => {
+    const chatId = 'dashboard:lo4-files';
+    await appendTurns(AGENT, chatId, [
+      { role: 'user', text: 'seed question', ts: 1 },
+      { role: 'assistant', text: 'seed reply', ts: 2 },
+    ], undefined, PERSON);
+    send.mockImplementation(markerAwareSend(table.rows, []));
+    const raw = process.env.RAW_BUCKET;
+    process.env.RAW_BUCKET = 'p7-unit-raw';
+    const s3 = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({} as never);
+    try {
+      await appendTurns(AGENT, chatId, [
+        { role: 'user', text: 'here is the plan', ts: 3,
+          attachments: [{ id: 'f1', name: 'plan.pdf', type: 'application/pdf', size: 10, key: 'chat-uploads/main/lo4/plan.pdf' }] },
+        { role: 'assistant', text: 'a reply', ts: 4 },
+      ], undefined, { ...PERSON, requestId: 'gone-marker-lo4' }).catch(() => undefined);
+      const deletes = s3.mock.calls.map(([cmd]) => cmd).filter((cmd) => cmd instanceof DeleteObjectsCommand);
+      expect(deletes.map((cmd) => (cmd as DeleteObjectsCommand).input), 'the refused turn\'s file is deleted from the raw bucket')
+        .toEqual([expect.objectContaining({ Bucket: 'p7-unit-raw', Delete: { Objects: [{ Key: 'chat-uploads/main/lo4/plan.pdf' }] } })]);
+    } finally {
+      s3.mockRestore();
+      if (raw === undefined) delete process.env.RAW_BUCKET; else process.env.RAW_BUCKET = raw;
+    }
   });
 
   // ── work order C: the child lock's 15-minute lease (M3) ───────────────────

@@ -166,4 +166,23 @@ describe('P7 on DynamoDB — delete mid-turn, the lock lease, and the version bu
     const after = (await row(chat))!;
     expect((after.turns as Array<{ text: string }>).map((t) => t.text)).toEqual(['New question', 'New answer']);
   });
+
+  // The security review's LOW-5 (decision 65): two tabs both showed reply send-1 and both were admitted. The
+  // first save lands; the second must be refused, not replace the reply the other tab now shows.
+  it('P7 on Floci a regenerate save whose reply changed after admission is refused', async () => {
+    const { appendTurns, replaceLastReply } = await repo();
+    const chat = 'dashboard:p7-lo5-two-tabs';
+    await (await client()).send(new PutCommand({ TableName: SESSIONS,
+      Item: { PK: 'AGENT#main', SK: `CHAT#${chat}#TURN#send-1`, status: 'streaming' } }));
+    await appendTurns('main', chat, [
+      { role: 'user', text: 'Question', ts: 100 },
+      { role: 'assistant', text: 'First answer', ts: 101 },
+    ], undefined, { ...PERSON, requestId: 'send-1' });
+    const expected = { turnsTotal: 2, owner: OWNER, replyTo: 'send-1' };
+    expect(await replaceLastReply('main', chat, { role: 'assistant', text: 'Tab A answer', ts: 102, requestId: 'regen-a' }, expected))
+      .toBe(true);
+    expect(await replaceLastReply('main', chat, { role: 'assistant', text: 'Tab B answer', ts: 103, requestId: 'regen-b' }, expected),
+      'a regenerate save must still name the reply it replaces').toBe(false);
+    expect(((await row(chat))!.turns as Array<{ text: string }>).at(-1)!.text).toBe('Tab A answer');
+  });
 });

@@ -528,6 +528,18 @@ describe('P7 work order A — stream route', () => {
     expect(replaceLastReply).not.toHaveBeenCalled();
   });
 
+  // The security review's INFO-8 (owner decision 66's revisit trigger): the kill-phrase confirmation is a canned
+  // reply too. Stored as an ordinary reply, Regenerate replayed the phrase and re-engaged the fleet-wide halt.
+  it('P7 the kill-phrase confirmation is saved as a notice', async () => {
+    const chatId = 'dashboard:1750000000803';
+    runAgentTurn.mockResolvedValue(ok('Emergency halt engaged.', { refusal: { kind: 'kill_phrase', retryable: false } }));
+    const res = await post({ chatId, text: 'the kill phrase', clientMessageId: 'kill-1' });
+    expect(res.status).toBe(200);
+    await res.text();
+    const reply = (await transcript(chatId)).find((t) => t.role === 'assistant');
+    expect(reply, 'Regenerate must never replay the kill phrase').toMatchObject({ status: 'notice' });
+  });
+
   // ── work order B: admission before the stored-file replay (A238) ─────────
   //
   // Today replayStoredAttachments (handler.ts:667-697, called at :2331) runs
