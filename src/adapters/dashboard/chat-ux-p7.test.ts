@@ -75,3 +75,62 @@ describe('P7 chat page helpers — the Markdown export pins its error line', () 
     expect(md.split('\n'), `markdown: ${JSON.stringify(md)}`).toContain('Error: Something went wrong: timeout');
   });
 });
+
+/**
+ * P7 (step 9) — work order E: the web stream reader drops the old cumulative
+ * format (WIRE, web_only; council 3-0).
+ *
+ * Written BEFORE the change, as the bar (netzar-chat-plan/p7-proof.sh row U-3).
+ *
+ * The decided design: `streamTurn` (web/src/lib/chat/stream.ts) ignores the
+ * old cumulative `event: chunk` frames — given a 200 SSE body of `event:
+ * chunk` frames and then `event: done`, it never calls `onChunk` and returns
+ * empty text. Today it treats a bare `event: chunk` as the live cumulative
+ * preview (stream.ts ~:161-164, the `curEvent === 'chunk'` branch U-4 will
+ * remove), so this fails at the assertion below rather than passing by
+ * construction (M41/P54). The server keeps the old format for the fallback
+ * page public/app.js (P2's frozen row B-4): this test drives only the web
+ * reader, through its own `fetchImpl` option, never the server.
+ */
+describe('P7 chat stream reader — the old cumulative format', () => {
+  it('P7 the chat stream reader ignores the old cumulative format', async () => {
+    type StreamModule = typeof import('../../../web/src/lib/chat/stream.js');
+    const mod = (await import('../../../web/src/lib/chat/stream.js').catch(() => null)) as StreamModule | null;
+    expect(mod, 'web/src/lib/chat/stream.ts exports streamTurn').not.toBeNull();
+
+    // Two old-format cumulative chunk frames, then done — exactly the shape
+    // the pre-P2 backend (and the fallback page) still writes.
+    const body = [
+      'event: chunk\ndata: Hello\n\n',
+      'event: chunk\ndata: Hello world\n\n',
+      'event: done\ndata: ok\n\n',
+    ].join('');
+    const bytes = new TextEncoder().encode(body);
+    let sent = false;
+    const fetchImpl = (async () => ({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (sent) return { done: true, value: undefined };
+            sent = true;
+            return { done: false, value: bytes };
+          },
+        }),
+      },
+    })) as unknown as typeof fetch;
+
+    const chunks: string[] = [];
+    const outcome = await mod!.streamTurn(
+      { agentId: 'main', chatId: 'dashboard:1', text: 'hi' },
+      'token',
+      { onChunk: (t) => chunks.push(t), onToolStatus: () => {} },
+      { fetchImpl },
+    );
+
+    // The old cumulative frames are ignored outright: no live preview call...
+    expect(chunks, `onChunk calls: ${JSON.stringify(chunks)}`).toEqual([]);
+    // ...and no text surfaces from them either.
+    expect(outcome.text).toBe('');
+  });
+});

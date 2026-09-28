@@ -797,7 +797,16 @@ test.describe('with an artifact open on a phone', () => {
 test('P6 a slower conversation load never replaces the one opened after it', async ({ page }) => {
   await newChat(page);
   await sendAndWait(page, 'the first conversation');
-  const firstId = await page.evaluate(() => (JSON.parse(sessionStorage.getItem('cce_chat_active')!) as { chatId: string }).chatId);
+  // P7 (E): reads the SCOPED pointer (the sessionStorage key that starts with
+  // `cce_chat_active:`) rather than the legacy unscoped `cce_chat_active` key,
+  // which work order E's product change removes (Chat.tsx ~:149, inside
+  // rememberScopedChatId) along with the dead pointer helpers (A223). Only
+  // how this test finds the chat id changed; the assertions below are
+  // untouched.
+  const firstId = await page.evaluate(() => {
+    const scopedKey = Object.keys(sessionStorage).find((k) => k.startsWith('cce_chat_active:'));
+    return (JSON.parse(sessionStorage.getItem(scopedKey!)!) as { chatId: string }).chatId;
+  });
   await page.getByRole('button', { name: 'New chat' }).first().click();
   await sendAndWait(page, 'the second conversation');
   await page.getByRole('button', { name: 'New chat' }).first().click();

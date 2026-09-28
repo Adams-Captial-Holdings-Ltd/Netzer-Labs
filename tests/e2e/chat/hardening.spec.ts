@@ -427,3 +427,42 @@ test('P7 an unsaved regenerate says the reply was not saved', async ({ page }) =
 
   await page.unroute('**/api/test-turn/stream');
 });
+
+// P7 (step 9) — work order E: the agent page's Chat entry becomes a link
+// (AGENTCHAT remove_link; council 3-0). Written BEFORE the change, as the
+// bar (netzar-chat-plan/p7-proof.sh row U-2).
+//
+// The agent page (/agents/<id>, web/src/pages/AgentDetail.tsx) no longer has
+// a chat client of its own; its Chat entry is a link to `/chat/<agentId>`
+// (App.tsx:240 routes it; Chat.tsx:52-54 reads it). An agent OTHER than the
+// default one (Chat.tsx's own default is the first ACTIVE agent, "main") is
+// used so the selection is actually proven, not merely consistent with a
+// fallback. Today the Chat tab renders AgentDetail's own in-page ChatTab
+// (a plain `<input placeholder="Type a message...">` with no accessible
+// name) and the URL never changes.
+test('P7 the agent page opens this agent in the Chat tab', async ({ page }) => {
+  const agentId = 'comms';
+  const displayName = 'Communications';
+  await page.route(`**/api/agents/${agentId}/detail`, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      agent: {
+        agentId, displayName, description: 'Email, messaging, and stakeholder communication.',
+        model: 'us.anthropic.claude-sonnet-4-5', status: 'active',
+        telegramConnected: false, slackConnected: false, createdAt: new Date().toISOString(),
+      },
+    }),
+  }));
+
+  await page.goto(`/dashboard/agents/${agentId}`);
+  await expect(page.getByRole('heading', { level: 1, name: displayName })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+
+  await expect(page, 'the Chat entry must navigate to the Chat tab, not render its own test chat')
+    .toHaveURL(new RegExp(`/dashboard/chat/${agentId}$`));
+  await expect(page.getByRole('textbox', { name: `Message ${displayName}` })).toBeVisible();
+
+  await page.unroute(`**/api/agents/${agentId}/detail`);
+});
