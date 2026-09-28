@@ -301,6 +301,12 @@ const dropFixture: Fixture = [
   ...cumulativeChunks(dropText, 2),
   { event: 'drop', data: '', delayMs: 300 },
 ];
+// drop-late (P7, A240): the same drop, but the mock saves the stopped reply a moment AFTER the connection drops,
+// as the real route does when its outbound scan finishes after the page has seen the drop.
+const dropLateFixture: Fixture = [
+  ...cumulativeChunks(dropText, 2),
+  { event: 'drop', data: 'late', delayMs: 300 },
+];
 
 export const fixtures: Record<string, Fixture> = {
   default: defaultFixture,
@@ -319,4 +325,5 @@ export const fixtures: Record<string, Fixture> = {
   'typed-error': typedErrorFixture,
   'tool-capped': toolCappedFixture,
   drop: dropFixture,
+  'drop-late': dropLateFixture,
 };

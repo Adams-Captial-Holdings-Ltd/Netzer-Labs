@@ -121,7 +121,10 @@ function describeUploads(keys: string[]): Array<{ id: string; name: string; type
   });
 }
 
-interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[]; failed: boolean; dropped?: true }
+interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[]; failed: boolean; dropped?: true; saveLate?: boolean }
+
+// P7 (A240): how long after the drop the `drop-late` fixture saves its stopped reply.
+const LATE_SAVE_MS = 700;
 
 /** Accumulate only the fields the real transcript stores, never arguments. */
 function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
@@ -164,7 +167,7 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
     await cadence(res, ev.delayMs);
     if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed, artifacts, failed };
     // P7 (A240): the `drop` fixture's marker. Left open: the caller records the reply, then drops the connection.
-    if (ev.event === 'drop') return { text: streamed, tools, stopped: true, artifacts, failed, dropped: true };
+    if (ev.event === 'drop') return { text: streamed, tools, stopped: true, artifacts, failed, dropped: true, saveLate: ev.data === 'late' };
     // The real route publishes at most eight references a turn (MAX_DASHBOARD_ARTIFACT_REFS).
     if (ev.event === 'artifact_ref' && artifacts.length >= 8) continue;
     if (ev.event === 'chunk') sseWrite(res, 'delta', JSON.stringify({ i: 0, t: ev.data }));
@@ -431,10 +434,20 @@ export function mockStreamPlugin(): Plugin {
               if (reply.stopped && !reply.dropped) {
                 console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.text.length} chars)`);
               }
-              if (turn.regenerate) {
-                const stored = transcripts.get(turn.chatId)!;
-                transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000, turn.clientMessageId)]);
-              } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys, turn.clientMessageId);
+              const record = () => {
+                if (turn.regenerate) {
+                  const stored = transcripts.get(turn.chatId)!;
+                  transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000, turn.clientMessageId)]);
+                } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys, turn.clientMessageId);
+              };
+              // P7 (A240): the real route saves a dropped reply only after its outbound scan, so that save can
+              // land after the page has already seen the drop. `drop-late` plays that order.
+              if (reply.saveLate) {
+                res.destroy();
+                setTimeout(record, LATE_SAVE_MS);
+                return;
+              }
+              record();
               // P7 (A240): saved as stopped first, as the real route saves a reply whose connection dropped;
               // then the connection drops with the body unfinished, which the page reads as a network failure.
               if (reply.dropped) res.destroy();

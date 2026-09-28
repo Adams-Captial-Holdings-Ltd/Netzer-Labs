@@ -24,6 +24,7 @@ const REGEN = 'Here is a fresh answer to the same question.'; // the mock's rege
 const DROP = '/fixture drop';
 const DROP_START = 'The rollout reached'; // the drop fixture's first chunk begins with this
 const DROP_TEXT = 'The rollout reached the first two regions before the third one'; // all it streams before the drop
+const DROP_LATE = '/fixture drop-late'; // the same drop, saved 700 ms after it (web/dev/mock-stream-plugin.ts)
 
 test.beforeEach(async ({ context }) => {
   await context.addInitScript((caps) => {
@@ -187,6 +188,28 @@ test('P7 a reply cut off by a dropped connection shows what the server saved', a
   await expect(replies(page).last()).toContainText(DROP_TEXT);
   await expect(replies(page).last()).toContainText(/stopped/i);
   await expect(userBubbles(page).filter({ hasText: DROP })).toHaveCount(1);
+});
+
+// The real route saves a dropped reply only after its outbound scan (the AbortError path in
+// src/adapters/dashboard/handler.ts), so that save can land after the page has seen the drop. The fresh
+// critic's note: the test above only covers a reply saved BEFORE the drop. `drop-late` saves 700 ms after it.
+test('P7 a reply saved a moment after its connection dropped is still shown', async ({ page }) => {
+  await newChat(page);
+  await composerOf(page).fill(DROP_LATE);
+  await expect(sendOf(page)).toBeEnabled();
+  await sendOf(page).click();
+
+  await expect(transcriptOf(page).getByText(DROP_START).first()).toBeVisible({ timeout: 10_000 });
+  await waitForEnd(page);
+
+  // No failure alert and no Try again: the page waited for the save instead of giving up at once.
+  await expect(transcriptOf(page).getByRole('alert')).toHaveCount(0);
+  await expect(tryAgainOf(page)).toHaveCount(0);
+  const reply = replies(page).last();
+  await expect(reply).toContainText(/stopped/i, { timeout: 10_000 });
+  await expect(reply).toContainText(DROP_TEXT);
+  await expect(replies(page)).toHaveCount(1);
+  await expect(userBubbles(page).filter({ hasText: DROP_LATE })).toHaveCount(1);
 });
 
 // P7 (step 9) — work order B: the file note is a notice (A241). A file-only
