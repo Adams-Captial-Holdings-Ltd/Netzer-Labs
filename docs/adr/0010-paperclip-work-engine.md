@@ -1,6 +1,6 @@
 # ADR 0010 — Paperclip is the missions work engine
 
-**Status:** Accepted (2026-08-18, Paperclip integration plan §34; amended 2026-08-18, 2026-09-01 and 2026-09-06, see "Amendment" sections below)
+**Status:** Accepted (2026-08-18, Paperclip integration plan §34; amended 2026-08-18, 2026-09-01, 2026-09-06 and 2026-09-29, see "Amendment" sections below)
 
 ## Context
 
@@ -175,6 +175,16 @@ signing key. Rotation would invalidate every Paperclip login session, so an
 ordinary local or CI deploy must preserve the stored value. Each customer
 installation receives its own independently generated key, and no
 repository-wide value may be shared across installations.
+
+## Amendment (2026-09-29) — the Work Platform record
+
+The owner-approved Work Platform plan (2026-09-26) builds managed Solution Packs on this ADR. The architecture is recorded in [ADRs 0012–0020](../features/paperclip/decision-log.md#adr-numbers) and the [minimum sellable product](../features/paperclip/minimum-sellable-product.md). The plan names three changes to this ADR:
+
+1. **The pin moves and the patch goes.** Step 2 re-pins to v2026.916.x under the [compatibility program (ADR 0019)](0019-paperclip-compatibility-program.md). That deletes `vendor/paperclip/updated-since.patch`: upstream implements `updatedSince` natively (strict `>`), so the reconciler keeps its overlap-and-dedupe window (2026-08-21 amendment above). This is the re-pin rule above taking effect. At the time of this amendment the patch is still in the image and the re-pin has not happened.
+2. **ADR 0009 is superseded now.** The "Relationship to ADR 0009" paragraph below says ADR 0009 stays Accepted until the retirement stage. The plan supersedes that timing: [ADR 0009](0009-mission-container-model.md) is marked Superseded, and the code retires later (scale-track step 18, after two clean production weeks).
+3. **The Missions page is not the foundation.** Customers use a Netzer-owned Work UI on Paperclip's work model, and `/missions` will redirect to Work Inbox ([ADR 0017](0017-netzer-identity-and-work-ui.md)). DL-4's `/api/missions*` wire contract stays in the code until the legacy retirement.
+
+**Reaffirmed by the plan:** DL-5 (one company per deployment, [ADR 0012](0012-paperclip-owns-work-state.md)) and DL-9 (never fork, [ADR 0019](0019-paperclip-compatibility-program.md)). The plan names no other change to this ADR.
 
 ## Relationship to ADR 0009
 
