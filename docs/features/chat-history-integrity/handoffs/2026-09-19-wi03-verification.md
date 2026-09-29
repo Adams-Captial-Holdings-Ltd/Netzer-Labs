@@ -1,0 +1,820 @@
+---
+feature: chat-history-integrity
+document_role: session-handoff
+status: current
+observed_at: 2026-09-19
+as_of_commit: 3f9c94ed4f6d1099a9d20613ef7701b641a17503
+session_slug: wi03-verification
+supersedes: 2026-09-19-wi03-cleanup.md
+---
+
+# Session handoff: WI-0.3 verification — PASS, by a critic that neither built nor cleaned it
+
+## 1. Session metadata
+
+| Field | Value |
+|---|---|
+| Session started | 2026-09-19 (Gauntlet Loop, `DIRECT_COORDINATOR / VERIFICATION`, WI-0.3). Claude Opus 5, fresh session, no Codex (`CODEX_REVIEW: OFF`), no subagents. |
+| Feature folder | `docs/features/chat-history-integrity/` |
+| Branch worked on | `fix/test-credential-isolation`, cut from `origin/development` @ `0f41b53`, in the standalone clone `_netzer-turn-ceiling` |
+| Branch it merges into next | `development` |
+| AWS environment that branch reaches | none, per the [branch-to-environment mapping](../../../../development.md#branch-to-environment-mapping) |
+| Commit verified | `3f9c94e` (`3f9c94ed4f6d1099a9d20613ef7701b641a17503`), clean tree, `git rev-parse --git-common-dir` = `.git` (a clone, not a worktree — M31) |
+| Commits made by this session | this docs commit only. **No source file was touched.** |
+| Pushed | **No.** |
+| PR | None. |
+| Deployed | no |
+
+## 2. Current state summary
+
+**WI-0.3 VERIFICATION: PASS. WI-0.3 is VERIFIED at `3f9c94e`.**
+
+Every criterion was re-derived from the repository, not carried from a log. The proof exits 0 with
+nine PASS lines and `FAILS=0`; the full `development.md` step 7 list equals the baseline on the exact
+HEAD verified; both negative controls were read as output rather than scored from a line.
+
+The single substantive correction to the incoming handoff is a **count, not a defect**: the branch
+scope is **8 paths** at `3f9c94e`, not 7. Seven is the count at `e09d673`, which is the commit the
+feature `HANDOFF.md` stamp names, so the stamped claim is true where it is stamped. The criterion is
+"all inside the seam", never a fixed number (carried trap, cleanup log 7.2).
+
+One finding is classified as technical debt and deliberately not patched: layer 1 does not neutralise
+the container-credential or web-identity members of the SDK's provider chain. Layer 2 still refuses
+the resulting `*.amazonaws.com` call, so the work item's safety property holds. See 4.2.
+
+## 3. What was verified, and how
+
+### 3.1 The verdict table
+
+| # | Criterion | Verdict | Evidence re-derived this session |
+|---|---|---|---|
+| V1 | AC-0.3-1 collection unchanged | **PASS** | All 246 baseline files still collected; the only addition is `src/__test-utils__/aws-guard.test.ts`. The baseline file is 246 lines and `sort -c` confirms it is sorted, which is what makes the `comm` comparison valid. |
+| V2 | AC-0.3-2/3/4, and the guard does what is claimed | **PASS** | `npm test` with credentials **planted and no stripping**: 247 files / 3215 tests, exit 0, **0** violation lines. Read `vitest.setup.ts` directly: layer 1 runs **once**, inside `if (!guardHost.__netzarAwsGuard)`; layer 2 wraps **four** functions — `http.request`, `http.get`, `https.request`, `https.get` (`:91-94`). |
+| V3 | AC-0.3-5 mock and the owner-approved control | **PASS** | `cost-cap.test.ts` mocks `budget-writer`, 7/7. The control restored fake credentials inside the test, ran the real `syncBudgetToDailyCap`, and the guard failed the test naming `sts.us-east-1.amazonaws.com` **despite** the swallow. |
+| V4 | AC-0.3-6 scope | **PASS** | **8** paths, every one inside the seam. `package.json`, `package-lock.json` and both web manifests unchanged. Zero production `src/` files. |
+| V5 | AC-0.3-7 full step 7 list | **PASS** | Run on `3f9c94e` itself. Equals the baseline in every line (7.3). |
+| V6 | The cleanup is comment-only | **PASS** | `e09d673` touches `vitest.setup.ts` and nothing else, `1 file changed, 5 insertions(+)`, and all five inserted lines begin with `//`. Read, not assumed. No test changed. |
+| V7 | A mutation the guard must catch | **PASS** | Both controls read as output (7.4), never scored on the exit code — the carried `ENOTFOUND` trap makes a disarmed run exit non-zero too. |
+| V8 | Documentation honesty | **PASS**, with one imprecision recorded | Every stamped claim re-run and true at the commit the stamp names. One wording overstatement, 4.2. |
+
+### 3.2 Why the tripwire cannot be silently disarmed
+
+The guard is only worth its PASS if nothing later in the suite un-patches it. Checked independently,
+unpiped:
+
+- Nothing outside `vitest.setup.ts` assigns to `http.request`, `http.get`, `https.request` or
+  `https.get` anywhere in `src`, `infra` or `scripts` (grep exits 1).
+- No HTTP-interception library is imported anywhere (`nock`, `msw`, `@mswjs` — grep exits 1), and
+  none is declared in `package.json` (grep exits 1).
+
+So the four patches installed at setup stand for the whole worker's life.
+
+### 3.3 Why layer 1 must run once and not continuously
+
+`src/__test-utils__/localstack.ts`'s `configureLocalAwsEnv()` **sets** `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL` and `AWS_REGION` for tests that point at the emulator. A
+guard that re-neutralised continuously would delete those out from under it. The install is inside
+`if (!guardHost.__netzarAwsGuard)`, so it runs once per worker at setup and never again. The claim in
+the incoming handoff is correct, and this is the reason.
+
+### 3.4 The contract test is a real contract test, not a tautology
+
+`src/__test-utils__/aws-guard.test.ts` duplicates `CREDENTIAL_VARS` and the `AwsGuard` type rather
+than importing them, which the cleanup deliberately preserved. That duplication is what makes it an
+independent check: it asserts against literals it owns, not against the implementation's own constant.
+Its two dialling tests assert `__netzarAwsGuard === true` **before** dialling (P31), so in a red state
+they fail instead of opening a socket, and both drain their own hits so the `afterEach` sees a clean
+slate. This is the file whose absence would make every other number meaningless, and it holds up.
+
+## 4. Decisions and classifications
+
+### 4.1 Decisions taken this session
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Score V4 on "all inside the seam", not on the number 7 | The carried trap says the count tracks the branch. It is 7 at `e09d673` and 8 at `3f9c94e`; both are correct at their commit. Failing the item on an arithmetic drift in the handoff would be judging the paperwork, not the artifact. |
+| 2 | Read both controls' output rather than trusting the proof's score line | V7 requires it, and the carried `ENOTFOUND` trap is exactly a case where the exit code lies. |
+| 3 | Classify the provider-chain gap as debt, do not patch it | Constraint 4, and VERIFICATION does not edit code. Layer 2 preserves the safety property; closing layer 1's gap is a behaviour change that belongs to a work item. |
+| 4 | Do not re-open the cleanup | The handoff says judge it, not re-open it. It is comment-only and correct. |
+
+### 4.2 Classified, not patched
+
+| Finding | Class | Route |
+|---|---|---|
+| **Layer 1 does not neutralise every member of the SDK's node provider chain.** `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` / `AWS_CONTAINER_CREDENTIALS_FULL_URI` (ECS container credentials) and `AWS_WEB_IDENTITY_TOKEN_FILE` / `AWS_ROLE_ARN` (web identity) are left set. `vitest.setup.ts:14`, the feature `HANDOFF.md:29` and `aws-guard.test.ts:52`'s test name all say "every ambient credential source". None of them is set on this machine (checked). **The safety property still holds:** web identity dials `sts.*.amazonaws.com`, which layer 2 refuses, and the container path dials link-local `169.254.170.2`, which yields credentials only — the AWS API call that follows is still refused. | Technical debt + a wording overstatement | Not patched. Offer with A39 and A43. The honest wording is "every credential source this environment can present"; the complete fix is four more names in `CREDENTIAL_VARS`, which is a behaviour change. |
+| `hostOf` matches the **first** host-bearing argument (A43) | Technical debt, theoretical | Carried unchanged from the cleanup. Re-read this session and confirmed still true at `3f9c94e`. |
+| `vitest.setup.ts` is outside `npm run typecheck` (A39) | Technical debt, one line | Carried. Owner decision 23 routes it to its own branch. |
+| `budget-writer.ts` swallows every AWS error | Pre-existing, deliberate | Carried. The guard now makes it visible in tests, which was the point. |
+
+### 4.3 Durable facts promoted out of this log
+
+| Fact learned | Promoted into | Done |
+|---|---|---|
+| WI-0.3 is VERIFIED at `3f9c94e`; the hand-stripping constraint is retired on a checkout carrying the guard | `HANDOFF.md`, current objective and live state | Yes, this commit |
+| Layer 1's provider-chain gap, and that layer 2 covers it | `HANDOFF.md` blockers table, and 4.2 above | Yes, this commit |
+| Nothing in the suite can disarm the tripwire | 3.2 above; the guard's own comment already states the design | Yes |
+
+## 5. Carried-forward mistakes, assumptions and precautions
+
+> Copied forward from the previous session handoff, then appended to. Nothing is
+> deleted. An entry that is fixed is marked `RESOLVED (<commit>)` and stays.
+
+### 5.1 Process precautions
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P1 | Record a baseline before changing anything. | Without it a pre-existing failure is indistinguishable from a regression you caused. |
+| P2 | Never record a command as passing unless it actually ran. Say what you skipped and why. | See M5: a handoff once carried checks that no runtime could have executed. |
+| P3 | Name the branch. Never write "ready for production". | Four long-lived branches exist and only two reach an AWS environment. |
+| P4 | Run the FULL `npm test` before pushing, never a scoped run. | Required by [`CLAUDE.md`](../../../../CLAUDE.md). Scoped runs have hidden cross-module regressions here. |
+| P5 | When a document and the code disagree, **the code wins**. Fix the document. | The framework's stated tie-break. |
+| P6 | Never force-add unrelated uncommitted work you find in the tree. Preserve it and hand it back to its owner. | Stray files found during cleanup are somebody's in-flight work, not yours to merge. |
+| P7 | Delete a transient branch once it merges. | Only `development`, `qa`, `staging`, `production` survive, so a handoff that names a branch names something that still exists. |
+| P8 | Docs changes must pass `node scripts/ci/feature-knowledge.mjs` and `node scripts/ci/docs-links.mjs` before pushing. | Docs CI runs them anyway; failing there costs a round trip. |
+| P9 | Never restate feature-documentation rules outside [the framework](../../README.md). | A second copy is exactly how these conventions drifted before — see M1. |
+
+### 5.2 Mistakes already made, and their corrections
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M1 | Feature-documentation conventions were written on several pages at once. | The copies drifted and no page was trustworthy. | Single specification in [the framework](../../README.md), machine-checked by `scripts/ci/feature-knowledge.mjs`. | One rule, one home, enforced by CI rather than by discipline. |
+| M2 | The repository-root `handoff.md` was used as live, writable operational state. | It became a stale global handoff that contradicted the per-feature ones. | Reduced to a one-sentence compatibility pointer; CI now fails if it grows back. | Operational state is per-feature. A global handoff always rots. |
+| M3 | `infra/lib/dynamo-stack.ts` carries a header comment claiming "All 14 DynamoDB tables". | It creates **32**. The comment misled table-count work. | Read the synthesized template, never the comment. | Comments are not authorities. `infra/lib/constants.ts` and the synth output are. |
+| M4 | The CodeBuild deploy branch default was changed from `main` to `production`, then reverted. | Churn on a live CI path; the doc fixes from that change were kept, the behaviour change was not. | Reverted in `4ce27a7`, doc fixes retained. | Do not re-apply this without first establishing why it was reverted. |
+| M5 | A feature handoff recorded required checks as complete when the authoring machine had no Node runtime, so they could not have run. | The next reader would have trusted an unverified contract. | Disclosed explicitly in the handoff; Docs CI on `development` became the first real execution. | This is precisely what P2 exists to prevent. Disclosure is the minimum; running the check is the goal. |
+| M6 | Targeted Vitest was run inside a Windows **linked worktree**. | Startup failed with `Cannot read directory "../../../../../../../.."` and could not resolve `vitest.config.ts`; no tests collected. | Ran from a normal checkout instead. | On Windows, run test suites from a normal clone. Dependency-free Node CI scripts are fine in a worktree; Vitest is not. |
+| M7 | `npm run test:integration:up` was assumed safe alongside the local stack. | It starts LocalStack on port 4566 and collides with Floci. Two emulators must never run at once. | Use `npm run local:test:integration`, which passes `--env-file=.env`. | One emulator on 4566, ever. |
+| M8 | `.env` was created for local development while several lifecycle scripts default their environment flag to **prod** and read `.env`. | Commands that were previously inert became genuinely dangerous. | Catalogued in [dangerous commands](../../../../development.md#dangerous-commands-never-run-locally). | Read that list before running any unfamiliar `npm run` script. |
+
+| M9 | The `development.md` Automated tests table records `npm test` as "178 files, 1927 tests, all passing". | A reader treats a failing baseline as a regression they caused. | Measured on a clean clone of untouched `development`: **192 files, 2135 tests, 7 files / 3 tests failing**. Reported to the owner; the document was NOT amended, because that needs approval. | Re-measure the baseline yourself. Do not trust that table. |
+| M10 | Web gates were run without `web/node_modules` installed, and the resulting `TS7026` errors were briefly read as a pre-existing code defect. | Nearly recorded an environment artifact as a real baseline failure — the exact shape of **M5**. | Ran `npm --prefix web ci` first; both web gates then passed cleanly. | `npm ci` at the root does NOT install `web/`. Install it before believing any web gate result. |
+| M11 | The first two baseline runs were done inside a Windows linked worktree, hit **M6**, and the failures were then over-corrected as "just the worktree". | Two wrong statements in a row: first that the baseline was clean, then that the failures were an artifact. | Ran a normal clone, per M6. The failures are real *and* the suite is flaky — three runs gave 10, 5 and 7 failing files. | M6 is real, but it is not an excuse. Confirm on a normal clone before either believing or dismissing a failure. |
+| M12 | The output ceiling was raised on the TOOL-LOOP rounds only. The initial streamed call passes no `maxTokens` and falls through to `?? 1024` in `lib/bedrock/client.ts`. | Shipped to production as a fix, and production still returned `outputTokens: 1024 / stopReason: max_tokens` four minutes later. Documents still could not fit. | Renamed to `TURN_MAX_TOKENS` and applied at all four call sites; `agent-loop.max-tokens.test.ts` pins the initial call and was verified to FAIL when reverted. | When raising a limit, grep every call site that can reach the provider. For a turn that never uses a tool, the initial call is the ONLY call. |
+| M13 | A command's exit code was masked by piping to `head`/`tail` — twice: once letting a failing `feature-knowledge` gate through to a push, once letting a TS6133 error reach CI. | A P8 violation went out, and CI caught a typecheck error that should have been caught locally. | Run gates unpiped and capture `$?` directly, or redirect to a file and grep that. | `cmd \| tail` reports TAIL's exit code, not cmd's. Never gate on a piped command. |
+### 5.3 Standing assumptions
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A1 | Local development never reaches real AWS; `AWS_ENDPOINT_URL` is the isolation control and `scripts/local/guard.ts` fails closed. | Verified. Prove it any time with `npm run local:verify`, which requires account id `000000000000`. |
+| A2 | [`development.md`](../../../../development.md) was verified on **macOS**, Floci 1.6.0, Docker 28.3.2, Node 24.3.0, on 2026-08-10. | Windows and Linux behaviour is **not** covered by that verification. See M6. |
+| A3 | Bedrock is a **stub** locally: fixed placeholder text, `stopReason` always `end_turn`, no `ConverseStream`, no embeddings. | Local development validates plumbing, never model behaviour. Tool use is unreachable locally by design. |
+| A4 | `qa` deploys nothing, and merging to `production` deploys nothing on its own. | Verified in `.github/workflows/deploy.yml`; deployment is `workflow_dispatch` only and requires typing `deploy`. |
+| A5 | Table names are compiled in at import time (`process.env.TABLE_X ?? 'claudeclaw-<literal>'` in a module-level const). | A `TABLE_*` override must be set before the first import. `src/lib/state/agents-repo.ts` is the lone lazy exception. |
+| A6 | AWS console access for this account is root-user sign-in via `aws login` with the `netzer-root` profile. | The `netzer-dev` SSO profile is known broken. Do not burn time on it. |
+
+| A7 | The prod orchestrator task runs **4096 MiB** (Tier 2, `claudeclaw-orchestrator:9`), not the 1024 MiB of Tier 0. | Verified from the live task definition 2026-08-24. Do not reason about prod OOM from `constants.ts` Tier 0 values. |
+| A8 | Prod log retention on `/claudeclaw/orchestrator` is **90 days**; staging is **7**. | Verified 2026-08-24. Anything older than 90 days is simply not answerable from logs. |
+| A9 | Of the AWS profiles, only `default` (root) authenticates. `netzer-dev` SSO is broken — this is **A6**, and it is still true. | Confirmed again 2026-08-24. Read A6 before burning time on SSO. |
+### 5.4 Known traps that cost time
+
+Short pointers only. The owning document has the detail; do not copy it here.
+
+| Trap | Where the detail lives |
+|---|---|
+| A bare `KEY=` in `.env` becomes `''`, and zod's `.optional()`/`.default()` only fire on `undefined`. Omit the line instead. | [Environment variables](../../../../development.md#environment-variables) |
+| `.env.example`, `.env.reference` and `.env.staging.example` all fail `loadEnv()`. Only `.env.local.example` works. | [Environment variables](../../../../development.md#environment-variables) |
+| `NODE_ENV=production` locally arms a deployed-task fail-fast; the orchestrator refuses to start. | [Environment variables](../../../../development.md#environment-variables) |
+| `CCE_NAME_SUFFIX` renames tables but four modules read the unsuffixed literal anyway. | [Environment variables](../../../../development.md#environment-variables) |
+| Vite does **not** always use port 5173, and binds `localhost` (IPv6 `::1`), so the IPv4 literal fails. Read the URL Vite prints. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| `GET /ready` returning `503` locally is **correct** — Slack and Telegram are genuinely unconfigured. | [Starting development](../../../../development.md#starting-development) |
+| A poisoned row in `claudeclaw-dashboard-tokens` causes a permanent `401` with a correct token. Fix: `npm run local:provision`. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| Floci answers `ConverseStream` with 501; the replay-as-non-streaming fallback fires **only** when `AWS_ENDPOINT_URL` is set. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| `src/adapters/dashboard/jarvis.flow.test.ts` intermittently times out at 5000 ms. Pre-existing flake. Reproduce twice before chasing it. | [Troubleshooting](../../../../development.md#troubleshooting) |
+| The IAM Copilot **degrades invisibly** locally: an empty findings list renders identically to "validated clean". | [Known local limitations](../../../../development.md#known-local-limitations) |
+| The cost waste scan reports a **false clean** and caches it for 30 minutes. Local cost output is not meaningful. | [Known local limitations](../../../../development.md#known-local-limitations) |
+| `npm run doctor`, `status` and `verify` fail rather than skip against an empty emulator. They give no useful local signal. | [Known local limitations](../../../../development.md#known-local-limitations) |
+
+| An empty assistant turn poisons a chat permanently via Bedrock validation. | This feature's [README](../README.md) |
+| `generate_document` needs the whole spec inline, so it is the tool most likely to hit any output ceiling. | This feature's [README](../README.md), section 3 |
+
+### Added 2026-09-17 (machine transfer)
+
+> Appended by the 2026-09-17 transfer session. The IDs continue the carried
+> ledger. The plan reserved M14–M17 for its session close, with the meanings
+> recorded below, so a resumed session must not append them again.
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P10 | Before you resume an interrupted claudex loop, compare the plan's SHA-256 with the last round's `plan_sha256` in its `result.json`, and read the last entry of the review log. | fac066ed accepted its round-1 findings and scripted the revisions, but never applied them. The plan copies still hash to the round-1 input. |
+| P11 | Commit the session handoff before starting long background work. Write each result into it as the result arrives. | The 09-10 handoff sat untracked for six days with an empty section 7, while its results existed only in `%TEMP%`. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M14 | Production hotfix PRs #103–#106 (2026-08-24/25) were never back-merged into `development`. That 17-day lag stalled `staging → production` PR #61, which was closed unmerged on 2026-09-09. | The next promotion hits the same conflicts. Resolving them toward staging silently reverts fixes that production runs. | Back-merge by cherry-pick on `fix/backmerge-production-hotfixes`, and verify by content. For example, `git grep -n TOOL_LOOP_MAX_TOKENS -- src infra` must print nothing and exit 1, and `TURN_MAX_TOKENS` must be on every turn call. | Cherry-picks never become ancestors. `merge-base --is-ancestor` and `git cherry` stay negative forever, so check content. |
+| M15 | `git merge origin/production` looked like the way to back-merge "the four fixes". | It carries every production-only hotfix: #90, #91, #103–#106, #168 and #170. | Cherry-pick only the nine commits of #103–#106. That was the owner's decision Q2, 2026-09-11. | Read `git log --first-parent origin/development..origin/production` before choosing a merge over a cherry-pick. |
+| M16 | An earlier note assumed `npm run local` failed only under the Claude preview tool. | On Windows 11 with Node 24.19.0, it provisions Floci fully, then dies with `spawn npm ENOENT` even from a plain Git Bash shell. The one-command setup never starts the app on Windows. | After provisioning, use the documented secondary workflow: `npm run dev` and `npm --prefix web run dev`. The code fix (`scripts/local/dev.mjs:79-80`) is deferred; see section 6.4. | On Windows, `spawn('npm')` without a shell cannot find `npm.cmd`. Reproduce in a plain shell before blaming a tool. |
+| M17 | The 2026-09-11 baseline ran `npm run typecheck` while dev servers, Floci and other sessions were running. The machine had 1.4 GB of 15.7 GB RAM free. | `tsc --noEmit` died after 29 s with "Zone Allocation failed - process out of memory", exit 134. Typecheck has no valid baseline yet. | Not re-run yet. Stop the dev servers once `/health` is verified, then run typecheck alone and record both attempts. | An out-of-memory crash is an environment result, not a code result. Re-run it alone before classifying it. |
+| M18 | Session fac066ed was interrupted mid-loop at about 14:57 on 2026-09-11. All of its state lived in `%TEMP%`: an untracked handoff, an unapplied plan revision, and a review log with no round-1 result. | Six days later no branch showed that the loop had run, and a machine transfer would have lost it. | This session committed the 09-10 handoff (`a4bad74`) and recorded the loop's state here. The devkit archives the scratchpad. | Apply P10 and P11. |
+| M19 | `TaskStop` on the background `npm run dev` (task `bci09pe7j`, stopped at 14:54 on 2026-09-11) was taken as having stopped the orchestrator. | The orchestrator kept running and writing to that task's output file until at least 2026-09-13 23:59:35Z. The file reached 817 KB. | On 2026-09-17, nothing listened on ports 3000, 5173 or 4566. | After stopping a dev server on Windows, confirm with `netstat -ano` that its port is free, and kill the process tree by PID if it is not. |
+| M20 | Round 1 accepted BR-003's absence check exactly as written: `git grep -n TOOL_LOOP_MAX_TOKENS` must print nothing and exit 1. The check is not scoped to code. | It can never pass. On 2026-09-17, `origin/production` itself had 5 hits, all in docs: `docs/diagrams/request-lifecycle.md` twice and the append-only 2026-08-24 session log three times. The session handoffs name the constant too. | Scope the check to code: `git grep -n TOOL_LOOP_MAX_TOKENS -- src infra` prints nothing and exits 1. On `origin/production`, the same check over `src infra scripts web` exits 1. The resumed loop must amend the revised plan's Verification 2. | A textual absence check must exclude history. Run it against the reference branch (here `origin/production`) before adopting it as an acceptance criterion. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A10 | `origin/development` stayed at `271339b` from 2026-09-07 22:29 until at least the main checkout's fetch of 2026-09-16 10:04 (-04:00). | Verified from the `origin/development` reflog and from `FETCH_HEAD`, which lists `development`, `qa`, `staging` and `production`. So plan finding 6 ("development moves about 7 commits a day") did not hold in that window. Re-fetch before relying on this. |
+| A11 | The owner's 2026-09-11 authorization to push `fix/backmerge-production-hotfixes` and open a PR into `development` was given to session fac066ed. | It is recorded in `PLAN-REVIEW-LOG.md`. The 2026-09-17 transfer push of this branch is a separate approval, for a backup only. A resumed session re-confirms with the owner before it pushes the finished back-merge or opens the PR. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| The claudex Q1 step switches Codex MCPs off in `~/.codex/config.toml` and restores them only when the loop ends, so an interrupted loop leaves them off. | This log, section 6.3 |
+| `picks.sh`, `validate.sh` and `red1.sh` hard-code `REPO=/c/dev/_netzer-backmerge`, and `red1.sh` uses the Git-Bash-only `MSYS_NO_PATHCONV`. | This log, Appendix A |
+| The 2026-09-11 baseline on `271339b` has six red test files and one "Worker exited unexpectedly" error. | This log, section 7.2 |
+| `node scripts/ci/docs-assets.mjs` fails on `271339b` because `docs/diagrams/system-flow.excalidraw` is 2.3 MB, over the 2 MB budget. This is pre-existing. | This log, section 7.2 |
+
+### Merged 2026-09-18 from the parallel docgen-crash-wip-transfer ledger
+
+> The 2026-09-17 [docgen-crash-wip-transfer](./2026-09-17-docgen-crash-wip-transfer.md)
+> log appended its own entries from P10, M14 and A10, colliding with the
+> back-merge ledger above. Its own instruction: "renumber the later entries rather
+> than drop either". Text is verbatim; only the IDs changed (P10→P12, P11→P13,
+> M14→M21, M15→M22, M16→M23, A10→A12, A11→A13). References inside the text keep
+> their original numbers and point at that log.
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P12 | Before resuming a `wip/*` backup branch, check what `origin/development` and `origin/production` now contain for the files it edits. | `wip/docgen-crash-turn-ceiling` edits the same `maxTokens` sites and `appendTurns` that `fix/backmerge-production-hotfixes` is bringing to `development`. |
+| P13 | When a session leaves work uncommitted, write or update its dated session log too, and prefer committing to a `wip/*` branch before closing. | The 2026-08-25 WIP had no session log and sat uncommitted for 23 days on a disk that later filled to 99%. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M21 | On 2026-08-25 the owner asked whether he could raise the token limit himself, and the agent started building the feature. The owner then said he was only asking. | An unrequested, unfinished feature was left in the tree. | The agent stopped and answered the question. The code is kept as a backup on `wip/docgen-crash-turn-ceiling` (`ef0768f`), not merged. | Answer the question first. Build only when asked. |
+| M22 | The 2026-08-25 work ended with uncommitted changes, and the only record was the rewritten canonical `HANDOFF.md`. No dated session log was written or updated. | A reader of `handoffs/` would not know the WIP existed. The only copy was one linked worktree. | Committed to a backup branch on 2026-09-17, and this log records it. | See P11. |
+| M23 | `HANDOFF.md` recorded the new tests as "not passing" with a single named cause (the unhoisted `getConfig` mock). There was no run log. | Hoisting the mock alone will not make the suite green. A whitespace-only value resolves to 1024, but the test expects 8192. The byte-trim tests may not be failing at all. | Recorded in section 3.1 and in `HANDOFF.md`. Not fixed, because this session only makes a backup. | "Not passing" without a run log is a claim. Name each failing test and its cause, and keep the output. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A12 | A push of `wip/docgen-crash-turn-ceiling` starts no workflow. | Verified 2026-09-17 against this branch's `.github/workflows/` push triggers: `branch-guard` fires for qa, staging and production; `ci` and `docs-ci` for development, qa, staging and production; `deploy` for staging only. `cdk-drift` runs on a schedule. Re-check if a workflow is added. |
+| A13 | The WIP was written in Claude Code session `2485d76c-309a-47fd-a199-1154b9f7d82c` (2026-08-24 17:12Z to 2026-08-25 12:47Z). Its scratchpad scripts (`add-knob.py`, `knob-tests.py`) no longer exist. | Verified from the transcript's timestamps and the missing `%TEMP%` folder. Commit `ef0768f` is now the only copy of the work, apart from the tool inputs recorded in that transcript. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `Number('  ')` is `0`, not `NaN`. An `!raw \|\| !Number.isFinite(...)` junk check lets a whitespace-only value through as zero. | [docgen-crash-wip-transfer](./2026-09-17-docgen-crash-wip-transfer.md), section 3.1 |
+| A mock created inside a `vi.mock` factory cannot be reached from test bodies. Hoist it with `vi.hoisted`. | [docgen-crash-wip-transfer](./2026-09-17-docgen-crash-wip-transfer.md), section 3.3 |
+
+### Added 2026-09-18 (WI-0.1 specification)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P14 | Map a cherry-pick sequence before touching the branch: `git merge-tree --write-tree --merge-base=<c>^ <cur> <c>`, chained with `git commit-tree`. | It lists every conflict of every pick without moving a ref or the working tree. It showed that `4765612` cannot be picked whole. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M24 | Assumed that porting production's final test blobs ahead of the picks would let the picks apply cleanly. | None; the simulation caught it. `8c14b3f`, `1abba67`, `333ef6b` and `d828124` conflict on those test files. | Resolve each by keeping ours, then check `git hash-object <file>` equals `git rev-parse origin/production:<file>`. | A pick carries its own version of a file. Only the last pick that touches a file matches its final blob. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A14 | On the macOS machine (16 GB RAM, about 4 GB free+inactive), `npm run typecheck` exits 0 in about 8 s on `9e8e42b`. | Observed 2026-09-18. M17's out-of-memory crash did not reproduce here. Re-run alone if it ever does. |
+| A15 | With every AWS credential source stripped, the full `npm test` on `9e8e42b` is green: 244 files, 3174 tests, on two consecutive runs. | Observed 2026-09-18. So on this machine a red run is not explained by a lapsed AWS session. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `~/.aws` exists on the Mac, so `development.md`'s fourth AWS-safety layer ("no credentials on the machine") does not hold there. Strip credential sources for every test run. | This log, section 7 |
+| Development's War Room PDF export returns 200 for emoji, with text like `Ship it Ø=Þ€ done '`. Production's own emoji test cannot see that; the substitution test can. | This log, section 7.2 |
+
+### Added 2026-09-18 (WI-0.1 implementation)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P15 | Keep a delegated build's work order, proof script, run artifacts and session-log draft outside the checkout. | The runner refuses a dirty checkout, and any file inside it would enter Codex's diff. |
+| P16 | After a Codex build, read the event stream (`stdout.txt` in the run directory) for `mcp_tool_call` items, not just the diff. | `~/.codex/config.toml` enables MCP servers, including `computer-use` and `node_repl`, which act outside the workspace sandbox. The runner forbids extra flags that could disable them. This session's build made none. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M25 | Treated the conflict map as the expected outcome. `333ef6b` and `d828124` did not conflict, and `5193ced` did (on `HANDOFF.md`). | None: the pick loop acted on each pick's observed state. | Section 3.1 records the actual outcome. | Resolve by the state git reports, and verify by blob afterwards. |
+| M26 | This session's chat status said four picks resolved empty. It was five: `81c9d0e`, `7ba28f8`, `ce185de`, `d8bad53`, `246bd2b`. | A wrong count in chat, corrected before this log. | Recounted from the pick log. | Count from the saved log, never from memory. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A16 | Codex `gpt-5.6-terra` at medium effort, through `codex-build` (workspace-write), can run this repo's `vitest` and `tsc` in its sandbox. | Observed 2026-09-18: it reported 58/58, and the host's rerun agreed. One build only. |
+| A17 | With every AWS credential source stripped, the full `npm test` on `6d43213` is green: 245 files, 3196 tests. | Observed 2026-09-18, one run. The +1 file and +22 tests are the ported production tests. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `git diff -U0` shows an unchanged first line as context. Comparing an approved diff's `-`/`+` lines against it can report a false mismatch; compare the resulting text instead. | This log, section 7.8 |
+| Codex's config defaults to `gpt-5.6-sol` / `xhigh`. A runner call without `--model` and `--effort` inherits it. | This log, section 3.3 |
+
+### Added 2026-09-18 (WI-0.1 cleanup)
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M27 | Compared the War Room route with a shell function that ran `git show $1:src/adapters/dashboard/handler.ts`. The Bash tool's shell on this Mac is zsh, which reads `$1:s…` as its `:s` substitution modifier and asked git for `HEADd/handler.ts`. Both extracts came out empty, and `cmp` reported them equal. | For one command, "route equals production" rested on two empty files. The zero line count caught it before anything was recorded. | Reran with `"${r}:path"`. Both extracts have 64 lines and are equal (7.2). | Two empty extracts are always equal. Check each extract's size before trusting `cmp`, and brace a parameter when a `:` follows it. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `request-lifecycle.md`'s history-poisoning bullet (production's `3bffea6` text) says the tool loop's ceiling is `TOOL_LOOP_MAX_TOKENS`. On both branches the code has `TURN_MAX_TOKENS` on all three calls. The sentence is stale and carried verbatim; it is not a WI-0.1 defect. | This log, sections 3.1 and 4.3 |
+| Production's War Room note in `architecture-security.md` says the route is *gained*. That is true only on production. Do not replace the back-merge's own note with it. | This log, section 3.1 |
+
+### Added 2026-09-18 (WI-0.1 verification)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P17 | Run mutation tests (RED-2) and full validation one after the other, never side by side, and start full validation only after `git status --porcelain` is empty. | A validation run that overlaps a mutation measures the mutant. This session ran them in sequence. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M28 | Checked README 4a's baseline claim with `git show $B:src/…` inside `$(…)`. zsh read `:s` as a modifier again (M27) and printed "bad substitution". `grep -c` on the empty input then printed `0`, which is exactly the "fails on the baseline" answer the check expected. | Two baseline results briefly rested on empty input. The error text caught it before anything was recorded. | Reran with `"${B}:path"` and printed each file's line count (7.7). | M27 again, in a worse form: when the expected answer is "absent", an empty extract agrees with it. Brace every ref, and print the extract's size next to any zero. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A18 | With every AWS credential source stripped, the full `npm test` on `fdda55c` is green: 245 files, 3196 tests. | Observed 2026-09-18, one run (22 s). The same count as at `6d43213`. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| Line 1 of `request-lifecycle.md` (the #96 drift-gate note) also names `TOOL_LOOP_MAX_TOKENS`. It records what #96 did at the time and is identical on all three refs. It is not the stale sentence; only line 51 is. | This log, section 3.1 |
+| A conflict-resolved pick's patch-id differs from its original's even when the pick adds nothing. Compare the `+`/`-` line sets per file instead. | This log, sections 3.3 and 7.5 |
+
+
+### Added 2026-09-18 (WI-0.2 specification)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P18 | Before trusting a PASS from a check that proves absence ("no adapter changed", "nothing outside scope"), run it once against a planted violation. | The WI-0.2 proof's scope checks ran inside `bash -c` with a non-exported `BASE`. `git diff origin/` then failed silently, and both checks passed on nothing (M30). A stray untracked adapter file exposed it. |
+| P19 | Put the Step-0 declaration ahead of any gate in a Gauntlet handoff's numbered steps. | This session's handoff numbered G0 first, so G0's read-only checks ran before the declaration. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M29 | The parked `trimTurnsToBudget` (`ef0768f`) cut the window anywhere and always kept the newest turn. Its reason was that an empty window breaks role alternation. | The stored window could start with an assistant turn: a cut landing on a large user turn, or only the reply kept. Every later request would then start with an assistant message, a new path to permanent chat poisoning. All six parked fixtures were assistant-only, so none could see it. | The spec rule: cut only at a user turn, never store over budget, and `kept` may be empty. Pinned in `56e37b0`. | Transcript fixtures alternate roles. An empty history is valid; a history that starts with the reply is not. |
+| M30 | The proof's AC-0.2-5 and AC-0.2-6 used `$BASE` inside `bash -c` without exporting it. | Both would have passed on any tree. | `export BASE`, plus a negative control that must FAIL and then PASS once the planted file is removed (7.6). | P18 |
+| M31 | The handoff called `_netzer-turn-ceiling` a linked worktree. | `Netzer-Labs`' `git worktree list` does not show it, and its remote refs are separate. | `git rev-parse --git-common-dir` returns `.git`: it is a standalone clone. Local-only commits from `_netzer-backmerge` reach it through `git fetch ../_netzer-backmerge <branch>`. | Confirm clone or worktree with `--git-common-dir`, not from the handoff. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A19 | With credentials stripped, the full step 7 list on `9f1cd58` equals the baseline: `npm test` 245 files and 3196 tests; integration 38 passed, 25 skipped, 1 failed (the Floci gap). | Observed 2026-09-18, one run in `_netzer-backmerge`. `typecheck` and `npm test` gave the same result in `_netzer-turn-ceiling`. |
+| A20 | Every production model id accepts `maxTokens` 32,768. | Inferred from the Claude 4.x model families, not checked on Bedrock. Re-check if a model id with a smaller output limit is added (`claude-3-5-haiku` tops out at 8192 and appears only in fixtures). |
+| A21 | Bedrock Converse rejects a conversation whose first message is the assistant's. | Inferred. The repo records strict alternation at `agent-loop.ts:1281-1286`. Not reproduced here, because this session made no live calls. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `graft` has no index for `_netzer-turn-ceiling`, and `graft build` would write an untracked `graft/` into the checkout. | This log, section 4.3 |
+| `diagrams-drift.mjs` diffs `origin/<base>...HEAD`, so it sees committed changes only. Until WI-0.1 lands, WI-0.2's base is `origin/fix/backmerge-production-hotfixes`, not `development`. | `wi-0.2-proof.sh` (`WI02_BASE`) |
+| `_netzer-turn-ceiling` has no `web/node_modules`. The web typecheck and web build in step 7 fail there until `npm --prefix web ci` runs. | This log, section 6.3 |
+
+### Added 2026-09-18 (WI-0.2 implementation)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P20 | A proof that a delegated builder must run inside its sandbox must need no network and no `.git` writes, or its work order must say how to run the proof's steps without them. | `wi-0.2-proof.sh` runs `git fetch`. In Codex's workspace-write sandbox that failed with `cannot open '.git/FETCH_HEAD': Operation not permitted`. The work order's sandbox note let the build run the steps directly instead of editing the script. |
+| P21 | Render every Mermaid block a change touches with the pinned renderer before committing: `node scripts/ci/docs-mermaid.mjs`, or the cached `mmdc` for one block. | M33: a parse error passed every grep-based check in the proof. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M32 | Codex build 1 trimmed the config value with `raw?.trim()`, trusting `getConfig`'s declared `string \| undefined`. | A value stored as a DynamoDB Number would throw outside the `.catch`, and every turn on every surface would fail. The frozen tests give `getConfig` only strings, `undefined` or a rejection, so none of them can see it. | `typeof raw === 'string' ? raw.trim() : raw`, in the correction round (`3ae63b4`). The replica check shows build 1 throwing on every numeric value and `3ae63b4` returning a number (7.8). | A declared type on a value read from DynamoDB is a cast, not a check. `repairEmptyTurns` already learned this for turn text. |
+| M33 | Codex build 1 put a `;` inside a Mermaid sequence-diagram message in `request-lifecycle.md`. | The diagram no longer parsed (`mmdc` 10.9.1: `Parse error on line 36`). Docs CI's `docs-mermaid` gate would have failed the PR, while every proof line passed. | The message now uses commas (`3ae63b4`). Both mapped diagrams render. | In a sequence-diagram message, `;` and `#` are syntax. Render, don't grep (P21). |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A22 | Codex `gpt-5.6-terra` (medium), through `codex-build`, can take one narrow correction by resuming its build session (`--resume <result.json> --feedback <file>`, same model and effort). | Observed 2026-09-18: build 1 took 251 s and the correction 36 s. Neither made an MCP tool call (P16). |
+| A23 | With every AWS credential source stripped, the full `npm test` on `3ae63b4` is green: 246 files, 3209 tests. | Observed 2026-09-18, one run (19 s). |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `git grep` prints only `Binary file src/lib/state/runtime-config-repo.ts matches` for that file, so its lines cannot be read that way. Use `grep -a`. The cause was not investigated. | This log, section 7.3 |
+| In Codex's sandbox, `.git` is read-only and binding `127.0.0.1` is denied. Its own full `npm test` shows `src/lib/paperclip/client.mock-server.test.ts` failing with `listen EPERM`. That is an environment result. | This log, section 3.1 |
+
+### Added 2026-09-19 (WI-0.2 cleanup)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P22 | Before editing a file that `docs/diagrams.map` lists as a source, even one comment, plan the mapped diagram's change for the same branch. If the diagram truly needs no change, leave the source alone or ask the owner first. | M34. The drift gate cannot tell a comment from code, and its approval escape hatch is not implemented. |
+| P23 | Before moving a feature README's `observed_at`/`as_of_commit`, re-check every code claim at the new commit, and give time-bound observations (production logs, "as of") their own dates in the text. | The stamp re-dates every undated claim under it. README section 4 said "As of `observed_at`". |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M34 | The post-merge CLEANUP handoff scoped the work to comments in `agent-loop.ts` and `sessions-repo.ts` and required every proof line to pass, but did not notice that AC-0.2-4-drift would then fail. Before the merge, the branch's diff against its base already held both diagrams; on a new branch off `development` it does not. | A comment-only cleanup would have failed the proof and Docs CI (7.6). | Found by reading the drift script before the first edit. Both diagrams got real fixes (findings 6 and 7). | When the base of a piece of work changes, re-derive which gates depend on the diff. |
+| M35 | This session's first README claim check had two over-strict greps. C4 failed on any mention of the sessions table outside the repo, and C14b looked for the C0 strip in `docx.ts`. | Two false FAILs at `b152b7a`. | Both traced by reading the code (3.1). The checks now test the claims themselves (7.5). | A FAIL from a grep check is a lead, not a finding. Read the code before classifying it. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A24 | With credentials stripped, the full `npm test` gives 246 files and 3209 tests at `b152b7a` and at `d1876b1`. | Observed 2026-09-19, one run each (26.37 s and 19.40 s). |
+| A25 | Bedrock rejects a request whose first message is the assistant's, and nothing in the agent loop reorders or drops a leading assistant turn: `agent-loop.ts:1021-1023` builds the request as `turnsToMessages(stripBlockedTurns(req.history))` plus the new message. | The code path was read this session. The Bedrock rule comes from the parked comment and M29 and was not re-tested live. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| A handoff pasted into a new session can predate the state file's section 0. Compare both against `git fetch` before acting. | This log, section 4.3 |
+
+### Added 2026-09-19 (WI-0.2 verification)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P24 | When a work item merged before its VERIFICATION, run the proof as specified. Then also run AC-0.2-5 and AC-0.2-6's filters over the whole item, from the merge's first parent: `git diff --name-only <merge>^1 HEAD`. | With `WI02_BASE=development`, the proof's `touched()` sees only the post-merge delta, so the proof alone no longer covers the implementation's scope. |
+| P25 | Keep a VERIFICATION session's log outside the tree until the gates have run, then move it in. | The bar asks for a clean committed HEAD, and the proof's AC-0.2-5, AC-0.2-6 and `status` line count untracked files. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M36 | The WI-0.2 cleanup's README claim check (22 PASS) moved the stamp to `d1876b1` over README 2.1's "Every consumer that converts stored turns into Bedrock messages — the agent loop, the dashboard TLDR path, Jarvis — reads through `getSession`". That session saw `jarvis-memory-repo.ts` and judged the sentence still true, because Jarvis keeps its own partition. But the sentence names Jarvis as reading through `getSession`, and Jarvis never does. False since `9d72979` (2026-08-24). | The stamp certifies a false claim. WI-0.2 VERIFICATION FAIL on fix 5 (the 2026-09-19 verification log, 4.3). | Routed to a fresh CLEANUP. | "Every X goes through Y" is checked by listing X from the code, through imports and call sites, and each example the sentence names is a claim of its own. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A26 | At `974399b`, with credentials stripped, the full step 7 list equals the baseline. `npm test`: 246 files and 3209 tests. Integration: 38 passed, 25 skipped and 1 failed, the Floci `checkSecrets` gap. | Observed 2026-09-19, one run of 37 s for the whole list. |
+| A27 | The cleanup `b152b7a..974399b` is comment-only in `src/`. `ts.transpileModule` with `removeComments` gives identical output for both changed files at both commits. | Observed 2026-09-19. |
+| A28 | Jarvis never stores an empty turn: `jarvis-memory-repo.ts` `appendTurn` trims the text and returns without writing when it is empty. Its replay path, `buildSeedMessages`, has no empty-text filter of its own. | Read 2026-09-19, not executed. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `_netzer-turn-ceiling`'s local `development` ref is stale (`9e8e42b`). The proof and `diagrams-drift.mjs` read `origin/development`, so they are unaffected. A hand-typed `git diff development` is not. | The 2026-09-19 verification log, section 7.1 |
+| A shell check that nests `awk '{print $NF}'` inside a double-quoted `eval` string gets `\$` wrong and fails with an awk syntax error. That is M35 again: a FAIL from the check is a lead. | The 2026-09-19 verification log, section 7.5 |
+
+### Added 2026-09-19 (WI-0.2 cleanup rerun)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P26 | For an "every X" claim, also grep each seam's name without its call parenthesis, so callers bound through a dependency-injection alias (`deps.runTurn ?? runAgentTurn`) are counted. | M37. |
+| P27 | Re-check a README's claims sentence by sentence, including negative ones ("unchanged", "not covered"), rather than a remembered list of claims. | M38. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M37 | The WI-0.2 verification listed replay paths and `appendTurns` writers by call-site name. It missed Paperclip's dispatch worker, which binds `runTurn`, `readSession` and `writeTurns` as `deps.* ?? <name>` (`dispatch-worker.ts:480-482`). | Its 3.1 says "All seven `appendTurns` callers", and there are eight. A README list built from it would have left out a replay path. | This log's 3.1 lists the agent loop's 11 callers and the 8 writers. | P26. |
+| M38 | README section 4 said `generate_document`'s "spec validation ... [is] unchanged". That has been false since `389476b` (2026-08-25), the same commit that added README 2.4 and 2.5 about those changes. The WI-0.2 cleanup's 22 checks and the verification's re-check both skipped section 4's sentences, so `d1876b1`'s stamp certified it. | A second false claim under the stamp. | Corrected in `e1cdc11` (checks 4-a to 4-c). | P27. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A29 | At `e036f7a` the 56 README claim checks in `wi-0.2-readme-claims.sh` all pass, and `e1cdc11`'s code is identical. | Observed 2026-09-19, one run (7.2). |
+| A30 | The agent's DynamoDB tool (`dynamodb-tools.ts`) can return raw session rows, turns included, without `getSession`. Bedrock gets them as tool-result data, not as conversation turns, so an empty turn cannot become an empty content block. | Read 2026-09-19: the `sessions` allowlist entry sets no `attributes`, so every attribute is projected, and the file has no replay call. The serialization into the tool result was not traced. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| The Bash tool's shell is zsh. There `$R:src/x` applies zsh's `:s` modifier, and `${PIPESTATUS[0]}` is empty. Write `${R}:`, capture exit codes unpiped, or run checks from a bash script file. | This log, sections 7.2 and 7.3 |
+| A grep check on exact message text or same-line tokens fails on formatting: a lowercase `docx` (`pdf.ts:78`), or a `422,` on the next line (`handler.ts:3245`). That is M35 again. | This log, section 7.2 |
+
+### Added 2026-09-19 (WI-0.2 specification amendment)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P28 | When the code already passes, make the red a mutation. Commit the test first. Change only the guarded line, in the working tree. Run the one test file, restore with `git checkout -- <file>`, and check that `git status --short` prints nothing. | Owner decision 15. A mutation on an uncommitted tree mixes the red with the test edit. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M39 | This session ran one read-only command before its Step-0 declaration: a `grep` of the state file's headings and a `wc` of the framework page. | None. It changed nothing, and the declaration did not depend on it. It still broke P19's order. | The declaration came right after, and it named the slip. | Do Step 0's reading with the Read tool only. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A31 | `getConfig` returns the stored runtime-config attribute unchecked. A value stored as a number arrives as a number, whatever its `string` type says. | Observed 2026-09-19 at `runtime-config-repo.ts:69` and `:83-85`. Whether the dashboard's `/config` route can ever store a number was not traced. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `src/lib/state/runtime-config-repo.ts` holds literal NUL bytes (`:57`, `:238`). `grep` prints "Binary file ... matches" or nothing for it, `git grep -n` prints nothing, and `git log -p` shows "Binary files ... differ". Use `grep -a`. | This log, sections 3.1 and 4.3 |
+
+### Added 2026-09-19 (WI-0.2 verification, final)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P29 | When a criterion says a mutation makes one test fail **and no other**, run the whole suite under the mutation, not just that file. Restore, then confirm `git status --short` is empty. | A file-scoped run cannot see a failure in another file, so it cannot support an "only" claim. Here the whole suite gave 1 failed of 3210. |
+| P30 | A verification that re-uses an earlier verification's result must first run the exact scoping diff that licenses the re-use, and must state which paths that diff does **not** cover. | The carried results were licensed by `git diff --quiet 974399b HEAD -- src infra web scripts tests ':!src/agent/agent-loop.max-tokens.test.ts'`, which says nothing about `docs/`. `docs/diagrams` was checked separately (0 files changed), and the Mermaid gate was re-run rather than carried. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A32 | At `c195a6e`, with every AWS credential source stripped, the full step 7 list equals the baseline: `typecheck`, `npm test` (246 files, 3210 tests), `build`, both `web` gates, `local:verify`, `docs-links`, `feature-knowledge`, `diff-check`, `docs-assets` and the PR-context `diagrams-drift` all exit 0; the integration suite is 38 passed, 25 skipped and 1 failed, the Floci `checkSecrets` gap. | Observed 2026-09-19 (2026-09-20T02:04Z), one run of 41 s for the whole list. |
+| A33 | With `agent-loop.ts:104` mutated to `const trimmed = raw?.trim();`, the **whole** suite has exactly one failure: `turn output ceiling > accepts a ceiling stored as a number, and the turn still runs`, with `TypeError: raw?.trim is not a function` at `agent-loop.ts:104:24`. | Observed 2026-09-19, one run (1 failed, 3209 passed). The tree was clean after `git checkout --`. |
+| A34 | Removing the initial streamed call's `maxTokens: turnMaxTokens` (`agent-loop.ts:1054`) now fails **4** tests in `agent-loop.max-tokens.test.ts`, not 3: the two initial-call tests, the configured-ceiling test and the pinning test. | Observed 2026-09-19. The earlier "3" predates `7b6bbf3`. |
+| A35 | The War Room orchestrator is outside README 2.1's claim: it passes `history: []` and flattens its room transcript into the user message (`orchestrator.ts:205-216`). | Read 2026-09-19. Its own transcript store was not audited for empty turns; nothing in this work item touches it. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `wi-0.2-readme-claims.sh` reports `FAILS=1` at any commit after `7b6bbf3`: its `carry` row omits the `':!src/agent/agent-loop.max-tokens.test.ts'` exclusion. The other 55 rows pass. The script lives outside the repository. | This log, sections 4.3 and 7.6 |
+
+### Added 2026-09-19 (WI-0.3 specification)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P31 | In a red test that must not touch the network, gate every network call behind an assertion that the guard is armed. Put the assertion in the **same** test, before the call. | M40. "The guard will stop it" is circular while the guard does not exist yet. |
+| P32 | Before the guard lands, run `wi-0.3-proof.sh` with `WI03_CREDS=strip`. The scored mode plants credentials, which would be an un-stripped `npm test` and is forbidden until WI-0.3 lands. | The script is the gate for a state that does not exist yet; rehearsing it must not break the standing constraint it exists to retire. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M40 | The first version of `aws-guard.test.ts` gated its 4th test on the patch being installed, but not its 5th. Unpatched, that 5th test called `https.request({ host: 'netzar-guard-probe.amazonaws.com' })` for real. | A red state whose own comment claimed it stayed offline made a real DNS lookup (12 ms, `ENOTFOUND`). No connection, no credentials, nothing sent. | The same `__netzarAwsGuard === true` assertion was added ahead of the call. Re-run: 4 failed, 1 passed, no lookup. | A test that proves a guard works must assume the guard is absent, because in the red state it is. |
+| M41 | `wi-0.3-proof.sh`'s first dry run reported **AC-0.3-3 PASS** — "0 amazonaws.com dials" — from a run that had exited 1 and never completed. | The tripwire criterion was green by construction, which is the exact failure P18 exists to catch, in the gate written to enforce P18. | AC-0.3-3 is now gated on AC-0.3-2's exit code and reports "not assessable" otherwise. | Grepping a log for the absence of something proves nothing until you have checked the log is of a completed run. |
+| M42 | The same dry run reported "AC-0.3-4 cleanup: 1 changed path left behind" and "AC-0.3-5 restore: 1 still dirty". | Two false FAILs. The changed path was the uncommitted red test, not anything the script had left. | Dirt is measured as a delta against `DIRT0`, captured at script start. | An absolute cleanliness check assumes a clean tree. Measure what you changed, not what you found. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A36 | On this Mac, `~/.aws` holds only `config`, with **no `credentials` file, no `[default]` profile** and no SSO or CLI cache, and no `AWS_*` variable is exported. So an un-stripped `npm test` in a clean shell resolves no credentials and does not dial. The exposure is conditional on `AWS_PROFILE=netzer-process`, whose `credential_process` mints real credentials. | Observed 2026-09-19. Re-check before relying on it: an `aws login`, a new profile or an exported key changes it. It does **not** weaken the standing constraint — it explains which shell makes it bite. |
+| A37 | At `0f41b53` with credentials stripped, `npm test` is green: **246 files, 3210 tests**, exit 0, 20.7 s. `src/adapters/dashboard/cost-cap.test.ts` is 7 tests. `npx vitest list --filesOnly` gives the same 246 files, saved as `netzar-chat-plan/wi-0.3-baseline-files.txt`. | Observed 2026-09-19, one run each. Same counts as `c195a6e`. |
+| A38 | The AWS SDK v3 in Node dials through `@smithy/node-http-handler`, i.e. `http`/`https`, not `fetch`. | Inferred from the SDK's Node request handler, not traced through `node_modules` this session. If a future SDK release moves to `fetch`, the tripwire misses it — AC-0.3-4 would still pass while AC-0.3-3 became meaningless, so re-run AC-0.3-5's mutation after any `@aws-sdk/*` bump. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| A planted `*.amazonaws.com` dial makes vitest exit non-zero **even when the guard is disarmed**: the test itself PASSES and vitest reports an unhandled `getaddrinfo ENOTFOUND`. Score the tripwire on a FAILED test plus the violation line, never on the exit code. | This log, section 7.3 |
+| `~/.aws/config` has no `[default]` profile, so a "clean shell" run of `npm test` proves nothing about credential safety. Plant fake credentials to exercise the chain. | This log, section 3.3 |
+
+### Added 2026-09-19 (WI-0.3 implementation)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P33 | Before writing a criterion of the form "remove the mock and the guard must fire", check that no earlier layer already stops the call. Name which layer the criterion is testing. | M43. Defence in depth makes the inner layer unreachable on that path, so the criterion fails against a correct implementation. |
+| P34 | Commit the implementation before running a proof whose mutation block ends in `git checkout -- <file>`. | That restores from the **index**, not from HEAD. An uncommitted edit to the mutated file is discarded, silently. |
+| P35 | When a brief's instruction and one of its own acceptance criteria cannot both hold, say so and pick the reading under which every criterion passes. Record it as a decision. | M44. Following the instruction literally would have shipped a guard that fails its own gate. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M43 | AC-0.3-5's mutation removed the `budget-writer` mock from `cost-cap.test.ts` and expected the tripwire to catch the Budgets dial. Layer 1 neutralises the credential chain, so the un-mocked call dies at `Could not load credentials from any providers` **before** a socket exists. | The proof could never exit 0 against a correct guard. Scored at `54cb972`: exit 0, 7/7 passed, no violation. | Owner-approved 2026-09-19: replaced with a control that restores fake credentials **inside** the test process, calls the real `syncBudgetToDailyCap`, and lets it swallow. The guard fails that test and names `sts.us-east-1.amazonaws.com` (7.3). | To test the inner layer of a defence in depth, defeat the outer one deliberately. A criterion that assumes the dial happens must say which layer is disarmed. |
+| M44 | The brief said the tripwire should print the `NETZAR-AWS-GUARD VIOLATION` line **at the dial**. `src/__test-utils__/aws-guard.test.ts` dials three times on purpose and drains them, so a green full-suite run would have carried three violation lines. | AC-0.3-3 counts exactly those lines and requires zero, so the implementation would have failed its own gate. | The line is printed by the `afterEach` that reports undrained hits (3.2, decision 1). Every criterion passes. | A deliberate probe and a real leak look identical at the dial. They differ only in whether anyone drained them, which is knowable one test later. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A39 | `vitest.setup.ts` is **not** covered by `npm run typecheck`: `tsconfig.json:25` names `vitest.config.ts` by name rather than globbing root `.ts` files. `tsconfig.build.json` still keeps it out of `dist`, which is why the root was chosen. | Observed 2026-09-19 by reading both configs. Adding it to the include list is one line, and is outside AC-0.3-6's approved scope. |
+| A40 | At `54cb972`, with credentials **planted** and no hand-stripping, `npm test` is green: 247 files, 3215 tests, exit 0 (21 s), zero violation lines. The full step 7 list equals the baseline; the integration suite is 38 passed, 25 skipped, 1 failed — the Floci `checkSecrets` gap, confirmed by test name. | Observed 2026-09-19, one full-validation run of 39 s (7.5). |
+| A41 | A vitest `afterEach` that throws marks the **test** as failed (`Tests  1 failed`) and prints the thrown message in the run output. | Observed twice 2026-09-19: the planted-violation control (AC-0.3-4) and the budget-writer control (7.3). This is what lets the guard defeat a swallow. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| The guard's own test file dials `*.amazonaws.com` three times deliberately and drains them. Anything that logs at the dial therefore shows up in a **green** run and breaks AC-0.3-3's count. | This log, sections 3.2 and 4.1 |
+| `git checkout -- <file>` restores from the index, not from HEAD, so it silently discards an uncommitted edit to that file. | This log, P34 |
+
+### Added 2026-09-19 (WI-0.3 cleanup)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P36 | A file named in `vitest.config.ts`'s `setupFiles` is a config file. Changing it, **even by a comment only**, re-runs the full step 7 list, not just the docs gates. | The setup file executes in every worker before every test. "It is only a comment" is a claim about the diff, not about what ran. |
+
+#### Mistakes already made, and their corrections (continued)
+
+> This session added no new entry. Nothing was run out of order, no check gave a
+> false result, and no edit had to be undone. The table above stands unchanged.
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A42 | At `e09d673`, with credentials **planted** and no hand-stripping, the proof is 9 PASS / `FAILS=0` / exit 0, and the full step 7 list equals the baseline: `npm test` 247 files and 3215 tests, `guard-violations: 0`, integration 38 passed / 25 skipped / 1 failed (the Floci `checkSecrets` gap, by name), all 11 other gates exit 0. | Observed 2026-09-19, one proof run and one full-validation run (38 s). Same numbers as `54cb972` (A40). |
+| A43 | The tripwire matches the **first** host-bearing argument it finds. Node's own rule for `http.request(url, options)` is that `options` takes precedence, so a call passing both, whose `options.hostname` is the AWS host and whose URL is not, would be read as the URL's host and pass. | Read 2026-09-19 against node's documented merge, not reproduced. No caller in this repository passes both forms; `@smithy/node-http-handler` passes a single options object (A38). Classified as debt, not patched — changing it is a behaviour change. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| `wi-0.3-proof.sh`'s AC-0.3-6 path count grows as a branch grows: it counts the whole branch against `origin/development`, so it read 4 at `54cb972` and 7 after the docs and cleanup commits. The criterion is "all inside the seam", never a fixed number. | This log, section 7.2 |
+
+### Added 2026-09-19 (WI-0.3 verification)
+
+#### Process precautions (continued)
+
+| # | Precaution | Why it exists |
+|---|---|---|
+| P37 | When a handoff states a path count, re-derive it **at the commit its stamp names** before calling either the handoff or the document wrong. | The AC-0.3-6 count tracks the branch: 7 at `e09d673`, 8 at `3f9c94e`. Both documents were right about their own commit; only the incoming handoff, which repeated 7 for HEAD, was stale. |
+| P38 | Before accepting a guard that patches a builtin, prove nothing else reassigns that builtin. Grep the whole tree for assignments to it and for interception libraries, unpiped. | A single `http.request = …` later in a worker silently disarms layer 2, and every count in this work item would still look green. |
+
+#### Mistakes already made, and their corrections (continued)
+
+| # | Mistake | Impact | Correction | Lesson |
+|---|---|---|---|---|
+| M45 | This session ran `grep … \| head -5` and read the pipeline's exit code as grep's, concluding "0 = found" for the interception-library check. That is **M13**, committed inside a VERIFICATION whose job is to score exit codes. | One check was void for one turn. Caught immediately because the printed output was empty while the reported code said otherwise — the contradiction, not the code, is what exposed it. | Re-ran unpiped: grep exits 1, no interception library exists, and `package.json` declares none. | M13 is not a rule about `tail`. Any pipeline reports the LAST command's status. When a check's output and its exit code disagree, the exit code is the one that is lying. |
+
+#### Standing assumptions (continued)
+
+| # | Assumption | Confidence and caveat |
+|---|---|---|
+| A44 | At `3f9c94e`, with credentials **planted** and no hand-stripping, `wi-0.3-proof.sh` is 9 PASS / `FAILS=0` / exit 0 with 0 changed paths, and the full step 7 list equals the baseline: `npm test` 247 files / 3215 tests, `guard-violations: 0`, integration 38 passed / 25 skipped / 1 failed (the Floci `checkSecrets` gap, confirmed by name), all 11 other gates exit 0. | Observed 2026-09-19 by a fresh critic, one proof run and one full-validation run (38 s). Same numbers as `54cb972` (A40) and `e09d673` (A42). |
+| A45 | Layer 1 neutralises the env, ini/process and IMDS members of the SDK's node provider chain, but **not** `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` / `_FULL_URI` or `AWS_WEB_IDENTITY_TOKEN_FILE` / `AWS_ROLE_ARN`. Layer 2 refuses the `*.amazonaws.com` call that either would eventually make, so no test can reach real AWS. | Read 2026-09-19 against `vitest.setup.ts:32-37,66-73`; none of the four is set on this machine (`env` grep exits 1). The container path's link-local fetch itself is not refused — it returns credentials only. Classified as debt (4.2), not patched. |
+| A46 | Nothing outside `vitest.setup.ts` reassigns `http`/`https` `request` or `get` in `src`, `infra` or `scripts`, and no HTTP-interception library (`nock`, `msw`, `@mswjs`) is imported or declared. | Observed 2026-09-19, both greps unpiped and both exit 1. Re-run after any new test-tooling dependency. |
+
+#### Known traps that cost time (continued)
+
+| Trap | Where the detail lives |
+|---|---|
+| AC-0.3-6's path count is **7 at `e09d673` and 8 at `3f9c94e`**. A handoff that states one number for "HEAD" goes stale the moment a docs commit lands. Score the criterion, which is "all inside the seam". | This log, 3.1 (V4) and P37 |
+| `wi-0.3-proof.sh` measures scope with two-dot `git diff --name-only $BASE HEAD`, while the handoff's V4 says three-dot. They agree **only while the merge base equals `origin/development`**. It does here (`merge-base` = `0f41b53` = `origin/development`). If `development` moves ahead, the two-dot form starts reporting development's own files as scope violations. | This log, 7.2 |
+
+## 6. Pending work
+
+### 6.1 Smallest next action
+
+WI-0.3 is VERIFIED. Nothing is pushed. The next action is the owner's: either push
+`fix/test-credential-isolation` and open its PR into `development`, or start the drafted
+`development.md` re-amendment on its own branch (owner decision 23). Both need authorization in the
+conversation that performs them.
+
+### 6.2 Open for the owner
+
+1. **Push WI-0.3 and open its PR into `development`.** Not yet authorized. The full step 7 list must
+   be re-run on the exact HEAD pushed, exactly as WI-0.1 and WI-0.2 did.
+2. **The `development.md` re-amendment (drafted, NOT applied)** and **A39's one-line `tsconfig.json`
+   include** — owner decision 23 says both, in the next session, on their **own branch**, because
+   putting them on `fix/test-credential-isolation` would fail AC-0.3-6. The applying session asks one
+   fresh yes/no in that conversation before editing `development.md`.
+3. **New this session: layer 1's provider-chain gap (A45).** Offer it alongside A39 and A43. It is
+   four names in `CREDENTIAL_VARS` plus a wording fix in three places; it is a behaviour change, so it
+   is not a cleanup.
+4. **Owner decision 18 is still due and not started**: promote `development` → `qa` → `staging`, each
+   its own PR, each confirmed before the push. The `staging` merge deploys (`cdk deploy --all`).
+   Production stays blocked (#90, #91, #168, #170).
+
+## 7. Commands actually run, and their results
+
+Every command below was run in `_netzer-turn-ceiling` on 2026-09-19, at `3f9c94e` unless stated.
+Exit codes were captured unpiped (M13 — see M45 for the one time this session did not).
+
+### 7.1 State at session start
+
+```
+git rev-parse --abbrev-ref HEAD    fix/test-credential-isolation
+git rev-parse HEAD                 3f9c94ed4f6d1099a9d20613ef7701b641a17503
+git rev-parse --git-common-dir     .git          (a standalone clone, M31)
+git rev-parse --short origin/development          0f41b53
+git merge-base origin/development HEAD            0f41b53
+git status --porcelain             (empty)       exit=0
+```
+
+### 7.2 Scope, dependencies and the cleanup diff
+
+```
+git diff --name-only origin/development...HEAD     8 paths:
+  docs/features/chat-history-integrity/HANDOFF.md
+  docs/features/chat-history-integrity/handoffs/2026-09-19-wi03-cleanup.md
+  docs/features/chat-history-integrity/handoffs/2026-09-19-wi03-implementation.md
+  docs/features/chat-history-integrity/handoffs/2026-09-19-wi03-specification.md
+  src/__test-utils__/aws-guard.test.ts
+  src/adapters/dashboard/cost-cap.test.ts
+  vitest.config.ts
+  vitest.setup.ts
+
+git diff --name-only origin/development e09d673 | wc -l      7   (the stamp's commit)
+git diff --name-only origin/development HEAD    | wc -l      8   (this commit)
+
+package.json / package-lock.json / web manifests   unchanged (empty diff)
+production src/ files changed                      none (grep exits 1)
+git show --stat e09d673            vitest.setup.ts | 5 +++++   1 file changed, 5 insertions(+)
+                                   all five inserted lines begin with //
+```
+
+### 7.3 AC-0.3-7, the full `development.md` step 7 list, credentials planted
+
+`FV_CREDS=plant FV_BASE=development bash netzar-chat-plan/wi-0.3-full-validation.sh` at `3f9c94e`,
+exit 0, 38 s:
+
+| Gate | Result |
+|---|---|
+| `npm run typecheck` | exit 0 (5 s) |
+| `npm test` | exit 0 (20 s) — **247 files, 3215 tests**, no stripping |
+| `npm run build` | exit 0 (3 s) |
+| `npm --prefix web run typecheck` | exit 0 (2 s) |
+| `npm --prefix web run build` | exit 0 (2 s) |
+| `npm run local:verify` | exit 0 (0 s) |
+| `npm run local:test:integration` | exit 1 (6 s) — **1 failed, 38 passed, 25 skipped**: `scripts/destroy.integration.test.ts > destroy completeness sweep (LocalStack S3/DynamoDB/SecretsManager) > checkSecrets passes on a clean prefix, flags an active secret, then warns once it is schedule-deleted`, the documented Floci gap, confirmed by name |
+| `node scripts/ci/docs-links.mjs` | exit 0 — 193 files, 2900 internal links |
+| `node scripts/ci/feature-knowledge.mjs` | exit 0 |
+| `git diff --check` | exit 0 |
+| `node scripts/ci/docs-assets.mjs` | exit 0 |
+| `diagrams-drift` (PR context) | exit 0 |
+
+`guard-violations: 0`. `status-after: 0 changed paths`. Extra verification, mine to add and not in step
+7's list: `node scripts/ci/docs-mermaid.mjs` exit 0.
+
+### 7.4 The proof, and what its two controls actually printed
+
+`bash netzar-chat-plan/wi-0.3-proof.sh` at `3f9c94e`, scored mode: **9 PASS, `FAILS=0`, exit 0**, and
+`git status --porcelain` empty afterwards. The scope line reads `8 path(s), all inside the seam`.
+
+Read as output, not scored from the line (V7):
+
+```
+AC-0.3-4, the planted swallowed dial:
+  → NETZAR-AWS-GUARD VIOLATION: this test dialled netzar-guard-probe.amazonaws.com.
+    Tests  1 failed (1)
+
+AC-0.3-5, the owner-approved control on the REAL path:
+  {"level":40,...,"err":"NETZAR-AWS-GUARD VIOLATION: refused a request to sts.us-east-1.amazonaws.com",
+   "msg":"budget: could not resolve account id"}
+  → NETZAR-AWS-GUARD VIOLATION: this test dialled sts.us-east-1.amazonaws.com.
+    Tests  1 failed (1)
+```
+
+The second is the strongest evidence in this work item: `budget-writer.ts` logged its own swallow at
+level 40 and returned normally, and the test failed anyway.
+
+Counts reconcile: baseline 246 files / 3210 tests, plus one file and the guard's five declared tests,
+gives 247 / 3215.
+
+### 7.5 Independent adversarial checks (not in the proof)
+
+```
+grep -rnE "(http|https)\.(request|get)\s*=" --include=*.ts src infra scripts   exit=1  (nothing)
+grep -rnE "from '(nock|msw|@mswjs)"          --include=*.ts src infra scripts   exit=1  (none)
+grep -nE '"(nock|msw)"' package.json                                            exit=1  (none)
+env | grep -E "AWS_CONTAINER_CREDENTIALS|AWS_WEB_IDENTITY|AWS_ROLE_ARN"         exit=1  (none set)
+sort -c netzar-chat-plan/wi-0.3-baseline-files.txt                              sorted; 246 lines
+```
+
+### 7.6 Not run, and why
+
+| Command | Why not |
+|---|---|
+| Anything that pushes, opens a PR, merges, promotes or deploys | Not authorized (constraint 8). The branch is local only. |
+| Anything using `AWS_PROFILE=netzer-process` | Its `credential_process` mints real credentials. No AWS mutation is authorized. Both runs used the proof's fake planted key `AKIAGUARDPROBE…`, which resolves to no account. |
+| The `development.md` re-amendment and the `tsconfig.json` A39 line | Owner decision 23 routes both to their own branch and their own session, with a fresh yes/no there. Applying them here would also fail AC-0.3-6. |
+| A patch for A45, A43 or A39 | VERIFICATION judges; it does not edit. All three are classified and offered (6.2). |
+| `graft build` in this checkout | It would write an untracked `graft/` into the clone (carried trap). The seam is four files; they were read directly. |

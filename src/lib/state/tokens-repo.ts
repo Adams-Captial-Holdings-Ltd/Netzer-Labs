@@ -48,6 +48,14 @@ export interface TokenRecord {
    */
   userId?: string;
   profileId?: string;
+  /**
+   * Owner decision 1: the ONE user a token with no `userId` of its own (the env
+   * root token, a legacy per-operator token) has been linked to by an audited
+   * admin action. It decides whose conversations the token owns and nothing
+   * else — it is deliberately NOT `userId`, which drives profile resolution and
+   * the per-user revocation index. Set once, never moved (linkTokenToUser).
+   */
+  linkedUserId?: string;
 }
 
 export interface TokenPrincipal {
@@ -59,6 +67,8 @@ export interface TokenPrincipal {
   /** Wave 4a: user + RBAC profile when this principal came from a user session. */
   userId?: string;
   profileId?: string;
+  /** Decision 1: the user this token's conversations belong to (TokenRecord.linkedUserId). */
+  linkedUserId?: string;
 }
 
 export function hashToken(raw: string): string {
@@ -248,7 +258,42 @@ function mapTokenItem(i: Record<string, unknown>): TokenRecord {
     ...(i.expiresAt ? { expiresAt: i.expiresAt as string } : {}),
     ...(typeof i.userId === 'string' ? { userId: i.userId } : {}),
     ...(typeof i.profileId === 'string' ? { profileId: i.profileId } : {}),
+    ...(typeof i.linkedUserId === 'string' ? { linkedUserId: i.linkedUserId } : {}),
   };
+}
+
+/**
+ * Owner decision 1: link a token that has no user of its own to exactly one
+ * user, once. The condition makes the link immutable and refuses a magic-link
+ * session token (which already carries its own `userId`), so a race between
+ * two admins cannot re-point a token's history at a second person. The caller
+ * audits the result.
+ */
+export async function linkTokenToUser(
+  tokenHash: string,
+  userId: string,
+  linkedBy: string,
+): Promise<'linked' | 'not_found' | 'session_token' | 'already_linked'> {
+  const existing = await lookupToken(tokenHash);
+  if (!existing) return 'not_found';
+  if (existing.userId) return 'session_token';
+  if (existing.linkedUserId) return 'already_linked';
+  try {
+    await ddb().send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK: `TOKEN#${tokenHash}`, SK: 'META' },
+        UpdateExpression: 'SET linkedUserId = :u, linkedAt = :at, linkedBy = :by',
+        ConditionExpression:
+          'attribute_exists(PK) AND attribute_not_exists(linkedUserId) AND attribute_not_exists(userId)',
+        ExpressionAttributeValues: { ':u': userId, ':at': new Date().toISOString(), ':by': linkedBy },
+      }),
+    );
+    return 'linked';
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return 'already_linked';
+    throw err;
+  }
 }
 
 export async function revokeToken(tokenHash: string): Promise<boolean> {

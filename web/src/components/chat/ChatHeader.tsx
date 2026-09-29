@@ -109,7 +109,7 @@
  *     DOM order and erases the `shadow-sm` that lifts the panel off the ground
  *     — a fix for the boundary that quietly deletes the boundary's edge.
  */
-import { Menu, Plus } from 'lucide-preact';
+import { Download, Menu, Plus } from 'lucide-preact';
 import type { Agent, Model } from '../../lib/chat/types';
 import { Button } from '../Button';
 import { InfoTooltip } from '../InfoTooltip';
@@ -132,6 +132,9 @@ interface ChatHeaderProps {
   chatId: string;
   streaming: boolean;
   onNewChat: () => void;
+  onExport: () => void;
+  sidebarOpen: boolean;
+  appNavOpen: boolean;
   /** Opens the conversation drawer. Rendered only below `lg`, where the
    *  conversation rail is off-canvas and has no control of its own on screen
    *  (donor `Chat/Menus/OpenSidebar.tsx`). Omit it and no button appears. */
@@ -154,6 +157,9 @@ export function ChatHeader({
   chatId,
   streaming,
   onNewChat,
+  onExport,
+  sidebarOpen,
+  appNavOpen,
   onOpenSidebar,
   onOpenAppNav,
 }: ChatHeaderProps) {
@@ -238,7 +244,7 @@ export function ChatHeader({
             the drawer). Above `lg` the house header is untouched.
 
             WHAT MOVED, AND WHAT DID NOT:
-              - the title is `hidden sm:block`. It is still in the DOM, still
+              - the title is visually hidden below `sm`. It is still in the DOM, still
                 carries `data-tour="chat-title"`, and is still the first thing
                 on the row from `sm` up; the donor's mobile header simply has
                 no title, and a 323px column cannot carry one plus four
@@ -334,13 +340,13 @@ export function ChatHeader({
               where the donor puts it and where a thumb reaches for it. No order
               class: it is first in the DOM and `order: 0`, so it leads the row
               at every width it exists at (it is `lg:hidden`). */}
-          {onOpenSidebar && <OpenSidebarButton onClick={onOpenSidebar} />}
+          {onOpenSidebar && <OpenSidebarButton onClick={onOpenSidebar} expanded={sidebarOpen} />}
 
           <h1
             data-tour="chat-title"
             title={title}
-            class="hidden min-w-0 flex-1 truncate text-heading-sm font-semibold text-primary
-              sm:block sm:order-1 sm:flex-none sm:max-w-[14rem] lg:max-w-[22rem]"
+            class="sr-only min-w-0 flex-1 truncate text-heading-sm font-semibold text-primary
+              sm:not-sr-only sm:block sm:order-1 sm:flex-none sm:max-w-[14rem] lg:max-w-[22rem]"
           >
             {title}
           </h1>
@@ -404,10 +410,10 @@ export function ChatHeader({
                 surface chip on it would have no edge of its own. */}
             <span
               class="hidden items-center gap-1 rounded-lg border border-border bg-bg px-2 py-1
-                font-mono text-caption text-muted xl:inline-flex"
+                font-mono text-caption text-secondary xl:inline-flex"
             >
               {chatId}
-              <InfoTooltip term="dashboard:" />
+              <InfoTooltip side="bottom" text="This chat's ID. Its transcript, costs and audit records are filed under it." />
             </span>
             <Button
               variant="secondary"
@@ -421,6 +427,10 @@ export function ChatHeader({
             >
               <span class="hidden sm:inline">New chat</span>
             </Button>
+            <button type="button" aria-label="Export chat" title="Export chat" onClick={onExport}
+              class="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-secondary hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-primary">
+              <Download size={17} aria-hidden="true" />
+            </button>
           </div>
 
           {/* THE HOUSE'S NAV TOGGLE, folded into this bar.
@@ -454,7 +464,7 @@ export function ChatHeader({
               onClick={onOpenAppNav}
               aria-label="Open main navigation"
               aria-controls={APP_NAV_DRAWER_ID}
-              aria-expanded={false}
+              aria-expanded={appNavOpen}
               title="Main navigation"
               class="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted
                 transition-colors duration-fast hover:bg-surface-hover hover:text-primary

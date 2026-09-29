@@ -150,107 +150,89 @@ describe('streamTurn request shape', () => {
   });
 });
 
-describe('streamTurn chunk semantics', () => {
-  it('chunk data REPLACES the cumulative text, never appends', async () => {
-    const { outcome, chunks } = await run([
-      'event: chunk\ndata: Hello\n\n',
-      'event: chunk\ndata: Hello world\n\n',
-    ]);
-    expect(chunks).toEqual(['Hello', 'Hello world']);
-    expect(outcome.text).toBe('Hello world');
-    expect(outcome.isReply).toBe(false);
-    expect(outcome.errorText).toBe('');
-  });
-
-  it('bare "data:" lines with no "event:" line default to chunk', async () => {
-    const { outcome, chunks } = await run(['data: plain\n\n']);
-    expect(chunks).toEqual(['plain']);
-    expect(outcome.text).toBe('plain');
-  });
-
+describe('streamTurn delta semantics', () => {
   it('rejoins multiple "data:" lines of one event with \\n', async () => {
-    const { chunks } = await run(['event: chunk\ndata: line1\ndata: line2\n\n']);
-    expect(chunks).toEqual(['line1\nline2']);
+    // The rejoin happens BEFORE the JSON parse: split the delta object itself
+    // across two "data:" lines (at a point where JSON permits insignificant
+    // whitespace) and it must still come out as one object.
+    const { chunks } = await run(['event: delta\ndata: {\ndata: "i":0,"t":"joined"}\n\n']);
+    expect(chunks).toEqual(['joined']);
   });
 
-  it('preserves whitespace after "data: " verbatim — slice(6), never a trimStart', async () => {
-    // Chunk payloads are markdown, where leading spaces ARE the code block. The
-    // source strips exactly the 6-char "data: " prefix; anything that also
-    // trimmed would silently unindent every fenced/indented block in a reply.
-    const { outcome, chunks } = await run(['event: chunk\ndata:     indented code\n\n']);
+  it("preserves leading whitespace inside a delta's text verbatim — no implicit trim", async () => {
+    // Delta text can carry markdown, where leading spaces ARE the code block.
+    // `delta.t` is spliced into fullText and handed to onChunk exactly as
+    // JSON.parse produced it — nothing trims it.
+    const { outcome, chunks } = await run(['event: delta\ndata: {"i":0,"t":"    indented code"}\n\n']);
     expect(chunks).toEqual(['    indented code']);
     expect(outcome.text).toBe('    indented code');
   });
 
-  it('preserves interior and trailing whitespace in a data payload too', async () => {
-    const { outcome } = await run(['event: chunk\ndata:   a  b  \n\n']);
+  it("preserves interior and trailing whitespace in a delta's text too", async () => {
+    const { outcome } = await run(['event: delta\ndata: {"i":0,"t":"  a  b  "}\n\n']);
     expect(outcome.text).toBe('  a  b  ');
   });
 
-  it('trims the "event:" name, so a trailing space still routes as a chunk', async () => {
-    // `line.slice(7).trim()` — without the trim the event would be 'chunk ',
+  it('trims the "event:" name, so a trailing space still routes as delta', async () => {
+    // `line.slice(7).trim()` — without the trim the event would be 'delta ',
     // fall through every branch, and the text would vanish.
-    const { outcome, chunks } = await run(['event: chunk \ndata: x\n\n']);
+    const { outcome, chunks } = await run(['event: delta \ndata: {"i":0,"t":"x"}\n\n']);
     expect(chunks).toEqual(['x']);
     expect(outcome.text).toBe('x');
   });
 
   it('parses an event split across read() boundaries mid-line', async () => {
-    const { chunks, outcome } = await run(['event: ch', 'unk\ndata: he', 'llo\n\n']);
+    const { chunks, outcome } = await run(['event: del', 'ta\ndata: {"i":0,"t":"he', 'llo"}\n\n']);
     expect(chunks).toEqual(['hello']);
     expect(outcome.text).toBe('hello');
   });
 
-  it('a blank line flushes the event and resets the event type to chunk', async () => {
+  it('a blank line resets the event type, so unprefixed data after it is ignored', async () => {
     const { chunks, statuses } = await run([
       'event: tool\ndata: {"label":"web search","step":1}\n\ndata: resumed\n\n',
     ]);
-    // After the tool event, the un-prefixed data event is a chunk again.
-    expect(statuses).toEqual(['web search…', '']);
-    expect(chunks).toEqual(['resumed']);
+    // curEvent resets to '' after the blank line — NOT to the previous event
+    // name — so the un-prefixed data that follows matches no branch and is
+    // silently dropped.
+    expect(statuses).toEqual(['web search…']);
+    expect(chunks).toEqual([]);
   });
 
   it('flushes a trailing event whose terminating blank line never arrived', async () => {
-    const { chunks, outcome } = await run(['data: done-ish\n']);
+    const { chunks, outcome } = await run(['event: delta\ndata: {"i":0,"t":"done-ish"}\n']);
     expect(chunks).toEqual(['done-ish']);
     expect(outcome.text).toBe('done-ish');
   });
 
   it('drops a final line with no terminating newline (stays in the buffer)', async () => {
-    const { outcome, chunks } = await run(['data: kept\n\ndata: lost']);
+    const { outcome, chunks } = await run([
+      'event: delta\ndata: {"i":0,"t":"kept"}\n\nevent: delta\ndata: {"i":4,"t":"lost"}',
+    ]);
     expect(chunks).toEqual(['kept']);
     expect(outcome.text).toBe('kept');
   });
 
-  it('a chunk event clears the tool status', async () => {
-    const { statuses } = await run([
-      'event: tool\ndata: {"label":"web search","step":1}\n\n',
-      'event: chunk\ndata: text is back\n\n',
-    ]);
-    expect(statuses).toEqual(['web search…', '']);
-  });
-
   it('documents the pre-existing CRLF limitation — the server uses LF', async () => {
-    // KNOWN LIMITATION, inherited verbatim from the pre-refactor parser in
-    // Chat.tsx send(). The loop splits on '\n' only, so under CRLF the event
-    // terminator line is '\r', not '' — it matches none of the three branches
-    // and flushEvent() therefore never fires mid-stream. Everything collapses
-    // into ONE trailing flush, which turns cumulative-REPLACE chunk semantics
-    // into accumulation: the two payloads below get rejoined by the multiline
-    // "data:" rule instead of the second replacing the first. The '\r' also
-    // rides along on the tail of every data line.
+    // KNOWN LIMITATION, inherited verbatim from the pre-refactor parser. The
+    // loop splits on '\n' only, so under CRLF the event-terminator line is
+    // '\r', not '' — it matches none of the three branches and flushEvent()
+    // therefore never fires mid-stream. Everything collapses into ONE
+    // trailing flush, and the two delta payloads below get rejoined by the
+    // multiline "data:" rule into a single blob that is no longer valid
+    // JSON — so the trailing flush's wellFormedDelta parse fails and BOTH
+    // deltas are lost, not just corrupted the way cumulative chunk text was.
     //
     // This is not hit in practice: the server side is Hono's streamSSE, which
     // emits LF line endings. The assertion below pins the CURRENT behavior so
     // that changing it is a deliberate decision rather than an accident — do
     // NOT "fix" the parser to satisfy this test.
     const { outcome, chunks, statuses } = await run([
-      'event: chunk\r\ndata: Hello\r\n\r\n',
-      'event: chunk\r\ndata: Hello world\r\n\r\n',
+      'event: delta\r\ndata: {"i":0,"t":"Hello"}\r\n\r\n',
+      'event: delta\r\ndata: {"i":5,"t":" world"}\r\n\r\n',
     ]);
-    expect(chunks).toEqual(['Hello\r\nHello world\r']);
-    expect(outcome.text).toBe('Hello\r\nHello world\r');
-    expect(statuses).toEqual(['']); // a single trailing flush, not one per event
+    expect(chunks).toEqual([]);
+    expect(outcome.text).toBe('');
+    expect(statuses).toEqual([]);
   });
 });
 
@@ -334,7 +316,7 @@ describe('streamTurn reply semantics', () => {
 describe('streamTurn error semantics', () => {
   it('captures an error event and preserves the prior partial text unparsed', async () => {
     const { outcome } = await run([
-      'event: chunk\ndata: {"text":"partial"}\n\n',
+      `event: delta\ndata: ${JSON.stringify({ i: 0, t: '{"text":"partial"}' })}\n\n`,
       'event: error\ndata: boom\n\n',
     ]);
     expect(outcome.errorText).toBe('boom');
@@ -418,7 +400,7 @@ describe('streamTurn tool/media status events', () => {
     const { outcome, statuses } = await run([
       'event: tool\ndata: not-json\n\n',
       'event: media\ndata: {broken\n\n',
-      'event: chunk\ndata: fine\n\n',
+      'event: delta\ndata: {"i":0,"t":"fine"}\n\n',
     ]);
     expect(statuses).toEqual(['']); // only the chunk's status clear
     expect(outcome.tools).toEqual([]);
@@ -493,7 +475,7 @@ describe('streamTurn kb/image/artifact accumulation', () => {
       'event: kb\ndata: {bad\n\n',
       'event: image\ndata: bad\n\n',
       'event: artifact\ndata: [}\n\n',
-      'event: chunk\ndata: ok\n\n',
+      'event: delta\ndata: {"i":0,"t":"ok"}\n\n',
     ]);
     expect(outcome.kb).toEqual([]);
     expect(outcome.images).toEqual([]);
@@ -505,7 +487,7 @@ describe('streamTurn kb/image/artifact accumulation', () => {
 describe('streamTurn done and unknown events', () => {
   it('ignores done events and unknown event types', async () => {
     const { outcome, chunks, statuses } = await run([
-      'event: chunk\ndata: hello\n\n',
+      'event: delta\ndata: {"i":0,"t":"hello"}\n\n',
       'event: done\ndata: {"ok":true}\n\n',
       'event: mystery\ndata: whatever\n\n',
     ]);
@@ -525,7 +507,7 @@ describe('streamTurn abort', () => {
       const encoder = new TextEncoder();
       const bodyStream = new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(encoder.encode('data: partial\n\n'));
+          controller.enqueue(encoder.encode('event: delta\ndata: {"i":0,"t":"partial"}\n\n'));
           i.signal?.addEventListener('abort', () => {
             controller.error(new DOMException('The operation was aborted.', 'AbortError'));
           });

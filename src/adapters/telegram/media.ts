@@ -95,7 +95,7 @@ export async function downloadAndStore(
   const fileName =
     attachment.fileName ?? filePath.split('/').pop() ?? `${attachment.kind}.bin`;
 
-  // 3. surface-agnostic pipeline (S3, classify, transcribe, KB ingest)
+  // decision 3: Telegram has no per-file opt-in, so chat files are never imported into the knowledge base.
   return processMedia(
     {
       surface: 'telegram',

@@ -21,6 +21,7 @@ Keep ADRs short (1 page). When a decision is reversed, write a new ADR that supe
 | [0002](0002-single-tenant.md) | Single-tenant deploy model | Accepted (revisit for E1 strategic track) |
 | [0003](0003-bedrock-inference-profiles.md) | Cross-region inference profiles | Accepted |
 | [0009](0009-mission-container-model.md) | Missions become a work container, not a task row | Accepted |
+| [0011](0011-chat-regenerate-tie-notice-and-lock-lease.md) | Regenerate tied to the reply shown, the file note as a notice, a lease on the chat lock | Accepted |
 
 ## Future ADRs to write (when we touch the related areas)
 

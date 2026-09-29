@@ -2,8 +2,8 @@
 feature: chat-history-integrity
 document_role: handoff
 status: current
-observed_at: 2026-08-24
-as_of_commit: f64d1e04b2d85853752e393b310ef243460958dd
+observed_at: 2026-09-20
+as_of_commit: e76538d23dc44dabab3b3cb9a255a00f3d5e87e3
 ---
 
 # Chat history integrity — current state
@@ -12,55 +12,123 @@ as_of_commit: f64d1e04b2d85853752e393b310ef243460958dd
 
 | | |
 |---|---|
-| Branch | `fix/docgen-crash-isolation` |
-| Based on | `development` at `f64d1e04b2d85853752e393b310ef243460958dd` |
+| Branch | `docs/aws-guard-amendment`: the `development.md` AWS-safety re-amendment, the Automated tests row, and A39's one-line `tsconfig.json` include (owner decision 24). Cut from `origin/development` at `90586e8`. On top: the amendment (`e76538d`) and this session's docs commit. |
+| Based on | `development` at `90586e814d440850224e8d3d971b13b144b66564`, the merge of PR #180. It holds WI-0.1 (#176 → `264d024`), WI-0.2 (#177 → `b152b7a`), the first `development.md` amendment (#178 → `33d9126`), the WI-0.2 cleanup (#179 → `0f41b53`) and **WI-0.3, the AWS guard** (#180). |
 | Next merge target | `development` |
-| Deployment state | **Deployed nowhere.** No staging deploy, no production deploy. |
-| Pushed | yes — `fix/docgen-crash-isolation` |
-| PR | [#96](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/96) into `development` |
+| Deployment state | **Nothing here deploys.** Nothing has been promoted past `development`: `qa`, `staging` and `production` still lack WI-0.1, WI-0.2, the cleanup and WI-0.3. `staging` deploys on push, so promotion needs its own authorization. Production (`de244e6`, deployed 2026-09-09) runs the hotfixes WI-0.1 back-merged. |
+| Pushed | This branch: recorded in the Gauntlet state file, because the push happens after this commit and only after the owner confirms once more. WI-0.1, WI-0.2, the first amendment, the cleanup and WI-0.3: yes, all merged into `development`. Every head branch is deleted on `origin`. |
+| PR | This branch: number in the Gauntlet state file. Earlier: [#176](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/176), [#177](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/177), [#178](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/178), [#179](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/179), [#180](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/180), all merged. |
 
-Staging is reachable only by the promotion chain `development → qa → staging`,
-each step its own pull request, because `scripts/ci/deploy-source-guard.mjs`
-refuses any staging deploy whose ref is not `refs/heads/staging`. Nothing on a
-`fix/*` branch reaches an AWS environment.
+Staging is reachable only by the promotion chain `development → qa → staging`. Each step is its own pull request, because `scripts/ci/deploy-source-guard.mjs` refuses any staging deploy whose ref is not `refs/heads/staging`. Nothing on a `fix/*` branch reaches an AWS environment.
 
-## What landed
+## Current objective
 
-Three changes, all in the chat path:
+Bring `development.md` in line with the guard that WI-0.3 merged, and type-check the guard (owner
+decision 24). Three edits on `docs/aws-guard-amendment`, all at `e76538d`: the AWS-safety paragraph
+no longer tells the reader to hand-strip and names the guard as a fifth isolation layer; the
+`npm test` row reads 247 files / 3215 tests; `tsconfig.json` includes `vitest.setup.ts`. The
+[session log](handoffs/2026-09-20-devmd-aws-guard-amendment.md) records the two wording changes made
+inside the approved text and why.
 
-1. `repairEmptyTurns` in `src/lib/state/sessions-repo.ts`, applied in
-   `getSession`.
-2. `truncatedNotice` in `src/agent/agent-loop.ts`, applied to the non-tool
-   return path.
-3. `TOOL_LOOP_MAX_TOKENS = 8192` replacing the hard-coded `1024` at both
-   tool-loop call sites.
+**WI-0.3 is VERIFIED and MERGED** (#180 → `development` `90586e8`).
 
-See the [README](README.md) for what each one does and why it sits where it
-does.
+WI-0.3's own record (2026-09-19, verified at `3f9c94e`) — implemented, cleaned up, and then judged **PASS** on all eight criteria by a fresh critic that neither built nor cleaned it ([verification log](handoffs/2026-09-19-wi03-verification.md)). Every criterion was re-derived from the repository, not carried from a log ([implementation log](handoffs/2026-09-19-wi03-implementation.md), sections 2 and 7; [cleanup log](handoffs/2026-09-19-wi03-cleanup.md)). The cleanup was comment-only: two comments in `vitest.setup.ts`, naming what `neutralised` records and the pool assumption under the once-per-worker install.
+- `vitest.setup.ts` at the repository root, named in `vitest.config.ts`'s `setupFiles`, arms two layers in every worker: it neutralises the environment, shared-config and IMDS credential sources (**not** the container-credential or web-identity ones — A45), and it records and refuses any `*.amazonaws.com` dial on `http`/`https` `request` and `get`.
+- The refusal survives a swallow. An `afterEach` fails the test that made the call, which is what `budget-writer.ts` catching its own errors used to hide.
+- `src/adapters/dashboard/cost-cap.test.ts` also mocks `budget-writer` directly, so that suite has no intent to call AWS.
+- **The hand-stripping constraint is retired.** AC-0.3-2, AC-0.3-3 and AC-0.3-4 all passed, which is what the constraint named as its own release condition.
 
 ## Live state worth knowing
 
-- **Chat `dashboard:1787596504860` (agent `elon-strategy`) is poisoned in
-  production right now.** Its stored turn 5 is an empty assistant turn. It will
-  heal by itself once change 1 is deployed; until then that chat cannot
-  produce a reply. Chat `dashboard:1787588514367` showed the same user-facing
-  symptom earlier the same day.
-- **Production output ceiling is still 1024** until this ships. Any request
-  that makes the model emit a document spec will keep truncating and keep
-  poisoning its chat.
+- **Green at `e76538d`, alone in the checkout**: the full step 7 list run 2026-09-20T22:41Z with every credential source **stripped** equals the baseline — `npm test` 247 files / 3215 tests, `guard-violations: 0`, integration 38 passed / 25 skipped / 1 failed (the Floci `checkSecrets` gap, by name), all 11 other gates exit 0, 0 changed paths left behind ([session log](handoffs/2026-09-20-devmd-aws-guard-amendment.md), 7.3). The same suite with fake credentials **planted and no stripping** gives the same 247 / 3215, exit 0, zero violation lines — which is what evidences the amended sentence "hand-stripping is no longer required".
+- **`vitest.setup.ts` is now type-checked** (`e76538d`): `tsconfig.json`'s `include` names it, `tsc --listFiles` lists it, and `npm run typecheck` still exits 0. `tsconfig.build.json` keeps it out of `dist/`. **A39 is resolved.**
+- **Green at `fa3b294`, alone in the checkout**: the full step 7 list re-run 2026-09-20T03:58Z with every credential source **stripped** equals the baseline — `npm test` 247 files / 3215 tests, `guard-violations: 0`, integration 38 passed / 25 skipped / 1 failed (the Floci `checkSecrets` gap, by name), all 11 other gates exit 0, 0 changed paths left behind ([landing-merge log](handoffs/2026-09-20-wi03-landing-merge.md), 7.2). The earlier run at `50cfd5b` matched too, but two agents were building in that tree at once, so it was re-run rather than trusted ([landing log](handoffs/2026-09-19-wi03-landing.md), 7.2).
+- **Green at `3f9c94e`**, re-derived by the verification ([log](handoffs/2026-09-19-wi03-verification.md), section 7):
+  - `bash wi-0.3-proof.sh` in scored mode: 9 lines PASS, `FAILS=0`, exit 0, 0 changed paths left behind.
+  - `npm test` with credentials **planted and not stripped**: 247 files, 3215 tests, exit 0, and **zero** `NETZAR-AWS-GUARD VIOLATION` lines.
+  - The full step 7 list equals the baseline, run on this exact HEAD. Integration: 38 passed, 25 skipped, 1 failed — the Floci `checkSecrets` gap, confirmed by name.
+  - Collection is unchanged: all 246 baseline files, plus `src/__test-utils__/aws-guard.test.ts`.
+  - Scope: **8** changed paths against `origin/development`, all inside the seam. The count tracks the branch, not the session — it was 7 at `e09d673` and grew with the cleanup's docs commit, so score the criterion ("all inside the seam"), never the number. `package.json` and the lockfile are untouched.
+  - Nothing can silently disarm the tripwire: no file outside `vitest.setup.ts` reassigns `http`/`https` `request` or `get`, and no HTTP-interception library is imported or declared.
+- **The tripwire is proved on the real path, not just a synthetic one.** With fake credentials restored inside a test, the real `syncBudgetToDailyCap` dialled `sts.us-east-1.amazonaws.com`; the guard refused it, `budget-writer.ts` swallowed the error, and the test failed anyway.
+- **AC-0.3-5's original mutation could not pass** and was amended with the owner's approval. Removing the mock does not reach a socket: layer 1 ends the call at `Could not load credentials from any providers`, so layer 2 has nothing to catch ([log](handoffs/2026-09-19-wi03-implementation.md), section 3.3 and M43).
+- **Chat `dashboard:1787596504860` (agent `elon-strategy`)** was poisoned in production on 2026-08-24. It has not been re-checked since production received the empty-turn repair (`8c14b3f`, #103).
+- **BR-002 dry-run (at `6d43213`, not rerun since):** merging production into HEAD gives 9 conflicted files. Merging staging into HEAD is conflict-free.
 
-## Open, not addressed here
+## Blockers and open items
 
 | Item | Status |
 |---|---|
-| PDF and DOCX have never run in production, ever | Unproven. 90 days of logs contain 2 `generate_document` calls, both `xlsx`. |
-| Does the model reliably *pick* `generate_document`? | Open. In the reproduced incident it never called the tool — but it was being truncated before it could, so this may resolve itself with change 3. Re-check after deploy. |
-| `memory ingest failed — "The provided model identifier is invalid."` | Separate live defect, seen in production 2026-08-24. Not investigated. |
-| `webhook monitor: getWebhookInfo failed` repeating every 2 minutes | Separate live warning, ongoing for hours. Not investigated. |
-| `development.md` Automated tests table is stale | Reported, not amended — amendment needs owner approval. See session log. |
+| The `development.md` AWS-safety paragraph still tells the reader to hand-strip, and its Automated tests table still says 246 files / 3209 tests | **Fixed on this branch at `e76538d`**, not yet on `development`. WI-0.3 merged first (#180), so every claim the amendment makes is true on the branch it lands in. Layer 5's drafted "every credential source" was narrowed to what A45 says is true, and the list's lead-in went from "Four" to "Five" with the owner's approval in the applying conversation ([session log](handoffs/2026-09-20-devmd-aws-guard-amendment.md), 4.1 and 4.2). |
+| `vitest.setup.ts` is outside `npm run typecheck`'s include list | **Fixed on this branch at `e76538d`** (A39). One line in `tsconfig.json`; `tsc --listFiles` now names the file and typecheck still exits 0. |
+| The tripwire matches the **first** host-bearing argument, while node gives `options` precedence over a `url` string | Technical debt, theoretical (A43). A two-argument dial whose `options.hostname` is the AWS host and whose URL is not would pass. No caller here passes both; the SDK passes one options object. Fixing it is a behaviour change, so it was classified, not patched. |
+| Layer 1 does not neutralise `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` / `_FULL_URI` or `AWS_WEB_IDENTITY_TOKEN_FILE` / `AWS_ROLE_ARN` | Technical debt, found by VERIFICATION (A45). Two places still say layer 1 neutralises "every ambient credential source" — `vitest.setup.ts:14` and `aws-guard.test.ts:52`; this page and `development.md` were corrected at `e76538d`. It covers the env, ini/process and IMDS members of the chain, not those four. **The safety property still holds** — layer 2 refuses the `*.amazonaws.com` call either path would end up making. None of the four is set on this machine. Four names in `CREDENTIAL_VARS` plus a wording fix; a behaviour change, so classified, not patched. |
+| Promote `development → qa → staging` (owner decision 18) | **Due, not started.** Each step is its own PR, each confirmed with the owner before the push. The `staging` merge deploys (`cdk deploy --all`). |
+| Production-only hotfixes #90, #91, #168 and the rest of #170 are not ancestors of `development` | Deferred by owner decision. **Do not promote `staging → production` until they are reconciled.** |
+| Raising `agent/max_output_tokens` above 8192 in production | Unknown whether a non-streaming tool round (`ConverseCommand`, no client timeout set) finishes at that length. Exercise one long tool round first. The default stays 8192; the owner chose (c) on 2026-09-19, so large documents go through the incremental document tool and there is no separate ceiling item. |
+| Documents of unbounded size | The incremental document tool is approved as a proposed P4 item (owner, 2026-09-19). It needs its own SPECIFICATION. |
+| `budget-writer.ts` swallows every AWS error | Pre-existing and deliberate ("best-effort by design"). Unchanged — but the guard now makes it visible in tests, which was the point. |
+| Documentation debts found in WI-0.2 CLEANUP | Classified and not patched ([log](handoffs/2026-09-19-wi02-cleanup.md), section 6.4): the README's `tested_by` and `implemented_by` omit the builder files and `builders.test.ts`; section 2.4 sits after 3a; and sections 3a and 4 disagree about production PDFs as of 2026-08-24. |
+| The knowledge Q&A route (`handler.ts:2826-2828`) sends browser-posted history text to Bedrock with no empty-text guard | Technical debt, unrelated. Per request and never stored, so it cannot poison a chat. |
+| `src/lib/state/runtime-config-repo.ts` holds literal NUL bytes (`:57`, `:238`), so `git grep -n` prints nothing for it | Technical debt, unrelated. Use `grep -a`. |
+| `1124118` (Haiku id) takes effect only through a CDK deploy | A note for whoever deploys. A staging promotion runs one. |
+| `npm run local` dies with `spawn npm ENOENT` on Windows (`scripts/local/dev.mjs:79-80`) | Deferred to its own `fix/*` branch. |
+| PDF and DOCX had never run in production (as of 2026-08-24) | Not re-checked |
+| Does the model reliably *pick* `generate_document`? (open on 2026-08-24) | Not re-checked |
+| `memory ingest failed — "The provided model identifier is invalid."` (production, 2026-08-24) | Not re-checked |
+| `webhook monitor: getWebhookInfo failed`, repeating (2026-08-24) | Not re-checked |
+
+## Smallest next action
+
+Confirm with the owner, then push `docs/aws-guard-amendment`, open its PR into `development`, and
+merge it once every check is green **and** the full step 7 list has run and matched the baseline on
+the exact HEAD pushed (`tsconfig.json` is a config file, P36). Delete the head branch after the
+merge. Then WI-0.4, the last P0 item: refresh the chat docs / hand-off and the mapped diagrams and
+close or supersede CHATUI-007. Owner decision 18's promotion chain stays after that, each step its
+own PR, each confirmed before the push.
+
+## Related
+
+- [README](README.md), including the [content check](README.md#4a-checking-a-branch-for-these-fixes-by-content-never-by-ancestry)
+- [2026-09-20 `development.md` AWS-guard amendment log](handoffs/2026-09-20-devmd-aws-guard-amendment.md): the three edits of owner decision 24, the two wording changes made inside the approved text, and the full step 7 list at `e76538d`
+- [2026-09-20 WI-0.3 landing-merge log](handoffs/2026-09-20-wi03-landing-merge.md): the clean-tree re-run of the full step 7 list on the exact HEAD pushed, and the push, PR and merge
+- [2026-09-19 WI-0.3 landing log](handoffs/2026-09-19-wi03-landing.md): why owner decision 23 was deferred behind the merge, and the full step 7 list re-run on the exact HEAD prepared for the push
+- [2026-09-19 WI-0.3 verification log](handoffs/2026-09-19-wi03-verification.md): the PASS verdict for WI-0.3 at `3f9c94e`, every criterion re-derived from the code, and the provider-chain gap it found
+- [2026-09-19 WI-0.3 cleanup log](handoffs/2026-09-19-wi03-cleanup.md): the two comments, what was deliberately left duplicated, and the proof and step 7 list re-run at `e09d673`
+- [2026-09-19 WI-0.3 implementation log](handoffs/2026-09-19-wi03-implementation.md): what the guard does, why AC-0.3-5's mutation was amended, and every command with its result at `54cb972`
+- [2026-09-19 WI-0.3 specification log](handoffs/2026-09-19-wi03-specification.md): the seam, the red state, the acceptance criteria, and the drafted `development.md` re-amendment
+- [2026-09-19 WI-0.2 verification (final) log](handoffs/2026-09-19-wi02-verification-final.md): the PASS verdict for the whole item at `c195a6e`
+- [2026-09-19 WI-0.2 specification amendment log](handoffs/2026-09-19-wi02-spec-amendment.md): the pinning test and the new counts
+- [2026-09-19 WI-0.2 cleanup rerun log](handoffs/2026-09-19-wi02-cleanup-rerun.md): the replay paths and all 56 README claim checks
+- [2026-09-18 WI-0.2 implementation log](handoffs/2026-09-18-wi02-implementation.md): the Codex build, its correction and the two defects
+- [2026-09-18 verification log](handoffs/2026-09-18-wi01-verification.md): the PASS verdict for WI-0.1 at `fdda55c`
+- [2026-09-17 docgen-crash-wip-transfer](handoffs/2026-09-17-docgen-crash-wip-transfer.md): the parked turn-ceiling work
+- [knowledge-scope-fanout HANDOFF](../knowledge-scope-fanout/HANDOFF.md), which records the closed `staging → production` PR #61
+- [Feature knowledge framework](../README.md)
 
 ## Session index
 
 | Date | Session | Subject |
 |---|---|---|
-| 2026-08-24 | [empty-turn-poisoning](handoffs/2026-08-24-empty-turn-poisoning.md) | Diagnosed the max_tokens → empty turn → dead chat chain from production logs; shipped the three guards above. |
+| 2026-09-20 | [devmd-aws-guard-amendment](handoffs/2026-09-20-devmd-aws-guard-amendment.md) | Applied owner decision 24 on its own branch off the merged `development`: `development.md`'s AWS-safety paragraph stops telling the reader to hand-strip and gains the guard as a fifth isolation layer, the `npm test` row moves to 247 files / 3215 tests, and `tsconfig.json` includes `vitest.setup.ts` (A39 resolved, proved with `tsc --listFiles`). Two wording changes were made inside the approved text and both are recorded: layer 5's "every credential source" was narrowed to what A45 says is true, and the list's lead-in went from "Four" to "Five", which was put to the owner in the applying conversation and approved there. The full step 7 list at `e76538d` equals the baseline in stripped mode, and `npm test` with fake credentials planted gives the same counts — the run that actually evidences the amended sentence. |
+| 2026-09-20 | [wi03-landing-merge](handoffs/2026-09-20-wi03-landing-merge.md) | Finished the landing, alone in the checkout. Re-derived the branch state rather than trusting three documents that disagreed about it (`50cfd5b` vs `fa3b294`, pushed vs not), re-ran the full step 7 list on the exact HEAD pushed with every credential source stripped — 247 files / 3215 tests, 0 violations, integration 38/25/1, all other gates exit 0 — then opened the PR into `development`, merged it once every check was green, and deleted the head branch. No source file was touched and `development.md` was not edited. |
+| 2026-09-19 | [wi03-landing](handoffs/2026-09-19-wi03-landing.md) | Was handed owner decision 23 — apply the drafted `development.md` re-amendment plus A39's `tsconfig.json` line — and applied neither, on purpose. `development.md` describes the branch it is read on, and the guard is not on `development` yet; the `tsconfig.json` line proves it mechanically by failing typecheck there. The owner chose the honest order: land WI-0.3 first, then amend. Prepared the landing instead — the full step 7 list re-run on the exact clean HEAD `50cfd5b` equals the baseline (247 files / 3215 tests, 0 violations, integration 38/25/1). Caught one flaw in the draft before it could land: its new layer 5 says "every credential source", which A45 contradicts. |
+| 2026-09-19 | [wi03-verification](handoffs/2026-09-19-wi03-verification.md) | A fresh critic verified WI-0.3 at `3f9c94e`: **PASS** on all eight criteria, each re-derived from the repository. The proof is 9 PASS / `FAILS=0`; `npm test` is 247 files / 3215 tests with credentials planted and no stripping and zero violations; the full step 7 list equals the baseline on that exact HEAD. Both negative controls were read as output, not scored from a line — the real `budget-writer` dial was refused, logged its own swallow, and failed its test anyway. Corrected one count: the branch scope is 8 paths at `3f9c94e`, 7 at `e09d673`. One new finding classified, not patched: layer 1 leaves the container-credential and web-identity chain members set, which layer 2 still covers (A45). |
+| 2026-09-19 | [wi03-cleanup](handoffs/2026-09-19-wi03-cleanup.md) | Cleaned up WI-0.3 with `/refactor`, scope-locked: two comments in `vitest.setup.ts` (`e09d673`), naming what `neutralised` actually records and the pool assumption under the once-per-worker install. No behaviour changed. The duplicated credential list and guard type in `aws-guard.test.ts` were left alone on purpose — unifying them would make the contract test assert against the implementation's own constant. The proof still exits 0 on all nine lines, and the full step 7 list was re-run (a file in `setupFiles` is a config file, P36) and equals the baseline. One new finding classified, not patched: the tripwire reads the first host-bearing argument, while node gives `options` precedence over a `url` string (A43). |
+| 2026-09-19 | [wi03-implementation](handoffs/2026-09-19-wi03-implementation.md) | Armed the AWS guard (`54cb972`): a root `vitest.setup.ts` in `setupFiles` that neutralises every credential source and refuses any `*.amazonaws.com` dial, reporting from an `afterEach` so a swallowed error still fails its test, plus the one-line `budget-writer` mock in `cost-cap.test.ts`. The proof exits 0 on all nine lines; `npm test` is 247 files / 3215 tests with credentials planted and no stripping, with zero violations; the full step 7 list equals the baseline. AC-0.3-5's mutation could not pass against a correct guard and was replaced, with the owner's approval, by a control that restores credentials inside the test: the real `budget-writer` dial was refused and failed the test despite the swallow. |
+| 2026-09-19 | [wi03-specification](handoffs/2026-09-19-wi03-specification.md) | Pinned the seam for WI-0.3 and committed the red state (`87c07b7`, test only): five tests that fail because no guard is armed. Established that this machine's `~/.aws` has no `[default]` profile, so an un-stripped run in a clean shell proves nothing, and made AC-0.3-2 plant fake credentials instead. Defined AC-0.3-1 … AC-0.3-7 with exact commands in two scripts kept outside the repository, and drafted the `development.md` re-amendment without applying it. |
+| 2026-09-19 | [wi02-verification-final](handoffs/2026-09-19-wi02-verification-final.md) | A fresh critic verified the whole of WI-0.2 at `c195a6e`: **PASS** on all seven criteria. README 2.1's replay set was re-derived from the agent loop's 11 call sites; the proof passed every line with 72 tests; the full step 7 list equalled the baseline (246 files, 3210 tests; integration 38/25/1); and under the `raw?.trim()` mutation the pinning test was the only failure in the whole suite. |
+| 2026-09-19 | [wi02-spec-amendment](handoffs/2026-09-19-wi02-spec-amendment.md) | Added the test the owner approved: a `max_output_tokens` value stored as a number resolves to that number and the turn still runs (`7b6bbf3`). New counts: 8 ceiling tests, and `npm test` 246 files and 3210 tests. |
+| 2026-09-19 | [wi02-cleanup-rerun](handoffs/2026-09-19-wi02-cleanup-rerun.md) | Fixed VERIFICATION's one failure, docs only (`e1cdc11`). README 2.1 now names the eight call sites that replay a stored transcript through `getSession`. A full re-check (56 checks) found and corrected section 4's false "spec validation unchanged". |
+| 2026-09-19 | [wi02-verification](handoffs/2026-09-19-wi02-verification.md) | A fresh critic verified WI-0.2 as merged plus the cleanup, at `974399b`: FAIL on one criterion — the README stamp certified section 2.1's false claim that Jarvis reads through `getSession`. Routed to a CLEANUP rerun. |
+| 2026-09-19 | [wi02-cleanup](handoffs/2026-09-19-wi02-cleanup.md) | Cleaned up WI-0.2 on `chore/wi02-cleanup` off `development`: comments and docs only (`d1876b1`), including two diagram notes the drift gate forced a review of. |
+| 2026-09-18 | [wi02-implementation](handoffs/2026-09-18-wi02-implementation.md) | Codex `gpt-5.6-terra` built WI-0.2 from the work order. Claude rejected the first build on two defects the tests could not see and sent the one allowed correction. Committed `3ae63b4`. |
+| 2026-09-18 | [wi02-specification](handoffs/2026-09-18-wi02-specification.md) | G0 failed (WI-0.1 not on `development`). Opened PR #176. WI-0.2 red at `56e37b0`, with a user-turn boundary rule for the byte trim. |
+| 2026-09-18 | [wi01-verification](handoffs/2026-09-18-wi01-verification.md) | A fresh critic verified WI-0.1: PASS. Every criterion, blob, route check and the full validation rerun at `fdda55c`. |
+| 2026-09-18 | [wi01-cleanup](handoffs/2026-09-18-wi01-cleanup.md) | Reviewed the back-merge with `/refactor`: no change needed. Classified two findings and patched neither. |
+| 2026-09-18 | [wi01-implementation](handoffs/2026-09-18-wi01-implementation.md) | Applied the nine picks with `-x`. Codex wrote the #170 slice and the diagram notes; Claude inspected and proved them. |
+| 2026-09-18 | [wi01-specification](handoffs/2026-09-18-wi01-specification.md) | Rebased onto `9e8e42b`, recorded a green baseline, committed the red state and mapped every pick's conflicts. |
+| 2026-09-17 | [backmerge-machine-transfer](handoffs/2026-09-17-backmerge-machine-transfer.md) | Landed the 09-10 log, recorded the interrupted claudex loop, and parked the back-merge for the machine transfer. |
+| 2026-09-17 | [docgen-crash-wip-transfer](handoffs/2026-09-17-docgen-crash-wip-transfer.md) | Parked the 2026-08-25 turn-ceiling work in progress on `wip/docgen-crash-turn-ceiling`. |
+| 2026-09-10 | [backmerge-production-hotfixes](handoffs/2026-09-10-backmerge-production-hotfixes.md) | Opened the back-merge of #103–#106 on a fresh clone at `271339b`. Nothing applied. |
+| 2026-08-24 | [empty-turn-poisoning](handoffs/2026-08-24-empty-turn-poisoning.md) | Diagnosed the max_tokens → empty turn → dead chat chain from production logs, and shipped the three guards of #96. |

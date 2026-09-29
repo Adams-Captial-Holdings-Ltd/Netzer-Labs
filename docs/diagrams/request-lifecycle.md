@@ -1,3 +1,9 @@
+<!-- drift-gate: P6 adds dashboard regenerate/try again in `src/adapters/dashboard/handler.ts`, with stored-file replay and last-reply replacement through `src/lib/state/sessions-repo.ts`; Telegram carries a P6 regenerate/retry SKIP comment only, so its depicted path is unchanged. -->
+<!-- drift-gate: P5 artifact UI: the Chat tab turns each URL-free artifact_ref (live) and each reloaded turn's artifacts into a card that holds no link; the panel reads /artifacts/versions and /artifacts/content (or view=outline for a deck) and re-mints /artifacts/download only on a click, for the version shown. Mapped source touched: `src/adapters/telegram/handler.ts` (a P5 panel SKIP comment only; the Telegram steps drawn here are unchanged); the dashboard's new content route is drawn in the P5 section below. -->
+<!-- drift-gate: P4 artifact flow adds dashboard-only DLP and owner-scoped CURATED version writes, URL-free transcript/SSE refs after durable save, owner-reminted exact-version downloads, and delete/forget-me version sweeps. Telegram/Slack keep their legacy generated-media path. -->
+<!-- drift-gate: verified against P2 (WI-2.1..2.4 and the step 4 review's fixes: the request's own abort signal, the save before `final`, the safe-side spend estimate, tool payloads through the block redactor). Mapped sources touched: `src/agent/agent-loop.ts` (the abort signal stops the model call and every later tool round; tool start/end carry the call id, capped arguments and a capped result; a stopped turn's spend is settled from an estimate), `src/lib/state/sessions-repo.ts` (turn records, tool results stored with the reply and evicted before turns under the byte budget, the per-record text cap leaving room for them) and `src/adapters/telegram/handler.ts` (a PARITY SKIP comment, and a failed turn now posts the sanitized error sentence instead of the raw error text; the steps drawn here are unchanged). The dashboard's side of the same turn is recorded in a new Legend bullet; the depicted Telegram steps did not change. -->
+<!-- drift-gate: verified against P1 (WI-1.1..1.4, owner decisions 1, 9, 11, 46, 47). Mapped sources touched: `src/lib/state/sessions-repo.ts` (appendTurns now writes the window row and one record per message in ONE version-fenced transaction; the owner is stamped once; /newchat keeps turnsTotal; getFullHistory; deleteSession cascades; reownLegacyConversation; `#` in a chat id stored as `_`) and `src/lib/audit/audit-writer.ts` (two always-audited actions, `token_linked` and `session_read_override`). The persist step and two Legend bullets are updated to match; no other step of this flow changed. -->
+<!-- drift-gate: verified against the corrupt-but-successful builder fixes; step 8 and the history-poisoning note below already describe the guard, and this change closes two holes in it. truncatedNotice now also covers the tool-loop return path, which is the path a document request actually takes. repairEmptyTurns now uses a typeof check rather than optional chaining, because a legacy turn whose text is a number threw a TypeError inside getSession and turned a poisoned chat into a 500. -->
 <!-- drift-gate: verified against the empty-turn poisoning fix (PR #96); mapped-source changes = repairEmptyTurns applied in getSession, truncatedNotice on the non-tool return, and TOOL_LOOP_MAX_TOKENS raised from 1024. Step 8 and the history-poisoning note updated to match. -->
 # Request lifecycle, one Telegram message end-to-end
 
@@ -39,21 +45,170 @@ sequenceDiagram
   L->>L: outbound exfil/DLP scan (redact block-severity matches)
   L-->>H: final text + usage (blocked flag if guardrail intervened)
   H->>T: final editMessage, split-send fallback on failure (+ optional Polly voice reply)
-  H->>D: appendTurns to session, version-fenced (skipped when blocked)
+  H->>D: appendTurns, the window row plus one record per message in one transaction, version-fenced (skipped when blocked), MAX_TURN_WINDOW_BYTES drops the oldest window exchanges at a user-turn boundary and sends them to ingest, their records stay (a turn written before P1 has none, and the migration backfills those still in the window when it runs)
   L->>D: recordUsage + writeAudit (token-usage + audit-log tables)
+```
+
+## Dashboard chat attachment path
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as Browser
+  participant H as Dashboard handler
+  participant S as S3 staging and raw buckets
+  participant D as DynamoDB sessions
+  participant L as Media pipeline and agent loop
+
+  U->>H: POST /api/chat/uploads with name, type, size
+  H-->>U: signed PUT link, chat upload key and content type
+  U->>S: PUT file directly to staging with signed type and size
+  U->>H: POST /api/test-turn/stream with attachment key
+  H->>D: check conversation ownership
+  H->>H: check each upload key belongs to caller
+  H->>S: HeadObject for each staged file
+  alt missing, wrong owner, too large or wrong type
+    H-->>U: 404 upload_not_found, 413 file_too_large or 415 unsupported_type
+  else every file passes preflight
+    H->>D: beginTurn when message id is present
+    H->>S: read staged file
+    H->>L: processMedia, store raw file and read supported content
+    L->>S: store raw file
+    H->>D: save user message with attachment descriptors and assistant answer
+    H-->>U: final answer and done
+    U->>H: GET /api/sessions/transcript
+    H-->>U: messages and attachments without storage keys
+    U->>H: GET /api/sessions/attachment with attachment id
+    H->>D: check owner or audited admin override, find attachment
+    H-->>U: fresh short-lived named download link
+  end
+```
+
+## Dashboard P4 artifact path
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as Browser
+  participant H as Dashboard handler
+  participant L as Agent loop and artifact tools
+  participant D as DynamoDB sessions
+  participant S as S3 CURATED (versioned)
+
+  U->>H: send turn in person-owned conversation
+  H->>D: verify stable owner, begin turn
+  H->>L: runAgentTurn (tools or bounded artifact grammar)
+  L->>L: scan name, complete bytes and source with DLP
+  L->>D: acquire conversation child lock, write pending/version/head rows
+  L->>S: write immutable CURATED object version
+  S-->>L: physical VersionId
+  L-->>H: URL-free artifact descriptor
+  H->>D: save assistant turn and durable message record with descriptor
+  D-->>H: saved
+  H-->>U: additive artifact_ref SSE, then done
+  U->>H: list heads/versions or request a chosen version
+  H->>D: verify owner (or await admin-read audit)
+  H-->>U: URL-free list or fresh short-lived GET for exact S3 VersionId
+  U->>H: delete conversation / forget-me
+  H->>D: hold child lock
+  H->>S: enumerate and delete artifact versions, markers and derivatives
+  H->>D: delete artifact children and conversation rows
+```
+
+## Dashboard P5 artifact card and panel
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as Browser
+  participant P as Artifact panel (sandboxed preview)
+  participant H as Dashboard handler
+  participant D as DynamoDB sessions
+  participant S as S3 CURATED (versioned)
+
+  H-->>U: artifact_ref SSE, or the transcript's artifacts after a reload
+  U->>U: render a card per reference, holding no link
+  U->>P: open the card
+  P->>H: GET /api/artifacts/versions
+  H->>D: verify owner (or await admin-read audit)
+  H-->>P: URL-free version list
+  P->>H: GET /api/artifacts/content for the version shown (view=outline for a deck)
+  H->>S: read that exact object version
+  H-->>P: inert bytes (octet-stream, nosniff, sandbox CSP) or bounded slide text
+  P->>P: preview by type and file magic, HTML and Mermaid only in the opaque-origin sandbox
+  U->>H: Download (card or panel), only on a click
+  H-->>U: fresh short-lived GET for that exact version, named with its extension
+```
+
+## Dashboard P6 regenerate and try again
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as Chat tab
+  participant H as Dashboard handler
+  participant D as DynamoDB sessions
+  participant S as Raw attachment bucket
+  participant L as Agent loop
+  participant B as Bedrock
+
+  U->>H: POST /api/test-turn/stream regenerate true, no text or files, new clientMessageId
+  alt body has text or files
+    H-->>U: 400 invalid_regenerate
+  else valid body
+    H->>D: load conversation and check caller owns it
+    alt missing conversation or stranger's conversation
+      H-->>U: one 404 not_found
+    else caller owns existing conversation
+      alt last turn pair is not user then assistant
+        H-->>U: 409 nothing_to_regenerate
+      else valid regenerate
+        H->>D: the clientMessageId turn record, as for any send (one message id starts one model call)
+        opt the last user message carried files
+          H->>H: if media_upload_disabled is on, refuse as kill_switch_active
+          H->>S: read only images and documents under their caps, no upload, archive, transcription or knowledge ingest
+          S-->>H: rebuild inline media blocks, or refuse as attachment_unavailable before any model call
+          Note over H: audio, voice and video are not re-read, their words are in the stored text
+        end
+        H->>L: runAgentTurn with the window before the last exchange and the rebuilt files
+        L->>D: kill switches, rate limit, cost cap, as for any send
+        L->>B: generate replacement reply
+        B-->>L: streamed reply
+        L-->>H: final reply
+        H->>D: replaceLastReply with the authorized message count and owner, unless blocked or refused
+        Note over H,D: one transaction, version-fenced and retried while count and owner match, replaces the last reply record at the same sequence, turnsTotal unchanged, nothing trimmed
+        H-->>U: final SSE event
+        H-->>U: done ok, or done not_saved and the page keeps the old reply
+      end
+    end
+  end
+  opt previous turn failed
+    H-->>U: error, no chat message stored
+    U->>H: Try again with the same text and a new clientMessageId
+    Note over U,H: if the failed message had files, ask for those files again
+  end
 ```
 
 ## Legend
 
 - The 200 ack at step 5 happens before any model work; Telegram retries on non-200 within about 60 seconds, so the handler never blocks the webhook on Bedrock latency.
 - Guardrail-blocked turns return a friendly notice and are NOT persisted; this holds on every surface, including both Slack send paths (main bot and per-agent apps). Legacy blocked turns are scrubbed from history before each call (`stripBlockedTurns`) so one tripped message cannot poison the session.
+- History poisoning has two known triggers, and both are guarded, because Bedrock rejects the WHOLE `messages` array rather than the offending turn — so one bad stored turn kills every later turn in that chat, permanently, not just its own. The first is the blocked-turn notice above. The second is an **empty** assistant turn, which Bedrock refuses with `messages: text content blocks must be non-empty`: a reply truncated at `max_tokens` mid-tool-call carries no text block at all, and generating a document is its common trigger because the whole spec must be emitted inline as tool-call JSON. `repairEmptyTurns` substitutes placeholder text for any empty turn inside `getSession` (step 8), which covers every consumer that builds Converse messages and lets already-poisoned chats heal with no migration; text is substituted rather than the turn dropped because Converse also demands strict role alternation. Neither return path can emit empty text any more: `truncatedNotice` covers the non-tool return AND the tool-loop return, which is the path a document request actually takes. The repair itself uses a `typeof` check rather than optional chaining, because a legacy turn whose stored text is a number would otherwise throw a TypeError inside `getSession` and turn a poisoned chat into a 500. Every model call in the turn carries the ceiling resolved per turn (default `TURN_MAX_TOKENS` 8192, runtime-tunable) rather than the 1024 that could not hold a document spec.
+- `resolveTurnMaxTokens` reads runtime-config `agent/max_output_tokens` once per turn, defaulting to `TURN_MAX_TOKENS` (8192) and clamping to 1024-32768; all three model calls (the initial streamed call, each tool-loop round and the post-loop synthesis call) use that one resolved ceiling.
 - Slash commands (`/newchat`, `/model`, `/missions`, `/mission`, ...) and active War Room sessions branch off before step 6 (the placeholder reply) and never reach the agent loop — the handler runs the slash-command router and the War Room check ahead of posting the placeholder. The mission commands are the cross-surface case: they talk to the Mission ACL and render through `src/lib/missions/format.ts`, so Telegram, both Slack send paths and the dashboard print the same string without any adapter knowing what a mission is. Size is the one thing that module does NOT settle for everyone: its 3000-character cap is on source characters, and each surface still has to bound what its own API measures — Telegram measures the HTML render, which escaping can expand roughly 5x (measured: 1059 source characters send as 5055; 2175 send as 9315), so `sendMessage` splits on the rendered length rather than the source. The one thing that travels the other way is the assignment push: when `create_mission` hands work to a different agent, it posts a one-line notice back into the originating chat through `deliverToReplyChat()`, which routes `ToolContext.replyChatId` to Telegram or either Slack path — and resolves WHICH bot should speak, because both surfaces run more than one: a per-agent Slack app's id carries an `app-<agentId>` segment (the main bot's does not, and keeps the workspace token) and a Telegram id carries `:bot-<agentId>`, naming the per-agent token its `/tg/:agentId/webhook` received the message on rather than the turn's agent, which the sticky default routinely makes `main` (the dashboard supplies no `replyChatId` at all and is a marked parity gap). The send result is not discarded: a refused push returns false and the create receipt says the chat was not notified. Voice notes are transcribed and fed in as text, and images/PDFs ride along as inline Bedrock content blocks.
 - The same `runAgentTurn` serves Slack and the dashboard chat; only the adapter steps (placeholder edits vs SSE events) differ. Slack additionally has two send paths (main bot and per-agent apps).
-- Binaries a tool produced (generated images and generated documents) do NOT travel in the reply text. Tools return them on `ToolMedia`, collected into `AgentTurnResponse.media` (capped at 4 per turn), and each surface delivers from that channel after the final message: Telegram `sendPhoto` for images, Slack `uploadFile` for both, dashboard chat an `image` or `artifact` SSE event. This is load-bearing rather than cosmetic — a presigned URL placed in the reply text is read by the model and reproduced in its own output, and a signed S3 URL does not survive that round trip (an observed production document link lost its entire `X-Amz-*` query string and returned AccessDenied). Documents are tagged `kind: 'artifact'` so they are never sent down an image path; Telegram currently skips them, with the reason recorded at the call site, because it has no `sendDocument` helper.
+- A dashboard chat upload uses a direct-to-S3 path. The signed PUT binds type and size; the send HEADs every staged object and refuses missing, oversized or wrong-type files before beginning a turn or reading bytes. `processMedia` stores the raw file, and the saved user message carries its attachment descriptors. A file-only media acknowledgment is saved as an exchange too. The transcript omits storage keys; an owner requests a new download link for an attachment id.
+- Legacy bot binaries a tool produced (generated images and generated documents) do NOT travel in the reply text. Tools return them on `ToolMedia`, collected into `AgentTurnResponse.media` (capped at 4 per turn), and each bot surface delivers from that channel after the final message: Telegram `sendPhoto` for images and Slack `uploadFile` for both; the dashboard also retains legacy `image` and `artifact` SSE events for old media paths. This is load-bearing rather than cosmetic — a presigned URL placed in the reply text is read by the model and reproduced in its own output, and a signed S3 URL does not survive that round trip (an observed production document link lost its entire `X-Amz-*` query string and returned AccessDenied). Documents are tagged `kind: 'artifact'` so they are never sent down an image path; Telegram currently skips them, with the reason recorded at the call site, because it has no `sendDocument` helper.
+- P4 dashboard-generated artifacts use CURATED immutable versions and a separate URL-free `artifact_ref` SSE event, emitted only after the object and assistant transcript save. Grammar bodies are withheld from live chunks until parsed and stored; a failed store never claims a saved file. The owner can later list versions and request a newly signed exact-version download. Artifact-derived previews and KB copies follow artifact erasure; P3 shared opt-in KB documents remain after chat deletion under owner decision 54. Telegram and Slack skip this durable ownership path; their legacy media path above is unchanged.
+- P5 artifact card and panel: the Chat tab renders every URL-free reference — from the live `artifact_ref` event, or from a reloaded turn's `artifacts` — as a card that holds no link and fetches nothing until clicked. Opening it shows the panel: a version picker (`/artifacts/versions`), the preview of the version shown (`/artifacts/content`, which answers with inert bytes; a deck's `view=outline` answers with bounded slide text), Copy for text, and Download, which re-mints `/artifacts/download` for exactly that version on every click. On a phone the panel is a full-screen sheet that keeps keyboard focus inside it and that Escape closes. A turn carries at most eight references (the route's cap). Legacy link cards from older turns keep their download. Telegram and Slack have no panel: Slack keeps uploading the files, and Telegram keeps sending generated images as photos and documents as the link in the reply text.
+- P6 regenerate, try again and the stopped text: regenerate is a dashboard Chat-tab send with no new text or files, and it replays the last user message's saved raw files without a new upload, archive, transcription or knowledge ingest; video keyframes are not replayed, while stored transcript text remains. The handler requires an existing conversation owned by the caller and a last user/assistant exchange, applies the streamed-send guards and writes the new `clientMessageId` turn record. A message's files are re-read only when `media_upload_disabled` is off and only if they can reach the model (images and documents under their caps); one that cannot be read refuses the regenerate as `attachment_unavailable` before any model call. It runs the agent on history before that exchange, then `replaceLastReply` — given the message count and owner the route authorized, and refused if the conversation moved on or changed hands — uses one transaction to version-fence the conversation window (retrying a version race while both still match) and replace the existing last assistant record at the same sequence; `turnsTotal` does not change. It trims nothing (the next append trims, with its memory summary) and, if memory had already summarised the replaced reply, rewinds `turnsIngested` so the replacement is summarised next; what memory already took from the replaced reply stays in memory. A blocked or refused regenerate is not saved: the stream ends `done: not_saved` and the page keeps the old reply. A turn that ends in an error event stores no message, so Try again resends its text as a new turn (a connection lost mid-reply is saved as a stop, like a closed tab; since P7 the page re-reads the conversation, up to three times over about two seconds because the route saves that stop only after its outbound scan, and shows that stopped reply once it is saved); if the failed message had files, the person must attach them again. Stop or a closed tab during the model call, and a stop interrupting a tool round, save only the guarded writer's visible text — never a withheld `:::artifact` block — after the same fail-closed outbound scan a finished reply passes, and mark the reply stopped. Every conversation writer carries the title and pin forward.
+- P7 regenerate tie, the file note and a chat deleted mid-turn (ADR 0011): every saved assistant reply carries `requestId`, the `clientMessageId` of the request that produced it (`appendTurns` stamps it from the route's enrichment; `replaceLastReply` writes the new reply's own id and never keeps the old one), and the transcript returns it. A regenerate names the reply the page shows (`replyTo`, `null` for a reply saved before P7); when that is not the stored last reply the route answers 409 `reply_changed` before the turn record, any stored-file read or any model call, and the page reloads the chat and says so; a request without `replyTo` keeps the P6 behaviour. The file-only note is saved with `status: 'notice'`, shown without Regenerate and refused by the route (409 `nothing_to_regenerate`); so is the kill-phrase confirmation, which reaches the page as a canned `reply` event. A regenerate's stored files are read by `runAgentTurn` (`loadAttachments`) only after its cost cap, rate limit and `bedrock_global` checks, so a refused turn reads none. A dashboard save checks the turn's marker (`CHAT#<chatId>#TURN#<requestId>`) inside its own transaction, so a chat deleted mid-turn stays deleted: the save is refused (`ConversationDeletedError`, one warn line naming agentId and chatId, no retry), and a file saved into a chat deleted mid-turn is refused instead of re-creating the chat (the route and the three file-saving tools pass the request id); Telegram, Slack, scheduled tasks, the fallback page (`public/app.js`) and the non-streaming `POST /test-turn` carry no request id, so their saves are not re-checked; each declares the skip in a parity comment.
 - Model fallback (H2) is live on the initial streamed call: a throttle/unavailability BEFORE any chunk is emitted walks Opus -> Sonnet -> Haiku and pins the session to the fallback model (per-process affinity, no oscillation). Once a chunk reached the user, a mid-stream failure propagates unchanged — two models are never spliced into one reply. Tool-dispatch rounds ride the model the initial call settled on.
 - Review-fixes hardening (PR #107): tool-dispatch rounds and the budget-exhausted synthesis call share the initial call's retry/backoff (a mid-loop throttle no longer voids the turn), and the synthesis instruction rides inside the final toolResult user message to keep Converse's strict role alternation. The final placeholder edit is checked and falls back to split delivery (Telegram caps messages at 4096 chars), so an oversized reply is never dropped while persisting as sent. `appendTurns` is fenced with an optimistic version counter so concurrent tasks re-merge instead of overwriting each other, and the streaming DLP redactor carries the same 50ms per-pattern timeout as the scanner.
 - Spend admission (C2-full) wraps the whole turn: before any Bedrock work, `ledger-gate.ts` either checks the strict daily counter (legacy) or atomically reserves worst-case headroom on the spend-ledger table (`cost/ledger_enabled`), and the persist step settles the reservation with the actual cost. Blocked admissions throw before the model is ever invoked; refusal/error exits release the un-spent hold.
-- Privilege-changing dashboard mutations (token mint/revoke, IAM apply) use the AWAITED variant `writeAuditOrThrow` (C5c): the route 500s when no audit store accepted the event, and those actions (plus kill-switch sets) are never suppressible by `audit_log_disabled`. Turn-time audits stay fire-and-forget.
+- Privilege-changing dashboard mutations (token mint/revoke/link, IAM apply) use the AWAITED variant `writeAuditOrThrow` (C5c): the route 500s when no audit store accepted the event, and those actions (plus kill-switch sets and every admin read of a conversation that is not theirs, `session_read_override`) are never suppressible by `audit_log_disabled`. Turn-time audits stay fire-and-forget.
 - The audit writer shown at persist time is the SAME module every dashboard route uses; its action catalog (the `AuditEvent` union) is additive and includes non-turn actions (member/token/seat/config CRUD) written outside this flow. Only the turn-time `agent_turn` write is depicted here.
+- Durable transcript (P1, owner decision 11: new item types in the existing sessions table, no CDK): every message is ALSO its own record beside its conversation, `SK=CHAT#<chatId>#MSG#<seq>` with `seq` its place in the whole conversation, written in the same all-or-nothing transaction as the window row; a record whose sequence number is taken fails the write rather than overwriting history — unless it is a leftover of an earlier conversation under the same id that is already past its own expiry, which is cleared first. The one exception is P6 regenerate, which replaces the LAST reply's own record in place, at the same sequence number. The window stays exactly what the model replays — MAX_TURNS, the byte budget and the ingest backstop are unchanged — and the records are what the dashboard reloads (`getFullHistory`) and what a delete removes (`deleteSession` cascades, records first, row last). `/newchat` empties the window but keeps the records and the sequence. The conversation's owner, and whether it expires, are settled when it first has an owner and never changed after: a person's lasts, anyone else's expires. A scheduled task (which cannot say who is sending) that saves before its chat's first turn starts the conversation with no owner and an expiry; the first owner to save settles it, and a person's makes it, and the records already in it, last. One nobody claims keeps expiring, visible only to an admin. A slash command creates one only for `/warroom`, owned by its caller. A `#` in a chat id is stored as `_` in every key (owner decision 47).
+- The dashboard turn lifecycle (P2): the stream route opens the SSE response first and writes a `: ping` comment every 15 s for as long as the turn runs, so an idle proxy (Cloudflare closes at about 100 s) never cuts a long tool turn. A client that sends `protocol: 2` gets positional `delta` events (`{i, t}`: keep the text before `i`, append `t` — positional because the live redactor can rewrite text already sent); every other client keeps the cumulative `chunk`. Each tool call is a `tool` event (id, the arguments capped at 1 KB) followed by a `tool_result` event (the output capped at 2 KB, `isError`, `truncated`) on every branch, the kill-switched and blocked ones included. The client going away — Stop, Escape, a closed tab — aborts the turn, even before the response has begun (the route watches the request's own signal as well as the stream's, and aborts the stream itself, so no write on any branch waits on a reader who is gone): the signal reaches the Bedrock request, no further tool round or model call starts, the partial answer is saved marked `stopped` (a fixed notice when nothing was written, because an empty turn poisons the chat), and the spend is settled rather than released — every finished call at its real usage, the cut call from an estimate that errs on the safe side (the files, tool list and re-sent tool arguments it carried; the text and tool input it had written; a cut tool round's output at its ceiling). A turn stopped before it began reserves nothing. Tool inputs and results pass the block-severity redactor before they leave the server. A failure is an `error` event carrying `{code, message}` (`cost_cap_exceeded`, `cost_cap_unverifiable`, `kill_switch_active`, `model_error`, `internal_error`) — never the raw exception text — and no `error` ever follows `final`: the route saves the reply and ends the turn record BEFORE it writes `final`, so no write to a reader who left can hold up the save; a save that fails is logged and the stream ends `done: not_saved`, which the Chat tab shows under the reply. With a `clientMessageId` the turn record moves from `streaming` to exactly one of `complete`, `stopped`, `error` or `refused`.
 - Before every stage shown: the emergency kill-phrase check (static reply, audit action `emergency_kill_phrase`, no model call) and then the sessions-frozen check short-circuit the turn.
-- Sources: `src/adapters/telegram/handler.ts`, `src/agent/agent-loop.ts`, `src/lib/memory/context-builder.ts`, `src/lib/safety/exfil-guard.ts`, `src/lib/audit/audit-writer.ts`.
+- Sources: `src/adapters/telegram/handler.ts`, `src/agent/agent-loop.ts`, `src/lib/memory/context-builder.ts`, `src/lib/safety/exfil-guard.ts`, `src/lib/audit/audit-writer.ts`, `src/lib/state/sessions-repo.ts`, `src/adapters/dashboard/handler.ts`, `src/lib/chat/artifacts-repo.ts`, `src/lib/chat/artifact-preview.ts`, `web/src/lib/chat/artifacts.ts`, `web/src/components/chat/ArtifactPanel.tsx`, `src/lib/tools/privacy-tools.ts`.

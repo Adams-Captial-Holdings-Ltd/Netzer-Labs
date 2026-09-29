@@ -1,5 +1,5 @@
 // Code-block chrome for rendered chat markdown: a header strip carrying the
-// language label and a copy button, wrapped around the highlighted <pre>.
+// language label, copy and download buttons, wrapped around the highlighted <pre>.
 //
 // Structure ported from danny-avila/LibreChat (MIT), pinned at commit
 // 6d499ba3ce17f906a7762429c61018f230ecd64e —
@@ -18,6 +18,7 @@
 // the lazy chat chunk.
 
 import hljs from 'highlight.js/lib/common';
+import { codeFileName } from './export';
 
 /** Escape text destined for an HTML text node / attribute value. */
 function escapeHtml(value: string): string {
@@ -68,6 +69,7 @@ export function codeBlockHtml(code: string, lang?: string): string {
     '</svg>' +
     '<span class="chat-code__copy-label" aria-live="polite">Copy</span>' +
     '</button>' +
+    '<button type="button" class="chat-code__download" aria-label="Download code">Download</button>' +
     '</div>' +
     `<pre><code class="${codeClass}">${body}</code></pre>` +
     '</div>'
@@ -119,7 +121,7 @@ function flash(button: HTMLElement, ok: boolean) {
 let installed = false;
 
 /**
- * Install the single delegated click handler that powers every copy button.
+ * Install the single delegated click handler for code block actions.
  *
  * The blocks are injected via dangerouslySetInnerHTML, so they cannot carry a
  * Preact handler and (correctly) lose inline `onclick` to DOMPurify. One
@@ -132,10 +134,18 @@ export function installChatCodeCopy(): void {
   document.addEventListener('click', (ev) => {
     const target = ev.target;
     if (!(target instanceof Element)) return;
-    const button = target.closest<HTMLElement>('.chat-md .chat-code__copy');
+    const button = target.closest<HTMLElement>('.chat-md .chat-code__copy, .chat-md .chat-code__download');
     if (!button) return;
     const code = button.closest('.chat-code')?.querySelector('pre code');
     if (!code) return;
-    void writeClipboard(code.textContent ?? '').then((ok) => flash(button, ok));
+    if (button.classList.contains('chat-code__download')) {
+      const language = button.closest('.chat-code')?.querySelector('.chat-code__lang')?.textContent ?? '';
+      const url = URL.createObjectURL(new Blob([code.textContent ?? ''], { type: 'text/plain' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = codeFileName(language);
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } else void writeClipboard(code.textContent ?? '').then((ok) => flash(button, ok));
   });
 }

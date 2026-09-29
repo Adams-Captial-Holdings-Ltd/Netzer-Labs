@@ -27,7 +27,6 @@ import {
   type ToolResultContentBlock,
   type ToolUseBlock,
 } from '@aws-sdk/client-bedrock-runtime';
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 
 import { logger } from '../../observability/logger.js';
 import { writeAudit } from '../../lib/audit/audit-writer.js';
@@ -71,7 +70,7 @@ import { emitJarvisMetric } from '../../observability/emf-jarvis.js';
 // through HTTP; a removed import is a compile error, R8).
 import { listAgents } from '../../lib/state/agents-repo.js';
 import { listKnownAgentsAsync, loadAgent } from '../../lib/config/agent-loader.js';
-import { computeAgentHealth, collectAcrossDays } from './handler.js';
+import { computeAgentHealth, collectAcrossDays, conversationsVisibleTo, readConversationRows } from './handler.js';
 import { getDailyCostUsd, getUsageByDay, recordUsage, JARVIS_USAGE_AGENT, SpendIndeterminateError } from '../../lib/usage/token-tracker.js';
 import {
   isKillSwitchActive,
@@ -93,7 +92,6 @@ import { listAddons, addonConfigured } from '../../lib/addons/registry.js';
 import { getEffectiveCostCap, isCostCapEnforced } from '../../lib/state/cost-cap-repo.js';
 import { getConfig } from '../../lib/state/runtime-config-repo.js';
 import { assembleStatusData } from '../status/data.js';
-import { ddb } from '../../lib/state/ddb.js';
 
 // ── Phase 1 voice relay deps ────────────────────────────────────────
 import type { Server as HttpServer } from 'node:http';
@@ -135,7 +133,6 @@ import { checkAndConsume } from '../../lib/state/rate-limits-repo.js';
 import xray from 'aws-xray-sdk-core';
 import { isXrayEnabled } from '../../lib/observability/xray.js';
 
-const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 const TABLE_TOKEN_USAGE = process.env.TABLE_TOKEN_USAGE ?? 'claudeclaw-token-usage';
 const TABLE_AUDIT_LOG = process.env.TABLE_AUDIT_LOG ?? 'claudeclaw-audit-log';
 
@@ -1099,7 +1096,7 @@ export async function executeQueryTool(
   if (!auth.ok) return { ok: false, code: auth.code, param: auth.param };
 
   try {
-    const result = await runQuery(auth.resource, params);
+    const result = await runQuery(auth.resource, params, principal);
     return { ok: true, result };
   } catch (err) {
     logger.warn({ err: errMsg(err), resource: auth.resource }, 'jarvis query failed');
@@ -1113,7 +1110,7 @@ function clamp(v: unknown, min: number, max: number, dflt: number): number {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-async function runQuery(resource: JarvisResource, params: QueryParams): Promise<unknown> {
+async function runQuery(resource: JarvisResource, params: QueryParams, principal: TokenPrincipal): Promise<unknown> {
   switch (resource) {
     case 'agents': {
       const [builtinIds, dbAgents] = await Promise.all([listKnownAgentsAsync(), listAgents()]);
@@ -1156,14 +1153,16 @@ async function runQuery(resource: JarvisResource, params: QueryParams): Promise<
     }
 
     case 'sessions': {
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: 'PK, SK, updatedAt, messageCount, surface, userId',
-          Limit: 100,
-        }),
+      // Read to the end (WI-1.2): a single 100-item scan undercounts once
+      // every message is a row of this table too.
+      const { rows: all, truncated } = await readConversationRows(
+        'PK, SK, updatedAt, messageCount, surface, userId',
       );
-      const rows = (out.Items ?? []).map((i) => ({
+      // Decisions 1 and 9, the rule GET /sessions applies: the caller's own
+      // conversations, or everyone's for an admin, audited first.
+      const items = await conversationsVisibleTo(principal, all, 'jarvis');
+      if (!items) throw new Error('admin override could not be audited');
+      const rows = items.map((i) => ({
         agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
         chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
         updatedAt: i.updatedAt as number,
@@ -1171,7 +1170,7 @@ async function runQuery(resource: JarvisResource, params: QueryParams): Promise<
         surface: (i.surface as string | undefined) ?? null,
       }));
       rows.sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
-      return { count: rows.length, sessions: rows.slice(0, 50) };
+      return { count: rows.length, sessions: rows.slice(0, 50), ...(truncated ? { truncated } : {}) };
     }
 
     case 'usage': {
@@ -1833,11 +1832,18 @@ async function runJarvisConnection(
     reject(ws, JARVIS_CLOSE.UNAUTHORIZED, 'unauthorized');
     return;
   }
+  const record = await lookupToken(resolved.tokenHash).catch(() => undefined);
+  // The ticket carries only the token's hash, role and label; the person behind
+  // the token comes from its record, exactly as the HTTP path resolves it
+  // (dashboard-auth.ts), so voice answers a person with that person's own
+  // conversations (decisions 1 and 9; the P1 critic's NEW-7).
   const principal: TokenPrincipal = {
     tokenHash: resolved.tokenHash,
     role: resolved.role,
     label: resolved.label,
     hashPrefix16: resolved.tokenHash.slice(0, 16),
+    ...(record?.userId ? { userId: record.userId } : {}),
+    ...(record?.linkedUserId ? { linkedUserId: record.linkedUserId } : {}),
   };
 
   // 3. Re-validate the token by tokenHash. Operators are fail-CLOSED — a ticket
@@ -1847,7 +1853,6 @@ async function runJarvisConnection(
   //    inactive/expired, so voice works before/without the dashboard-tokens table
   //    being seeded (it is empty by default). Without this the strict lookup 4011s
   //    every root-token voice session — the real reason voice never connected.
-  const record = await lookupToken(principal.tokenHash).catch(() => undefined);
   const explicitlyRevoked = !!record && (!record.active || isExpired(record));
   const isRoot = isRootTokenHash(principal.tokenHash);
   if (explicitlyRevoked || (!isRoot && !record)) {

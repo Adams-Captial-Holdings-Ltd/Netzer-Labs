@@ -17,13 +17,33 @@
  * heading is what keeps the transcript reading as an alternating dialogue.
  */
 import type { Message } from '../../lib/chat/types';
+import { api } from '../../lib/api';
+import { toast } from '../Toast';
 import { MessageRow, isoFromEpochSeconds } from './MessageRow';
 
 interface UserMessageProps {
   message: Message;
+  agentId: string;
+  chatId: string;
 }
 
-export function UserMessage({ message }: UserMessageProps) {
+export function UserMessage({ message, agentId, chatId }: UserMessageProps) {
+  async function download(id: string) {
+    try {
+      const path = `/sessions/attachment?agentId=${encodeURIComponent(agentId)}` +
+        `&chatId=${encodeURIComponent(chatId)}&id=${encodeURIComponent(id)}`;
+      const { url, name } = await api.get<{ url: string; name: string }>(path);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+    } catch {
+      toast('Could not download that file. Please try again.', 'error');
+    }
+  }
+
   return (
     // The donor row renders the user turn's heading itself, as `sr-only`
     // (headerPrefix + label + timestamp), which is why no `header` node is
@@ -42,9 +62,22 @@ export function UserMessage({ message }: UserMessageProps) {
       {/* `font-sans` overrides the UA monospace: this is prose that must
           preserve its line breaks, not code. `break-words` keeps an unbroken
           URL or token from widening the pill past the column. */}
-      <pre class="whitespace-pre-wrap break-words font-sans text-body-sm text-primary">
+      {message.text && <pre class="whitespace-pre-wrap break-words font-sans text-body-sm text-primary">
         {message.text}
-      </pre>
+      </pre>}
+      {message.attachments && message.attachments.length > 0 && (
+        <ul class="mt-2 flex flex-wrap gap-2" aria-label="Message attachments">
+          {message.attachments.map((file) => (
+            <li key={file.id} class="rounded-lg border border-border bg-bg px-2 py-1 text-caption text-secondary">
+              <button type="button" aria-label={`Download ${file.name}`}
+                onClick={() => { void download(file.id); }}
+                class="text-left hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                {file.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </MessageRow>
   );
 }

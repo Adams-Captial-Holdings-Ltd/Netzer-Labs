@@ -18,7 +18,7 @@
 import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
 import { createHash } from 'node:crypto';
 import { tools } from './registry.js';
-import { writeAudit } from '../audit/audit-writer.js';
+import { writeAuditOrThrow } from '../audit/audit-writer.js';
 import { logger } from '../../observability/logger.js';
 import {
   listMemoriesForChat,
@@ -166,37 +166,60 @@ export async function purgeChatData(
     .update(JSON.stringify(snapshot))
     .digest('hex');
 
-  const memories = await listMemoriesForChat(agentId, chatId, 500);
-  await Promise.all(memories.map((m) => forgetMemory(agentId, chatId, m.id)));
+  const counts: PurgeReport['counts'] = {
+    memories: 0,
+    scheduledTasks: 0,
+    inboxItems: 0,
+    sessionDeleted: false,
+  };
 
-  const scheduled = (await listScheduledTasksForAgent(agentId, 500)).filter(
-    (t) => t.chatId === chatId,
-  );
-  await Promise.all(
-    scheduled.map((t) => deleteScheduledTask(agentId, t.id)),
-  );
+  try {
+    const memories = await listMemoriesForChat(agentId, chatId, 500);
+    for (const memory of memories) {
+      await forgetMemory(agentId, chatId, memory.id);
+      counts.memories += 1;
+    }
 
-  const inbox = (await listInbox(agentId, 500, ['queued', 'delivered', 'completed'])).filter(
-    (r) => r.toChat === chatId || r.fromChat === chatId,
-  );
-  await Promise.all(inbox.map((r) => deleteInterAgentTask(r)));
+    const scheduled = (await listScheduledTasksForAgent(agentId, 500)).filter(
+      (t) => t.chatId === chatId,
+    );
+    for (const task of scheduled) {
+      await deleteScheduledTask(agentId, task.id);
+      counts.scheduledTasks += 1;
+    }
 
-  await deleteSession(agentId, chatId);
+    const inbox = (await listInbox(agentId, 500, ['queued', 'delivered', 'completed'])).filter(
+      (r) => r.toChat === chatId || r.fromChat === chatId,
+    );
+    for (const item of inbox) {
+      await deleteInterAgentTask(item);
+      counts.inboxItems += 1;
+    }
+
+    // Keep this as the single shared session erasure path. It also removes
+    // versioned artifacts for this chat.
+    await deleteSession(agentId, chatId);
+    counts.sessionDeleted = true;
+  } catch (error) {
+    await writeAuditOrThrow({
+      action: 'data_purged',
+      agentId,
+      chatId,
+      detail: { counts, preDeleteHash, requestedBy },
+      result: 'error',
+    });
+    throw error;
+  }
 
   const report: PurgeReport = {
     agentId,
     chatId,
     purgedAt: new Date().toISOString(),
-    counts: {
-      memories: memories.length,
-      scheduledTasks: scheduled.length,
-      inboxItems: inbox.length,
-      sessionDeleted: true,
-    },
+    counts,
     preDeleteHash,
   };
 
-  void writeAudit({
+  await writeAuditOrThrow({
     action: 'data_purged',
     agentId,
     chatId,

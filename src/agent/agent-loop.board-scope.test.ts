@@ -208,3 +208,19 @@ describe('the agent loop forwards only caller-held Paperclip run provenance', ()
     expect(dispatchedCtx()).not.toHaveProperty('runId');
   });
 });
+
+// P7 (step 9) — coordinator addition (Jev m1_tool_saves -> thread_to_tools,
+// 1.00): a dashboard turn's own request id (the clientMessageId that begins
+// its turn marker, M1's dashboard_marker) must reach every tool it dispatches
+// to, the same way boardAgentId and runId already do above, so a
+// saveArtifact-calling tool can name it. AgentTurnRequest carries no
+// requestId field today, and the toolCtx build at the dispatch site does not
+// forward one, so this fails at the assertion below rather than passing by
+// construction (M41/P54).
+describe('the agent loop forwards the turn\'s own request id (P7, M1)', () => {
+  it('P7 the tool context carries the turn\'s request id', async () => {
+    oneToolCall();
+    await runAgentTurn({ ...req, requestId: 'req-p7' });
+    expect(dispatchedCtx().requestId).toBe('req-p7');
+  });
+});

@@ -698,6 +698,7 @@ async function renderChat() {
           Authorization: `Bearer ${state.token}`,
           'Content-Type': 'application/json',
         },
+        // P7 (M1): no clientMessageId here, so a chat deleted mid-turn is not re-checked.
         body: JSON.stringify({ agentId: agent, chatId, text }),
       });
       if (!resp.ok || !resp.body) {

@@ -5,33 +5,12 @@
  * `client/src/components/Chat/Messages/Content/ToolOutput/{StackedToolIcons,
  * ToolIcon}.tsx`.
  *
- * ── What this is, and the one thing it deliberately is NOT ─────────────────
+ * The collapsed summary expands to the ordered calls with their inputs and
+ * results. P2 carries inputs live (never stored) and results capped at 2 KB
+ * (stored with the assistant turn), so both panels now have their data.
+ * Reopened turns show results only; stopped turns may include unfinished calls.
  *
- * The buyer is paying for a governed agent platform, and the single most
- * legible proof of that is being able to see what the agent actually DID before
- * it answered. This is that record: a collapsed one-line summary under the
- * reply ("Used 5 tools · web search, Slack: search public, +2"), expanding to
- * the ordered list of calls.
- *
- * It is NOT the donor's tool inspector. The donor renders an Input panel and an
- * Output panel per call because its wire carries `args` and `output` on every
- * tool_call content part. Ours does not: `POST /api/test-turn/stream` emits
- * `event: tool` with `{label, step}` and nothing else (see
- * web/src/lib/chat/stream.ts). Rendering empty Input/Output shells for payloads
- * that do not exist would be a UI that lies about the system behind it, so this
- * phase ports the SHAPE of the group — stacked category glyphs, count verb,
- * deduplicated name summary, collapse — and stops exactly where the data stops.
- * Widening the wire is a backend change and is out of scope here.
- *
- * ── Live turns only ────────────────────────────────────────────────────────
- *
- * `Message.tools` is accumulated by streamTurn during a turn this tab actually
- * watched. A conversation reloaded from `/sessions/transcript` returns role and
- * text only, so historical turns have no `tools` array and keep the run
- * footer's `N tools` count instead. AssistantMessage owns that switch; this
- * component is only ever handed a non-empty list.
- *
- * ── Categories from labels, because labels are all the wire sends ──────────
+ * Categories still come from humanized labels.
  *
  * The donor keys its glyphs off raw tool NAMES (`web_search`,
  * `mcp__slack__…`). By the time a label reaches this client the backend has
@@ -43,6 +22,7 @@
  * the shape humanizeToolName gives every MCP connector call.
  */
 import { useState, useId } from 'preact/hooks';
+import type { ToolCall } from '../../lib/chat/types';
 import useExpandCollapse from './lc/hooks/Messages/useExpandCollapse';
 import {
   ChevronDown,
@@ -54,10 +34,11 @@ import {
   Wrench,
 } from 'lucide-preact';
 
-export interface ToolCall {
-  label: string;
-  step: number;
-}
+// The capped boxes scroll on their own, so each is a tab stop (with the page's
+// focus ring) and carries a name — a screen reader hears which payload it is on.
+const TOOL_PAYLOAD_CLASS =
+  'max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-elevated p-2 font-mono text-caption text-secondary ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary';
 
 type ToolKind = 'web' | 'knowledge' | 'code' | 'image' | 'document' | 'connector' | 'generic';
 
@@ -141,10 +122,8 @@ interface ToolCallsSectionProps {
 }
 
 export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
-  // Collapsed by default. Every call in this list has already returned (the
-  // section only renders under a settled reply), and the answer is what the
-  // reader came for — the donor auto-collapses a completed group for the same
-  // reason. One click, and it is a full audit row.
+  // Collapsed by default under a settled or stopped reply: the answer comes
+  // first, and one click reveals the calls, including any interrupted ones.
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const { style, ref: expandRef } = useExpandCollapse(open);
@@ -178,7 +157,7 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
         {summary && (
           // Caps at 40% of the row so a chatty connector name can never push
           // the chevron off the end; the full list is one click away anyway.
-          <span class="min-w-0 max-w-[40%] truncate font-normal text-muted" title={summary}>
+          <span class="min-w-0 max-w-[40%] truncate font-normal text-secondary" title={summary}>
             · {summary}
           </span>
         )}
@@ -222,18 +201,45 @@ export function ToolCallsSection({ tools }: ToolCallsSectionProps) {
           {tools.map((t, i) => {
             const Icon = KIND_ICON[kinds[i]];
             return (
-              <li key={`${t.step}-${i}`} class="flex min-w-0 items-center gap-2 py-1">
-                {/* The step number IS the governance datum: it is the ordinal
-                    the agent loop stamped on the call, and it is what a run in
-                    the audit log is reconciled against. Monospace and fixed
-                    width so the column of numbers stays a column. */}
-                <span class="w-6 shrink-0 text-right font-mono text-muted tabular-nums">
-                  {t.step}
-                </span>
-                <Icon size={13} class="shrink-0 text-muted" />
-                <span class="min-w-0 truncate text-secondary" title={t.label}>
-                  {t.label}
-                </span>
+              <li key={`${t.step}-${i}`} class="min-w-0 py-1">
+                <div class="flex min-w-0 items-center gap-2">
+                  {/* The step number IS the governance datum: it is the ordinal
+                      the agent loop stamped on the call, and it is what a run in
+                      the audit log is reconciled against. Monospace and fixed
+                      width so the column of numbers stays a column. */}
+                  <span class="w-6 shrink-0 text-right font-mono text-secondary tabular-nums">
+                    {t.step}
+                  </span>
+                  <Icon size={13} class="shrink-0 text-muted" />
+                  <span class="min-w-0 truncate text-secondary" title={t.label}>
+                    {t.label}
+                  </span>
+                </div>
+                <div class="ml-8 min-w-0 space-y-1">
+                  {t.input !== undefined && (
+                    <>
+                      <div class="text-caption text-secondary">Input</div>
+                      <pre class={TOOL_PAYLOAD_CLASS} tabIndex={0} aria-label="Tool input">{t.input}</pre>
+                      {t.inputTruncated && <div class="text-caption text-secondary">Input shortened</div>}
+                    </>
+                  )}
+                  {t.output !== undefined && (
+                    <>
+                      <div class="text-caption text-secondary">Output</div>
+                      <pre class={TOOL_PAYLOAD_CLASS} tabIndex={0} aria-label="Tool output">{t.output}</pre>
+                    </>
+                  )}
+                  {/* A call that started but has no result: the Stop interrupted it. */}
+                  {t.toolUseId !== undefined && t.output === undefined && (
+                    <div class="text-caption text-secondary">No result</div>
+                  )}
+                  {t.truncated && <div class="text-caption text-secondary">Output shortened</div>}
+                  {t.isError && (
+                    <span class="chat-error-panel inline-flex rounded border border-danger-a/40 bg-danger-a/10 px-1.5 py-0.5 text-caption">
+                      Failed
+                    </span>
+                  )}
+                </div>
               </li>
             );
           })}

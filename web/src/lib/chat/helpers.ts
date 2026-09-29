@@ -4,7 +4,33 @@
 // under src/, so it enters the ROOT tsc program: keep it DOM-light and keep
 // relative imports `.js`-suffixed (NodeNext).
 
-import type { Conversation, Model } from './types.js';
+import { parseArtifactRef } from './artifacts.js';
+import type { Conversation, Message, MessageAttachment, Model, ToolCall } from './types.js';
+
+/** Restore transcript results and stopped state; arguments belong only to the live tab. */
+export function transcriptToMessages(
+  turns: Array<{ role: string; text: string; ts: number; requestId?: string; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[]; artifacts?: unknown[] }>,
+): Message[] {
+  return turns.map((turn) => {
+    if (turn.role === 'user') return {
+      role: 'user', text: turn.text, ts: turn.ts,
+      ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+    };
+    const artifactRefs = turn.artifacts?.map(parseArtifactRef).filter((ref) => ref !== null);
+    return {
+      role: 'assistant',
+      text: turn.text,
+      ts: turn.ts,
+      ...(turn.requestId !== undefined ? { requestId: turn.requestId } : {}),
+      ...(turn.status === 'stopped' ? { stopped: true } : {}),
+      ...(turn.status === 'notice' ? { isReply: true } : {}),
+      ...(turn.tools?.length ? {
+        tools: turn.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
+      } : {}),
+      ...(artifactRefs?.length ? { artifactRefs } : {}),
+    };
+  });
+}
 
 // Friendly names for the env-driven model labels the backend returns.
 export const MODEL_NAMES: Record<string, string> = {
@@ -40,27 +66,9 @@ export function freshChatId(): string {
 // — which is what made history feel non-existent even though it was stored.
 export const ACTIVE_CHAT_KEY = 'cce_chat_active';
 
-export function storedChatId(agentId: string): string | null {
-  try {
-    const raw = sessionStorage.getItem(ACTIVE_CHAT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { agentId?: string; chatId?: string };
-    return parsed.agentId === agentId && parsed.chatId ? parsed.chatId : null;
-  } catch {
-    return null;
-  }
-}
-
-export function rememberChatId(agentId: string, chatId: string): void {
-  try {
-    sessionStorage.setItem(ACTIVE_CHAT_KEY, JSON.stringify({ agentId, chatId }));
-  } catch {
-    /* private mode or quota — the sidebar still works, only resume-on-reload is lost */
-  }
-}
-
 /** Sidebar label for a conversation: its opening message, else the raw id. */
 export function conversationTitle(c: Conversation): string {
+  if (c.title?.trim()) return c.title.trim();
   const first = (c.firstMessage ?? '').trim();
   return first.length > 0 ? first : c.chatId;
 }
@@ -92,4 +100,39 @@ export function friendlyStreamError(raw: string): string {
   return code && code.length < 140 && !/[{}$]/.test(code)
     ? `Something went wrong: ${code}`
     : 'The agent could not finish this response. Please try again.';
+}
+
+// A refusal before the stream starts says what to do about it. Every other typed
+// error is shown as the server wrote it: since P2 its message is plain English
+// already (src/agent/turn-errors.ts), and the sanitiser above, written for raw
+// codes, would prefix it with "Something went wrong:" and drop the cost cap's hint.
+const REFUSAL_WORDS: Record<string, string> = {
+  unknown_model: 'That model is no longer available. Pick another one.',
+  unknown_agent: 'This agent is no longer available.',
+  turn_record_unavailable: 'Could not start the reply. Try again.',
+  turn_duplicate: 'Could not start the reply. Try again.',
+  turn_conflict: 'Could not start the reply. Try again.',
+  too_many_attachments: 'You can attach up to 3 files to a message.',
+  upload_not_found: 'Please reload the page and attach the file again.',
+  upload_unavailable: 'Could not check your file right now. Please try again.',
+  file_too_large: 'An attachment exceeds the 30 MB limit.',
+  unsupported_type: 'An attachment type cannot be attached.',
+};
+
+/** The words a failed turn shows. No code means an older server, whose wire text still goes through friendlyStreamError. */
+export function friendlyTurnError(text: string, code?: string): string {
+  if (code === undefined) return friendlyStreamError(text);
+  return REFUSAL_WORDS[code] ?? text;
+}
+
+/**
+ * A message id the server accepts (`^[A-Za-z0-9._:-]{1,64}$`, handler.ts).
+ * `crypto.randomUUID` exists only on a secure page; served over plain HTTP the
+ * page has none, and Send used to die silently on it.
+ */
+export function newMessageId(): string {
+  const webCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return typeof webCrypto?.randomUUID === 'function'
+    ? webCrypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
