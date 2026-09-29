@@ -553,6 +553,7 @@ registerIfConfigured(
                 agentId: ctx.agentId,
                 chatId: ctx.chatId,
                 ownerId: ctx.userId!,
+                clientMessageId: ctx.requestId,
                 fileName: `image-${mode.toLowerCase()}.png`,
                 contentType: 'image/png',
                 body: bytes,

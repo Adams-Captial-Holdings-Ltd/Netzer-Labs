@@ -264,15 +264,16 @@ export function JarvisWidget(): preact.JSX.Element | null {
       data-testid="jarvis-widget"
       // The widget box IS the orb's glow footprint (HALO×HALO). The orb centers in
       // it; the caption + hints float OFF it (absolute) so they never shift the
-      // orb's anchor or overlap the glow. Default anchor: content area, clear of the
-      // On desktop chat, center the 52px control in the house nav's unused
-      // lower band. Other routes and narrow screens keep their existing anchor.
-      // A remembered drag still supplies left/top below and takes precedence.
+      // orb's anchor or overlap the glow. Default anchor: the content area, clear of
+      // the fixed sidebar and the bottom-right toasts. On desktop chat, center the
+      // 52px control in the house nav's unused lower band; other routes and narrow
+      // screens keep the default. A remembered drag still supplies left/top below
+      // and takes precedence.
       class={`fixed ${chatRoute && chatSidebarAnchor ? 'left-0 top-0' : 'left-5 lg:left-[calc(var(--sidebar-width)_+_1.5rem)]'} z-[60] grid place-items-center pointer-events-none [&_button]:pointer-events-auto ${chatRoute ? (chatSidebarAnchor ? '' : 'bottom-52') : 'bottom-5'}`}
       style={
         pos
           ? { left: `${pos.x}px`, top: `${pos.y}px`, right: 'auto', bottom: 'auto', width: `${HALO}px`, height: `${HALO}px` }
-          : chatRoute && window.innerWidth >= 1024 && chatSidebarAnchor
+          : inChatNavigation
             ? { left: `${chatSidebarAnchor.left}px`, top: `${chatSidebarAnchor.top}px`, right: 'auto', bottom: 'auto', width: `${HALO}px`, height: `${HALO}px` }
             : { width: `${HALO}px`, height: `${HALO}px` }
       }

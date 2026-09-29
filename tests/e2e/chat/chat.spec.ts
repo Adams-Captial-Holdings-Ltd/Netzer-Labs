@@ -42,12 +42,10 @@ test('streams a reply, then replays the stored turns after a reload', async ({ p
   const composer = page.getByRole('textbox', { name: /^Message / });
   await expect(composer).toBeVisible();
 
-  // Start the conversation the way a user does. This is load-bearing, not
-  // decoration: `rememberChatId` is called ONLY from `startNewChat` and
-  // `openConversation` (web/src/pages/Chat.tsx), never from `send`, so the
-  // chatId a fresh mount mints is not written to sessionStorage and a reload
-  // cannot resume it. `.first()` because the sidebar and the header each offer
-  // the button.
+  // Start the conversation the way a user does. Since P6 the page remembers a
+  // fresh chat's id too, so a reload would resume it either way; the click keeps
+  // this test on the usual path. `.first()` because the sidebar and the header
+  // each offer the button.
   await page.getByRole('button', { name: 'New chat' }).first().click();
 
   // Send. The button is gated on a non-empty draft AND on an agent to route to,
@@ -58,8 +56,8 @@ test('streams a reply, then replays the stored turns after a reload', async ({ p
   await expect(send).toBeEnabled();
   await send.click();
 
-  // The reply streams in over mock SSE, whose chunk events carry the text
-  // cumulatively. The prompt assertion is scoped to the message row, not to the
+  // The reply streams in over mock SSE, each event carrying the whole text so
+  // far (a protocol-2 delta at position 0). The prompt assertion is scoped to the message row, not to the
   // page: the prompt is ALSO the conversation's title, and that title is derived
   // from Chat.tsx's own state, so a page-wide match could be satisfied by the
   // header alone while the transcript itself rendered nothing. `role="group"` +
@@ -84,8 +82,9 @@ test('streams a reply, then replays the stored turns after a reload', async ({ p
   await expect(send).toBeVisible();
 
   // THE ROW THAT MATTERS. The active conversation id lives in sessionStorage
-  // (`cce_chat_active`, web/src/lib/chat/helpers.ts), which survives a reload,
-  // so Chat.tsx reopens the same chat and GETs /sessions/transcript for it.
+  // under the signed-in user's key (`cce_chat_active:<user>`, written by
+  // web/src/pages/Chat.tsx), which survives a reload, so Chat.tsx reopens the
+  // same chat and GETs /sessions/transcript for it.
   // Until the mock replayed that route this failed: the transcript answered a
   // hard-coded `{"turns":[]}` and the page fell back to its empty landing
   // state, which is why a local reload could not be driven at all.

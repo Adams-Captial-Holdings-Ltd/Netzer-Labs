@@ -210,6 +210,7 @@ export interface AgentTurnRequest {
   abortSignal?: AbortSignal;
   agentId: string;
   chatId: string;
+  requestId?: string;
   /** Genuine caller-held Paperclip run id. Chat turns leave this absent. */
   runId?: string;
   userText: string;
@@ -235,6 +236,8 @@ export interface AgentTurnRequest {
   origin?: TurnOrigin;
   /** Inline attachments (image, PDF) sent with the user message. */
   attachments?: AttachmentBlock[];
+  /** Called only after this turn's admission checks pass, immediately before user content is built. */
+  loadAttachments?: () => Promise<AttachmentBlock[]>;
   /**
    * Extra, surface-specific guidance appended to the agent's system prompt for
    * this turn only (e.g. the War Room etiquette note). It rides in the SYSTEM
@@ -1113,7 +1116,8 @@ async function runAdmittedTurn(
   // to use a tool, we resend non-streaming with the same context and
   // dispatch from there.
   const t0 = Date.now();
-  const userContent = buildUserContent(req.userText, req.attachments);
+  const attachments = req.loadAttachments ? [...(req.attachments ?? []), ...await req.loadAttachments()] : req.attachments;
+  const userContent = buildUserContent(req.userText, attachments);
   // Scrub guardrail-blocked exchanges (legacy sessions persisted them) so one
   // tripped message can never poison every turn after it.
   const cleanHistory = stripBlockedTurns(req.history);
@@ -1467,6 +1471,7 @@ async function runAdmittedTurn(
         ...(req.userId ? { userId: req.userId } : {}),
         ...(req.surface ? { surface: req.surface } : {}),
         ...(req.runId ? { runId: req.runId } : {}),
+        ...(req.requestId ? { requestId: req.requestId } : {}),
         ...(req.replyChatId ? { replyChatId: req.replyChatId } : {}),
         ...(req.boardAgentId ? { boardAgentId: req.boardAgentId } : {}),
         ...(req.delegationDepth !== undefined ? { delegationDepth: req.delegationDepth } : {}),

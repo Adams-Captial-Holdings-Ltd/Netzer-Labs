@@ -92,7 +92,12 @@ vi.mock('../../lib/state/sessions-repo.js', async (importActual) => {
 
 vi.mock('../../agent/agent-loop.js', async (importActual) => {
   const actual = await importActual<typeof import('../../agent/agent-loop.js')>();
-  return { ...actual, runAgentTurn: (...a: unknown[]) => runAgentTurn(...a) };
+  // P7 (A238): the real runAgentTurn loads a regenerate's stored files itself, after its admission checks and
+  // before the model call. The stand-in does the same, so the `runAgentTurn` spy is the model call.
+  return { ...actual, runAgentTurn: async (req: { attachments?: unknown[]; loadAttachments?: () => Promise<unknown[]> }) => {
+    const loaded = req.loadAttachments ? await req.loadAttachments() : [];
+    return runAgentTurn(loaded.length ? { ...req, attachments: [...(req.attachments ?? []), ...loaded] } : req);
+  } };
 });
 
 vi.mock('../../agent/commands.js', () => ({

@@ -9,7 +9,7 @@ import type { Conversation, Message, MessageAttachment, Model, ToolCall } from '
 
 /** Restore transcript results and stopped state; arguments belong only to the live tab. */
 export function transcriptToMessages(
-  turns: Array<{ role: string; text: string; ts: number; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[]; artifacts?: unknown[] }>,
+  turns: Array<{ role: string; text: string; ts: number; requestId?: string; status?: string; tools?: ToolCall[]; attachments?: MessageAttachment[]; artifacts?: unknown[] }>,
 ): Message[] {
   return turns.map((turn) => {
     if (turn.role === 'user') return {
@@ -21,7 +21,9 @@ export function transcriptToMessages(
       role: 'assistant',
       text: turn.text,
       ts: turn.ts,
+      ...(turn.requestId !== undefined ? { requestId: turn.requestId } : {}),
       ...(turn.status === 'stopped' ? { stopped: true } : {}),
+      ...(turn.status === 'notice' ? { isReply: true } : {}),
       ...(turn.tools?.length ? {
         tools: turn.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
       } : {}),
@@ -63,25 +65,6 @@ export function freshChatId(): string {
 // fresh chatId on every mount and silently abandoned the previous conversation
 // — which is what made history feel non-existent even though it was stored.
 export const ACTIVE_CHAT_KEY = 'cce_chat_active';
-
-export function storedChatId(agentId: string): string | null {
-  try {
-    const raw = sessionStorage.getItem(ACTIVE_CHAT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { agentId?: string; chatId?: string };
-    return parsed.agentId === agentId && parsed.chatId ? parsed.chatId : null;
-  } catch {
-    return null;
-  }
-}
-
-export function rememberChatId(agentId: string, chatId: string): void {
-  try {
-    sessionStorage.setItem(ACTIVE_CHAT_KEY, JSON.stringify({ agentId, chatId }));
-  } catch {
-    /* private mode or quota — the sidebar still works, only resume-on-reload is lost */
-  }
-}
 
 /** Sidebar label for a conversation: its opening message, else the raw id. */
 export function conversationTitle(c: Conversation): string {

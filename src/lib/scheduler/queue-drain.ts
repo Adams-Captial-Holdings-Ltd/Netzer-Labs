@@ -173,6 +173,7 @@ async function fireTask(task: ScheduledTask): Promise<void> {
   // session history has to check BOTH, because neither flag implies the other.
   if (!result.blocked && result.refusal === undefined) {
     const now = Math.floor(Date.now() / 1000);
+    // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
     await appendTurns(task.agentId, task.chatId, [
       { role: 'user', text: `[scheduled] ${task.promptText}`, ts: now },
       { role: 'assistant', text: result.text, ts: now },

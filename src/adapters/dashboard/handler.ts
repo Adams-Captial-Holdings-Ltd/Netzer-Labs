@@ -96,6 +96,7 @@ import {
   appendTurns,
   beginTurn,
   endTurn,
+  ConversationDeletedError,
   type ToolRecord,
   type TurnStatus,
   getSession,
@@ -590,8 +591,8 @@ async function finishChatTurn(agentId: string, chatId: string, id: string | unde
 
 async function saveChatTurn(
   agentId: string, chatId: string, userText: string,
-  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts'>, tools: ToolRecord[], owner: SessionEnrichment,
-  attachments: TurnAttachment[] = [],
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts' | 'refusal'> & { notice?: true }, tools: ToolRecord[], owner: SessionEnrichment,
+  attachments: TurnAttachment[] = [], requestId?: string,
 ): Promise<boolean> {
   if (result.blocked) return true;
   const ts = Math.floor(Date.now() / 1000);
@@ -599,12 +600,14 @@ async function saveChatTurn(
     await appendTurns(agentId, chatId, [
       { role: 'user', text: userText, ts, ...(attachments.length ? { attachments } : {}) },
       { role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
-        ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
+        ...(result.notice || result.refusal?.kind === 'kill_phrase' ? { status: 'notice' as const } : result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
         ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}) },
-    ], undefined, owner);
+    ], undefined, { ...owner, ...(typeof requestId === 'string' ? { requestId } : {}) });
     return true;
   } catch (err) {
-    logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    if (!(err instanceof ConversationDeletedError)) {
+      logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    }
     return false;
   }
 }
@@ -612,13 +615,14 @@ async function saveChatTurn(
 async function saveRegeneratedReply(
   agentId: string, chatId: string,
   result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>, tools: ToolRecord[],
-  expected: { turnsTotal: number; owner: string },
+  requestId: string | undefined, expected: { turnsTotal: number; owner: string; replyTo?: string | null },
 ): Promise<boolean> {
   if (result.blocked || result.refusal) return false;
   const ts = Math.floor(Date.now() / 1000);
   try {
     return await replaceLastReply(agentId, chatId, {
       role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
+      ...(typeof requestId === 'string' ? { requestId } : {}),
       ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
       ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}),
     }, expected);
@@ -629,6 +633,10 @@ async function saveRegeneratedReply(
 }
 
 async function writeChatAnswer(stream: SSEStreamingApi, result: AgentTurnResponse, confirmations: string[]): Promise<void> {
+  if (result.refusal?.kind === 'kill_phrase') {
+    await stream.writeSSE({ event: 'reply', data: result.text });
+    return;
+  }
   await stream.writeSSE({
     event: 'final',
     data: JSON.stringify({ text: result.text, modelId: result.modelId, latencyMs: result.latencyMs,
@@ -2210,6 +2218,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         modelOverride?: string;
         protocol?: number;
         clientMessageId?: string;
+        replyTo?: unknown;
         /** Pre-staged uploads (presigned PUT to the vectors staging bucket). */
         attachments?: Array<{ s3Key?: string; fileName?: string; mimeType?: string; addToKnowledge?: boolean }>;
       }>()
@@ -2220,7 +2229,10 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = safeDashboardChatId(body?.chatId);
     const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
     if (regenerate && (text !== '' || (body?.attachments !== undefined &&
-      (!Array.isArray(body.attachments) || body.attachments.length > 0)))) return c.json({ error: 'invalid_regenerate' }, 400);
+      (!Array.isArray(body.attachments) || body.attachments.length > 0)) ||
+      (body?.replyTo !== undefined && body.replyTo !== null && typeof body.replyTo !== 'string'))) {
+      return c.json({ error: 'invalid_regenerate' }, 400);
+    }
     if (rawAttachments.length > CHAT_ATTACHMENT_MAX_FILES) return c.json({ error: 'too_many_attachments' }, 400);
     // File-only sends are allowed (parity with Telegram/Slack file drops).
     if (!regenerate && !text && rawAttachments.length === 0) {
@@ -2246,12 +2258,17 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // history — with the 404 DELETE /sessions gives a missing chat. A send still
     // tells a stored chat from a missing one (a missing one simply starts), so
     // this hides the conversation, not whether its id is taken.
-    const stored = await getSession(agentId, chatId);
+    const stored = await getSession(agentId, chatId, regenerate ? { consistentRead: true } : undefined);
     if ((regenerate && !stored) || (stored && !ownsConversation(c, stored.userId))) {
       return c.json({ error: 'not_found' }, 404);
     }
-    if (regenerate && (stored!.turns.at(-1)?.role !== 'assistant' || stored!.turns.at(-2)?.role !== 'user')) {
+    if (regenerate && (stored!.turns.at(-1)?.role !== 'assistant' || stored!.turns.at(-2)?.role !== 'user' ||
+      stored!.turns.at(-1)?.status === 'notice')) {
       return c.json({ error: 'nothing_to_regenerate' }, 409);
+    }
+    if (regenerate && body?.replyTo !== undefined && (stored!.turns.at(-1)?.requestId ?? null) !== body.replyTo) {
+      logger.warn({ agentId, chatId }, 'dashboard chat regenerate refused: reply changed');
+      return c.json({ error: 'reply_changed' }, 409);
     }
     const staged: Array<{ size: number; type: string }> = [];
     for (const a of rawAttachments) {
@@ -2302,10 +2319,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       let guardedChunks: ReturnType<typeof guardedChunkWriter> | undefined;
       const saveReply = (result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>) =>
         regenerate
-          ? saveRegeneratedReply(agentId, chatId, result, tools, {
+          ? saveRegeneratedReply(agentId, chatId, result, tools,
+            clientMessageId, {
             turnsTotal: stored!.turnsTotal ?? stored!.turns.length, owner: stored!.userId!,
+            ...(body?.replyTo !== undefined ? { replyTo: body.replyTo as string | null } : {}),
           })
-          : saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments);
+          : saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments,
+            clientMessageId);
       try {
         // Command? send the reply as a single event and close. Skipped for
         // attachment turns — a caption starting with '/' is data, not a command
@@ -2326,10 +2346,6 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         const attachmentBlocks: AttachmentBlock[] = [];
         const kbConfirmations: string[] = [];
         const acks: string[] = [];
-        if (regenerate) {
-          const replayFiles = stored!.turns.at(-2)!.attachments ?? [];
-          attachmentBlocks.push(...await replayStoredAttachments(replayFiles, abort.signal, agentId, chatId));
-        }
         for (const [index, a] of rawAttachments.entries()) {
           const s3Key = a.s3Key as string;
           const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
@@ -2382,7 +2398,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // already carry the "indexed, ask me anything" line).
           userText = 'What is this?';
           const reply = acks.join('\n') || 'Stored the file.';
-          const saved = await saveChatTurn(agentId, chatId, userText, { text: reply }, tools, conversationOwner(c), savedAttachments);
+          const saved = await saveChatTurn(agentId, chatId, userText, { text: reply, notice: true }, tools, conversationOwner(c), savedAttachments,
+            clientMessageId);
           await stream.writeSSE({ event: 'reply', data: reply });
           for (const k of kbConfirmations) {
             await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
@@ -2447,6 +2464,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           abortSignal: abort.signal,
           agentId,
           chatId,
+          ...(clientMessageId ? { requestId: clientMessageId } : {}),
           userText: modelUserText,
           history,
           modelOverride,
@@ -2473,6 +2491,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // none and attribute nothing.
           ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
           ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
+          ...(regenerate ? { loadAttachments: () => replayStoredAttachments(
+            stored!.turns.at(-2)!.attachments ?? [], abort.signal, agentId, chatId,
+          ) } : {}),
           ...(peekNote ? { systemNote: peekNote } : {}),
           onChunk: guardedChunks.onChunk,
           onToolEvent: ({ name, callIndex, toolUseId, input, inputTruncated }) => {
@@ -2510,6 +2531,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
                   agentId,
                   chatId,
                   ownerId,
+                  ...(clientMessageId ? { clientMessageId } : {}),
                   fileName: artifact.title,
                   contentType: artifact.mimeType,
                   body: Buffer.from(artifact.body),
@@ -2845,6 +2867,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       });
       if (persist && !result.blocked) {
         const now = Math.floor(Date.now() / 1000);
+        // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
         await appendTurns(agentId, chatId, [
           { role: 'user', text: body.text, ts: now },
           { role: 'assistant', text: result.text, ts: now },

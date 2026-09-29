@@ -21,6 +21,7 @@ export interface TurnBody {
   chatId: string;
   modelOverride?: string;
   clientMessageId?: string;
+  replyTo?: string | null;
   protocol?: 2;
   attachments?: TurnAttachment[];
 }
@@ -117,6 +118,7 @@ export async function streamTurn(
       chatId: body.chatId,
       ...(body.modelOverride ? { modelOverride: body.modelOverride } : {}),
       ...(body.clientMessageId !== undefined ? { clientMessageId: body.clientMessageId } : {}),
+      ...(body.regenerate && body.replyTo !== undefined ? { replyTo: body.replyTo } : {}),
       ...(body.protocol !== undefined ? { protocol: body.protocol } : {}),
       ...(!body.regenerate && body.attachments && body.attachments.length > 0 ? { attachments: body.attachments } : {}),
     }),
@@ -141,7 +143,7 @@ export async function streamTurn(
   const artifactRefs: ArtifactRef[] = [];
   const tools: ToolCall[] = [];
   const publishTools = () => cb.onTools?.(tools.map((tool) => ({ ...tool })));
-  let curEvent = 'chunk'; // SSE without an event: line defaults to "message"; we treat bare data as a chunk
+  let curEvent = '';
   let curData = '';
   let buffer = '';
 
@@ -156,10 +158,6 @@ export async function streamTurn(
       cb.onChunk(curData);
     } else if (curEvent === 'final') {
       fullText = curData; // JSON; parsed after the loop
-    } else if (curEvent === 'chunk') {
-      fullText = curData; // cumulative plain text for the live preview
-      cb.onChunk(curData);
-      cb.onToolStatus(''); // text resumed; drop the tool-status line
     } else if (curEvent === 'delta') {
       const delta = wellFormedDelta(curData, fullText.length);
       if (delta) {
@@ -224,14 +222,21 @@ export async function streamTurn(
           errorText = error.message;
           errorCode = error.code;
         }
-      } catch { /* legacy errors are plain text */ }
+      } catch { /* plain-text errors remain available to friendlyTurnError */ }
     }
     // done / unknown events carry no assistant text we surface here.
     curData = '';
   };
 
   while (true) {
-    const { done, value } = await reader.read();
+    let chunk: Awaited<ReturnType<typeof reader.read>>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === 'AbortError') throw err;
+      throw Object.assign(new Error('Stream failed'), { code: 'connection_lost' });
+    }
+    const { done, value } = chunk;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
@@ -241,7 +246,7 @@ export async function streamTurn(
       if (line === '') {
         // Blank line terminates an SSE event.
         flushEvent();
-        curEvent = 'chunk';
+        curEvent = '';
       } else if (line.startsWith('event: ')) {
         curEvent = line.slice(7).trim();
       } else if (line.startsWith('data: ')) {
@@ -254,8 +259,8 @@ export async function streamTurn(
 
   let meta: TurnMeta | undefined;
   if (!errorText && fullText && !isReply) {
-    // chunk/final payloads carry the assistant turn as JSON {text,...}. The
-    // `final` event also carries the run metadata for the footer.
+    // Only `final` carries the assistant turn as JSON {text,...}, with the run
+    // metadata for the footer; text built from deltas is raw.
     try {
       const parsed = JSON.parse(fullText);
       fullText = parsed.text ?? fullText;
@@ -267,7 +272,7 @@ export async function streamTurn(
           toolCallCount: parsed.toolCallCount ?? 0,
         };
       }
-    } catch { /* not JSON (e.g. a raw chunk); use raw text */ }
+    } catch { /* not JSON (text built from deltas); use raw text */ }
   }
 
   return { text: fullText, isReply, errorText, errorCode, saved, meta, kb: kbChips, images, artifacts, artifactRefs, tools };

@@ -13,6 +13,7 @@ import {
 } from '../lib/chat/helpers';
 import { installChatCodeCopy } from '../lib/chat/code-block';
 import { streamTurn } from '../lib/chat/stream';
+import type { TurnOutcome } from '../lib/chat/stream';
 import { stageAttachment } from '../lib/chat/uploads';
 import type { StagedFile } from '../lib/chat/uploads';
 import { admitFiles } from '../lib/chat/attachment-rules';
@@ -145,8 +146,6 @@ export function Chat() {
     try {
       const value = JSON.stringify({ owner: getDashboardUser() || 'unknown', agentId: id, chatId: conversationId });
       sessionStorage.setItem(activeKey(), value);
-      // Keep the current tab's pointer readable by older callers.
-      sessionStorage.setItem(ACTIVE_CHAT_KEY, value);
     } catch { /* Resume is best-effort in private storage modes. */ }
   }
 
@@ -301,8 +300,8 @@ export function Chat() {
   }
 
   // Reopen a stored conversation, including tool results and stopped turns.
-  async function openConversation(id: string) {
-    if (streaming) return;
+  async function openConversation(id: string, force = false) {
+    if (streaming && !force) return;
     const request = ++transcriptRequest.current;
     activateConversation(id);
     setStreamText('');
@@ -325,6 +324,34 @@ export function Chat() {
     }
   }
 
+  async function reloadIfSaved(requestId: string): Promise<boolean> {
+    const request = transcriptRequest.current;
+    // The save waits for the outbound scan, so retry the transcript read.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (request !== transcriptRequest.current) return true;
+      try {
+        clearApiCache();
+        const d = await api.get<{ turns?: Parameters<typeof transcriptToMessages>[0] }>(
+          `/sessions/transcript?agentId=${encodeURIComponent(agentId)}&chatId=${encodeURIComponent(chatId)}`,
+        );
+        if (request !== transcriptRequest.current) return true;
+        const turns = d.turns ?? [];
+        const last = turns.at(-1);
+        if (last?.role === 'assistant' && last.requestId === requestId) {
+          setMessages(transcriptToMessages(turns));
+          return true;
+        }
+      } catch {
+        if (request !== transcriptRequest.current) return true;
+      }
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (request !== transcriptRequest.current) return true;
+      }
+    }
+    return false;
+  }
+
   // Start a brand-new conversation: fresh server-side chatId + cleared UI.
   function startNewChat(forAgent = agentId) {
     ++transcriptRequest.current;
@@ -343,7 +370,9 @@ export function Chat() {
       await refreshConversations(c.agentId);
     } catch (e) {
       console.error('Chat: could not update conversation', e);
-      toast('Could not update that chat. Please try again.', 'error');
+      toast(e instanceof Error && e.message.startsWith('invalid_title')
+        ? 'A title can be up to 120 characters, with no tabs or line breaks.'
+        : 'Could not update that chat. Please try again.', 'error');
     }
   }
 
@@ -439,6 +468,21 @@ export function Chat() {
     }
   }
 
+  const replyMessage = (outcome: TurnOutcome, requestId: string): Message => ({
+    role: 'assistant',
+    text: outcome.text,
+    ts: Date.now() / 1000,
+    requestId,
+    ...(outcome.kb.length > 0 ? { kb: outcome.kb } : {}),
+    ...(outcome.images.length > 0 ? { images: outcome.images } : {}),
+    ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
+    ...(outcome.artifactRefs.length > 0 ? { artifactRefs: outcome.artifactRefs } : {}),
+    ...(outcome.meta ? { meta: outcome.meta } : {}),
+    ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
+    // `done: not_saved`: the answer arrived, the server could not store it.
+    ...(outcome.saved === false ? { notSaved: true as const } : {}),
+  });
+
   async function send(retryIndex?: number) {
     const retry = retryIndex !== undefined;
     const text = retry ? messages[retryIndex - 1]?.text ?? '' : input.trim();
@@ -520,18 +564,8 @@ export function Chat() {
       }
 
       setMessages((prev) => [...prev, {
-        role: 'assistant',
-        text: outcome.text,
-        ts: Date.now() / 1000,
-        ...(outcome.kb.length > 0 ? { kb: outcome.kb } : {}),
-        ...(outcome.images.length > 0 ? { images: outcome.images } : {}),
-        ...(outcome.artifacts.length > 0 ? { artifacts: outcome.artifacts } : {}),
-        ...(outcome.artifactRefs.length > 0 ? { artifactRefs: outcome.artifactRefs } : {}),
-        ...(outcome.meta ? { meta: outcome.meta } : {}),
+        ...replyMessage(outcome, clientMessageId),
         ...(outcome.isReply ? { isReply: true } : {}),
-        ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
-        // `done: not_saved`: the answer arrived, the server could not store it.
-        ...(outcome.saved === false ? { notSaved: true as const } : {}),
       }]);
       announce('Reply finished.');
     } catch (e) {
@@ -549,6 +583,7 @@ export function Chat() {
           text: streamTextRef.current || '(Stopped before a reply.)',
           ts: Date.now() / 1000,
           stopped: true,
+          requestId: clientMessageId,
           ...(streamToolsRef.current.length > 0 ? { tools: streamToolsRef.current } : {}),
         }]);
         setStreamText('');
@@ -568,9 +603,14 @@ export function Chat() {
       // before the stream (its `code`) says what to do about it, short clean
       // causes still surface ("Something went wrong: Upload failed"), anything
       // long or token-like collapses to the generic line.
-      console.error('Chat: send failed', e);
-      const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', (e as { code?: string } | null)?.code);
-      setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current, failure: msg, ts: Date.now() / 1000, error: true }]);
+      const code = (e as { code?: string } | null)?.code;
+      if (code === 'connection_lost' && await reloadIfSaved(clientMessageId)) {
+        // The reply committed before the connection dropped; the transcript is authoritative.
+      } else {
+        console.error('Chat: send failed', e);
+        const msg = friendlyTurnError(e instanceof Error && e.message ? e.message : '', code);
+        setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current, failure: msg, ts: Date.now() / 1000, error: true }]);
+      }
     }
     setStreamText('');
     streamTextRef.current = '';
@@ -589,6 +629,7 @@ export function Chat() {
     if (streaming || messages.at(-1)?.role !== 'assistant') return;
     const old = messages.at(-1)!;
     if (old.error || old.notSaved || old.isReply) return;
+    const clientMessageId = newMessageId();
     setRegenerateError('');
     setMessages((prev) => prev.slice(0, -1));
     setStreaming(true);
@@ -600,7 +641,7 @@ export function Chat() {
     const abort = new AbortController();
     abortRef.current = abort;
     try {
-      const outcome = await streamTurn({ regenerate: true, agentId, chatId, clientMessageId: newMessageId(), protocol: 2,
+      const outcome = await streamTurn({ regenerate: true, agentId, chatId, clientMessageId, replyTo: old.requestId ?? null, protocol: 2,
         ...(modelId ? { modelOverride: modelId } : {}) }, getToken(), {
         onChunk: (t) => { streamTextRef.current = t; setStreamText(t); },
         onToolStatus: setToolStatus,
@@ -610,24 +651,21 @@ export function Chat() {
         setMessages((prev) => [...prev, old]);
         setRegenerateError(outcome.errorText
           ? friendlyTurnError(outcome.errorText, outcome.errorCode)
-          : outcome.text || 'The server did not save this reply.');
+          : `The new reply wasn't saved, so the previous one is kept.${outcome.text ? `\n${outcome.text}` : ''}`);
       } else {
-        setMessages((prev) => [...prev, { role: 'assistant', text: outcome.text, ts: Date.now() / 1000,
-          ...(outcome.artifactRefs.length ? { artifactRefs: outcome.artifactRefs } : {}),
-          ...(outcome.kb.length ? { kb: outcome.kb } : {}),
-          ...(outcome.images.length ? { images: outcome.images } : {}),
-          ...(outcome.artifacts.length ? { artifacts: outcome.artifacts } : {}),
-          ...(outcome.meta ? { meta: outcome.meta } : {}),
-          ...(outcome.tools.length ? { tools: outcome.tools } : {}),
-          ...(outcome.saved === false ? { notSaved: true as const } : {}),
-        }]);
+        setMessages((prev) => [...prev, replyMessage(outcome, clientMessageId)]);
         announce('Reply finished.');
       }
     } catch (e) {
       if ((e as { name?: string })?.name === 'AbortError') {
         setMessages((prev) => [...prev, { role: 'assistant', text: streamTextRef.current || '(Stopped before a reply.)', ts: Date.now() / 1000,
-          stopped: true, ...(streamToolsRef.current.length ? { tools: streamToolsRef.current } : {}) }]);
+          stopped: true, requestId: clientMessageId, ...(streamToolsRef.current.length ? { tools: streamToolsRef.current } : {}) }]);
         announce('Reply stopped.');
+      } else if ((e as { code?: string } | null)?.code === 'reply_changed') {
+        await openConversation(chatId, true);
+        setRegenerateError('This chat changed in another tab, so it was reloaded.');
+      } else if ((e as { code?: string } | null)?.code === 'connection_lost' && await reloadIfSaved(clientMessageId)) {
+        // The regenerated reply committed before the connection dropped; the transcript is authoritative.
       } else {
         setMessages((prev) => [...prev, old]);
         setRegenerateError(friendlyTurnError(e instanceof Error ? e.message : ''));
@@ -667,7 +705,6 @@ export function Chat() {
       onRetryLoad={() => void refreshConversations(agentId)}
       search={search}
       onSearch={(value) => {
-        ++historyRequest.current;
         setHistoryError(false);
         setHistoryLoading(value.trim() !== searchQuery);
         setSearch(value);
@@ -839,6 +876,7 @@ export function Chat() {
             toolStatus={toolStatus}
             streamStartedAt={streamStartedAt}
             endRef={endRef}
+            footer={regenerateError && <div role="alert" class="chat-error-panel whitespace-pre-line rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
           >
             {loadError && agents.length === 0 && (
               <div class="text-caption text-danger bg-danger-a/10 border border-danger-a/40 rounded-lg px-3 py-2">
@@ -847,7 +885,6 @@ export function Chat() {
             )}
             {transcriptLoading && <div role="status" class="flex min-h-48 items-center justify-center gap-2 text-secondary"><span class="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />Loading conversation…</div>}
             {transcriptError && <div role="alert" class="chat-error-panel flex items-center gap-3 rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">Could not load this conversation. <Button variant="secondary" size="sm" onClick={() => void openConversation(chatId)}>Try again</Button></div>}
-            {regenerateError && <div role="alert" class="chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">{regenerateError}</div>}
             {isLanding && !transcriptLoading && !transcriptError && (
               <ChatLanding
                 agentName={agentName}

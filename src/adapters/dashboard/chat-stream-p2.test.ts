@@ -115,7 +115,7 @@ describe('turn lifecycle (P2) — web client', () => {
   it('ignores heartbeat comments', async () => {
     const { outcome, chunks, statuses } = await run([
       ': ping\n\n',
-      'event: chunk\ndata: Hi\n\n',
+      'event: delta\ndata: {"i":0,"t":"Hi"}\n\n',
       ': ping\n\n',
       FINAL('Hi there'),
     ]);

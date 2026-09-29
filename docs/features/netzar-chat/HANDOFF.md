@@ -2,72 +2,98 @@
 feature: netzar-chat
 document_role: handoff
 status: current
-observed_at: 2026-09-27
-as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
+observed_at: 2026-09-28
+as_of_commit: fbcf47fffdc6190ee8fa719c1aa55bd9892a7742
 ---
 
 # Netzar Chat handoff
 
-- **CURRENT: P6 is BUILT on `feature/p6-conversation-ux` — step 8 of 10
-  (conversation UX completion), as one step (owner decision 45).** Branch cut
-  from `origin/development` @ `ed8a3dc` (P5's merge, PR #193); merge target
+- **CURRENT: P7 is BUILT on `feature/p7-hardening` — step 9 of 10
+  (hardening), as one step (owner decision 45).** Branch cut from
+  `origin/development` @ `77c58d9` (P6's merge, PR #194); merge target
   `development`. **At this commit: pushed no, PR none, deployment none.** The
   landing runs the full `development.md` step 7 list on this exact commit, asks
   the owner once with the numbers, and only on a yes pushes, opens one pull
   request into `development` and merges it on green; the pull request number and
   the merge commit live in the Gauntlet state file (P40). Nothing is promoted
   (decision 18). No AWS call was made.
-- **What P6 built** (detail: README sections 2, 5, 6 and 7, and the session log
-  below). Try again on the last failed reply; Regenerate on the last saved reply,
-  replacing it in place (version-fenced, the same message number, only if the
-  conversation is still the one it answered; blocked, refused, unreadable-file and
-  kill-switched regenerates keep the old reply); both stop paths save what the
-  reader saw, through the outbound scan; owner-only rename and pin (`PATCH
-  /api/sessions`), pinned-first listing and a server search; one-click New chat;
-  loading and load-failure states; an announcer, alerts, the phone drawer's focus
-  trap with the page inert, an `h1` at every width, bound `aria-expanded`,
-  chat-scoped contrast, scrolling tables; drafts in tab storage keyed by the
-  signed-in identity; three shortcuts; code and whole-chat downloads; the model
-  picker's family and context pill; the voice orb moved off the chat (owner
-  decision 61; at desktop widths into the house navigation's empty lower band).
-  Telegram and Slack carry a P6 SKIP comment (CLAUDE.md parity).
-- **Known gaps, by decision.** Edit and branch (P6b) was excluded; a regenerated
-  video question is answered without its keyframes (**A220**); the list's search
-  term rides in the URL (**A221**); an admin's list shows every member's pins
-  (**A222**); CLEANUP left two low-impact refactors (**A223**); a long title's
-  rename field opens scrolled to its end (**A229**); the orb widget keeps a
-  spliced comment and a repeated condition (**A230**); a title padded with a
-  non-ASCII space is trimmed since CLEANUP (**A231**); a whole-row write can undo a
-  /newchat, /model or war-room change racing it (**A232**); Regenerate acts on the
-  stored last exchange, not always the one on screen (**A233**, P7's first item);
-  a rename pre-filled from a first message with a line break fails (**A234**);
-  an unsaved regenerate's alert shows the reply with no reason (**A235**); a search
-  over 100 characters looks like a failed load (**A236**); two `chat.spec.ts`
-  comments describe the pre-P6 reload (**A237**); a regenerate reads its stored
-  files before admission (**A238**, early in P7); a fast search edit can keep old
-  results (**A239**); a connection lost mid-reply is saved as a stop while the
-  page shows a failure (**A240**); after a reload Regenerate is offered on canned
-  replies (**A241**); the export's error line has no test (**A242**). Still carried:
-  A212 (the WebRTC residual), ART-16, WI-5.4 / ART-10 (P7), decision 59 M1 / M3
-  (P7), A209 and A213.
-- **Who wrote it.** Claude Opus coordinated; Codex wrote every production change
-  (`gpt-6-sol`: the server slice, both large web slices, both review-fix slices
-  and the round-3 look fixes; `gpt-6-luna`: the helpers, the docs slice, four
-  follow-ups and the three CLEANUP refactors; Jev picked every rung but four luna
-  runs, **M154**). The review was cross-vendor: Claude security (Opus) and React
-  (Sonnet), Codex security and correctness (`gpt-6-sol`), and four look-critic
-  rounds (Sonnet); five councils seated a Codex member (**P112**); three fresh
-  critics FAILED the docs on wording and the owner waived a fourth (decision 63).
-- **P6's gate** (`~/.claude/plans/netzar-chat-plan/p6-proof.sh`, 60 rows) reads
-  **`FAILS=0`, CONTROL `FAIL`** at the final code (`f824039`); it read
-  `FAILS=56` at the base. P5 39/0, P4 52/0; the P1-P3 originals are green (6/0,
-  12/0, 47/0, 60/0) and their P4-scope copies fail only their P4-scope guard
-  rows (**A210**). Browser 90/90.
-- **Baseline recorded before any change**, re-run at `ed8a3dc` with fake
+- **What P7 built** (detail: README section 2's Hardening block and section 7,
+  ADR 0011, and the session log below). Regenerate tied to the reply the page
+  shows (a stored `requestId`; a 409 `reply_changed` refusal on a mismatch; both
+  Stop paths stamp their own reply's id; a regenerate save re-checked again at
+  write time); a dropped connection's page re-read shows what the server
+  actually saved; the file-only note and the kill-phrase confirmation both saved
+  as a `notice` (never regenerable, before or after a reload; one saved before
+  P7 stays regenerable); a regenerate's
+  stored-file replay moved to after admission; an unsaved regenerate's fixed
+  alert line below the kept reply; `/newchat`, a model override and a war-room
+  change all bump the conversation row's version; the rename pre-fill collapses
+  control characters and a refused title says why; the rename box opens at the
+  title's start; the search field caps at 100 characters and a quick edit no
+  longer drops its own answer; a dashboard turn — including a document draft's
+  `start`, `append` and `finalize` — can no longer re-create a chat deleted
+  mid-turn, and a turn refused for that reason deletes the files it had already
+  uploaded; the conversation child lock has a 15-minute lease with a logged
+  takeover, and its doc comment now says so; the agent page's own chat client is
+  gone (its Chat entry links to `/chat/<agentId>`); the web stream reader speaks
+  only protocol 2 (the server still serves the old format to `public/app.js`);
+  dead pointer helpers, a duplicated reply builder and two stale test comments
+  removed; the chat header's ID help box opens below, in the page's own font,
+  and says what the ID is (owner decision 70). Telegram, Slack, `public/app.js`
+  and `POST /test-turn` carry a P7 parity note where the request-id tie does not
+  reach them.
+- **Known gaps, by decision.** P7's own CUT list: WI-5.4 / ART-10 (model
+  capabilities) — `bedrock-all-models` is still not merged; WI-7.3 and all
+  production validation — deferred to S1 (decision 39); `getFullHistory`'s
+  pre-P1 merge — deferred to S1; the server's old stream format — kept for
+  `public/app.js` (P2's frozen row B-4); PRODUCT.md / design.md — not added
+  (Jev: no durable design change this step); any visual redesign. **A231** was
+  settled, not left open: a title padded with a non-ASCII space is accepted and
+  trimmed, now pinned by a `PATCH /sessions` unit test. New from the security
+  review, all carried: **LOW-3** (a turn saved in the last moment of a chat
+  delete can still leave two unlisted message records — pre-existing, narrowed
+  by P7; council 3-0 carry); **INFO-7** (any turn save can clear war-room mode —
+  pre-existing); **INFO-9** (`public/app.js` and `POST /test-turn` send no
+  request id, so their dashboard turns sit outside the mid-turn delete check) —
+  Telegram, Slack and scheduled tasks are the same; all five declare the skip in a parity
+  comment.
+  Still carried, unchanged by P7: A212 (the WebRTC residual), A213 (chat reply
+  markdown can still load a remote image), A172 (who `dynamodb_query` may
+  read), ART-16 (the artifact export bridge), A209.
+- **Who wrote it.** Claude Opus coordinated; Codex `gpt-6-luna` wrote every
+  production change — work orders A through E, the security-review fixes (FX),
+  the chat-ID help fix (HELP) and its font follow-up, plus the CLEANUP and CL2
+  refactors — landing on the Build Ladder's floor every time (Jev picked
+  `luna`, unsure each time, per P114's lower-rung-when-unsure rule); no order
+  climbed. Red tests came from Claude subagents (opus and sonnet, one dispatched
+  into a parallel worktree) and the coordinator itself for the security-review
+  rounds. The review was ONE security reviewer, `ecc:security-reviewer` on
+  Opus, per owner decision 69 ("don't over-engineer or over-do unnecessary
+  testing"), plus the coordinator's own `/ponytail-review` (net -111 lines) and
+  `/ponytail-debt` (no new markers, none added by P7). Every Jev fork and
+  council decision is recorded in the session log below.
+- **P7's gate** (`~/.claude/plans/netzar-chat-plan/p7-proof.sh`, 51 rows — 34
+  `[B]` + 13 shape/evidence + 4 guards — frozen sha256 `b1be2b33…`) read
+  `ASSESSED=51 FAILS=47`, CONTROL `FAIL`, red at the base (`77c58d9`). Its
+  final run, with the full validation list, happens once on the commit that
+  carries this file, so its results live outside the repo (the session log's
+  section 6.9 says where).
+  Baseline inherited gates: P6 60/0, P5 39/0, P4 52/0; the originals P1-P3 green
+  (containment 6/0, storage 12/0, P2 local 47/0, P3 local 60/0); their P4-scope
+  copies fail only their own P4-scope guard rows (**A210**). Baseline browser:
+  91 passed, 10 `[chat-mock]` "stream cut mid-turn" lines (the base figure).
+- **Baseline recorded before any change**, re-run at `77c58d9` with fake
   credentials planted, alone in the checkout, `floci/floci:1.6.0` named first:
-  `npm test` 278 files / 3528 tests all passing, `guard-violations: 0`;
-  integration 69 passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap by
-  name; every other gate exit 0; P5 39/0, P4 52/0; the browser suite 45/45.
+  `npm test` 282 files / 3562 tests all passing, `guard-violations: 0`;
+  integration 72 passed / 25 skipped / 1 failed, the Floci `checkSecrets` gap by
+  name; every other gate (typecheck, build, both web gates, `local:verify`,
+  `docs-links`, `feature-knowledge`, `diff-check`, `docs-assets`,
+  `diagrams-drift-pr`) exit 0; one `amazonaws.com` hit, **A72**'s stub; the
+  browser suite 91 passed.
+- **Next: step 10 of 10** (S1, the staging/production promotion), once P7's
+  gate re-run, a fresh critic and the owner's yes land this step.
+- **P6 landed** as PR #194 into `development` (merge `77c58d9`, 2026-09-27); its
+  session log is [`handoffs/2026-09-27-p6-one-shot.md`](handoffs/2026-09-27-p6-one-shot.md).
 - **P5 landed** as PR #193 into `development` (merge `ed8a3dc`, 2026-09-27); its
   session log is [`handoffs/2026-09-27-p5-one-shot.md`](handoffs/2026-09-27-p5-one-shot.md).
 - **P4 landed** as PR #192 into `development` (merge `e2cd11e`, 2026-09-26); its
@@ -337,6 +363,8 @@ as_of_commit: f82403946ed1974ca7fd2cc55ca4ba060186f70b
   merge runs a full `cdk deploy --all`.
 
 Session index (newest first):
+- [2026-09-28-p7-one-shot.md](handoffs/2026-09-28-p7-one-shot.md)
+- [2026-09-27-p6-one-shot.md](handoffs/2026-09-27-p6-one-shot.md)
 - [2026-09-27-p5-one-shot.md](handoffs/2026-09-27-p5-one-shot.md)
 - [2026-09-26-p4-one-shot.md](handoffs/2026-09-26-p4-one-shot.md)
 - [2026-09-24-p3-one-shot.md](handoffs/2026-09-24-p3-one-shot.md)

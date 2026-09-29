@@ -1,9 +1,7 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
-import { type ComponentChildren } from 'preact';
+import { useState, useEffect } from 'preact/hooks';
+import { Fragment, type ComponentChildren } from 'preact';
 import { useRoute, Link } from 'wouter-preact';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import { api, getToken } from '../lib/api';
+import { api } from '../lib/api';
 import { Button } from '../components/Button';
 import { Toggle } from '../components/Toggle';
 import { Select } from '../components/Select';
@@ -11,21 +9,10 @@ import { Badge } from '../components/Badge';
 import { StatusDot } from '../components/StatusDot';
 import { Skeleton } from '../components/Skeleton';
 import { EmptyState } from '../components/EmptyState';
-import { EmptyChat, EmptySessions, EmptyUsage, EmptyBrain } from '../components/Icons';
+import { EmptySessions, EmptyUsage, EmptyBrain } from '../components/Icons';
 import { ConfirmDialog } from '../components/Modal';
-// Type-to-confirm dialog (distinct from Modal's ConfirmDialog above); used to
-// gate discarding an in-progress test conversation when starting a new chat.
-import { ConfirmDialog as TypedConfirmDialog } from '../components/ConfirmDialog';
-import { InfoTooltip } from '../components/InfoTooltip';
 import { toast } from '../components/Toast';
 import { formatModelName } from '../lib/format';
-
-// One chatId per test conversation. A pinned id let prior context accumulate
-// and trip Bedrock guardrails on later turns; a fresh id per chat keeps the
-// server-side history scoped to what's actually on screen. (Mirrors Chat.tsx.)
-function freshChatId(): string {
-  return `dashboard:${Date.now()}`;
-}
 
 interface AgentInfo {
   agentId: string;
@@ -45,9 +32,9 @@ interface AgentInfo {
   createdAt: string;
 }
 
-type TabKey = 'overview' | 'prompt' | 'chat' | 'sessions' | 'usage' | 'memories' | 'connections' | 'settings';
+type TabKey = 'overview' | 'prompt' | 'sessions' | 'usage' | 'memories' | 'connections' | 'settings';
 
-const TAB_KEYS: TabKey[] = ['overview', 'prompt', 'chat', 'sessions', 'usage', 'memories', 'connections', 'settings'];
+const TAB_KEYS: TabKey[] = ['overview', 'prompt', 'sessions', 'usage', 'memories', 'connections', 'settings'];
 
 // Initial tab can be deep-linked via the URL hash (e.g. /agents/x#connections),
 // so the post-create "Connect a channel" button lands a new user straight on
@@ -55,14 +42,6 @@ const TAB_KEYS: TabKey[] = ['overview', 'prompt', 'chat', 'sessions', 'usage', '
 function tabFromHash(): TabKey {
   const h = (typeof window !== 'undefined' ? window.location.hash : '').replace(/^#/, '');
   return (TAB_KEYS as string[]).includes(h) ? (h as TabKey) : 'overview';
-}
-
-// Render assistant markdown to sanitized HTML (see Chat.tsx for the rationale).
-// Synchronous parse keeps the return type a plain string; DOMPurify guards the
-// dangerouslySetInnerHTML sink.
-function renderMarkdown(text: string): string {
-  const html = marked.parse(text, { async: false, gfm: true, breaks: true });
-  return DOMPurify.sanitize(html);
 }
 
 export function AgentDetail() {
@@ -127,7 +106,6 @@ export function AgentDetail() {
   const tabs: { key: TabKey; label: string; badge?: string }[] = [
     { key: 'overview', label: 'Overview' },
     { key: 'prompt', label: 'System Prompt' },
-    { key: 'chat', label: 'Chat' },
     { key: 'sessions', label: 'Sessions' },
     { key: 'usage', label: 'Usage' },
     { key: 'memories', label: 'Memories' },
@@ -145,23 +123,33 @@ export function AgentDetail() {
 
       <div class="flex gap-1 mb-6 border-b border-border overflow-x-auto" role="tablist" data-tour="agent-detail-tabs">
         {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            class={`px-4 py-2.5 text-body-sm font-medium border-b-2 transition-colors whitespace-nowrap
-              ${tab === t.key ? 'border-primary text-primary' : 'border-transparent text-secondary hover:text-primary'}`}
-            role="tab"
-            aria-selected={tab === t.key}
-          >
-            {t.label} {t.badge && <span class="ml-1 text-success">{t.badge}</span>}
-          </button>
+          <Fragment key={t.key}>
+            {t.key === 'sessions' && (
+              <Link
+                href={`/chat/${encodeURIComponent(agentId)}`}
+                class="px-4 py-2.5 text-body-sm font-medium border-b-2 transition-colors whitespace-nowrap border-transparent text-secondary hover:text-primary"
+                role="tab"
+                aria-selected={false}
+              >
+                Chat
+              </Link>
+            )}
+            <button
+              onClick={() => setTab(t.key)}
+              class={`px-4 py-2.5 text-body-sm font-medium border-b-2 transition-colors whitespace-nowrap
+                ${tab === t.key ? 'border-primary text-primary' : 'border-transparent text-secondary hover:text-primary'}`}
+              role="tab"
+              aria-selected={tab === t.key}
+            >
+              {t.label} {t.badge && <span class="ml-1 text-success">{t.badge}</span>}
+            </button>
+          </Fragment>
         ))}
       </div>
 
       <div class="page-enter" role="tabpanel" data-tour="agent-detail-panel">
         {tab === 'overview' && <OverviewTab agent={agent} onRefresh={refresh} onGoToConnections={() => setTab('connections')} />}
         {tab === 'prompt' && <SystemPromptTab agentId={agentId} />}
-        {tab === 'chat' && <ChatTab agentId={agentId} />}
         {tab === 'sessions' && <SessionsTab agentId={agentId} />}
         {tab === 'usage' && <UsageTab agentId={agentId} />}
         {tab === 'memories' && <MemoriesTab agentId={agentId} />}
@@ -351,160 +339,6 @@ function SystemPromptTab({ agentId }: { agentId: string }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function ChatTab({ agentId }: { agentId: string }) {
-  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
-  const [input, setInput] = useState('');
-  const [streaming, setStreaming] = useState(false);
-  const [streamText, setStreamText] = useState('');
-  const [chatId, setChatId] = useState(freshChatId);
-  const [newChatOpen, setNewChatOpen] = useState(false);
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, streamText]);
-
-  // If the viewed agent changes, never reuse the previous agent's chatId:
-  // mint a fresh one and clear the test conversation.
-  useEffect(() => {
-    setChatId(freshChatId());
-    setMessages([]);
-    setStreamText('');
-  }, [agentId]);
-
-  // Start a brand-new test conversation: fresh chatId + cleared UI.
-  function startNewChat() {
-    setChatId(freshChatId());
-    setMessages([]);
-    setStreamText('');
-  }
-
-  async function send() {
-    const text = input.trim();
-    if (!text || streaming) return;
-    setInput('');
-    setMessages((p) => [...p, { role: 'user', text }]);
-    setStreaming(true);
-    setStreamText('');
-    try {
-      const token = getToken();
-      const res = await fetch('/api/test-turn/stream', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, agentId, chatId }),
-      });
-      if (!res.ok || !res.body) throw new Error('Stream failed');
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let fullText = '';
-      let isReply = false;
-      let curEvent = 'chunk';
-      let curData = '';
-      let buffer = '';
-      // Flush a complete SSE event. 'reply' = slash-command plain text;
-      // 'final' = assistant JSON; 'chunk' = cumulative live text. done/error ignored.
-      const flushEvent = () => {
-        if (curData === '') return;
-        if (curEvent === 'reply') { fullText = curData; isReply = true; setStreamText(curData); }
-        else if (curEvent === 'final') { fullText = curData; }
-        else if (curEvent === 'chunk') { fullText = curData; setStreamText(curData); }
-        curData = '';
-      };
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          if (line === '') { flushEvent(); curEvent = 'chunk'; }
-          else if (line.startsWith('event: ')) { curEvent = line.slice(7).trim(); }
-          else if (line.startsWith('data: ')) { curData = curData === '' ? line.slice(6) : `${curData}\n${line.slice(6)}`; }
-        }
-      }
-      flushEvent();
-      if (fullText && !isReply) { try { const p = JSON.parse(fullText); fullText = p.text ?? fullText; } catch { /* raw text */ } }
-      setMessages((p) => [...p, { role: 'assistant', text: fullText }]);
-    } catch {
-      setMessages((p) => [...p, { role: 'assistant', text: 'Error: Failed to get response.' }]);
-    }
-    setStreamText('');
-    setStreaming(false);
-  }
-
-  return (
-    <div class="flex flex-col h-[60vh]">
-      <div class="flex items-center justify-between mb-3">
-        <span class="inline-flex items-center gap-1 text-caption text-muted font-mono">
-          {chatId}
-          <InfoTooltip term="dashboard:" />
-        </span>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={streaming}
-          onClick={() => { if (messages.length > 0) setNewChatOpen(true); else startNewChat(); }}
-        >
-          New chat
-        </Button>
-      </div>
-      <div class="flex-1 overflow-y-auto bg-bg-sunken border border-border rounded-xl p-4 space-y-3">
-        {messages.length === 0 && !streaming && (
-          <EmptyState icon={<EmptyChat />} title="Test this agent" description={`Send a message to ${agentId}`} />
-        )}
-        {messages.map((m, i) => (
-          <div key={i} class={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div class={`max-w-[75%] rounded-xl px-4 py-3 text-body-sm ${m.role === 'user' ? 'bg-primary text-inverse rounded-br-sm' : 'bg-surface border border-border rounded-bl-sm text-primary'}`}>
-              {m.role === 'assistant'
-                ? <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
-                : <pre class="whitespace-pre-wrap font-sans break-words">{m.text}</pre>}
-            </div>
-          </div>
-        ))}
-        {streaming && streamText && (
-          <div class="flex justify-start">
-            <div class="max-w-[75%] rounded-xl rounded-bl-sm px-4 py-3 bg-surface border border-border text-body-sm text-primary">
-              <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(streamText) }} />
-              <span class="inline-block w-2 h-4 bg-primary/50 animate-pulse ml-0.5" />
-            </div>
-          </div>
-        )}
-        {streaming && !streamText && (
-          <div class="flex justify-start">
-            <div class="rounded-xl px-4 py-3 bg-surface border border-border">
-              <div class="flex gap-1">
-                <span class="w-2 h-2 bg-muted rounded-full animate-bounce" style="animation-delay:0ms" />
-                <span class="w-2 h-2 bg-muted rounded-full animate-bounce" style="animation-delay:150ms" />
-                <span class="w-2 h-2 bg-muted rounded-full animate-bounce" style="animation-delay:300ms" />
-              </div>
-            </div>
-          </div>
-        )}
-        <div ref={endRef} />
-      </div>
-      <form onSubmit={(e) => { e.preventDefault(); send(); }} class="mt-3 flex gap-3">
-        <input
-          value={input}
-          onInput={(e) => setInput((e.target as HTMLInputElement).value)}
-          placeholder="Type a message..."
-          disabled={streaming}
-          class="flex-1 bg-surface border border-border rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted disabled:opacity-50"
-          autoFocus
-        />
-        <Button type="submit" loading={streaming} disabled={!input.trim()}>Send</Button>
-      </form>
-
-      <TypedConfirmDialog
-        open={newChatOpen}
-        title="Start a new chat"
-        message="This clears the test conversation on screen and starts a fresh chat session. The current messages won't be recoverable here."
-        confirmPhrase="NEW CHAT"
-        confirmLabel="Start new chat"
-        onConfirm={() => { startNewChat(); setNewChatOpen(false); }}
-        onCancel={() => setNewChatOpen(false)}
-      />
     </div>
   );
 }

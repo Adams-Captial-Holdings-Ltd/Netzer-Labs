@@ -60,13 +60,24 @@ function sseWrite(res: ServerResponse, event: string, data: string): void {
  * record — and a missing or unparseable body is still a valid request that
  * plays "default".
  */
-function parseTurn(rawBody: string): { text: string; chatId: string; attachmentKeys: string[]; regenerate: boolean } {
+function parseTurn(rawBody: string): {
+  text: string; chatId: string; attachmentKeys: string[]; regenerate: boolean;
+  clientMessageId?: string; replyTo?: unknown;
+} {
   try {
-    const body = JSON.parse(rawBody) as { text?: unknown; chatId?: unknown; attachments?: unknown; regenerate?: unknown };
+    const body = JSON.parse(rawBody) as {
+      text?: unknown; chatId?: unknown; attachments?: unknown; regenerate?: unknown;
+      clientMessageId?: unknown; replyTo?: unknown;
+    };
     const attachmentKeys = Array.isArray(body.attachments)
       ? body.attachments.map((a) => String((a as { s3Key?: unknown }).s3Key ?? ''))
       : [];
-    return { text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys, regenerate: body.regenerate === true };
+    return {
+      text: String(body.text ?? ''), chatId: String(body.chatId ?? ''), attachmentKeys,
+      regenerate: body.regenerate === true,
+      ...(typeof body.clientMessageId === 'string' ? { clientMessageId: body.clientMessageId } : {}),
+      ...(Object.prototype.hasOwnProperty.call(body, 'replyTo') ? { replyTo: body.replyTo } : {}),
+    };
   } catch {
     return { text: '', chatId: '', attachmentKeys: [], regenerate: false };
   }
@@ -110,7 +121,10 @@ function describeUploads(keys: string[]): Array<{ id: string; name: string; type
   });
 }
 
-interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[]; failed: boolean }
+interface PlayedTurn { text: string; tools: ToolCall[]; stopped: boolean; artifacts: unknown[]; failed: boolean; dropped?: true; saveLate?: boolean }
+
+// P7 (A240): how long after the drop the `drop-late` fixture saves its stopped reply.
+const LATE_SAVE_MS = 700;
 
 /** Accumulate only the fields the real transcript stores, never arguments. */
 function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
@@ -126,10 +140,12 @@ function recordToolEvent(tools: ToolCall[], event: string, data: string): void {
 
 /**
  * Play one fixture, and return the assistant text that actually reached the
- * client. `chunk` and `reply` events carry the reply CUMULATIVELY (the client
- * assigns, never appends — see web/src/lib/chat/stream.ts), so the last one
- * written is the whole reply. A client that leaves mid-stream is returned what
- * it had received, which is then exactly what its transcript replays.
+ * client. Fixture `chunk` and `reply` events carry the reply CUMULATIVELY, so
+ * the last one written is the whole reply. The page reads only protocol 2
+ * (P7, WIRE), so each `chunk` goes out as a `delta` at position 0, which
+ * replaces the text (web/src/lib/chat/stream.ts). A client that leaves
+ * mid-stream is returned what it had received, which is then exactly what its
+ * transcript replays.
  */
 async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   // Fixture selection: "/fixture <name>" picks one by name, anything else
@@ -150,9 +166,12 @@ async function play(text: string, res: ServerResponse): Promise<PlayedTurn> {
   for (const ev of fixture) {
     await cadence(res, ev.delayMs);
     if (res.destroyed || res.writableEnded) return { text: streamed, tools, stopped: res.destroyed, artifacts, failed };
+    // P7 (A240): the `drop` fixture's marker. Left open: the caller records the reply, then drops the connection.
+    if (ev.event === 'drop') return { text: streamed, tools, stopped: true, artifacts, failed, dropped: true, saveLate: ev.data === 'late' };
     // The real route publishes at most eight references a turn (MAX_DASHBOARD_ARTIFACT_REFS).
     if (ev.event === 'artifact_ref' && artifacts.length >= 8) continue;
-    sseWrite(res, ev.event, ev.data);
+    if (ev.event === 'chunk') sseWrite(res, 'delta', JSON.stringify({ i: 0, t: ev.data }));
+    else sseWrite(res, ev.event, ev.data);
     if (ev.event === 'chunk' || ev.event === 'reply') streamed = ev.data;
     if (ev.event === 'artifact_ref') artifacts.push(JSON.parse(ev.data));
     if (ev.event === 'error') failed = true;
@@ -271,7 +290,8 @@ function mockSessions(q = ''): unknown {
       },
       ...[...transcripts].filter(([chatId]) => !rows.some((_, i) => chatId === `dashboard:${SESSION_ID_BASE + i}`))
         .map(([chatId, turns]) => ({ agentId: 'main', chatId, updatedAt: turns.at(-1)?.ts ?? nowMs / 1000,
-          messageCount: turns.length, firstMessage: turns.find((t) => t.role === 'user')?.text ?? null,
+          // P7 (A234): cut at 120 UTF-16 units, as the repository stores it (sessions-repo.ts), which can split an emoji.
+          messageCount: turns.length, firstMessage: turns.find((t) => t.role === 'user')?.text.slice(0, 120) ?? null,
           title: sessionMeta.get(chatId)?.title ?? null, pinned: sessionMeta.get(chatId)?.pinned ?? false })),
     ];
   return { sessions: sessions.filter((s) => !q || (s.title ?? '').toLowerCase().includes(q) ||
@@ -290,7 +310,7 @@ function mockSessions(q = ''): unknown {
 // carry. The milliseconds mistake this file made once for `updatedAt` is
 // written up above the sidebar fixture; it is not repeated here.
 const transcripts = new Map<string, Array<{
-  role: string; text: string; ts: number; status?: string; tools?: ToolCall[];
+  role: string; text: string; ts: number; requestId?: string; status?: string; tools?: ToolCall[];
   attachments?: Array<{ id: string; name: string; type: string; size: number }>;
   artifacts?: unknown[];
 }>>();
@@ -305,9 +325,10 @@ const transcripts = new Map<string, Array<{
 const MAX_CONVERSATIONS = 200;
 
 /** Append one exchange. A turn with no chatId cannot be addressed, so it is dropped — loudly. */
-function recordedReply(reply: PlayedTurn, ts: number) {
+function recordedReply(reply: PlayedTurn, ts: number, requestId?: string) {
   return {
     role: 'assistant', text: reply.text || (reply.stopped ? '(Stopped before a reply.)' : ''), ts,
+    ...(typeof requestId === 'string' ? { requestId } : {}),
     ...(reply.stopped ? { status: 'stopped' } : {}),
     ...(reply.tools.length ? {
       tools: reply.tools.map(({ input: _input, inputTruncated: _inputTruncated, ...tool }) => tool),
@@ -316,7 +337,9 @@ function recordedReply(reply: PlayedTurn, ts: number) {
   };
 }
 
-function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = []): void {
+function recordTurn(
+  chatId: string, userText: string, reply: PlayedTurn, attachmentKeys: string[] = [], requestId?: string, notice = false,
+): void {
   if (!chatId) {
     // The chat page always sends one (web/src/lib/chat/stream.ts), so this is
     // either an unparseable body or a caller that is not the chat page.
@@ -330,7 +353,9 @@ function recordTurn(chatId: string, userText: string, reply: PlayedTurn, attachm
   transcripts.set(chatId, [
     ...(transcripts.get(chatId) ?? []),
     { role: 'user', text: userText, ts, ...(files.length ? { attachments: files } : {}) },
-    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length ? [recordedReply(reply, ts)] : []),
+    ...(reply.text || reply.stopped || reply.tools.length || reply.artifacts.length
+      ? [{ ...recordedReply(reply, ts, requestId), ...(notice ? { status: 'notice' } : {}) }]
+      : []),
   ]);
   // Evicting in silence would be worse than not evicting at all: reopening a
   // dropped conversation returns an empty transcript, which is exactly what the
@@ -353,8 +378,27 @@ export function mockStreamPlugin(): Plugin {
         req.on('data', (c: Buffer) => { raw += c; });
         req.on('end', () => {
           const turn = parseTurn(raw);
+          // P7 (A241): a file-only send with no caption has nothing the model can
+          // see, so the real route answers with a canned "stored but not read"
+          // acknowledgement (event: reply, done: media_only) instead of a model
+          // turn (handler.ts's media-only branch). The stored turn is a notice,
+          // so it remains non-regenerable after a reload.
+          if (!turn.regenerate && !turn.text && turn.attachmentKeys.length > 0) {
+            const note = 'Stored the file.';
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+            });
+            sseWrite(res, 'reply', note);
+            recordTurn(turn.chatId, turn.text, { text: note, tools: [], stopped: false, artifacts: [], failed: false }, turn.attachmentKeys, turn.clientMessageId, true);
+            sseWrite(res, 'done', 'media_only');
+            res.end();
+            return;
+          }
           if (turn.regenerate) {
-            if (turn.text || turn.attachmentKeys.length) {
+            if (turn.text || turn.attachmentKeys.length ||
+              (turn.replyTo !== undefined && turn.replyTo !== null && typeof turn.replyTo !== 'string')) {
               jsonStatus(res, 400, { error: 'invalid_regenerate' });
               return;
             }
@@ -365,8 +409,12 @@ export function mockStreamPlugin(): Plugin {
               return;
             }
             const stored = transcripts.get(turn.chatId);
-            if (!stored?.length || stored.at(-1)?.role !== 'assistant') {
+            if (!stored?.length || stored.at(-1)?.role !== 'assistant' || stored.at(-1)?.status === 'notice') {
               jsonStatus(res, 409, { error: 'nothing_to_regenerate' });
+              return;
+            }
+            if (turn.replyTo !== undefined && (stored.at(-1)?.requestId ?? null) !== turn.replyTo) {
+              jsonStatus(res, 409, { error: 'reply_changed' });
               return;
             }
           }
@@ -384,13 +432,26 @@ export function mockStreamPlugin(): Plugin {
               // A cut stream records what the client actually received, which is
               // the honest transcript — but a mysteriously short reply on replay
               // is worth a word here rather than a puzzle later.
-              if (reply.stopped) {
+              if (reply.stopped && !reply.dropped) {
                 console.warn(`[chat-mock] stream cut mid-turn: recording the partial reply (${reply.text.length} chars)`);
               }
-              if (turn.regenerate) {
-                const stored = transcripts.get(turn.chatId)!;
-                transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000)]);
-              } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys);
+              const record = () => {
+                if (turn.regenerate) {
+                  const stored = transcripts.get(turn.chatId)!;
+                  transcripts.set(turn.chatId, [...stored.slice(0, -1), recordedReply(reply, Date.now() / 1000, turn.clientMessageId)]);
+                } else recordTurn(turn.chatId, turn.text, reply, turn.attachmentKeys, turn.clientMessageId);
+              };
+              // P7 (A240): the real route saves a dropped reply only after its outbound scan, so that save can
+              // land after the page has already seen the drop. `drop-late` plays that order.
+              if (reply.saveLate) {
+                res.destroy();
+                setTimeout(record, LATE_SAVE_MS);
+                return;
+              }
+              record();
+              // P7 (A240): saved as stopped first, as the real route saves a reply whose connection dropped;
+              // then the connection drops with the body unfinished, which the page reads as a network failure.
+              if (reply.dropped) res.destroy();
             })
             // Without this, a throw anywhere above becomes an unhandled
             // rejection that takes the whole dev server down and blames
@@ -548,8 +609,9 @@ export function mockStreamPlugin(): Plugin {
             const chatId = body.chatId;
             if (typeof chatId !== 'string' || !chatId) { jsonStatus(res, 400, { error: 'chatId_required' }); return; }
             if (body.title === undefined && body.pinned === undefined) { jsonStatus(res, 400, { error: 'nothing_to_update' }); return; }
+            // P7 (A234): the server's own title rule, UNSAFE_ARTIFACT_TITLE_PATTERN in src/lib/chat/artifact-grammar.ts.
             if (body.title !== undefined && body.title !== null && (typeof body.title !== 'string' ||
-              /[\x00-\x1f\x7f]/.test(body.title) || body.title.trim().length > 120)) {
+              /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(body.title) || body.title.trim().length > 120)) {
               jsonStatus(res, 400, { error: 'invalid_title' }); return;
             }
             if (body.pinned !== undefined && typeof body.pinned !== 'boolean') { jsonStatus(res, 400, { error: 'invalid_pinned' }); return; }

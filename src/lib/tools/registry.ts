@@ -18,6 +18,7 @@ import type { ArtifactDescriptor } from '../chat/artifacts-repo.js';
 export interface ToolContext {
   agentId: string;
   chatId: string;
+  requestId?: string;
   /** Genuine caller-held Paperclip run id. Ordinary chat turns omit it. */
   runId?: string;
   /** Speaker id if known (Slack user / Telegram chat); used for audit attribution. */

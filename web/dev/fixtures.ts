@@ -292,6 +292,22 @@ const toolCappedFixture: Fixture = [
   finalEvent(toolCappedText, { latencyMs: 1900, costUsd: 0.006, toolCallCount: 1 }),
 ];
 
+// drop (P7, A240; test data for tests/e2e/chat/hardening.spec.ts): the connection drops partway through the
+// reply. `drop` is a marker, never written to the wire: the mock records what streamed as a stopped reply,
+// as the real route's abort path saves it, then destroys the connection, so the page meets a network failure
+// in the middle of the body rather than an end of stream (mock-stream-plugin.ts).
+const dropText = 'The rollout reached the first two regions before the third one';
+const dropFixture: Fixture = [
+  ...cumulativeChunks(dropText, 2),
+  { event: 'drop', data: '', delayMs: 300 },
+];
+// drop-late (P7, A240): the same drop, but the mock saves the stopped reply a moment AFTER the connection drops,
+// as the real route does when its outbound scan finishes after the page has seen the drop.
+const dropLateFixture: Fixture = [
+  ...cumulativeChunks(dropText, 2),
+  { event: 'drop', data: 'late', delayMs: 300 },
+];
+
 export const fixtures: Record<string, Fixture> = {
   default: defaultFixture,
   'wide-table': (() => {
@@ -308,4 +324,6 @@ export const fixtures: Record<string, Fixture> = {
   notsaved: notSavedFixture,
   'typed-error': typedErrorFixture,
   'tool-capped': toolCappedFixture,
+  drop: dropFixture,
+  'drop-late': dropLateFixture,
 };

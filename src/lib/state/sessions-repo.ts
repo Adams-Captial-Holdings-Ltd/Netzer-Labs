@@ -38,6 +38,7 @@ import {
   UpdateCommand,
   DeleteCommand,
   type UpdateCommandInput,
+  type TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
 import { ddb } from './ddb.js';
@@ -49,6 +50,7 @@ import { DeleteObjectsCommand, S3Client } from '@aws-sdk/client-s3';
 
 const TABLE = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 const MAX_TURNS = 20;
+const CHILD_LOCK_LEASE_MS = 15 * 60 * 1000;
 /**
  * Byte budget for the stored turn window, on top of the MAX_TURNS count cap.
  *
@@ -147,18 +149,25 @@ export function isPersistentChat(chatId: string): boolean {
 
 /**
  * Serialize artifact writes with conversation erasure using a durable child
- * row. There is deliberately no TTL: if a process dies while holding it, an
- * operator must inspect and recover the conversation before removing the row.
+ * row. A lock older than 15 minutes from createdAt is taken over, and the
+ * takeover is logged with its age.
  */
 export async function acquireConversationChildLock(agentId: string, chatId: string): Promise<() => Promise<void>> {
   const token = randomUUID();
   const key = { PK: pk(agentId), SK: `${childPrefix(chatId)}CHILD_LOCK` };
+  const now = Date.now();
   try {
-    await ddb().send(new PutCommand({
+    const out = await ddb().send(new PutCommand({
       TableName: TABLE,
-      Item: { ...key, lockToken: token, createdAt: new Date().toISOString() },
-      ConditionExpression: 'attribute_not_exists(PK)',
+      Item: { ...key, lockToken: token, createdAt: new Date(now).toISOString() },
+      ConditionExpression: 'attribute_not_exists(PK) OR createdAt < :cutoff',
+      ExpressionAttributeValues: { ':cutoff': new Date(now - CHILD_LOCK_LEASE_MS).toISOString() },
+      ReturnValues: 'ALL_OLD',
     }));
+    const old = out.Attributes as { createdAt?: string } | undefined;
+    if (old) {
+      logger.warn({ agentId, chatId, ageSeconds: Math.floor((now - Date.parse(old.createdAt!)) / 1000) }, 'sessions: took over stale child lock');
+    }
   } catch (error) {
     if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') {
       throw new Error('Conversation child storage is busy; retry after the active operation completes');
@@ -168,12 +177,17 @@ export async function acquireConversationChildLock(agentId: string, chatId: stri
   let released = false;
   return async () => {
     if (released) return;
-    await ddb().send(new DeleteCommand({
-      TableName: TABLE,
-      Key: key,
-      ConditionExpression: 'lockToken = :token',
-      ExpressionAttributeValues: { ':token': token },
-    }));
+    try {
+      await ddb().send(new DeleteCommand({
+        TableName: TABLE,
+        Key: key,
+        ConditionExpression: 'lockToken = :token',
+        ExpressionAttributeValues: { ':token': token },
+      }));
+    } catch (error) {
+      if ((error as { name?: string })?.name !== 'ConditionalCheckFailedException') throw error;
+      logger.warn({ agentId, chatId }, 'sessions: late child-lock release found another holder');
+    }
     released = true;
   };
 }
@@ -249,7 +263,10 @@ export interface ToolRecord {
 }
 
 export interface Turn {
-  status?: 'stopped';
+  /** 'notice' = a fixed note the server wrote, not a model reply; it cannot be regenerated. */
+  status?: 'stopped' | 'notice';
+  /** The clientMessageId of the request that produced this reply; assistant turns only. Absent on replies saved before P7. */
+  requestId?: string;
   tools?: ToolRecord[];
   attachments?: TurnAttachment[];
   artifacts?: ArtifactDescriptor[];
@@ -452,7 +469,7 @@ export async function getSession(
  */
 export async function replaceLastReply(
   agentId: string, chatId: string, reply: Turn,
-  expected?: { turnsTotal: number; owner: string },
+  expected?: { turnsTotal: number; owner: string; replyTo?: string | null },
 ): Promise<boolean> {
   const key = { PK: pk(agentId), SK: sk(chatId) };
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -460,7 +477,8 @@ export async function replaceLastReply(
     if (!row) return false;
     const turns = (row.turns as Turn[] | undefined) ?? [];
     const turnsTotal = (row.turnsTotal as number | undefined) ?? turns.length;
-    if (expected && (turnsTotal !== expected.turnsTotal || row.userId !== expected.owner)) return false;
+    if (expected && (turnsTotal !== expected.turnsTotal || row.userId !== expected.owner ||
+      (expected.replyTo !== undefined && (turns.at(-1)?.requestId ?? null) !== expected.replyTo))) return false;
     if (turns.at(-1)?.role !== 'assistant' || turns.at(-2)?.role !== 'user') return false;
     const seq = turnsTotal - 1;
     const { Item: oldRecord } = await ddb().send(new GetCommand({
@@ -471,7 +489,7 @@ export async function replaceLastReply(
     const turnsIngested = row.turnsIngested as number | undefined;
     const now = Math.floor(Date.now() / 1000);
     const { text: _text, truncated: _truncated, tools: _tools, artifacts: _artifacts,
-      attachments: _attachments, status: _status, ...recordBase } = oldRecord;
+      attachments: _attachments, status: _status, requestId: _requestId, ...recordBase } = oldRecord;
     try {
       await ddb().send(new TransactWriteCommand({ TransactItems: [
         { Put: {
@@ -487,6 +505,7 @@ export async function replaceLastReply(
           TableName: TABLE,
           Item: { ...recordBase, role: 'assistant', ...capRecordContent(stamped), ts: reply.ts,
             ...(reply.status ? { status: reply.status } : {}),
+            ...(stamped.requestId !== undefined ? { requestId: stamped.requestId } : {}),
             ...(stamped.surface ? { surface: stamped.surface } : {}) },
           ConditionExpression: 'attribute_exists(SK) AND #r = :assistant',
           ExpressionAttributeNames: { '#r': 'role' },
@@ -587,6 +606,7 @@ export interface ContextUsage {
 
 export interface SessionEnrichment {
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
+  requestId?: string;
   /**
    * The conversation's owner. Stamped when the row is CREATED and never changed
    * afterwards (owner decision 1): the dashboard used to overwrite it with
@@ -602,6 +622,13 @@ export interface SessionEnrichment {
   ephemeral?: boolean;
 }
 
+export class ConversationDeletedError extends Error {
+  constructor() {
+    super('Conversation was deleted while the turn was running');
+    this.name = 'ConversationDeletedError';
+  }
+}
+
 /**
  * Append two turns (user + assistant) to the session, trimming to
  * MAX_TURNS most recent. Creates the session if missing. Refreshes TTL.
@@ -615,9 +642,12 @@ export async function appendTurns(
 ): Promise<void> {
   // Stamp each turn with the producing surface (from the enrichment every
   // call site already passes) so merged cross-surface sessions stay legible.
-  const newTurns = enrichment?.surface
-    ? turnsIn.map((t) => (t.surface ? t : { ...t, surface: enrichment.surface }))
-    : turnsIn;
+  const newTurns = turnsIn.map((t) => ({
+    ...t,
+    ...(enrichment?.surface && !t.surface ? { surface: enrichment.surface } : {}),
+    ...(t.role === 'assistant' && enrichment?.requestId !== undefined && t.requestId === undefined
+      ? { requestId: enrichment.requestId } : {}),
+  }));
   // Optimistic concurrency: three ECS tasks share this table, and a blind
   // read-then-put let two near-simultaneous turns for the same chat (webhook
   // retry, a scheduled fire racing a live turn, a merged cross-surface
@@ -698,6 +728,7 @@ export async function appendTurns(
           ...capRecordContent(t),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
+          ...(t.requestId !== undefined ? { requestId: t.requestId } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           ...(owner ? { userId: owner } : {}),
           ...(ttl ? { ttl } : {}),
@@ -705,8 +736,8 @@ export async function appendTurns(
         ConditionExpression: 'attribute_not_exists(SK)',
       },
     }));
-    try {
-      await ddb().send(new TransactWriteCommand({ TransactItems: [{
+    const markerIndex = typeof enrichment?.requestId === 'string' ? 1 + records.length : undefined;
+    const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [{
         Put: {
           TableName: TABLE,
           Item: {
@@ -753,7 +784,18 @@ export async function appendTurns(
                 }
             : { ConditionExpression: 'attribute_not_exists(PK)' }),
         },
-      }, ...records] }));
+      }, ...records];
+    if (markerIndex !== undefined) {
+      transactItems.push({
+        ConditionCheck: {
+          TableName: TABLE,
+          Key: { PK: pk(agentId), SK: `${childPrefix(chatId)}TURN#${enrichment!.requestId}` },
+          ConditionExpression: 'attribute_exists(SK)',
+        },
+      });
+    }
+    try {
+      await ddb().send(new TransactWriteCommand({ TransactItems: transactItems }));
     } catch (err) {
       // Re-read only when the conversation's own fence (item 0) lost a race or
       // another transaction was in flight. A record whose sequence number is
@@ -763,8 +805,18 @@ export async function appendTurns(
       const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
       const reasons = e.CancellationReasons ?? [];
       const cancelled = e.name === 'TransactionCanceledException';
+      if (cancelled && markerIndex !== undefined && reasons[markerIndex]?.Code === 'ConditionalCheckFailed') {
+        logger.warn({ agentId, chatId }, 'sessions: refused turn save after conversation deletion');
+        try {
+          await deleteRawFiles(turnsIn.flatMap((turn) => turn.attachments?.map((attachment) => attachment.key) ?? []));
+        } catch (err) {
+          logger.error({ agentId, chatId, err }, 'sessions: failed to delete files from refused turn');
+        }
+        throw new ConversationDeletedError();
+      }
+      const markerConflict = markerIndex !== undefined && reasons[markerIndex]?.Code === 'TransactionConflict';
       const fenced =
-        cancelled && (reasons[0]?.Code === 'ConditionalCheckFailed' || reasons[0]?.Code === 'TransactionConflict');
+        cancelled && (reasons[0]?.Code === 'ConditionalCheckFailed' || reasons[0]?.Code === 'TransactionConflict' || markerConflict);
       // A throttled item cancels the whole transaction, and the SDK does not
       // retry a cancelled transaction (it did retry the single Put this
       // replaced), so back off and try again rather than lose the turn.
@@ -777,7 +829,8 @@ export async function appendTurns(
       // has not expired is never cleared. A lost race (the fence) just re-reads:
       // the records it collided with are the winner's (the third critic's C3-4).
       let staleNumbers = false;
-      if (cancelled && !fenced && attempt < MAX_ATTEMPTS - 1 && reasons.slice(1).some((r) => r.Code === 'ConditionalCheckFailed')) {
+      const recordEnd = markerIndex ?? reasons.length;
+      if (cancelled && !fenced && attempt < MAX_ATTEMPTS - 1 && reasons.slice(1, recordEnd).some((r) => r.Code === 'ConditionalCheckFailed')) {
         try {
           staleNumbers = (await deleteExpiredRecords(agentId, chatId)) > 0;
         } catch (sweepErr) {
@@ -857,9 +910,12 @@ async function adoptRecords(conversationPk: string, chatId: string, owner: strin
  * good (the first critic's F2). A dashboard conversation's expiry is left alone
  * here too: it is settled when the conversation is created (appendTurns).
  */
+type ExistingItemUpdate = Pick<UpdateCommandInput, 'UpdateExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'> & { UpdateExpression: string };
+const VERSION_BUMP = '#version = if_not_exists(#version, :zero) + :one';
+
 async function updateIfExists(
   Key: Record<string, string>,
-  update: Pick<UpdateCommandInput, 'UpdateExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'>,
+  update: ExistingItemUpdate,
 ): Promise<boolean> {
   try {
     await ddb().send(new UpdateCommand({ TableName: TABLE, Key, ...update, ConditionExpression: 'attribute_exists(PK)' }));
@@ -868,6 +924,17 @@ async function updateIfExists(
     if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return false;
     throw err;
   }
+}
+
+async function updateRowIfExists(
+  Key: Record<string, string>,
+  update: ExistingItemUpdate,
+): Promise<boolean> {
+  return updateIfExists(Key, {
+    ...update,
+    ExpressionAttributeNames: { ...update.ExpressionAttributeNames, '#version': 'version' },
+    ExpressionAttributeValues: { ...update.ExpressionAttributeValues, ':zero': 0, ':one': 1 },
+  });
 }
 
 /** The update that refreshes a bot chat's expiry; a dashboard chat's is left alone. */
@@ -888,11 +955,11 @@ export async function setModelOverride(
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const Key = { PK: pk(agentId), SK: sk(chatId) };
-  await updateIfExists(
+  await updateRowIfExists(
     Key,
     modelId
-      ? refreshTtl(chatId, 'SET modelOverride = :m, updatedAt = :u', { ':m': modelId, ':u': now })
-      : { UpdateExpression: 'REMOVE modelOverride SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } },
+      ? refreshTtl(chatId, `SET modelOverride = :m, updatedAt = :u, ${VERSION_BUMP}`, { ':m': modelId, ':u': now })
+      : { UpdateExpression: `REMOVE modelOverride SET updatedAt = :u, ${VERSION_BUMP}`, ExpressionAttributeValues: { ':u': now } },
   );
 }
 
@@ -910,11 +977,11 @@ export async function setWarroomMode(
   const now = Math.floor(Date.now() / 1000);
   const Key = { PK: pk(agentId), SK: sk(chatId) };
   if (!meetingId) {
-    await updateIfExists(Key, { UpdateExpression: 'REMOVE activeWarroomId SET updatedAt = :u', ExpressionAttributeValues: { ':u': now } });
+    await updateRowIfExists(Key, { UpdateExpression: `REMOVE activeWarroomId SET updatedAt = :u, ${VERSION_BUMP}`, ExpressionAttributeValues: { ':u': now } });
     return;
   }
-  const entered = await updateIfExists(Key, {
-    UpdateExpression: 'SET activeWarroomId = :w, updatedAt = :u',
+  const entered = await updateRowIfExists(Key, {
+    UpdateExpression: `SET activeWarroomId = :w, updatedAt = :u, ${VERSION_BUMP}`,
     ExpressionAttributeValues: { ':w': meetingId, ':u': now },
   });
   if (entered) return;
@@ -959,9 +1026,9 @@ export async function clearSession(agentId: string, chatId: string): Promise<voi
   // per-message records (WI-1.2), which /newchat keeps, and a reset would hand
   // the next message a sequence number that is already taken. Marking every turn
   // so far as ingested gives the zero pending count the old reset gave.
-  await updateIfExists(
+  await updateRowIfExists(
     { PK: pk(agentId), SK: sk(chatId) },
-    refreshTtl(chatId, 'SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u', {
+    refreshTtl(chatId, `SET turns = :empty, turnsIngested = if_not_exists(turnsTotal, :z), updatedAt = :u, ${VERSION_BUMP}`, {
       ':empty': [],
       ':z': 0,
       ':u': Math.floor(Date.now() / 1000),
@@ -1012,6 +1079,7 @@ export async function getFullHistory(
         text: r.text as string,
         ts: r.ts as number,
         ...(r.status ? { status: r.status as Turn['status'] } : {}),
+        ...(r.requestId !== undefined ? { requestId: r.requestId as string } : {}),
         ...(r.tools ? { tools: r.tools as ToolRecord[] } : {}),
         ...(r.attachments ? { attachments: r.attachments as TurnAttachment[] } : {}),
         ...(r.artifacts ? { artifacts: safeMessageArtifacts(r.artifacts) } : {}),
@@ -1076,6 +1144,7 @@ export async function reownLegacyConversation(
           ...capRecordContent(t),
           ts: t.ts,
           ...(t.status ? { status: t.status } : {}),
+          ...(t.requestId !== undefined ? { requestId: t.requestId } : {}),
           ...(t.surface ? { surface: t.surface } : {}),
           userId: newOwner,
         },
@@ -1175,8 +1244,9 @@ export async function deleteSession(
   } finally {
     // Keep the lock row through parent deletion. A writer that acquires after
     // release re-reads the parent consistently. Only a finalizing draft refuses a
-    // missing parent; a first-turn artifact save or a draft start re-creates the
-    // chat (known gap M1, carried to hardening by owner decision 59).
+    // missing parent; a first-turn artifact save or a draft start refuses one when its
+    // turn has a request id and that turn's marker is gone (M1). A turn with no request id
+    // (public/app.js, POST /test-turn) still re-creates the chat.
     await releaseChildLock();
   }
 }
@@ -1202,18 +1272,21 @@ async function deleteSessionAttachments(agentId: string, chatId: string): Promis
     startKey = out.LastEvaluatedKey;
   } while (startKey);
 
-  if (fileKeys.size > 0) {
-    const bucket = process.env.RAW_BUCKET;
-    if (!bucket) throw new Error('RAW_BUCKET not configured');
-    const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-east-1' });
-    const files = [...fileKeys];
-    for (let i = 0; i < files.length; i += 1000) {
-      const result = await s3.send(new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: files.slice(i, i + 1000).map((Key) => ({ Key })) },
-      }));
-      if (result.Errors?.length) throw new Error(`Failed to delete ${result.Errors.length} stored attachment(s)`);
-    }
+  await deleteRawFiles([...fileKeys]);
+}
+
+async function deleteRawFiles(keys: string[]): Promise<void> {
+  const files = [...new Set(keys.filter(Boolean))];
+  if (files.length === 0) return;
+  const bucket = process.env.RAW_BUCKET;
+  if (!bucket) throw new Error('RAW_BUCKET not configured');
+  const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-east-1' });
+  for (let i = 0; i < files.length; i += 1000) {
+    const result = await s3.send(new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: { Objects: files.slice(i, i + 1000).map((Key) => ({ Key })) },
+    }));
+    if (result.Errors?.length) throw new Error(`Failed to delete ${result.Errors.length} stored attachment(s)`);
   }
 }
 

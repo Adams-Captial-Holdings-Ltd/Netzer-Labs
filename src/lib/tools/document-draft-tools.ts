@@ -92,7 +92,8 @@ async function ownedMeta(ctx: ToolContext, draftId: string): Promise<DraftMeta |
 async function assertStableParent(ctx: ToolContext): Promise<boolean> {
   const session = await getSession(ctx.agentId, ctx.chatId, { consistentRead: true });
   if (!session) {
-    try { await appendTurns(ctx.agentId, ctx.chatId, [], undefined, { surface: 'dashboard', userId: ctx.userId, ephemeral: false }); }
+    try { await appendTurns(ctx.agentId, ctx.chatId, [], undefined, { surface: 'dashboard', userId: ctx.userId, ephemeral: false,
+      ...(ctx.requestId ? { requestId: ctx.requestId } : {}) }); }
     catch { return false; }
   }
   const current = await getSession(ctx.agentId, ctx.chatId, { consistentRead: true });
@@ -283,7 +284,7 @@ async function invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<
       else body = await buildPptx(assembled);
       if (ctx.abortSignal?.aborted) return safeError('Document generation was stopped before storage; draft remains fenced for manual recovery.');
       const fileName = `${meta!.title.trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80) || 'document'}.${meta!.format}`;
-      const descriptor = await saveArtifact({ agentId: ctx.agentId, chatId: ctx.chatId, ownerId: ctx.userId!, fileName,
+      const descriptor = await saveArtifact({ agentId: ctx.agentId, chatId: ctx.chatId, ownerId: ctx.userId!, clientMessageId: ctx.requestId, fileName,
         contentType: CONTENT_TYPES[meta!.format], body,
         source: { kind: 'draft', draftId, revision: meta!.revision, format: meta!.format } });
       await ddb().send(new PutCommand({ TableName: TABLE, Item: { ...meta!, status: 'complete', artifact: descriptor },
