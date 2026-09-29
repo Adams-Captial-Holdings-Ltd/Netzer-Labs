@@ -9,6 +9,8 @@ work_state: in_progress
 
 # Paperclip to staging, goal-first: arm the engine, make Missions collaborative, then 8.5, the board bridge, approvals, governance, skills
 
+> **Partly superseded (2026-09-29).** The Work Platform record supersedes these pieces of this backlog, each marked SUPERSEDED in place: B-1 to B-6 (the board bridge), 8.5-4, 10-4, 11-2, 12-2 and P0-3b. The record is [minimum-sellable-product.md](minimum-sellable-product.md), [do-not-build.md](do-not-build.md), [decision-log.md](decision-log.md) and [ADRs 0012-0020](../../adr/README.md). Only the pieces listed here are marked; nothing below was edited, and the markers are the only additions.
+
 ## Context
 
 ADR 0009 and 0010 adopted Paperclip so that the Missions tab would stop being a per-agent card
@@ -293,6 +295,8 @@ milestone and a credential/billing boundary, so it stays internal and never beco
 noun. The repeatable-run primitive is Paperclip's **routine**. This is the same destination
 as B-6 below. It may make P0-3b unnecessary — settle the direction before building it.
 
+> **SUPERSEDED (2026-09-29) — P0-3b.** Moot once the step-2 re-pin lands: the re-pin to v2026.916.x makes agents write visible issues (@817) ([ADR 0019](../../adr/0019-paperclip-compatibility-program.md)). As of 2026-09-29 the re-pin has not happened. The owner's 2026-09-07 ruling above is kept as history, and the text above is too.
+
 ## Phase 1: hierarchy on the wire and in the detail modal
 
 **P1-1 Characterize before typing.** Over the tunnel: create parent and child issues
@@ -353,6 +357,8 @@ envelope at `authz-matrix.test.ts:463-523` stays byte-identical); goals panel be
 `/api/test-turn` with `/goals` and `/help` returns the shared strings on both dashboard paths; a
 goal created in the panel appears at `GET /api/goals` and in the probe's `goals-list` shape.
 
+> **SUPERSEDED (2026-09-29) — 8.5-4.** Deferred, not built: "Phase 8.5 org/goals chat verbs" is on the defer-until-revenue list (section E of the [minimum sellable product](minimum-sellable-product.md#e-defer)). The text above is kept as history.
+
 **8.5-5 One opt-in, bounded standing line.** Runtime-config `paperclip/context_agents` (seed `[]`,
 `parseEnabledAgents`; separate from `enabled_agents` so context never arms writes, M33);
 `mission-acl.ts` `orgLineFor(slug)` with a 30 s memo returning `''` when off/not opted in/no key;
@@ -376,6 +382,8 @@ route exists; record it); load the UI through the tunnel and record behaviour wh
 WebSocket fails (decides whether B-5 blocks B-6). Criteria: A1-16, A1-17 through the proxy with a
 real browser `Origin`. Output: README §6 "board bridge contract" table.
 
+> **SUPERSEDED (2026-09-29) — B-1.** The host-based board bridge is not built. Customers never use the Paperclip UI, and a customer-facing Paperclip SPA or board bridge is on the [DO NOT BUILD list](do-not-build.md) ([ADR 0017](../../adr/0017-netzer-identity-and-work-ui.md), decision 5). B-1 to B-6 are superseded together. The text above is kept as history.
+
 **B-2 Infra and secrets, both states.** New GitHub env var `CCE_MISSIONS_BOARD_HOSTNAME`
 (staging `missions.staging.pgnos.ai`). Homes (M22/M27/M34/M38): `infra/bin/app.ts:181-205` reads
 it into a `PaperclipStack` prop `publicHostname?` validated with the exported hostname check from
@@ -395,6 +403,8 @@ acceptance 1/2, A20, M33. Live: `describe-task-definition claudeclaw-staging-pap
 values; orchestrator RUNNING (both secret fields resolved); probe step green; tunnel
 `GET /api/health` with `Host: missions.staging.pgnos.ai` 200 and with `Host: nope.example` 403.
 
+> **SUPERSEDED (2026-09-29) — B-2.** Part of the board bridge (see B-1): not built. The parked branch `feat/paperclip-b2-missions-board-infra` holds only this piece's RED test; what happens to that branch is not decided here. The text above is kept as history.
+
 **B-3 Host gate and HTTP reverse proxy.** New adapter `src/adapters/missions-board/handler.ts`
 exporting `buildMissionsBoardRouter(deps)` and `isMissionsBoardHost(host, env)`; mounted in
 `src/server.ts` as the first `app.use('*')` after `secureHeaders()` (:69), host match delegates,
@@ -410,6 +420,8 @@ frame-ancestors https://staging.pgnos.ai` instead of the SAMEORIGIN default so a
 Criteria: Phase 4.5 acceptance 3/5, A38, A2-13, A2-21. Live: no cookie gives 401 JSON; with a gate
 the Paperclip `index.html` and `/assets/index-*.js` 200; sign-up POST 403 and no sign-up line in
 Paperclip's log; `staging.pgnos.ai/dashboard` unchanged; smoke step green.
+
+> **SUPERSEDED (2026-09-29) — B-3.** Part of the board bridge (see B-1): not built. The text above is kept as history.
 
 **B-4 Session bridge, provisioning, revocation.** Dashboard side: `POST
 /api/missions-board/handoff` registered beside `handler.ts:3290-3292` under
@@ -438,6 +450,8 @@ bearer gets a URL; opening it lands signed in as that email (`/api/auth/get-sess
 board host; CEO admin listing shows membership); token reuse 401; viewer 403 envelope; disabling
 the member makes the next board request 401 and company access `[]`; audit rows visible.
 
+> **SUPERSEDED (2026-09-29) — B-4.** Part of the board bridge (see B-1): not built. The text above is kept as history.
+
 **B-5 WebSocket relay.** Export `handleJarvisUpgrade(req, socket, head)` from
 `jarvis.ts:1729-1771` and let `src/index.ts:69` own one dispatcher: board host and path
 `/api/companies/*/events/ws` relays, else Jarvis. Relay validates the gate from the cookie, strips
@@ -445,6 +459,8 @@ it, opens `new WebSocket('ws://<cloud map host>:3100'+path, {headers:{cookie, or
 pipes frames both ways, closes both on either end, pending ceiling copied from `admitPendingAuth`.
 Criteria: Part F.2.1, A2-21, Phase 4.5 acceptance 3. Live: 101 on the board host in devtools; a goal
 created in a second tab appears without reload; Jarvis voice still connects.
+
+> **SUPERSEDED (2026-09-29) — B-5.** Part of the board bridge (see B-1): not built. The text above is kept as history.
 
 **B-6 Missions tab button, docs, bar correction.** "Open full board" on `Missions.tsx` behind
 `hasCapability('missions:board')`, calling the handoff route and `window.open(url,'_blank',
@@ -454,6 +470,8 @@ superseded); HANDOFF; ADR 0010 amendment (host-based bridge; §16.6 and the "SSM
 superseded); `bar-and-phases.md` Part F.2.3 correction blockquote; diagram notes; out-of-band
 catalog row; `.env.example`. Gates green; fresh-context critic reads the README against live
 behaviour. Follow-on recorded, not built: embed the board in the Missions tab as a same-site frame.
+
+> **SUPERSEDED (2026-09-29) — B-6.** Part of the board bridge (see B-1): not built. The text above is kept as history.
 
 ## Phase 10: approvals, review gates, the collaboration record
 
@@ -489,6 +507,8 @@ rendering who delegated or assigned to whom (Part F.4: lead with the timeline). 
 not exposed (acceptance 5). Live: an agent-created approval shows; request-revision in the board
 reflects on refresh; the timeline shows P0-2's delegation edge.
 
+> **SUPERSEDED (2026-09-29) — 10-4.** Approvals are decided in the Netzer Work UI as the approver's shadow user ([ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md), [ADR 0017](../../adr/0017-netzer-identity-and-work-ui.md)), and "Decide in board" deep links go through B-4, which is not built. The text above is kept as history.
+
 **10-5 Tools and chat.** `paperclip_list_approvals`, `paperclip_resubmit_approval(approval_id,
 note)`; `/approvals [status]`; `formatApprovalList`, `formatApprovalCard`; notes enter tool text
 only through `frameUntrustedBlock`; `auditMutation` union gains `resubmit_approval`. Criteria:
@@ -511,6 +531,8 @@ with a pointer at plan §16.6/§16.7; a test asserting serialized `OrgView`/`Goa
 8.5 acceptance 2, A2-13/14. Live: staging page shows the chart; bearer 200, none 401; `org-svg`
 marker.
 
+> **SUPERSEDED (2026-09-29) — 11-2.** The Missions page is no longer the foundation (decision 5, [ADR 0017](../../adr/0017-netzer-identity-and-work-ui.md)), and the four-screen Work UI has no org panel. The text above is kept as history.
+
 **11-3 Disjoint planes.** README §6 statement; a test that no Paperclip permission key string is in
 `CAPABILITIES` and `PATCH /api/agents/{id}/permissions` has no caller under `src/`; optional read-
 only display of `/agents/me.permissions` on the agent detail. Criteria: acceptance 6.
@@ -528,6 +550,8 @@ version, bound agents as slugs), ACL, tool `paperclip_list_skills` (text via `fr
 dashboard `/skills` tab per the tab pattern (`App.tsx` route with `RequireCapability('agents:read')`,
 `route-manifest.ts` ROUTE_TABLE row, `Sidebar.tsx` item). Criteria: acceptance 1/6, A2-16..19, A3-4.
 Live: the tab lists what the tunnel lists; tool via `/api/test-turn`; marker green.
+
+> **SUPERSEDED (2026-09-29) — 12-2.** Skills live in Netzer agent config (decision 12, [ADR 0018](../../adr/0018-managed-solution-packs-v1.md)). The text above is kept as history.
 
 **12-3 Governance with authoring, one PR.** `getSkillPolicy`, `evaluateSkillPolicy`,
 `auditSkill`; the tab shows the policy read-only and each skill's latest verdict; "Author in board"
