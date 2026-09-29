@@ -128,6 +128,10 @@ export interface AuditEvent {
     // v5.7: auth + token lifecycle + guardrail
     | 'token_created'
     | 'token_revoked'
+    // Owner decision 1: a token with no user linked to one person, and an admin
+    // reading a conversation that is not theirs (the audited override).
+    | 'token_linked'
+    | 'session_read_override'
     | 'auth_failure'
     | 'guardrail_intervention'
     // Increment 2: runtime-config bridge writes.
@@ -245,6 +249,10 @@ const ALWAYS_AUDITED_ACTIONS: ReadonlySet<AuditEvent['action']> = new Set([
   'kill_switch_set',
   'token_created',
   'token_revoked',
+  // Decision 1: who owns a token's conversations, and every admin read of a
+  // conversation that is not theirs, are exactly what a hostile admin would hide.
+  'token_linked',
+  'session_read_override',
   'iam_apply',
   // Pausing prod flips kill switches and drains compute — same tier as
   // kill_switch_set, so the trail survives audit_log_disabled.

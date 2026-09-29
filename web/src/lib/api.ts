@@ -43,7 +43,19 @@ export function getToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? localStorage.getItem(TOKEN_KEY) ?? '';
 }
 
+function clearUnknownChatSlot(): void {
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key?.startsWith('cce_chat_draft:unknown/')) sessionStorage.removeItem(key);
+    }
+    sessionStorage.removeItem('cce_chat_active:unknown');
+  } catch { /* Storage is best-effort. */ }
+}
+
 export function setToken(token: string, remember = false): void {
+  clearUnknownChatSlot();
+  sessionStorage.removeItem('cce_chat_active');
   if (remember) {
     localStorage.setItem(TOKEN_KEY, token);
     sessionStorage.removeItem(TOKEN_KEY);
@@ -54,6 +66,8 @@ export function setToken(token: string, remember = false): void {
 }
 
 export function clearToken(): void {
+  clearUnknownChatSlot();
+  sessionStorage.removeItem('cce_chat_active');
   sessionStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(TOKEN_KEY);
   // Never let one session's cached reads bleed into the next.
@@ -108,6 +122,26 @@ export async function downloadFile(path: string, filename: string): Promise<void
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** Authenticated artifact bytes, kept out of the JSON GET cache. */
+export async function getBytes(path: string): Promise<ArrayBuffer> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${getToken()}` };
+  const who = getDashboardUser();
+  if (who) headers['X-Dashboard-User'] = who;
+  const res = await fetch(`/api${path}`, { headers });
+  if (res.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) {
+    const msg = await res.json()
+      .then((b: { error?: string; detail?: string }) => b.detail || b.error || `HTTP ${res.status}`)
+      .catch(() => `HTTP ${res.status}`);
+    throw new Error(msg);
+  }
+  return res.arrayBuffer();
 }
 
 // ── Read-through cache (stale-while-revalidate) for GET requests ──────

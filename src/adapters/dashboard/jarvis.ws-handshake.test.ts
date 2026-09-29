@@ -194,6 +194,22 @@ describe('jarvis WS handshake — close codes', () => {
     expect((await run())._closes[0].code).toBe(4009);
   });
 
+  it('carries the person behind the token into the voice session, as the HTTP path does', async () => {
+    // The ticket holds only the token's hash, role and label. Without the person,
+    // the voice `sessions` answer filtered out every conversation a member owns
+    // (decisions 1 and 9; the second critic's NEW-7).
+    // The principal the whole session runs as, as admission first sees it.
+    const sessionPrincipal = async (record: Record<string, unknown>) => {
+      m.isJarvisEnabled.mockClear();
+      m.lookupToken.mockResolvedValue({ ...activeToken, ...record });
+      (await run())._listeners.close?.();
+      return (m.isJarvisEnabled.mock.calls[0] as unknown[] | undefined)?.[0];
+    };
+
+    expect(await sessionPrincipal({ userId: 'user-a' })).toMatchObject({ tokenHash: 'h', userId: 'user-a' });
+    expect(await sessionPrincipal({ linkedUserId: 'user-b' })).toMatchObject({ tokenHash: 'h', linkedUserId: 'user-b' });
+  });
+
   it('admits a valid handshake → session_ready, no close', async () => {
     const ws = await run();
     expect(ws._closes).toHaveLength(0);

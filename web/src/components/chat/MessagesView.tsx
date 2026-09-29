@@ -20,7 +20,7 @@
  * them, and where the scroll sentinel sits.
  */
 import type { ComponentChildren } from 'preact';
-import type { Message } from '../../lib/chat/types';
+import type { ArtifactRef, Message } from '../../lib/chat/types';
 import { AssistantMessage } from './AssistantMessage';
 import { StreamingRow } from './StreamingRow';
 import { UserMessage } from './UserMessage';
@@ -30,6 +30,11 @@ interface MessagesViewProps {
   messages: Message[];
   /** Display name of the agent answering — the author line on every reply. */
   agentName: string;
+  agentId: string;
+  chatId: string;
+  onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
+  onRetry: (index: number) => void;
+  onRegenerate: () => void;
   /** Landing state: no turns yet, so hug the composer instead of filling. */
   landing: boolean;
   /** True while a turn is in flight; renders the live row. */
@@ -44,11 +49,18 @@ interface MessagesViewProps {
   endRef: { current: HTMLDivElement | null };
   /** Pre-transcript slot: the load-error notice and the landing block. */
   children?: ComponentChildren;
+  /** Notice rendered at the bottom of the transcript. */
+  footer?: ComponentChildren;
 }
 
 export function MessagesView({
   messages,
   agentName,
+  agentId,
+  chatId,
+  onOpenArtifact,
+  onRetry,
+  onRegenerate,
   landing,
   streaming,
   streamText,
@@ -56,6 +68,7 @@ export function MessagesView({
   streamStartedAt,
   endRef,
   children,
+  footer,
 }: MessagesViewProps) {
   return (
     // `flex-1` claims the column's free height so the block below can push
@@ -88,9 +101,14 @@ export function MessagesView({
         {children}
         {messages.map((m, i) =>
           m.role === 'user' ? (
-            <UserMessage key={i} message={m} />
+            <UserMessage key={i} message={m} agentId={agentId} chatId={chatId} />
           ) : (
-            <AssistantMessage key={i} message={m} agentName={agentName} />
+            <AssistantMessage key={i} message={m} agentName={agentName}
+              agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact}
+              canRetry={!streaming && i === messages.length - 1 && !messages[i - 1]?.attachments?.length} onRetry={() => onRetry(i)}
+              needsAttachments={!!messages[i - 1]?.attachments?.length}
+              canRegenerate={!streaming && i === messages.length - 1 && !m.error && !m.notSaved && !m.isReply}
+              onRegenerate={onRegenerate} />
           ),
         )}
         {streaming && (
@@ -102,6 +120,7 @@ export function MessagesView({
           />
         )}
       </div>
+      {footer}
       {/* OUTSIDE the gap container on purpose: a zero-height sentinel inside a
           `gap-7` stack still takes a 28px gap before it, which is dead space
           the composer then sits on top of. */}

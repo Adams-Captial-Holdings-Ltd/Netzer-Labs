@@ -119,7 +119,10 @@ describe('processMedia', () => {
     expect(out.s3Key).toMatch(/^telegram\/owner:emmanuel\//);
   });
 
-  it('builds a document block for pdfs AND ingests into the KB', async () => {
+  // P3 (owner decision 3): a chat file enters the knowledge base only when its
+  // sender opts in, and Telegram has no opt-in control — so this pdf is read by
+  // the model inline and is NOT ingested. (Before P3 every chat document was.)
+  it('builds a document block for pdfs and leaves the KB alone without an opt-in', async () => {
     ingestChatMediaMock.mockResolvedValue({
       docId: 'chat-1',
       scope: 'ops-scope',
@@ -133,13 +136,14 @@ describe('processMedia', () => {
       expect.objectContaining({ kind: 'document', format: 'pdf' }),
     ]);
     expect(out.ackText).toBe('');
-    expect(out.kb).toEqual(expect.objectContaining({ chunks: 5 }));
-    expect(ingestChatMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({ targetAgentId: 'ops', surface: 'telegram', fileName: 'report.pdf' }),
-    );
+    expect(out.kb ?? null).toBeNull();
+    expect(ingestChatMediaMock).not.toHaveBeenCalled();
   });
 
-  it('docx gets no inline block but the ack carries the KB confirmation', async () => {
+  // P3 (WI-3.2): a .docx is a ZIP container, and these bytes are not a ZIP at all,
+  // so the bounded ZIP check refuses it before anything opens it: no block, no
+  // ingest, and an ack that names the file. (Before P3 it went to the KB unread.)
+  it('refuses a docx that is not a real document, and says so', async () => {
     ingestChatMediaMock.mockResolvedValue({
       docId: 'chat-2',
       scope: 'default',
@@ -150,8 +154,8 @@ describe('processMedia', () => {
       input({ kind: 'document', fileName: 'notes.docx', bytes: Buffer.from('zipzip') }),
     );
     expect(out.blocks).toHaveLength(0);
-    expect(out.ackText).toContain('indexed it into the knowledge base');
-    expect(out.ackText).toContain('3 chunks');
+    expect(ingestChatMediaMock).not.toHaveBeenCalled();
+    expect(out.ackText).toContain('notes.docx');
   });
 
   it('voice notes get transcribed and proceed', async () => {
@@ -173,7 +177,9 @@ describe('processMedia', () => {
     expect(out.ackText).toContain("Couldn't transcribe");
   });
 
-  it('videos get a transcript + keyframes and the transcript is KB-ingested', async () => {
+  // P3 (owner decision 3): a video's transcript comes from a chat attachment, so it
+  // too stays out of the knowledge base unless its sender opts in — Telegram cannot.
+  it('videos get a transcript + keyframes and the transcript stays out of the KB', async () => {
     transcribeMock.mockResolvedValue({ transcript: 'quarterly numbers look good', jobName: 'j2' });
     ingestChatMediaMock.mockResolvedValue({
       docId: 'chat-v',
@@ -193,9 +199,7 @@ describe('processMedia', () => {
     expect(transcribeMock).toHaveBeenCalledWith(
       expect.objectContaining({ mimeType: 'video/mp4', maxWaitMs: 180_000 }),
     );
-    expect(ingestChatMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({ transcript: 'quarterly numbers look good', extraTags: ['video'] }),
-    );
+    expect(ingestChatMediaMock).not.toHaveBeenCalled();
     expect(tempCleanupMock).toHaveBeenCalled();
   });
 
@@ -277,13 +281,14 @@ describe('processMedia', () => {
       chunks: 2,
       deduped: false,
     });
+    // P3: an opted-in dashboard file is the one way into the KB now (decision 3).
     await processMedia(
-      input({ kind: 'document', fileName: 'a.pdf', mimeType: 'application/pdf', bytes: Buffer.from('%PDF') }),
+      input({ surface: 'dashboard', addToKnowledge: true, kind: 'document', fileName: 'a.pdf', mimeType: 'application/pdf', bytes: Buffer.from('%PDF') }),
     );
     expect(writeAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'media_upload',
-        surface: 'telegram',
+        surface: 'dashboard',
         detail: expect.objectContaining({ kbDocId: 'chat-9' }),
       }),
     );

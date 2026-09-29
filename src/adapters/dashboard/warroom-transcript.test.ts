@@ -188,4 +188,57 @@ describe('GET /api/warroom-transcripts/:id', () => {
     const text = await pdfText(res);
     expect(text).toContain('turn 150');
   });
+
+  /**
+   * The regression this route shipped with. `buildPdf` REFUSES any character
+   * the WinAnsi font cannot draw (guard added by the document-builder hotfix),
+   * and agent replies routinely contain emoji and check marks. Without the
+   * substitution pass this throws, the route has no catch, and the export 500s
+   * on the first real transcript — a failure that cannot reproduce anywhere the
+   * guard is absent, and that ASCII-only fixtures never see.
+   */
+  it('exports a transcript containing emoji instead of failing on it', async () => {
+    getMeeting.mockResolvedValue({ ...MEETING, title: 'Launch Planning 🚀' });
+    getHistory.mockResolvedValue([
+      {
+        meetingId: 'm1',
+        seq: 1,
+        speaker: 'alice',
+        type: 'user' as const,
+        content: 'Ship it 🚀 — done ✓ (наш план, 計画)',
+        ts: '2026-01-01T00:00:01.000Z',
+      },
+    ]);
+
+    const res = await req('/warroom-transcripts/m1', 'viewer');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+
+    // The renderable text survives; only the unrenderable codepoints are
+    // substituted, so the reader still gets the message.
+    const text = await pdfText(res);
+    expect(text).toContain('Ship it');
+    expect(text).toContain('done');
+    expect(text).not.toContain('🚀');
+  });
+
+  /**
+   * Pins the substitution itself, not only the absence of a 500: each
+   * unrenderable codepoint must arrive as `?` (toPdfSafeText). Without it the
+   * export either 500s (guard present, nothing substituted) or, where the guard
+   * is absent, returns 200 with pdfkit's WinAnsi mis-encoding of the UTF-16
+   * code units: a PDF that opens but reads as garbage. The test above cannot
+   * see that second case; this one can.
+   */
+  it('substitutes unrenderable characters with ? instead of garbling them', async () => {
+    getMeeting.mockResolvedValue(MEETING);
+    getHistory.mockResolvedValue([
+      { meetingId: 'm1', seq: 1, speaker: 'alice', type: 'user' as const, content: 'Ship it 🚀 done ✓', ts: '2026-01-01T00:00:01.000Z' },
+    ]);
+
+    const res = await req('/warroom-transcripts/m1', 'viewer');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+    expect(await pdfText(res)).toContain('Ship it ? done ?');
+  });
 });

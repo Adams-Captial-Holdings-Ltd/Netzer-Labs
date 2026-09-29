@@ -2,8 +2,8 @@
 feature: netzar-chat
 document_role: backlog
 status: accepted
-observed_at: 2026-08-25
-as_of_commit: 06ebe1caf91c4053b0bce6a8fc3c2c82fb9d2710
+observed_at: 2026-09-20
+as_of_commit: eee0a83d7cfd98cc498bf0a509da345925c1183c
 ---
 
 # LibreChat chat UI port — approved plan and phase backlog
@@ -128,7 +128,11 @@ Alpha tokens, `.chat-md` code-block chrome + scoped hljs palette,
 `highlight.js` dep, white-label support. Chat-chunk bundle delta ≤ 70 KB gzip.
 
 ```yaml
-work_state: in_progress
+outcome: landed
+reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+present_in_current_source: true
+deployment: staging
+verification: code_verified
 ```
 
 ### CHATUI-002 — Phase 2: layout shell + header
@@ -137,7 +141,11 @@ Open canvas, shared column, ChatHeader overlay; tour anchors and NEW CHAT
 dialog unchanged.
 
 ```yaml
-work_state: in_progress
+outcome: landed
+reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+present_in_current_source: true
+deployment: staging
+verification: code_verified
 ```
 
 ### CHATUI-003 — Phase 3: message list
@@ -157,7 +165,11 @@ than in CHATUI-004 because a turn that cannot be read or stopped is a message
 list defect, not a composer feature.
 
 ```yaml
-work_state: in_progress
+outcome: landed
+reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+present_in_current_source: true
+deployment: staging
+verification: code_verified
 ```
 
 ### CHATUI-004 — Phase 4: composer
@@ -166,7 +178,11 @@ Autosize card, Send↔Stop with abort keeping partial text, attachments,
 identical disabled logic.
 
 ```yaml
-work_state: approved
+outcome: landed
+reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+present_in_current_source: true
+deployment: staging
+verification: code_verified
 ```
 
 ### CHATUI-005 — Phase 5: agent + model picker
@@ -176,7 +192,11 @@ agent and every model plus "Agent default" reachable and selectable; deep-link
 preselect; keyboard-only selection.
 
 ```yaml
-work_state: approved
+outcome: landed
+reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+present_in_current_source: true
+deployment: staging
+verification: code_verified
 ```
 
 ### CHATUI-006 — Phase 6: conversation sidebar
@@ -184,7 +204,11 @@ work_state: approved
 Date groups, delete flow preserved, desktop collapse + minimal mobile drawer.
 
 ```yaml
-work_state: approved
+outcome: landed
+reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+present_in_current_source: true
+deployment: staging
+verification: code_verified
 ```
 
 ### CHATUI-007 — Phase 7: polish, docs, ship
@@ -195,13 +219,38 @@ PR → `development`, promote `qa` → `staging`, staging QA, final full-journey
 blind critic.
 
 ```yaml
-work_state: approved
+outcome: superseded
+reachable_commit: b3b427497d63d8f4d1faa147b46c9681c19bc460
+present_in_current_source: true
+deployment: staging
+verification: code_verified
+```
+
+Superseded by CHATUI-008: its full validation, PR, and promotion deliverables
+landed, but authenticated staging QA, the dependent full-journey blind critic,
+and the doc-owner line-pin refresh did not run. Those three move to CHATUI-008.
+
+`present_in_current_source: true` reads against the `reachable_commit` above:
+`b3b4274` is an ancestor of `development`, so what this phase did ship is in the
+source today. `false` is the value for a superseded item whose work never landed
+or was reverted, which carries `reachable_commit: none` (see `MISSION-033` in
+[the missions backlog](../../missions-v2-backlog.md)). What is missing here is
+named in the paragraph above, not encoded in this key.
+
+### CHATUI-008 — staging verification of the shipped chat UI
+
+Authenticated staging QA, then the full-journey blind critic, followed by the
+line-pin refresh for the doc owners named above. Blocked on owner decision 6:
+the owner mints a dedicated spend-capped staging token and authorizes each run.
+
+```yaml
+work_state: blocked
 ```
 
 ## Verification
 
 - Unit tests in the root suite: `src/adapters/dashboard/chat-stream.test.ts`,
-  `chat-helpers.test.ts`, `chat-source-contract.test.ts`.
+  `chat-helpers.test.ts`.
 - Local streaming UX via the mock-SSE fixtures (Floci's Bedrock stub cannot
   stream or emit tool events — see
   [development.md known limitations](../../../development.md#known-local-limitations)).

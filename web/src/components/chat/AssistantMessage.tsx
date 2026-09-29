@@ -54,10 +54,12 @@
  * same `N tool(s)`. CLAUDE.md's chat-surface parity rule makes that a contract:
  * change the copy here and the other surfaces have to move with it.
  */
-import type { Message, TurnMeta } from '../../lib/chat/types';
+import type { ArtifactRef, Message, TurnMeta } from '../../lib/chat/types';
 import { renderMarkdown } from '../../lib/chat/markdown';
+import { ArtifactCard } from './ArtifactCard';
 import { AgentMark, MessageRow, isoFromEpochSeconds } from './MessageRow';
 import { ToolCallsSection } from './ToolCallsSection';
+import { Button } from '../Button';
 import CancelledIcon from './lc/components/Chat/Messages/Content/CancelledIcon';
 import MinimalHoverButtons from './lc/components/Chat/Messages/MinimalHoverButtons';
 
@@ -130,10 +132,12 @@ export function RunFooter({ meta, showToolCount }: RunFooterProps) {
  * What a turn the reader cancelled has instead of a run footer.
  *
  * It cannot have one: a stopped turn never reaches its `final` event, so there
- * is no modelId, no latency and no metered cost to report. Printing the numbers
- * we happen to have (or worse, zeros) in the audit row would be a lie in the
- * one place on this page that must not lie, so the slot says plainly what
- * happened and stops there. Same type and same sub-row as RunFooter, so the
+ * is no modelId, no latency and no metered cost to report here. Since P2 the
+ * turn's usage IS recorded — the server settles it from an estimate that errs
+ * on the safe side — so the footer says the cost was estimated rather than that
+ * no run was recorded, and still shows no numbers: printing the ones we happen
+ * to have (or worse, zeros) in the audit row would be a lie in the one place on
+ * this page that must not lie. Same type and same sub-row as RunFooter, so the
  * transcript's rhythm is unbroken.
  */
 function StoppedFooter() {
@@ -147,7 +151,7 @@ function StoppedFooter() {
       <span aria-hidden="true" class="size-4 shrink-0">
         <CancelledIcon />
       </span>
-      <span>stopped — partial reply, no run recorded</span>
+      <span>stopped — partial reply, cost estimated</span>
     </div>
   );
 }
@@ -155,9 +159,17 @@ function StoppedFooter() {
 interface AssistantMessageProps {
   message: Message;
   agentName: string;
+  agentId: string;
+  chatId: string;
+  onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
+  canRetry: boolean;
+  needsAttachments: boolean;
+  onRetry: () => void;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
 }
 
-export function AssistantMessage({ message, agentName }: AssistantMessageProps) {
+export function AssistantMessage({ message, agentName, agentId, chatId, onOpenArtifact, canRetry, needsAttachments, onRetry, canRegenerate, onRegenerate }: AssistantMessageProps) {
   const tools = message.tools ?? [];
 
   return (
@@ -182,9 +194,7 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
           ) : message.stopped ? (
             <StoppedFooter />
           ) : null}
-          {/* The action row this product did not have. Copy only — see the
-              copied file's header for why regenerate and feedback are absent
-              rather than disabled.
+          {/* The action row: Copy on replies, Regenerate on the last saved reply.
 
               ── ROUND 3: `chat-row-actions` IS WHAT MAKES IT EXIST ON TOUCH ──
 
@@ -216,7 +226,7 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
               because it is an action, but because it is already visible on a
               phone and there is no reason for a 900px window to disagree. */}
           <div class="chat-row-actions">
-            <MinimalHoverButtons message={message} />
+            <MinimalHoverButtons message={message} onRegenerate={canRegenerate ? onRegenerate : undefined} />
           </div>
         </div>
       }
@@ -226,23 +236,31 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
           no tool array, and the footer's count stands in for it. */}
       {tools.length > 0 && <ToolCallsSection tools={tools} />}
 
-      {message.error ? (
-        // The one assistant turn that IS boxed. A failure has to be visibly a
-        // failure and not mistakable for a short answer, so it keeps the
-        // donor's bordered danger panel — and stays a `<pre>`, because the text
-        // is a sanitized error string, never markdown.
-        <div class="rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3">
-          <pre class="whitespace-pre-wrap break-words font-sans text-body-sm text-danger">
-            {message.text}
-          </pre>
-        </div>
-      ) : (
+      {message.text && (!message.error || message.failure) && (
         // DOMPurify runs inside renderMarkdown, last, immediately before this
         // is handed to dangerouslySetInnerHTML (web/src/lib/chat/markdown.ts).
         <div class="chat-md break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
       )}
+      {message.error && (
+        // Only the failure sentence belongs in the alert; any partial answer
+        // above uses the same markdown treatment as a complete reply.
+        <div role="alert" class={`chat-error-panel rounded-xl border border-danger-a/40 bg-danger-a/10 px-4 py-3 ${message.text && message.failure ? 'mt-3' : ''}`}>
+          <pre class="whitespace-pre-wrap break-words font-sans text-body-sm">
+            {message.failure ?? message.text}
+          </pre>
+          {canRetry ? <Button variant="secondary" size="sm" onClick={onRetry} class="mt-2">Try again</Button>
+            : needsAttachments ? <p class="mt-2 text-body-sm">Please attach the files again.</p> : null}
+        </div>
+      )}
 
-      <MessageAttachments message={message} />
+      <MessageAttachments message={message} agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
+
+      {/* The answer arrived but the server could not store it (`done:
+          not_saved`): one caption, so the reader knows it is theirs to copy now
+          and will not be here after a reload. */}
+      {message.notSaved && (
+        <p class="mt-2 text-caption text-secondary">This reply wasn't saved, so it won't be here after a reload.</p>
+      )}
     </MessageRow>
   );
 }
@@ -253,11 +271,17 @@ export function AssistantMessage({ message, agentName }: AssistantMessageProps) 
  * container so they sit on the page ground at the column's full width, the way
  * the donor's attachment group does.
  */
-function MessageAttachments({ message }: { message: Message }) {
+function MessageAttachments({ message, agentId, chatId, onOpenArtifact }: {
+  message: Message;
+  agentId: string;
+  chatId: string;
+  onOpenArtifact: (ref: ArtifactRef, opener: HTMLButtonElement) => void;
+}) {
   const images = message.images ?? [];
   const artifacts = message.artifacts ?? [];
+  const artifactRefs = message.artifactRefs ?? [];
   const kb = message.kb ?? [];
-  if (images.length === 0 && artifacts.length === 0 && kb.length === 0) return null;
+  if (images.length === 0 && artifacts.length === 0 && artifactRefs.length === 0 && kb.length === 0) return null;
 
   return (
     <div class="mt-3 space-y-2">
@@ -269,7 +293,7 @@ function MessageAttachments({ message }: { message: Message }) {
             class="max-h-96 max-w-full rounded-xl border border-border"
             loading="lazy"
           />
-          {im.caption && <span class="mt-1 block text-caption text-muted">{im.caption}</span>}
+          {im.caption && <span class="mt-1 block text-caption text-secondary">{im.caption}</span>}
         </a>
       ))}
 
@@ -292,6 +316,11 @@ function MessageAttachments({ message }: { message: Message }) {
           <span class="min-w-0 flex-1 truncate text-body-sm text-primary">{a.name}</span>
           <span class="shrink-0 text-caption text-secondary">Download</span>
         </a>
+      ))}
+
+      {artifactRefs.map((artifact) => (
+        <ArtifactCard key={`${artifact.artifactId}:${artifact.version}`} artifact={artifact}
+          agentId={agentId} chatId={chatId} onOpenArtifact={onOpenArtifact} />
       ))}
 
       {kb.map((k, j) => (

@@ -195,6 +195,7 @@ export interface MenuPanel {
 export interface CommandMenuProps {
   /** Visible text on the trigger — the current selection. */
   triggerLabel: string;
+  triggerContent?: JSX.Element;
   /** Accessible name for the trigger (the label alone reads as a bare value). */
   triggerAriaLabel: string;
   /** `title` attribute, for the truncated case. */
@@ -440,6 +441,7 @@ function segment(rows: MenuRow[]): Array<{ label?: string; key: string; rows: Ac
 
 export function CommandMenu({
   triggerLabel,
+  triggerContent,
   triggerAriaLabel,
   triggerTitle,
   triggerIcon,
@@ -1173,7 +1175,7 @@ export function CommandMenu({
             {triggerIcon}
           </span>
         )}
-        <span class="min-w-0 truncate">{triggerLabel}</span>
+        <span class="min-w-0 truncate">{triggerContent ?? triggerLabel}</span>
         {/* COPIED from the donor's own trigger (`Chat/Menus/Endpoints/
             ModelSelector.tsx`): `flex h-9 max-w-full items-center gap-2 …
             px-3 py-2`, an icon, and `<span className="truncate text-left">`.

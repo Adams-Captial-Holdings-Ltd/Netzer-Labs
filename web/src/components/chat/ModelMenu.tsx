@@ -59,6 +59,7 @@
 import { Cpu, Pin } from 'lucide-preact';
 import type { Model } from '../../lib/chat/types';
 import { modelOptionLabel } from '../../lib/chat/helpers';
+import { modelTriggerParts } from '../../lib/chat/model-label';
 import { CommandMenu } from './CommandMenu';
 import type { MenuPanel, MenuRow } from './CommandMenu';
 
@@ -268,6 +269,13 @@ export function ModelMenu({ models, modelId, onSelect, disabled = false }: Model
     <CommandMenu
       menuName="model"
       triggerLabel={label}
+      triggerContent={pinned && active ? (() => {
+        const parts = modelTriggerParts(active);
+        return <span class="inline-flex min-w-0 items-center gap-1.5">
+          <span data-model-family class="truncate font-medium">{parts.family}</span>
+          <span data-model-context class="rounded-md border border-border bg-bg px-1 text-caption text-secondary">{parts.context}</span>
+        </span>;
+      })() : undefined}
       triggerAriaLabel={
         pinned
           ? `Model: pinned to ${label}`

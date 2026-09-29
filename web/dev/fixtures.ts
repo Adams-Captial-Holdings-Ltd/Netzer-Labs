@@ -177,21 +177,28 @@ const toolsText = `Here is what the failed staging rollout came down to.
 // tidy full stop when the second tool window opens over it.
 const TOOLS_TEXT_BREAK = 210;
 
+/** Pair each live call with its result, preserving the fixture's status windows. */
+function toolEvents(label: string, step: number, input: string, output: string, delayMs: number, resultDelayMs: number, isError = false, truncated = false): MockSseEvent[] {
+  const toolUseId = `tu-${step}`;
+  return [
+    { event: 'tool', data: JSON.stringify({ label, step, toolUseId, input, inputTruncated: false }), delayMs },
+    { event: 'tool_result', data: JSON.stringify({ toolUseId, output, isError, truncated }), delayMs: resultDelayMs },
+  ];
+}
+
 const toolsFixture: Fixture = [
-  { event: 'tool', data: JSON.stringify({ label: 'web search', step: 1 }), delayMs: 260 },
-  { event: 'tool', data: JSON.stringify({ label: 'Knowledge: search', step: 2 }), delayMs: 1000 },
-  { event: 'tool', data: JSON.stringify({ label: 'Slack: search public', step: 3 }), delayMs: 1000 },
+  ...toolEvents('web search', 1, '{"query":"failed staging rollout"}', 'Found 3 pages about the failed rollout.', 260, 1000),
+  ...toolEvents('Knowledge: search', 2, '{"query":"staging rollout incident"}', 'The staging task used an outdated image tag and failed its health check. '.repeat(40).slice(0, 2048), 0, 1000, false, true),
+  ...toolEvents('Slack: search public', 3, '{"query":"rollout in:deploys"}', 'Slack search is not connected for this agent.', 0, 55, true),
   // Text resumes: streamTurn's chunk branch clears the status line.
   ...cumulativeRange(toolsText, 0, TOOLS_TEXT_BREAK, 12, 55),
   // …and a mid-answer tool call brings it back, over prose that is already on
   // screen. This is the captured frame.
-  { event: 'tool', data: JSON.stringify({ label: 'code interpreter', step: 4 }), delayMs: 900 },
-  { event: 'tool', data: JSON.stringify({ label: 'document generator', step: 5 }), delayMs: 1400 },
-  // The tail's FIRST chunk is what closes the second status window (the chunk
-  // branch clears the line), so it waits too — otherwise step 5 would flash for
-  // 55ms and the window would only ever be step 4's.
+  ...toolEvents('code interpreter', 4, '{"code":"compare_image_tags()"}', 'The deployed image tag differs from the latest push.', 900, 1400),
+  ...toolEvents('document generator', 5, '{"title":"Staging rollout incident"}', 'Created the staging rollout incident note.', 0, 1400),
+  // The result already held step 5's status window; the tail can resume now.
   ...cumulativeRange(toolsText, TOOLS_TEXT_BREAK, toolsText.length, 16, 55).map((ev, i) =>
-    i === 0 ? { ...ev, delayMs: 1400 } : ev,
+    i === 0 ? { ...ev, delayMs: 0 } : ev,
   ),
   finalEvent(toolsText, { latencyMs: 8320, costUsd: 0.0409, toolCallCount: 5 }),
 ];
@@ -254,8 +261,59 @@ const longstreamFixture: Fixture = (() => {
   return events;
 })();
 
+// ── P2 review fixtures (test data for tests/e2e/chat/lifecycle.spec.ts) ─────────
+
+// notsaved: the answer arrives, then the server reports it could not store it.
+const notSavedText = 'This answer arrived, but the server could not store it.';
+const notSavedFixture: Fixture = [
+  ...cumulativeChunks(notSavedText, 4),
+  finalEvent(notSavedText, { latencyMs: 1200, costUsd: 0.004, toolCallCount: 0 }),
+  { event: 'done', data: 'not_saved' },
+];
+
+// typed-error: a protocol-2 error, {code, message}, the message already plain English.
+const typedErrorFixture: Fixture = [
+  { event: 'error', data: JSON.stringify({ code: 'internal_error', message: 'Something went wrong on our side. Try again.' }) },
+];
+
+// tool-capped: one call whose arguments were cut at 1 KB before they were sent.
+const toolCappedText = 'Drafted the long note you asked for.';
+const toolCappedFixture: Fixture = [
+  {
+    event: 'tool',
+    data: JSON.stringify({
+      label: 'document generator', step: 1, toolUseId: 'tu-1',
+      input: `{"body":"${'A long paragraph of the note. '.repeat(40)}`.slice(0, 1024), inputTruncated: true,
+    }),
+    delayMs: 200,
+  },
+  { event: 'tool_result', data: JSON.stringify({ toolUseId: 'tu-1', output: 'Created the note.', isError: false, truncated: false }), delayMs: 300 },
+  ...cumulativeChunks(toolCappedText, 3),
+  finalEvent(toolCappedText, { latencyMs: 1900, costUsd: 0.006, toolCallCount: 1 }),
+];
+
+// drop (P7, A240; test data for tests/e2e/chat/hardening.spec.ts): the connection drops partway through the
+// reply. `drop` is a marker, never written to the wire: the mock records what streamed as a stopped reply,
+// as the real route's abort path saves it, then destroys the connection, so the page meets a network failure
+// in the middle of the body rather than an end of stream (mock-stream-plugin.ts).
+const dropText = 'The rollout reached the first two regions before the third one';
+const dropFixture: Fixture = [
+  ...cumulativeChunks(dropText, 2),
+  { event: 'drop', data: '', delayMs: 300 },
+];
+// drop-late (P7, A240): the same drop, but the mock saves the stopped reply a moment AFTER the connection drops,
+// as the real route does when its outbound scan finishes after the page has seen the drop.
+const dropLateFixture: Fixture = [
+  ...cumulativeChunks(dropText, 2),
+  { event: 'drop', data: 'late', delayMs: 300 },
+];
+
 export const fixtures: Record<string, Fixture> = {
   default: defaultFixture,
+  'wide-table': (() => {
+    const text = `| Alpha | Bravo | Charlie | Delta | Echo | Foxtrot | Golf | Hotel |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| extraordinarilylongalpha | extraordinarilylongbravo | extraordinarilylongcharlie | extraordinarilylongdelta | extraordinarilylongecho | extraordinarilylongfoxtrot | extraordinarilylonggolf | extraordinarilylonghotel |`;
+    return [...cumulativeChunks(text, 3), finalEvent(text, { latencyMs: 900, costUsd: 0.002, toolCallCount: 0 })];
+  })(),
   code: codeFixture,
   tools: toolsFixture,
   'error-mid': errorMidFixture,
@@ -263,4 +321,9 @@ export const fixtures: Record<string, Fixture> = {
   media: mediaFixture,
   reply: replyFixture,
   longstream: longstreamFixture,
+  notsaved: notSavedFixture,
+  'typed-error': typedErrorFixture,
+  'tool-capped': toolCappedFixture,
+  drop: dropFixture,
+  'drop-late': dropLateFixture,
 };

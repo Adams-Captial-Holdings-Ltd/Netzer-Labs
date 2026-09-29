@@ -88,5 +88,16 @@ Merge PR #34, then open a PR for this branch into `development`.
 
 After that, M2 (durable artifacts) — but answer the visibility question first.
 
+## Session index
+
+Newest first.
+
+- 2026-08-14 — [document delivery and chat history (raw)](handoffs/2026-08-14-persistent-workspaces-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: PRs #34 and
+  #36 merged and promoted to `staging`; no deploy had succeeded yet.
+- 2026-08-13 — [persistent chat history (raw)](handoffs/2026-08-13-chat-history-raw.md):
+  historical, imported 2026-09-17. Never-committed chat-side log: the
+  pre-implementation brief for conversation persistence (M1).
+
 Authorities: [README](README.md), [ADR 0002](../../adr/0002-single-tenant.md),
 [ADR 0009](../../adr/0009-mission-container-model.md).

@@ -491,8 +491,10 @@ describe('telegram: a session command acts on the session ordinary chat uses', (
 
   it('/warroom arms the flag on the session the war-room check actually reads', async () => {
     await drive('research', '/warroom planning');
-    expect(h.setWarroomMode).toHaveBeenCalledWith('main', '42', 'room-1');
-    expect(h.setWarroomMode).not.toHaveBeenCalledWith('research', '42', 'room-1');
+    // The trailing undefined is the conversation owner, which only the dashboard
+    // passes (it alone checks who owns a conversation).
+    expect(h.setWarroomMode).toHaveBeenCalledWith('main', '42', 'room-1', undefined);
+    expect(h.setWarroomMode).not.toHaveBeenCalledWith('research', '42', 'room-1', undefined);
 
     // And the room really routes: with the flag on that session, the next
     // message on the same bot is published to the room instead of falling

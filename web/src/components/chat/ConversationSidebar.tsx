@@ -38,9 +38,9 @@
  *   - `Convo.tsx` reads `useParams`, `useRecoilValue`, `useNavigateToConvo`,
  *     `useUpdateConversationMutation`, `useGetStartupConfig` and `useShiftKey`
  *     in its first ten lines, and its actions slot is a rename form plus a
- *     `ConvoOptions` popover for pin/share/archive/delete. This product has
- *     one action (delete) and it is a plain sibling button, so what survives
- *     is the row's markup and class list, not the component.
+ *     `ConvoOptions` popover for pin/share/archive/delete. This product uses
+ *     plain sibling buttons for rename, pin and delete, so what survives is
+ *     the row's markup and class list, not the component.
  *   - `ConvoLink.tsx`'s gradient fade mask (`textOverflow: clip` plus a 5rem
  *     `bg-gradient-to-l` in the row's own background colour) assumes a
  *     single-line row whose background it can name. This row is two lines —
@@ -129,9 +129,10 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren, RefObject } from 'preact';
-import { PanelLeftClose, PanelLeftOpen, Plus, Trash2 } from 'lucide-preact';
+import { PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Pin, Check, X } from 'lucide-preact';
 import type { Conversation } from '../../lib/chat/types';
 import { conversationTitle, relativeAge } from '../../lib/chat/helpers';
+import { Button } from '../Button';
 import { groupConversationsByDate } from './conversation-groups';
 
 /*
@@ -221,6 +222,12 @@ interface ConversationSidebarProps {
   /** The conversation currently on screen — the row that is marked active. */
   activeChatId: string;
   loading: boolean;
+  loadError: boolean;
+  onRetryLoad: () => void;
+  search: string;
+  onSearch: (value: string) => void;
+  onRename: (c: Conversation, title: string) => void;
+  onTogglePin: (c: Conversation) => void;
   /** A turn is in flight: navigating away or deleting is refused, exactly as
    *  the inline rail refused it. */
   streaming: boolean;
@@ -234,6 +241,8 @@ interface ConversationSidebarProps {
   onToggleCollapse: () => void;
   /** Below `lg` only: is the off-canvas drawer showing? */
   mobileOpen: boolean;
+  /** Chat content that the drawer makes inert while it is open. */
+  pageContentRef: RefObject<HTMLDivElement>;
   onCloseMobile: () => void;
 }
 
@@ -241,6 +250,12 @@ export function ConversationSidebar({
   conversations,
   activeChatId,
   loading,
+  loadError,
+  onRetryLoad,
+  search,
+  onSearch,
+  onRename,
+  onTogglePin,
   streaming,
   deleting,
   onOpen,
@@ -249,9 +264,24 @@ export function ConversationSidebar({
   collapsed,
   onToggleCollapse,
   mobileOpen,
+  pageContentRef,
   onCloseMobile,
 }: ConversationSidebarProps) {
-  const groups = groupConversationsByDate(conversations);
+  const pinned = conversations.filter((c) => c.pinned);
+  const groups = [
+    ...(pinned.length ? [{ label: 'Pinned', conversations: pinned }] : []),
+    ...groupConversationsByDate(conversations.filter((c) => !c.pinned)),
+  ];
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState('');
+  useLayoutEffect(() => {
+    if (!renamingId) return;
+    const fields = document.querySelectorAll<HTMLInputElement>('input[aria-label="Chat title"]');
+    const field = [...fields].find((candidate) => !candidate.closest('[inert]') && candidate.getClientRects().length > 0);
+    field?.focus();
+    field?.setSelectionRange(0, field.value.length, 'backward');
+    if (field) field.scrollLeft = 0;
+  }, [renamingId]);
   // What the scrolling list is re-measured against (see ConversationList): the
   // rows it holds, and whether the empty-state paragraph is standing in for
   // them. Both change the content height, and neither resizes the scroller.
@@ -263,15 +293,29 @@ export function ConversationSidebar({
   // because the panel is not guaranteed to hold focus (a reader can tab out of
   // it in a browser that ignores `inert`), and "Escape gets me out" has to hold
   // from wherever focus actually is. Same shape as ConfirmDialog/Modal.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!mobileOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseMobile(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Escape') { e.preventDefault(); onCloseMobile(); }
+      if (e.key !== 'Tab') return;
+      const focusable = [...(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])]
+        .filter((el) => !el.closest('[inert]') && el.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (e.shiftKey && (document.activeElement === first || !drawerRef.current?.contains(document.activeElement))) {
+        e.preventDefault(); last?.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !drawerRef.current?.contains(document.activeElement))) {
+        e.preventDefault(); first?.focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [mobileOpen, onCloseMobile]);
 
-  // ONE effect, because `inert` and the focus handoff have to be SEQUENCED and
-  // two effects cannot promise that.
+  // ONE effect, because the drawer's and page's `inert` flips and the focus
+  // handoff have to be SEQUENCED; two effects cannot promise that.
   //
   // The drawer stays MOUNTED while closed so it can slide, and a translated
   // element is still focusable — a closed drawer would otherwise sit in the tab
@@ -287,34 +331,36 @@ export function ConversationSidebar({
   // see; closing puts it back on the control that opened it. Both directions
   // depend on the order relative to `inert`, and in opposite ways —
   //
-  //   opening: clear `inert` FIRST. `focus()` on an element inside an inert
-  //            subtree is a silent no-op, so a handoff that ran first would do
-  //            nothing at all.
+  //   opening: clear drawer `inert`, make the page inert, then focus the close
+  //            button. `focus()` inside an inert subtree is a silent no-op.
   //   closing: read `document.activeElement` BEFORE setting `inert`. Making a
   //            subtree inert blurs whatever is inside it, so a containment
-  //            check made afterwards always answers "focus was not in here" and
-  //            the opener never gets focus back.
+  //            check made afterwards always answers "focus was not in here";
+  //            then clear the page's `inert` before returning focus to opener.
   //
   // The donor drives this off the commit rather than a timer for the same
   // reason ("a wall-clock timer would race the deferred state flip"), and so
   // does this.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = drawerRef.current as (HTMLDivElement & { inert?: boolean }) | null;
     if (mobileOpen) {
       if (el) el.inert = false;
+      if (pageContentRef.current) pageContentRef.current.inert = true;
       closeRef.current?.focus();
     } else {
       const hadFocus = el?.contains(document.activeElement) ?? false;
       if (el) el.inert = true;
+      if (pageContentRef.current) pageContentRef.current.inert = false;
       if (hadFocus) document.getElementById(OPEN_SIDEBAR_ID)?.focus();
     }
-  }, [mobileOpen]);
+  }, [mobileOpen, pageContentRef]);
 
   // ── One list, rendered into both shells ──────────────────────────────────
   const list = (
     <>
-      {conversations.length === 0 && !loading && (
-        <p class="px-2 py-2 text-caption text-muted">
+      {loadError && <div role="alert" class="chat-error-panel flex flex-wrap items-center gap-2 rounded-xl border border-danger-a/40 bg-danger-a/10 px-3 py-2 text-caption">Could not load your chats. <Button variant="secondary" size="sm" onClick={onRetryLoad}>Try again</Button></div>}
+      {conversations.length === 0 && !loading && !loadError && (
+        <p class="px-2 py-2 text-caption text-secondary">
           No past conversations yet. They appear here once you send a message.
         </p>
       )}
@@ -325,7 +371,7 @@ export function ConversationSidebar({
               the first group so the list starts at the panel's padding. */}
           <h3
             id={`chat-group-${group.label}`}
-            class={`pl-1 pt-1 text-muted ${groupIndex === 0 ? 'mt-0' : 'mt-3'}`}
+            class={`pl-1 pt-1 text-secondary ${groupIndex === 0 ? 'mt-0' : 'mt-3'}`}
             style={{ fontSize: '0.7rem' }}
           >
             {group.label}
@@ -369,7 +415,17 @@ export function ConversationSidebar({
                       : 'hover:bg-row-hover'
                   }`}
                 >
-                  <button
+                  {renamingId === c.chatId ? <input
+                    aria-label="Chat title"
+                    maxLength={120}
+                    value={renameTitle}
+                    onInput={(e) => setRenameTitle(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') { if (!e.shiftKey) e.stopPropagation(); setRenamingId(null); }
+                      if (e.key === 'Enter') { e.preventDefault(); onRename(c, renameTitle); setRenamingId(null); }
+                    }}
+                    class="min-w-0 flex-1 rounded-lg border border-border bg-bg px-2 py-1 text-body-sm text-primary"
+                  /> : <button
                     type="button"
                     disabled={streaming}
                     onClick={() => onOpen(c.chatId)}
@@ -393,19 +449,15 @@ export function ConversationSidebar({
                     >
                       {title}
                     </span>
-                    {/* `text-secondary`, not `text-muted`. The rail's grounds
-                        are darker now (light) and lighter (dark) than the
-                        panel, and muted ink on the active row's fill measures
-                        1.86:1 light / 2.30:1 dark — worse than the 2.82:1 it
-                        had on the old white row. Secondary ink puts the same
-                        line at 3.70:1 / 4.98:1 on the active row and 4.44:1 /
-                        5.94:1 on a hovered one, so the fill is paid for
-                        instead of charged to the metadata. */}
-                    <span class="block text-caption text-secondary">
+                    {/* Chat-scoped #55557a ink clears 4.5:1 in light: 6.50:1
+                        on the panel, 5.60:1 on hover and 4.67:1 on active.
+                        Dark uses #a6a6bd for 5.31:1 on active, with more on
+                        the darker hover fill. */}
+                    <span class="chat-rail-meta block text-caption text-secondary">
                       {relativeAge(c.updatedAt)}
                       {c.messageCount ? ` · ${c.messageCount} msg` : ''}
                     </span>
-                  </button>
+                  </button>}
                   {/* ── ACTION SLOT ────────────────────────────────────────
                       COPIED from donor `Convo.tsx`'s action wrapper — its
                       `actionVisibilityClassName` / `actionWidthClassName`
@@ -451,12 +503,43 @@ export function ConversationSidebar({
                       motion-reduce:transition-none
                       [@media(hover:hover)]:pointer-events-none [@media(hover:hover)]:max-w-0
                       [@media(hover:hover)]:scale-x-0 [@media(hover:hover)]:opacity-0
-                      group-hover:pointer-events-auto group-hover:max-w-[2.25rem]
+                      group-hover:pointer-events-auto group-hover:max-w-[6.75rem]
                       group-hover:scale-x-100 group-hover:opacity-100
                       group-focus-within:pointer-events-auto
-                      group-focus-within:max-w-[2.25rem] group-focus-within:scale-x-100
+                      group-focus-within:max-w-[6.75rem] group-focus-within:scale-x-100
                       group-focus-within:opacity-100"
                   >
+                    {renamingId === c.chatId ? <>
+                      <button type="button"
+                        aria-label="Save title" title="Save title"
+                        onClick={(e) => { e.stopPropagation(); onRename(c, renameTitle); setRenamingId(null); }}
+                        class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary">
+                        <Check size={15} />
+                      </button>
+                      <button type="button"
+                        aria-label="Cancel rename" title="Cancel rename"
+                        onClick={(e) => { e.stopPropagation(); setRenamingId(null); }}
+                        class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary">
+                        <X size={15} />
+                      </button>
+                    </> : <>
+                    <button type="button" disabled={streaming || deleting}
+                      aria-label={`Rename chat: ${title}`} title="Rename chat"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Match the server's UNSAFE_ARTIFACT_TITLE_PATTERN after cutting the stored UTF-16 text.
+                        setRenameTitle((c.title ?? c.firstMessage ?? '').slice(0, 120).replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]+/gu, ' ').trim());
+                        setRenamingId(c.chatId);
+                      }}
+                      class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40">
+                      <Pencil size={15} />
+                    </button>
+                    <button type="button" disabled={streaming || deleting}
+                      aria-label={`${c.pinned ? 'Unpin' : 'Pin'} chat: ${title}`} title={c.pinned ? 'Unpin chat' : 'Pin chat'}
+                      onClick={(e) => { e.stopPropagation(); onTogglePin(c); }}
+                      class="flex size-9 items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40">
+                      <Pin size={15} />
+                    </button>
                     {/* A SIBLING of the row button, never nested inside it: a
                         <button> within a <button> is invalid HTML, and nesting
                         would make one click both open and delete the
@@ -483,6 +566,7 @@ export function ConversationSidebar({
                     >
                       <Trash2 size={15} />
                     </button>
+                    </>}
                   </div>
                 </li>
               );
@@ -492,6 +576,10 @@ export function ConversationSidebar({
       ))}
     </>
   );
+
+  const searchField = <input type="search" aria-label="Search chats" maxLength={100} value={search}
+    onInput={(e) => onSearch(e.currentTarget.value)} placeholder="Search chats"
+    class="mx-3 my-2 w-[calc(100%-1.5rem)] rounded-lg border border-border bg-bg px-2 py-1.5 text-body-sm text-primary" />;
 
   const newChatButton = (
     <button
@@ -543,7 +631,7 @@ export function ConversationSidebar({
                 // `surface-hover` is a 2% step and the chip stops reading as a
                 // chip at all.
                 class="mt-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full
-                  border border-border bg-surface px-1 text-overline text-muted"
+                  border border-border bg-surface px-1 text-overline text-secondary"
                 title={`${conversations.length} conversations`}
               >
                 {conversations.length}
@@ -553,9 +641,9 @@ export function ConversationSidebar({
         ) : (
           <>
             <div class="flex items-center justify-between gap-2 px-3 pt-3">
-              <h2 class="text-overline uppercase tracking-wider text-muted">Conversations</h2>
+              <h2 class="text-overline uppercase tracking-wider text-secondary">Conversations</h2>
               <div class="flex items-center gap-1">
-                {loading && <span class="text-caption text-muted">…</span>}
+                {loading && <span class="text-caption text-secondary">…</span>}
                 <IconButton
                   label="Collapse conversation history"
                   expanded={true}
@@ -565,6 +653,7 @@ export function ConversationSidebar({
                 </IconButton>
               </div>
             </div>
+            {searchField}
             <ConversationList signal={listSignal}>{list}</ConversationList>
             <div class="border-t border-border p-3">{newChatButton}</div>
           </>
@@ -617,11 +706,12 @@ export function ConversationSidebar({
             expanded={true}
             onClick={onCloseMobile}
           />
-          <h2 class="min-w-0 flex-1 truncate text-overline uppercase tracking-wider text-muted">
+          <h2 class="min-w-0 flex-1 truncate text-overline uppercase tracking-wider text-secondary">
             Conversations
           </h2>
-          {loading && <span class="shrink-0 text-caption text-muted">…</span>}
+          {loading && <span class="shrink-0 text-caption text-secondary">…</span>}
         </div>
+        {searchField}
         <ConversationList signal={listSignal}>{list}</ConversationList>
         <div class="border-t border-border p-3">
           {/* Selecting anything in the drawer closes it — the donor's
@@ -949,16 +1039,18 @@ function DrawerToggle({
  */
 export function OpenSidebarButton({
   onClick,
+  expanded,
   class: extra = '',
 }: {
   onClick: () => void;
+  expanded: boolean;
   class?: string;
 }) {
   return (
     <DrawerToggle
       id={OPEN_SIDEBAR_ID}
       label="Show conversation history"
-      expanded={false}
+      expanded={expanded}
       onClick={onClick}
       class={`lg:hidden ${extra}`}
     />

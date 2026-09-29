@@ -93,6 +93,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowUp, Paperclip, X } from 'lucide-preact';
 import TextareaAutosize from 'react-textarea-autosize';
+import { ACCEPT } from '../../lib/chat/attachment-rules';
+import type { StagedFile } from '../../lib/chat/uploads';
 
 /**
  * How tall the textarea may grow before it becomes its own scroller, in whole
@@ -117,6 +119,16 @@ const MD_QUERY = '(min-width: 768px)';
  * tall monitor. Whichever is smaller is the one that was going to be wrong.
  */
 const TEXTAREA_MAX = 'max-h-[min(9.5rem,30vh)] md:max-h-[min(15rem,45vh)]';
+
+function ImageThumbnail({ file }: { file: File }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+  return url ? <img src={url} alt={file.name} class="size-8 shrink-0 rounded object-cover" /> : null;
+}
 
 /**
  * The turn's one primary control, in both of its states. Same height, same
@@ -161,10 +173,12 @@ interface ComposerProps {
   /** Display name of the selected agent, for the placeholder. */
   agentName: string;
   /** Files staged for the next send, shown as removable chips. */
-  files: File[];
+  files: StagedFile[];
+  attachmentAlert: string;
   /** Newly picked files. The page owns the cap and the staging list. */
   onAttach: (picked: File[]) => void;
-  onRemoveFile: (index: number) => void;
+  onRemoveFile: (id: number) => void;
+  onToggleKnowledge: (id: number, checked: boolean) => void;
   /**
    * Handed in by the page so a landing starter chip can put the caret where
    * the reader will keep typing.
@@ -185,6 +199,16 @@ interface ComposerProps {
  * generous end: a cap that is too tall clamps against TEXTAREA_MAX, while one
  * that is too short would silently take four rows off a laptop composer.
  */
+/**
+ * Whether nothing else took the focus while a reply streamed: no active element,
+ * the body (the Send button that had it was replaced by Stop), or something
+ * inside the composer's own form.
+ */
+function focusIsFree(form: HTMLFormElement | null): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || (form !== null && form.contains(active));
+}
+
 function useMaxRows(): number {
   const mediaQuery = () =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -217,14 +241,27 @@ export function Composer({
   agentReady,
   agentName,
   files,
+  attachmentAlert,
   onAttach,
   onRemoveFile,
+  onToggleKnowledge,
   textareaRef,
 }: ComposerProps) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const area = textareaRef ?? ownRef;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const maxRows = useMaxRows();
+  const wasStreaming = useRef(streaming);
+
+  // The cursor comes back to the composer when a reply ends — unless something
+  // else took the focus while the reply streamed, which is theirs to keep. No
+  // scroll: the composer is always on screen, and a scrolling focus cancels
+  // useChatScroll's smooth scroll to the end.
+  useEffect(() => {
+    if (wasStreaming.current && !streaming && focusIsFree(formRef.current)) area.current?.focus({ preventScroll: true });
+    wasStreaming.current = streaming;
+  }, [streaming]);
 
   // No sizing effect of our own any more. TextareaAutosize re-measures in a
   // layout effect on every render — which is every keystroke, paste, starter
@@ -237,7 +274,8 @@ export function Composer({
   // pre-Phase-4 rules: nothing while a turn is streaming, nothing without an
   // agent to route to, and nothing for an empty or whitespace-only draft
   // (attachments alone are a valid send, as before).
-  const canSend = !streaming && agentReady && (value.trim().length > 0 || files.length > 0);
+  const canSend = !streaming && agentReady && files.every((f) => f.status === 'ready') &&
+    (value.trim().length > 0 || files.length > 0);
 
   function submit() {
     if (canSend) onSend();
@@ -251,9 +289,35 @@ export function Composer({
     submit();
   }
 
+  // Escape stops a streaming reply from anywhere in the composer: the form
+  // receives the keydown from the textarea and from the Stop button alike.
+  function handleEscape(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || e.shiftKey || !streaming) return;
+    // The Escape that closes a Japanese or Chinese input method's candidates is
+    // the input method's, not a Stop.
+    if (e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    // The page-wide Jarvis Escape listener (JarvisWidget.tsx, on `window`) must
+    // not also fire and end a voice session.
+    e.stopPropagation();
+    onStop();
+  }
+
   return (
     <form
+      ref={formRef}
       onSubmit={(e) => { e.preventDefault(); submit(); }}
+      onKeyDown={handleEscape}
+      onPaste={(e: ClipboardEvent) => {
+        const picked = Array.from(e.clipboardData?.files ?? []);
+        if (picked.length > 0) { e.preventDefault(); onAttach(picked); }
+      }}
+      onDragOver={(e: DragEvent) => e.preventDefault()}
+      onDrop={(e: DragEvent) => {
+        e.preventDefault();
+        const picked = Array.from(e.dataTransfer?.files ?? []);
+        if (picked.length > 0) onAttach(picked);
+      }}
       // No measure, no padding, no border — see the header. This element's
       // content box IS the shared column's.
       class="flex flex-col"
@@ -262,7 +326,7 @@ export function Composer({
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/*,video/*,audio/*,.pdf,.docx,.pptx,.txt,.md,.csv"
+        accept={ACCEPT}
         class="hidden"
         onChange={(e) => {
           const list = (e.target as HTMLInputElement).files;
@@ -283,32 +347,55 @@ export function Composer({
           focus-within:border-primary focus-within:shadow-lg focus-within:ring-2
           focus-within:ring-primary-a/30"
       >
+        {attachmentAlert && <div role="alert" class="chat-error-panel px-3 pt-2 text-caption">{attachmentAlert}</div>}
         {files.length > 0 && (
           // Inside the card, above the text: what is about to be sent belongs
           // in the thing that sends it, not floating above it.
           <ul class="flex flex-wrap gap-2 px-3 pt-3" aria-label="Attached files">
-            {files.map((f, i) => (
+            {files.map((f) => (
               <li
-                key={`${f.name}-${i}`}
-                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border
+                key={f.localId}
+                class="inline-flex max-w-full flex-col gap-1 rounded-lg border border-border
                   bg-bg px-2 py-1 text-caption text-secondary"
               >
+                <div class="flex min-w-0 items-center gap-1.5">
                 {/* `bg-bg` rather than `bg-surface`: the card is surface, so a
                     surface chip on it would have no edge of its own. */}
-                <Paperclip size={12} class="shrink-0 text-muted" aria-hidden="true" />
+                {f.file.type.startsWith('image/')
+                  ? <ImageThumbnail file={f.file} />
+                  : <Paperclip size={12} class="shrink-0 text-muted" aria-hidden="true" />}
                 {/* `min-w-0` or a long filename refuses to shrink and pushes
                     its own remove button off the chip. */}
-                <span class="min-w-0 truncate">{f.name}</span>
+                <span class="min-w-0 truncate">{f.file.name}</span>
                 <button
                   type="button"
-                  onClick={() => onRemoveFile(i)}
-                  aria-label={`Remove ${f.name}`}
+                  onClick={() => onRemoveFile(f.localId)}
+                  aria-label={`Remove ${f.file.name}`}
                   class="shrink-0 rounded text-muted transition-colors duration-fast
                     hover:text-danger focus-visible:outline-none focus-visible:ring-2
                     focus-visible:ring-danger"
                 >
                   <X size={12} aria-hidden="true" />
                 </button>
+                </div>
+                {f.status === 'uploading' && (
+                  <div role="progressbar" aria-label={`Uploading ${f.file.name}`}
+                    aria-valuemin={0} aria-valuemax={100} aria-valuenow={f.progress}
+                    class="h-1 w-full overflow-hidden rounded-full bg-surface-hover">
+                    <div class="h-full bg-primary" style={{ width: `${f.progress}%` }} />
+                  </div>
+                )}
+                {f.status === 'failed' && <span class="chat-error-panel">{f.error}</span>}
+                <label class="flex items-center gap-1.5">
+                  <input type="checkbox" checked={f.addToKnowledge}
+                    onChange={(e) => onToggleKnowledge(f.localId, (e.target as HTMLInputElement).checked)}
+                    aria-label={`Add ${f.file.name} to knowledge`}
+                    aria-describedby={`chat-knowledge-${f.localId}`} />
+                  <span>Add to knowledge</span>
+                </label>
+                <span id={`chat-knowledge-${f.localId}`} class="text-secondary">
+                  Everyone who uses this agent can find it, and it stays if you delete this chat.
+                </span>
               </li>
             ))}
           </ul>
@@ -336,9 +423,7 @@ export function Composer({
           onKeyDown={handleKeyDown}
           placeholder={`Message ${agentName}...`}
           aria-label={`Message ${agentName}`}
-          // Unchanged from the single-line composer: a second turn cannot be
-          // composed on top of the one in flight.
-          disabled={streaming}
+          // The next turn can be composed during a run; canSend waits for it to end.
           autoFocus
           // `chat-composer__input` is where the CAPPED state is finished (see
           // index.css): no scrollbar furniture, and a fade at both ends so a
@@ -353,7 +438,7 @@ export function Composer({
           // previous 8px bottom padding did not, and that seam was the one
           // thing on this card that still looked unfinished.
           class={`chat-composer__input block w-full resize-none overflow-y-auto bg-transparent
-            px-4 py-4 text-body-sm text-primary outline-none placeholder:text-muted
+            px-4 py-4 text-body-sm text-primary outline-none placeholder:text-secondary
             disabled:cursor-not-allowed disabled:opacity-50 ${TEXTAREA_MAX}`}
         />
 

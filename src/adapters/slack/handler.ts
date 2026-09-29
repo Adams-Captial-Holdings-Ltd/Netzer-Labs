@@ -26,6 +26,7 @@ import { processSlackFiles, stageLabel } from './media.js';
 import { getRawObject } from '../../lib/media/process.js';
 import type { ToolMedia } from '../../lib/tools/registry.js';
 import { runAgentTurn, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { classifyTurnError } from '../../agent/turn-errors.js';
 import { runCommand } from '../../agent/commands.js';
 import { pickAgent } from '../../agent/picker.js';
 import { appendTurns, getSession } from '../../lib/state/sessions-repo.js';
@@ -475,6 +476,8 @@ async function handlePerAgentSlackEvent(
       history,
       modelOverride,
       onChunk,
+      // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
+      // P6 regenerate/retry SKIP: chat clients own their messages, so there is no per-message Regenerate or Try again control (a person re-asks by sending again); rename, pin, search, drafts, export and shortcuts belong to the dashboard conversation list and page. The turn path is unchanged.
       onToolEvent,
       surface: 'slack',
       // A person typed this in a chat window. `origin` is the ONLY thing that
@@ -547,6 +550,7 @@ async function handlePerAgentSlackEvent(
     if (result.blocked) return;
     const now = Math.floor(Date.now() / 1000);
     const spec = resolveModel(result.modelId);
+    // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
     await appendTurns(agentId, chatId, [
       { role: 'user', text: userText, ts: now },
       { role: 'assistant', text: result.text, ts: now },
@@ -559,7 +563,7 @@ async function handlePerAgentSlackEvent(
   } catch (err) {
     const errMessage = err instanceof Error ? err.message : String(err);
     logger.error({ channel, agentId, errMessage }, 'per-agent slack turn failed');
-    await updateMessage(channel, placeholderTs, `Something went wrong: ${errMessage.slice(0, 300)}`, botToken);
+    await updateMessage(channel, placeholderTs, classifyTurnError(err).message, botToken);
   }
 }
 
@@ -743,6 +747,8 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
       history,
       modelOverride,
       onChunk,
+      // PARITY SKIP (CLAUDE.md): onToolResult is not passed — a chat bubble cannot host the dashboard's tool-result panel; the live tool status (onToolEvent) is unchanged.
+      // P6 regenerate/retry SKIP: chat clients own their messages, so there is no per-message Regenerate or Try again control (a person re-asks by sending again); rename, pin, search, drafts, export and shortcuts belong to the dashboard conversation list and page. The turn path is unchanged.
       onToolEvent,
       surface: 'slack',
       // A person typed this in a chat window. `origin` is the ONLY thing that
@@ -814,6 +820,7 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
     if (result.blocked) return;
     const now = Math.floor(Date.now() / 1000);
     const spec = resolveModel(result.modelId);
+    // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
     await appendTurns(targetAgentId, chatId, [
       { role: 'user', text: userText, ts: now },
       { role: 'assistant', text: result.text, ts: now },
@@ -826,7 +833,7 @@ async function handleSlackEvent(callback: SlackEventCallback): Promise<void> {
   } catch (err) {
     const errMessage = err instanceof Error ? err.message : String(err);
     logger.error({ channel, agentId: targetAgentId, errMessage }, 'agent turn failed');
-    await updateMessage(channel, placeholderTs, `Something went wrong: ${errMessage.slice(0, 300)}`);
+    await updateMessage(channel, placeholderTs, classifyTurnError(err).message);
   }
 }
 
@@ -842,6 +849,10 @@ async function deliverSlackMedia(
   threadTs?: string,
   botToken?: string,
 ): Promise<void> {
+  // P4 durable artifact SKIP: dashboard artifacts need a stable person-bound
+  // owner, and Slack has no such mapping; keep generated file/image delivery as-is.
+  // P5 artifact panel SKIP: the preview panel is dashboard-only (a chat client
+  // cannot host a sandboxed preview); Slack keeps uploading the files themselves.
   for (const m of media ?? []) {
     try {
       const bytes = await getRawObject(m.s3Key, m.s3Bucket);

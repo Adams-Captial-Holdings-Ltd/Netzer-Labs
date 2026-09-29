@@ -41,6 +41,7 @@ import {
 } from '../../lib/auth/permissions.js';
 import {
   createToken,
+  linkTokenToUser,
   listTokens,
   revokeToken,
   revokeTokensForUser,
@@ -78,8 +79,13 @@ import {
   KILL_SWITCH_META,
   type KillSwitchName,
 } from '../../lib/state/kill-switches-repo.js';
-import { runAgentTurn, KillSwitchActiveError, CostCapExceededError, type AttachmentBlock } from '../../agent/agent-loop.js';
-import { processMedia, buildKbConfirmation, kindForMime, stageLabel } from '../../lib/media/process.js';
+import { runAgentTurn, scanOutboundReply, KillSwitchActiveError, CostCapExceededError, type AgentTurnResponse, type AttachmentBlock } from '../../agent/agent-loop.js';
+import { AttachmentUnavailableError, classifyTurnError } from '../../agent/turn-errors.js';
+import { processMedia, buildMediaBlocks, getRawObject, buildKbConfirmation, kindForMime, stageLabel, presignRawAttachment, MAX_IMAGE_BYTES, MAX_DOCUMENT_BYTES } from '../../lib/media/process.js';
+import { chatAttachmentFormat, CHAT_ATTACHMENT_MAX_BYTES, CHAT_ATTACHMENT_MAX_FILES } from '../../lib/chat/attachments.js';
+import { attachmentDisposition, downloadFileName, listArtifactHeads, listArtifactVersions, presignArtifactDownload, readArtifactBody, saveArtifact, type ArtifactDescriptor } from '../../lib/chat/artifacts-repo.js';
+import { deckOutline, DeckOutlineError } from '../../lib/chat/artifact-preview.js';
+import { extractArtifactBlocks, UNSAFE_ARTIFACT_TITLE_PATTERN } from '../../lib/chat/artifact-grammar.js';
 import { resolveOwnerChatId, isPrincipalScopedChatId } from '../../lib/identity/owner-alias.js';
 import { runCommand } from '../../agent/commands.js';
 import { listAvailableModels, pickDefaultModel, resolveModel } from '../../lib/bedrock/models.js';
@@ -88,8 +94,18 @@ import { listPlaygroundModels, playgroundCost, playgroundMeteredCost } from '../
 import { InFlightGate } from '../../lib/concurrency/bounded.js';
 import {
   appendTurns,
+  beginTurn,
+  endTurn,
+  ConversationDeletedError,
+  type ToolRecord,
+  type TurnStatus,
   getSession,
+  replaceLastReply,
+  setConversationMeta,
+  getFullHistory,
   deleteSession,
+  type SessionEnrichment,
+  type TurnAttachment,
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
@@ -97,6 +113,8 @@ import {
   listDocuments,
   search as vectorSearch,
   presignUploadUrl,
+  presignChatUploadUrl,
+  headChatUpload,
   uploadKeyFor,
   isUploadKey,
   getObjectBuffer,
@@ -132,13 +150,13 @@ import { addonConfigured, listAddons } from '../../lib/addons/registry.js';
 import { exportChatData, purgeChatData } from '../../lib/tools/privacy-tools.js';
 import { getMeeting } from '../../lib/warroom/meetings-repo.js';
 import { getHistory } from '../../lib/warroom/publisher.js';
-import { buildPdf } from '../../lib/documents/pdf.js';
+import { buildPdf, toPdfSafeText } from '../../lib/documents/pdf.js';
 import {
   saveAgentFile,
   listRevisions,
   type AgentFileName,
 } from '../../lib/state/agent-file-history-repo.js';
-import { streamSSE } from 'hono/streaming';
+import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { buildCsv } from '../../lib/csv.js';
 import {
   validateAgentId,
@@ -169,6 +187,76 @@ import { checkForUpdates } from '../../lib/updates/discovery.js';
 const TABLE_SESSIONS = process.env.TABLE_SESSIONS ?? 'claudeclaw-sessions';
 
 /**
+ * WI-1.0, the containment gate owner decision 11 makes a release gate: every
+ * reader of the sessions table must accept solely `AGENT#…`/`CHAT#…`.
+ *
+ * The table is shared. `jarvis-memory-repo.ts` already writes `PK=JARVIS#…`,
+ * `SK=TURN#…` into it, and P1 adds one `SK=CHAT#<chatId>#MSG#…` record per
+ * message. Every reader below Scans or Queries it and maps whatever comes back
+ * into a conversation by stripping key prefixes, so without this an unrelated
+ * row renders as a phantom conversation.
+ *
+ * Written as an ALLOWLIST — this exact shape — rather than as a blocklist of
+ * the item types that exist today. A blocklist would have to be extended for
+ * every future type, and the one that got forgotten is precisely the failure
+ * this gate exists to prevent.
+ *
+ * It relies on a chatId carrying no `#` into a key. Since P1 that is enforced
+ * where every key is built: sessions-repo stores a `#` as `_` (owner decision
+ * 47), so neither an already-prefixed id from `safeDashboardChatId` nor a
+ * Paperclip issueId can hide a conversation from this rule. The agentId is left
+ * unconstrained beyond the prefix, because only the sort key distinguishes a
+ * conversation from its own messages.
+ */
+export function isConversationRow(item: Record<string, unknown>): boolean {
+  const sk = typeof item.SK === 'string' ? item.SK : '';
+  return /^AGENT#./.test(typeof item.PK === 'string' ? item.PK : '') && /^CHAT#[^#]+$/.test(sk);
+}
+
+/**
+ * The most items one listing reads before it stops and says `truncated`.
+ * ponytail: every message row is READ only to be skipped, because there is no
+ * index that selects conversation rows (A132); a GSI — decision 11 reopened —
+ * is the upgrade if listing ever gets slow.
+ */
+const LISTING_READ_CEILING = 100_000;
+
+/**
+ * WI-1.2: the conversation rows of the sessions table, or of one agent's
+ * partition, read to the END. P1 keeps a row per message beside every
+ * conversation, so a read bounded by a count of ITEMS undercounts conversations
+ * as soon as a partition fills with message rows — and said nothing when it did
+ * (the WI-1.0 review finding). This pages until DynamoDB has nothing more,
+ * keeps only conversation rows, and stops only at LISTING_READ_CEILING, which it
+ * reports as `truncated` instead of dropping rows silently.
+ */
+export async function readConversationRows(
+  projection: string,
+  agentId?: string,
+): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+  const rows: Record<string, unknown>[] = [];
+  let read = 0;
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const out = await ddb().send(
+      agentId
+        ? new QueryCommand({
+            TableName: TABLE_SESSIONS,
+            KeyConditionExpression: 'PK = :pk',
+            ExpressionAttributeValues: { ':pk': `AGENT#${agentId}` },
+            ProjectionExpression: projection,
+            ExclusiveStartKey: startKey,
+          })
+        : new ScanCommand({ TableName: TABLE_SESSIONS, ProjectionExpression: projection, ExclusiveStartKey: startKey }),
+    );
+    read += out.Items?.length ?? 0;
+    for (const item of out.Items ?? []) if (isConversationRow(item)) rows.push(item);
+    startKey = out.LastEvaluatedKey;
+  } while (startKey && read < LISTING_READ_CEILING);
+  return { rows, truncated: startKey !== undefined };
+}
+
+/**
  * Constrain dashboard-initiated chatIds so a holder of the bearer
  * token can't write turns into another surface's session. Allowed
  * prefixes: dashboard:, system:, smoke:, test:. Everything else gets
@@ -193,14 +281,140 @@ function operatorIdentity(c: { req: { header: (name: string) => string | undefin
   return `dashboard:${raw.replace(/[^A-Za-z0-9_.@-]/g, '_').slice(0, 64)}`;
 }
 
+/**
+ * The owner stamped on the principal's conversations (WI-1.1). A PERSON owns
+ * them, whichever token they signed in with: a magic-link session carries its
+ * `userId`, and a token with no user of its own may be linked to one by an
+ * audited admin action (owner decision 1). Before WI-1.1 this was the token
+ * hash, and a member session mints a new token per login, so the next login
+ * orphaned everything the last one wrote (A133). A token with no person keeps
+ * its own hash, which is stable for the env root token and legacy tokens; its
+ * conversations are not durable (decision 1, see personOf in the send routes).
+ */
 function dashboardIdentity(c: DashboardCtx): string {
   const p = getPrincipal(c);
+  const person = p?.userId ?? p?.linkedUserId;
+  if (person) return `dashboard:user:${person}`;
   if (p) return `dashboard:${p.tokenHash}`;
   const auth = c.req.header('authorization') ?? '';
   const token = auth.replace(/^Bearer\s+/i, '');
   if (!token) return 'dashboard:unknown';
   const hash = createHash('sha256').update(token).digest('hex');
   return `dashboard:${hash}`;
+}
+
+function chatUploadPrefix(c: DashboardCtx): string {
+  const callerTag = createHash('sha256').update(dashboardIdentity(c)).digest('hex').slice(0, 16);
+  return `uploads/chat/${callerTag}/`;
+}
+
+/** Decision 1: the person behind the principal, if there is one. */
+function personOf(c: DashboardCtx): string | undefined {
+  const p = getPrincipal(c);
+  return p?.userId ?? p?.linkedUserId;
+}
+
+/**
+ * Who a conversation the caller starts belongs to, and whether it lasts: a
+ * person's is durable, a principal with no person's expires (decision 1). What
+ * appendTurns stamps, and what a slash command that creates one stamps (F2).
+ */
+function conversationOwner(c: DashboardCtx): SessionEnrichment {
+  return { surface: 'dashboard', userId: dashboardIdentity(c), ephemeral: !personOf(c) };
+}
+
+/**
+ * Whether the caller owns a stored conversation (decisions 1 and 9). Also true
+ * for a row the caller's OWN token wrote before WI-1.1, which carries
+ * `dashboard:<tokenHash>`: stable for a token with no person, so that history
+ * stays reachable until the legacy migration (WI-1.4) re-keys it. A row with no
+ * owner belongs to nobody — only the audited admin override reaches it.
+ */
+function ownsConversation(c: DashboardCtx, owner: unknown): boolean {
+  if (typeof owner !== 'string' || owner === '') return false;
+  const p = getPrincipal(c);
+  return owner === dashboardIdentity(c) || (p !== null && owner === `dashboard:${p.tokenHash}`);
+}
+
+/** The answer when an admin override could not be recorded: nothing is returned. */
+const OVERRIDE_UNAUDITED = { error: 'override_not_audited' } as const;
+
+/**
+ * Record an admin's look at a conversation that is not theirs BEFORE any of it
+ * leaves (decision 1). Awaited and never suppressible, like `token_linked`: an
+ * override nobody can see recorded is exactly what a hostile admin wants (the
+ * first critic's F4). False means it could not be recorded, and the caller must
+ * return nothing.
+ */
+async function auditedOverride(
+  c: DashboardCtx,
+  scope: string,
+  where: { agentId?: string; chatId?: string } = {},
+): Promise<boolean> {
+  try {
+    await writeAuditOrThrow({
+      action: 'session_read_override',
+      ...where,
+      detail: { scope, requestedBy: dashboardIdentity(c) },
+      result: 'ok',
+    });
+    return true;
+  } catch (err) {
+    logger.error(
+      { scope, ...where, errMessage: err instanceof Error ? err.message : String(err) },
+      'admin conversation override refused: its audit could not be written',
+    );
+    return false;
+  }
+}
+
+/** Resolve the stable stored owner before any artifact metadata or URL leaves. */
+async function artifactReadOwner(
+  c: DashboardCtx,
+  agentId: string,
+  chatId: string,
+): Promise<{ ownerId: string } | 'not_found' | 'unaudited'> {
+  const session = await getSession(agentId, chatId);
+  const ownerId = session?.userId;
+  if (!session || session.surface !== 'dashboard' || session.ttl !== undefined ||
+      typeof ownerId !== 'string' || !/^dashboard:user:.+/.test(ownerId)) return 'not_found';
+  if (ownsConversation(c, ownerId)) return { ownerId };
+  if (!(await hasCapability(c, 'security:write'))) return 'not_found';
+  if (!(await auditedOverride(c, 'artifact', { agentId, chatId }))) return 'unaudited';
+  return { ownerId };
+}
+
+/**
+ * Decisions 1 and 9: of these conversation rows, the ones the caller may see —
+ * its own, or every one for an admin (`security:write`), whose look at anyone
+ * else's is audited first. Null when that audit could not be written.
+ */
+async function visibleConversations<T extends Record<string, unknown>>(
+  c: DashboardCtx,
+  rows: T[],
+  scope: string,
+  agentId?: string,
+): Promise<T[] | null> {
+  const isAdmin = await hasCapability(c, 'security:write');
+  const visible = rows.filter((i) => isAdmin || ownsConversation(c, i.userId));
+  const others = visible.some((i) => !ownsConversation(c, i.userId));
+  if (others && !(await auditedOverride(c, scope, agentId ? { agentId } : {}))) return null;
+  return visible;
+}
+
+/**
+ * The same rule for a caller known only by its principal: the Jarvis `sessions`
+ * action, which answered every enabled principal with everyone's conversations
+ * (the first critic's F1). Null when an admin's override could not be audited.
+ * The stand-in context has no headers; everything this rule reads comes from
+ * the principal (dashboardIdentity, ownsConversation, hasCapability).
+ */
+export function conversationsVisibleTo<T extends Record<string, unknown>>(
+  principal: TokenPrincipal,
+  rows: T[],
+  scope: string,
+): Promise<T[] | null> {
+  return visibleConversations({ req: { header: () => undefined }, get: () => principal }, rows, scope);
 }
 
 export const ROLE_RANK: Record<TokenRole, number> = { viewer: 0, operator: 1, admin: 2 };
@@ -251,6 +465,197 @@ export function requiredRole(method: string, subPath: string): TokenRole {
   return 'operator';
 }
 
+export const SSE_HEARTBEAT_MS = 15_000;
+export const STOPPED_EMPTY_TEXT = '(Stopped before a reply.)';
+
+/** A refusal an operator chose (the daily cap, a kill switch): audited already, so a warning, not an alarm. */
+function isOperatorRefusal(err: unknown): boolean {
+  return err instanceof CostCapExceededError || err instanceof KillSwitchActiveError;
+}
+
+/** Known from the cache first; the agents table is read only for an agent not seen yet. */
+async function isKnownAgent(agentId: string): Promise<boolean> {
+  return listKnownAgents().includes(agentId) || (await listKnownAgentsAsync()).includes(agentId);
+}
+
+/** A refused send is logged with its code so a refusal can be found; nothing failed, so at warn. */
+function refusedSend(code: 'unknown_agent' | 'unknown_model' | 'invalid_message_id', fields: Record<string, unknown>): { error: string } {
+  logger.warn({ ...fields, code }, 'dashboard chat send refused');
+  return { error: code };
+}
+
+/**
+ * Stop the turn when the request itself is gone. node-server never cancels a
+ * body nobody started reading, so `stream.onAbort` never fires for a reader who
+ * left during the route's awaits before the stream began — but the request's
+ * own signal has fired by then.
+ */
+function abortWithRequest(signal: AbortSignal, stream: SSEStreamingApi): void {
+  if (signal.aborted) stream.abort();
+  else signal.addEventListener('abort', () => stream.abort(), { once: true });
+}
+
+function chunkWriter(stream: SSEStreamingApi, protocol?: number): (text: string) => void {
+  let previous = '';
+  return (text) => {
+    if (protocol !== 2) {
+      void stream.writeSSE({ event: 'chunk', data: text });
+      return;
+    }
+    if (previous === text) return;
+    let i = 0;
+    while (i < previous.length && i < text.length && previous[i] === text[i]) i++;
+    previous = text;
+    void stream.writeSSE({ event: 'delta', data: JSON.stringify({ i, t: text.slice(i) }) });
+  };
+}
+
+const MAX_DASHBOARD_ARTIFACT_REFS = 8;
+const ARTIFACT_DESCRIPTOR_FIELDS = ['artifactId', 'version', 'fileName', 'contentType', 'createdAt'] as const;
+
+function safeArtifactDescriptor(value: unknown): ArtifactDescriptor | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.artifactId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row.artifactId) ||
+      !Number.isInteger(row.version) || (row.version as number) < 1 ||
+      typeof row.fileName !== 'string' || row.fileName.length < 1 || row.fileName.length > 255 ||
+      /[/\\\u0000-\u001f\u007f]/.test(row.fileName) ||
+      typeof row.contentType !== 'string' || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(row.contentType) ||
+      typeof row.createdAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(row.createdAt) ||
+      !Number.isFinite(Date.parse(row.createdAt))) return undefined;
+  return Object.fromEntries(ARTIFACT_DESCRIPTOR_FIELDS.map((key) => [key, row[key]])) as unknown as ArtifactDescriptor;
+}
+
+function safeArtifactDescriptors(values: unknown): ArtifactDescriptor[] {
+  if (!Array.isArray(values)) return [];
+  const descriptors: ArtifactDescriptor[] = [];
+  for (const value of values) {
+    const descriptor = safeArtifactDescriptor(value);
+    if (descriptor) descriptors.push(descriptor);
+    if (descriptors.length >= MAX_DASHBOARD_ARTIFACT_REFS) break;
+  }
+  return descriptors;
+}
+
+/**
+ * Model chunks are cumulative. Withhold from the first possible artifact fence
+ * until finalization so even a split or partial opening marker cannot put an
+ * artifact body on the live SSE stream.
+ */
+function guardedChunkWriter(stream: SSEStreamingApi, protocol: number | undefined): {
+  onChunk: (text: string) => void;
+  finish: (safeFinalText: string) => void;
+  visibleText: () => string;
+} {
+  const write = chunkWriter(stream, protocol);
+  let withheld = false;
+  let lastVisible = '';
+  const writeVisible = (text: string) => {
+    lastVisible = text;
+    write(text);
+  };
+  const emit = (text: string) => {
+    if (withheld) return;
+    const marker = text.indexOf(':::artifact');
+    if (marker >= 0) {
+      withheld = true;
+      writeVisible(text.slice(0, marker));
+      return;
+    }
+    let partial = 0;
+    const fence = ':::artifact';
+    for (let size = Math.min(fence.length - 1, text.length); size > 0; size--) {
+      if (fence.startsWith(text.slice(-size))) { partial = size; break; }
+    }
+    writeVisible(partial ? text.slice(0, -partial) : text);
+  };
+  return {
+    onChunk: emit,
+    visibleText: () => lastVisible,
+    finish: (safeFinalText) => {
+      if (safeFinalText !== lastVisible) writeVisible(safeFinalText);
+    },
+  };
+}
+
+async function finishChatTurn(agentId: string, chatId: string, id: string | undefined, status: Exclude<TurnStatus, 'streaming'>): Promise<void> {
+  if (!id) return;
+  try {
+    const ended = await endTurn(agentId, chatId, id, status);
+    if (!ended) logger.warn({ agentId, chatId, clientMessageId: id, status }, 'dashboard chat turn record was not streaming');
+  } catch (err) {
+    logger.error({ agentId, chatId, clientMessageId: id, status, err }, 'dashboard chat turn state save failed');
+  }
+}
+
+async function saveChatTurn(
+  agentId: string, chatId: string, userText: string,
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'artifacts' | 'refusal'> & { notice?: true }, tools: ToolRecord[], owner: SessionEnrichment,
+  attachments: TurnAttachment[] = [], requestId?: string,
+): Promise<boolean> {
+  if (result.blocked) return true;
+  const ts = Math.floor(Date.now() / 1000);
+  try {
+    await appendTurns(agentId, chatId, [
+      { role: 'user', text: userText, ts, ...(attachments.length ? { attachments } : {}) },
+      { role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
+        ...(result.notice || result.refusal?.kind === 'kill_phrase' ? { status: 'notice' as const } : result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
+        ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}) },
+    ], undefined, { ...owner, ...(typeof requestId === 'string' ? { requestId } : {}) });
+    return true;
+  } catch (err) {
+    if (!(err instanceof ConversationDeletedError)) {
+      logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    }
+    return false;
+  }
+}
+
+async function saveRegeneratedReply(
+  agentId: string, chatId: string,
+  result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>, tools: ToolRecord[],
+  requestId: string | undefined, expected: { turnsTotal: number; owner: string; replyTo?: string | null },
+): Promise<boolean> {
+  if (result.blocked || result.refusal) return false;
+  const ts = Math.floor(Date.now() / 1000);
+  try {
+    return await replaceLastReply(agentId, chatId, {
+      role: 'assistant', text: result.stopped && !result.text.trim() ? STOPPED_EMPTY_TEXT : result.text, ts,
+      ...(typeof requestId === 'string' ? { requestId } : {}),
+      ...(result.stopped ? { status: 'stopped' as const } : {}), ...(tools.length ? { tools } : {}),
+      ...(safeArtifactDescriptors(result.artifacts).length ? { artifacts: safeArtifactDescriptors(result.artifacts) } : {}),
+    }, expected);
+  } catch (err) {
+    logger.error({ agentId, chatId, err }, 'dashboard chat transcript save failed');
+    return false;
+  }
+}
+
+async function writeChatAnswer(stream: SSEStreamingApi, result: AgentTurnResponse, confirmations: string[]): Promise<void> {
+  if (result.refusal?.kind === 'kill_phrase') {
+    await stream.writeSSE({ event: 'reply', data: result.text });
+    return;
+  }
+  await stream.writeSSE({
+    event: 'final',
+    data: JSON.stringify({ text: result.text, modelId: result.modelId, latencyMs: result.latencyMs,
+      costUsd: result.costUsd, toolCallCount: result.toolCallCount }),
+  });
+  if (result.blocked) return;
+  for (const text of confirmations) {
+    await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text }) });
+  }
+  for (const m of result.media ?? []) {
+    if (!m.presignedUrl) continue;
+    await stream.writeSSE({
+      event: m.kind === 'artifact' ? 'artifact' : 'image',
+      data: JSON.stringify({ url: m.presignedUrl, caption: m.caption ?? '',
+        ...(m.kind === 'artifact' ? { name: m.caption ?? 'document', contentType: m.contentType } : {}) }),
+    });
+  }
+}
+
 function safeDashboardChatId(input: string | undefined): string {
   const raw = (input ?? '').trim();
   if (!raw) return `dashboard:${Date.now()}`;
@@ -260,6 +665,45 @@ function safeDashboardChatId(input: string | undefined): string {
   const sanitized = raw.replace(/[^A-Za-z0-9_:.-]/g, '_').slice(0, 100);
   return `dashboard:${sanitized}`;
 }
+
+/**
+ * Replay only stored attachments that can become model blocks. Audio, voice
+ * and video yield no block because their words are already in the stored message text;
+ * video keyframes are not replayed because that needs processVideo's probe and
+ * keyframe step for raw bytes, carried to a later step.
+ */
+async function replayStoredAttachments(
+  attachments: TurnAttachment[],
+  signal: AbortSignal,
+  agentId: string,
+  chatId: string,
+): Promise<AttachmentBlock[]> {
+  const attachmentBlocks: AttachmentBlock[] = [];
+  if (attachments.length > 0) {
+    const killed = await isKillSwitchActive('media_upload_disabled');
+    if (killed.active) throw new KillSwitchActiveError(killed.reason ?? 'no reason given', 'media_upload_disabled');
+  }
+  for (const attachment of attachments) {
+    if (signal.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+    const kind = kindForMime(attachment.type);
+    if (kind !== 'photo' && kind !== 'document') continue;
+    if (attachment.size > (kind === 'photo' ? MAX_IMAGE_BYTES : MAX_DOCUMENT_BYTES)) continue;
+    try {
+      if (!attachment.key) throw new Error('Stored attachment has no key');
+      const bytes = await getRawObject(attachment.key);
+      const built = await buildMediaBlocks({
+        kind, fileName: attachment.name,
+        mimeType: attachment.type, bytes,
+      });
+      attachmentBlocks.push(...built.blocks);
+    } catch (err) {
+      logger.warn({ agentId, chatId, err }, 'dashboard chat attachment replay failed');
+      throw new AttachmentUnavailableError();
+    }
+  }
+  return attachmentBlocks;
+}
+
 const TABLE_TOKEN_USAGE = process.env.TABLE_TOKEN_USAGE ?? 'claudeclaw-token-usage';
 const TABLE_AUDIT_LOG = process.env.TABLE_AUDIT_LOG ?? 'claudeclaw-audit-log';
 
@@ -1768,21 +2212,30 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const body = await c.req
       .json<{
         text?: string;
+        regenerate?: boolean;
         agentId?: string;
         chatId?: string;
         modelOverride?: string;
+        protocol?: number;
+        clientMessageId?: string;
+        replyTo?: unknown;
         /** Pre-staged uploads (presigned PUT to the vectors staging bucket). */
-        attachments?: Array<{ s3Key?: string; fileName?: string; mimeType?: string }>;
+        attachments?: Array<{ s3Key?: string; fileName?: string; mimeType?: string; addToKnowledge?: boolean }>;
       }>()
       .catch(() => null);
     const text = body?.text ?? '';
+    const regenerate = body?.regenerate === true;
     const agentId = body?.agentId ?? 'main';
     const chatId = safeDashboardChatId(body?.chatId);
-    const rawAttachments = Array.isArray(body?.attachments)
-      ? body.attachments.slice(0, 3)
-      : [];
+    const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
+    if (regenerate && (text !== '' || (body?.attachments !== undefined &&
+      (!Array.isArray(body.attachments) || body.attachments.length > 0)) ||
+      (body?.replyTo !== undefined && body.replyTo !== null && typeof body.replyTo !== 'string'))) {
+      return c.json({ error: 'invalid_regenerate' }, 400);
+    }
+    if (rawAttachments.length > CHAT_ATTACHMENT_MAX_FILES) return c.json({ error: 'too_many_attachments' }, 400);
     // File-only sends are allowed (parity with Telegram/Slack file drops).
-    if (!text && rawAttachments.length === 0) {
+    if (!regenerate && !text && rawAttachments.length === 0) {
       return c.json({ error: 'missing_text' }, 400);
     }
     // Validate staging keys up front — only presigned-upload keys are ever
@@ -1792,132 +2245,227 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         return c.json({ error: 'invalid_upload_key' }, 400);
       }
     }
+    if (!(await isKnownAgent(agentId))) return c.json(refusedSend('unknown_agent', { agentId }), 404);
+    if (body?.modelOverride !== undefined && !listAvailableModels(process.env).some((m) => m.id === body.modelOverride)) {
+      return c.json(refusedSend('unknown_model', { agentId, model: body.modelOverride }), 400);
+    }
+    const clientMessageId = body?.clientMessageId;
+    if (clientMessageId !== undefined && (typeof clientMessageId !== 'string' || !/^[A-Za-z0-9._:-]{1,64}$/.test(clientMessageId))) {
+      return c.json(refusedSend('invalid_message_id', { agentId, chatId }), 400);
+    }
+    // WI-1.1 (decision 9): refuse a conversation the caller does not own before
+    // anything touches it — slash commands included, since /newchat wipes a
+    // history — with the 404 DELETE /sessions gives a missing chat. A send still
+    // tells a stored chat from a missing one (a missing one simply starts), so
+    // this hides the conversation, not whether its id is taken.
+    const stored = await getSession(agentId, chatId, regenerate ? { consistentRead: true } : undefined);
+    if ((regenerate && !stored) || (stored && !ownsConversation(c, stored.userId))) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+    if (regenerate && (stored!.turns.at(-1)?.role !== 'assistant' || stored!.turns.at(-2)?.role !== 'user' ||
+      stored!.turns.at(-1)?.status === 'notice')) {
+      return c.json({ error: 'nothing_to_regenerate' }, 409);
+    }
+    if (regenerate && body?.replyTo !== undefined && (stored!.turns.at(-1)?.requestId ?? null) !== body.replyTo) {
+      logger.warn({ agentId, chatId }, 'dashboard chat regenerate refused: reply changed');
+      return c.json({ error: 'reply_changed' }, 409);
+    }
+    const staged: Array<{ size: number; type: string }> = [];
+    for (const a of rawAttachments) {
+      const key = a.s3Key as string;
+      if (!key.startsWith(chatUploadPrefix(c))) return c.json({ error: 'upload_not_found' }, 404);
+      let head: { size: number; type: string } | null;
+      try {
+        head = await headChatUpload(key);
+      } catch (err) {
+        logger.warn({ err, agentId, chatId }, 'chat upload preflight failed');
+        return c.json({ error: 'upload_unavailable' }, 503);
+      }
+      if (!head) return c.json({ error: 'upload_not_found' }, 404);
+      if (head.size > CHAT_ATTACHMENT_MAX_BYTES) {
+        return c.json({ error: 'file_too_large', maxBytes: CHAT_ATTACHMENT_MAX_BYTES }, 413);
+      }
+      const format = chatAttachmentFormat(a.fileName ?? '', a.mimeType);
+      if (!format || head.type !== format.mime) return c.json({ error: 'unsupported_type' }, 415);
+      staged.push(head);
+    }
+    if (clientMessageId) {
+      const payloadHash = createHash('sha256').update(JSON.stringify({
+        text, agentId, chatId, modelOverride: body?.modelOverride ?? null,
+        attachments: rawAttachments.map((a) => a.s3Key),
+        ...(regenerate ? { regenerate: true } : {}),
+      })).digest('hex');
+      // A turn record that cannot be written is a typed 503, named by its turn:
+      // no model call, and not an anonymous "unhandled error".
+      const turn = await beginTurn(agentId, chatId, clientMessageId, payloadHash).catch((err: unknown) => {
+        logger.error({ agentId, chatId, clientMessageId, err }, 'dashboard chat turn record could not be written');
+        return undefined;
+      });
+      if (!turn) return c.json({ error: 'turn_record_unavailable' }, 503);
+      if (!turn.started) return turn.sameMessage
+        ? c.json({ error: 'turn_duplicate', status: turn.status }, 409)
+        : c.json({ error: 'turn_conflict' }, 409);
+    }
     return streamSSE(c, async (stream) => {
-      // Command? send the reply as a single event and close. Skipped for
-      // attachment turns — a caption starting with '/' is data, not a command
-      // (parity with Telegram/Slack).
-      if (rawAttachments.length === 0) {
-        const cmd = await runCommand(agentId, chatId, text);
-        if (cmd?.reply) {
-          await stream.writeSSE({ event: 'reply', data: cmd.reply });
-          await stream.writeSSE({ event: 'done', data: 'command' });
+      const abort = new AbortController();
+      stream.onAbort(() => abort.abort());
+      abortWithRequest(c.req.raw.signal, stream);
+      const heartbeat = setInterval(() => void stream.write(': ping\n\n'), SSE_HEARTBEAT_MS);
+      const tools: ToolRecord[] = [];
+      const savedAttachments: TurnAttachment[] = [];
+      const toolStarts = new Map<string, Pick<ToolRecord, 'label' | 'step'>>();
+      let userText = regenerate ? stored!.turns.at(-2)!.text : text;
+      let finalSent = false;
+      let guardedChunks: ReturnType<typeof guardedChunkWriter> | undefined;
+      const saveReply = (result: Pick<AgentTurnResponse, 'text' | 'stopped' | 'blocked' | 'refusal' | 'artifacts'>) =>
+        regenerate
+          ? saveRegeneratedReply(agentId, chatId, result, tools,
+            clientMessageId, {
+            turnsTotal: stored!.turnsTotal ?? stored!.turns.length, owner: stored!.userId!,
+            ...(body?.replyTo !== undefined ? { replyTo: body.replyTo as string | null } : {}),
+          })
+          : saveChatTurn(agentId, chatId, userText, result, tools, conversationOwner(c), savedAttachments,
+            clientMessageId);
+      try {
+        // Command? send the reply as a single event and close. Skipped for
+        // attachment turns — a caption starting with '/' is data, not a command
+        // (parity with Telegram/Slack).
+        if (!regenerate && rawAttachments.length === 0) {
+          const cmd = await runCommand(agentId, chatId, text, { owner: conversationOwner(c) });
+          if (cmd?.reply) {
+            await stream.writeSSE({ event: 'reply', data: cmd.reply });
+            await finishChatTurn(agentId, chatId, clientMessageId, 'complete');
+            await stream.writeSSE({ event: 'done', data: 'command' });
+            return;
+          }
+        }
+
+        // Attachments: load staged bytes, run the shared media pipeline
+        // (raw-bucket archival, inline blocks, Transcribe, KB auto-ingest),
+        // narrate stages over SSE, then clean up the staging object.
+        const attachmentBlocks: AttachmentBlock[] = [];
+        const kbConfirmations: string[] = [];
+        const acks: string[] = [];
+        for (const [index, a] of rawAttachments.entries()) {
+          const s3Key = a.s3Key as string;
+          const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
+          try {
+            const bytes = await getObjectBuffer(s3Key);
+            const media = await processMedia(
+              {
+                surface: 'dashboard',
+                agentId,
+                targetAgentId: agentId,
+                chatId,
+                kind: kindForMime(staged[index]!.type),
+                fileName,
+                mimeType: staged[index]!.type,
+                addToKnowledge: a.addToKnowledge === true,
+                bytes,
+              },
+              (stage) => {
+                void stream.writeSSE({
+                  event: 'media',
+                  data: JSON.stringify({ fileName, stage, label: stageLabel(stage, fileName) }),
+                });
+              },
+            );
+            attachmentBlocks.push(...media.blocks);
+            if (media.s3Key) savedAttachments.push({
+              id: s3Key.split('/')[3]!, name: fileName, type: staged[index]!.type,
+              size: staged[index]!.size, key: media.s3Key,
+            });
+            if (media.transcript) {
+              const label =
+                media.transcriptKind === 'video' ? '[video transcript]' : '[transcribed audio]';
+              userText = userText ? `${userText}\n\n${label} ${media.transcript}` : media.transcript;
+            }
+            if (media.ackText) acks.push(media.ackText);
+            if (media.kb) kbConfirmations.push(buildKbConfirmation(media.kb, fileName));
+            else if (a.addToKnowledge === true) kbConfirmations.push(`${fileName} was not added to the knowledge base.`);
+          } catch (err) {
+            logger.warn(
+              { s3Key, errMessage: err instanceof Error ? err.message : String(err) },
+              'dashboard chat attachment processing failed',
+            );
+            acks.push(`Couldn't process ${fileName}.`);
+          } finally {
+            void deleteObject(s3Key);
+          }
+        }
+        if (rawAttachments.length > 0 && attachmentBlocks.length === 0 && userText === '' ) {
+          // Nothing the model can see (KB-only docs land here; their acks
+          // already carry the "indexed, ask me anything" line).
+          userText = 'What is this?';
+          const reply = acks.join('\n') || 'Stored the file.';
+          const saved = await saveChatTurn(agentId, chatId, userText, { text: reply, notice: true }, tools, conversationOwner(c), savedAttachments,
+            clientMessageId);
+          await stream.writeSSE({ event: 'reply', data: reply });
+          for (const k of kbConfirmations) {
+            await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
+          }
+          await finishChatTurn(agentId, chatId, clientMessageId, 'complete');
+          await stream.writeSSE({ event: 'done', data: saved ? 'media_only' : 'not_saved' });
           return;
         }
-      }
+        if (rawAttachments.length > 0 && !userText) userText = 'What is this?';
+        const modelUserText = acks.length > 0
+          ? `${userText}\n\n${acks.map((ack) => `[${ack}]`).join('\n')}`
+          : userText;
 
-      // Attachments: load staged bytes, run the shared media pipeline
-      // (raw-bucket archival, inline blocks, Transcribe, KB auto-ingest),
-      // narrate stages over SSE, then clean up the staging object.
-      let userText = text;
-      const attachmentBlocks: AttachmentBlock[] = [];
-      const kbConfirmations: string[] = [];
-      const acks: string[] = [];
-      for (const a of rawAttachments) {
-        const s3Key = a.s3Key as string;
-        const fileName = (a.fileName ?? s3Key.split('/').pop() ?? 'upload').slice(0, 120);
+        // Cross-surface peek (flag default OFF): when the authenticated member
+        // is a configured owner (CCE_OWNER_DASHBOARD_EMAILS), inject their
+        // recent Telegram/Slack conversation with this agent as READ-ONLY
+        // context. Dashboard turns still persist under the dashboard: chatId —
+        // the owner session is never written from here (write containment).
+        // The peek source is hard-limited to principal-scoped chatIds; a Slack
+        // channel session can never leak in.
+        let peekNote: string | undefined;
         try {
-          const bytes = await getObjectBuffer(s3Key);
-          const media = await processMedia(
-            {
-              surface: 'dashboard',
-              agentId,
-              targetAgentId: agentId,
-              chatId,
-              kind: kindForMime(a.mimeType),
-              fileName,
-              mimeType: a.mimeType,
-              bytes,
-            },
-            (stage) => {
-              void stream.writeSSE({
-                event: 'media',
-                data: JSON.stringify({ fileName, stage, label: stageLabel(stage, fileName) }),
-              });
-            },
-          );
-          attachmentBlocks.push(...media.blocks);
-          if (media.transcript) {
-            const label =
-              media.transcriptKind === 'video' ? '[video transcript]' : '[transcribed audio]';
-            userText = userText ? `${userText}\n\n${label} ${media.transcript}` : media.transcript;
-          }
-          if (media.ackText) acks.push(media.ackText);
-          if (media.kb) kbConfirmations.push(buildKbConfirmation(media.kb, fileName));
-        } catch (err) {
-          logger.warn(
-            { s3Key, errMessage: err instanceof Error ? err.message : String(err) },
-            'dashboard chat attachment processing failed',
-          );
-          acks.push(`Couldn't process ${fileName}.`);
-        } finally {
-          void deleteObject(s3Key);
-        }
-      }
-      if (rawAttachments.length > 0 && attachmentBlocks.length === 0 && userText === '' ) {
-        // Nothing the model can see (KB-only docs land here; their acks
-        // already carry the "indexed, ask me anything" line).
-        await stream.writeSSE({ event: 'reply', data: acks.join('\n') || 'Stored the file.' });
-        for (const k of kbConfirmations) {
-          await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
-        }
-        await stream.writeSSE({ event: 'done', data: 'media_only' });
-        return;
-      }
-      if (rawAttachments.length > 0 && !userText) userText = 'What is this?';
-
-      // Cross-surface peek (flag default OFF): when the authenticated member
-      // is a configured owner (CCE_OWNER_DASHBOARD_EMAILS), inject their
-      // recent Telegram/Slack conversation with this agent as READ-ONLY
-      // context. Dashboard turns still persist under the dashboard: chatId —
-      // the owner session is never written from here (write containment).
-      // The peek source is hard-limited to principal-scoped chatIds; a Slack
-      // channel session can never leak in.
-      let peekNote: string | undefined;
-      try {
-        if ((await getConfig('sessions', 'cross_surface_peek')) === '1') {
           const principal = getPrincipal(c);
-          const email = principal?.userId
-            ? (await getUser(principal.userId))?.emailLower
-            : undefined;
-          const ownerChat = resolveOwnerChatId('dashboard', email);
-          if (ownerChat && isPrincipalScopedChatId(ownerChat)) {
-            const peekTurns = Math.max(
-              1,
-              Math.min(10, Number((await getConfig('sessions', 'cross_surface_peek_turns')) ?? 6)),
-            );
-            const ownerSession = await getSession(agentId, ownerChat);
-            const recent = (ownerSession?.turns ?? []).slice(-peekTurns);
-            if (recent.length > 0) {
-              // Neutralize angle brackets exactly like the hive block so a
-              // chat message can't close </other_surfaces> and inject
-              // pseudo-structure into the system prompt.
-              const lines = recent
-                .map((t) => {
-                  const safe = t.text.slice(0, 240).replace(/</g, '‹').replace(/>/g, '›');
-                  return `- [${t.surface ?? 'chat'}] ${t.role === 'user' ? 'user' : 'you'}: ${safe}`;
-                })
-                .join('\n');
-              peekNote = `<other_surfaces>\nThe same person's recent conversation with you on other chat surfaces (read-only background):\n${lines}\n</other_surfaces>`;
+          if (principal?.userId && (await getConfig('sessions', 'cross_surface_peek')) === '1') {
+            const email = (await getUser(principal.userId))?.emailLower;
+            const ownerChat = resolveOwnerChatId('dashboard', email);
+            if (ownerChat && isPrincipalScopedChatId(ownerChat)) {
+              const peekTurns = Math.max(
+                1,
+                Math.min(10, Number((await getConfig('sessions', 'cross_surface_peek_turns')) ?? 6)),
+              );
+              const ownerSession = await getSession(agentId, ownerChat);
+              const recent = (ownerSession?.turns ?? []).slice(-peekTurns);
+              if (recent.length > 0) {
+                // Neutralize angle brackets exactly like the hive block so a
+                // chat message can't close </other_surfaces> and inject
+                // pseudo-structure into the system prompt.
+                const lines = recent
+                  .map((t) => {
+                    const safe = t.text.slice(0, 240).replace(/</g, '‹').replace(/>/g, '›');
+                    return `- [${t.surface ?? 'chat'}] ${t.role === 'user' ? 'user' : 'you'}: ${safe}`;
+                  })
+                  .join('\n');
+                peekNote = `<other_surfaces>\nThe same person's recent conversation with you on other chat surfaces (read-only background):\n${lines}\n</other_surfaces>`;
+              }
             }
           }
+        } catch {
+          // Peek is best-effort context; never fail the turn over it.
         }
-      } catch {
-        // Peek is best-effort context; never fail the turn over it.
-      }
 
-      const session = await getSession(agentId, chatId);
-      const history = session?.turns ?? [];
-      // Per-turn model: an explicit picker choice wins, else the chat's sticky
-      // /model override, else the agent's configured model (resolved in the
-      // loop). The non-stream /test-turn already does this; the stream path used
-      // to drop the override entirely, so a /model switch (or the new Chat model
-      // picker) silently had no effect on the streamed Chat tab.
-      const modelOverride = body?.modelOverride ?? session?.modelOverride;
-      try {
+        const session = regenerate ? stored : await getSession(agentId, chatId);
+        const history = regenerate ? stored!.turns.slice(0, -2) : session?.turns ?? [];
+        // Per-turn model: an explicit picker choice wins, else the chat's sticky
+        // /model override, else the agent's configured model (resolved in the
+        // loop). The non-stream /test-turn already does this; the stream path used
+        // to drop the override entirely, so a /model switch (or the new Chat model
+        // picker) silently had no effect on the streamed Chat tab.
+        const modelOverride = body?.modelOverride ?? session?.modelOverride;
+        guardedChunks = guardedChunkWriter(stream, body?.protocol);
         const result = await runAgentTurn({
+          abortSignal: abort.signal,
           agentId,
           chatId,
-          userText,
+          ...(clientMessageId ? { requestId: clientMessageId } : {}),
+          userText: modelUserText,
           history,
           modelOverride,
           surface: 'dashboard',
@@ -1943,83 +2491,105 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // none and attribute nothing.
           ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
           ...(attachmentBlocks.length > 0 ? { attachments: attachmentBlocks } : {}),
+          ...(regenerate ? { loadAttachments: () => replayStoredAttachments(
+            stored!.turns.at(-2)!.attachments ?? [], abort.signal, agentId, chatId,
+          ) } : {}),
           ...(peekNote ? { systemNote: peekNote } : {}),
-          onChunk: (cumulative) => {
-            // fire and forget; await would serialize the stream
-            void stream.writeSSE({ event: 'chunk', data: cumulative });
+          onChunk: guardedChunks.onChunk,
+          onToolEvent: ({ name, callIndex, toolUseId, input, inputTruncated }) => {
+            const info = { label: humanizeToolName(name), step: callIndex + 1 };
+            toolStarts.set(toolUseId, info);
+            void stream.writeSSE({ event: 'tool', data: JSON.stringify({ ...info, toolUseId, input, inputTruncated }) });
           },
-          // Live tool status, mirroring Telegram/Slack (CLAUDE.md "Chat surface
-          // parity"). Tool dispatch emits no chunks, so without this the Chat
-          // tab shows only the typing dots while the agent works tools.
-          onToolEvent: ({ name, callIndex }) => {
-            void stream.writeSSE({
-              event: 'tool',
-              data: JSON.stringify({ label: humanizeToolName(name), step: callIndex + 1 }),
-            });
+          onToolResult: ({ name, callIndex, toolUseId, output, isError, truncated }) => {
+            const result = { toolUseId, output, isError, truncated };
+            tools.push({ ...(toolStarts.get(toolUseId) ?? { label: humanizeToolName(name), step: callIndex + 1 }), ...result });
+            void stream.writeSSE({ event: 'tool_result', data: JSON.stringify(result) });
           },
         });
-        await stream.writeSSE({
-          event: 'final',
-          data: JSON.stringify({
-            text: result.text,
-            modelId: result.modelId,
-            latencyMs: result.latencyMs,
-            costUsd: result.costUsd,
-            toolCallCount: result.toolCallCount,
-          }),
-        });
-        // Knowledge-base confirmations after the answer — the Chat tab renders
-        // these as chips under the assistant message (parity with the
-        // Telegram/Slack follow-up message).
-        if (!result.blocked) {
-          for (const k of [...kbConfirmations, ...acks]) {
-            await stream.writeSSE({ event: 'kb', data: JSON.stringify({ text: k }) });
+        if (result.stopped) {
+          clearInterval(heartbeat);
+          const text = await scanOutboundReply(guardedChunks.visibleText(), { agentId, chatId });
+          const saved = await saveReply({ ...result, text });
+          await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
+          if (regenerate) await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
+          return;
+        }
+        let displayText = result.text;
+        let artifactRefs = safeArtifactDescriptors(result.artifacts);
+        let artifactSaveFailed = false;
+        try {
+          const extracted = extractArtifactBlocks(result.text);
+          displayText = extracted.text;
+          const available = Math.max(0, MAX_DASHBOARD_ARTIFACT_REFS - artifactRefs.length);
+          if (extracted.artifacts.length > available) artifactSaveFailed = true;
+          const ownerId = dashboardIdentity(c);
+          if (ownerId.startsWith('dashboard:user:')) {
+            for (const artifact of extracted.artifacts.slice(0, available)) {
+              try {
+                const savedArtifact = await saveArtifact({
+                  agentId,
+                  chatId,
+                  ownerId,
+                  ...(clientMessageId ? { clientMessageId } : {}),
+                  fileName: artifact.title,
+                  contentType: artifact.mimeType,
+                  body: Buffer.from(artifact.body),
+                  source: { kind: 'grammar', identifier: artifact.identifier },
+                });
+                const descriptor = safeArtifactDescriptor(savedArtifact);
+                if (descriptor) artifactRefs.push(descriptor);
+                else artifactSaveFailed = true;
+              } catch {
+                // Storage and safety details are intentionally opaque at egress.
+                artifactSaveFailed = true;
+              }
+            }
+          } else if (extracted.artifacts.length > 0) {
+            artifactSaveFailed = true;
           }
-          // Generated media: the browser renders the presigned URL directly
-          // (parity with Telegram sendPhoto / Slack file upload). Documents go
-          // out as a distinct `artifact` event so the Chat tab renders a
-          // download card rather than a broken <img> — and, critically, so the
-          // usable link never depends on the model reproducing it in its reply.
-          for (const m of result.media ?? []) {
-            if (!m.presignedUrl) continue;
-            await stream.writeSSE({
-              event: m.kind === 'artifact' ? 'artifact' : 'image',
-              data: JSON.stringify({
-                url: m.presignedUrl,
-                caption: m.caption ?? '',
-                ...(m.kind === 'artifact'
-                  ? { name: m.caption ?? 'document', contentType: m.contentType }
-                  : {}),
-              }),
-            });
+        } catch {
+          // A parser limit failure must not turn raw artifact source into display text.
+          const marker = result.text.indexOf(':::artifact');
+          if (marker >= 0) displayText = result.text.slice(0, marker);
+          artifactSaveFailed = true;
+        }
+        if (artifactSaveFailed) {
+          displayText = `${displayText.trimEnd()}${displayText.trimEnd() ? '\n\n' : ''}I couldn't store one or more requested files.`;
+        }
+        const displayResult: AgentTurnResponse = { ...result, text: displayText,
+          ...(artifactRefs.length ? { artifacts: artifactRefs } : { artifacts: undefined }) };
+        guardedChunks.finish(displayText);
+        // The save and the turn record come first: an awaited write to a body
+        // nobody reads never resolves, and must not gate either.
+        const saved = await saveReply(displayResult);
+        await finishChatTurn(agentId, chatId, clientMessageId, result.blocked ? 'refused' : 'complete');
+        finalSent = true;
+        await writeChatAnswer(stream, displayResult, [...kbConfirmations, ...acks]);
+        if (saved) {
+          for (const artifact of safeArtifactDescriptors(displayResult.artifacts)) {
+            await stream.writeSSE({ event: 'artifact_ref', data: JSON.stringify(artifact) });
           }
         }
-        // Guardrail-blocked exchanges are not persisted; a kept block notice
-        // used to poison the session and re-trip the guardrail on every
-        // subsequent turn until /newchat.
-        if (!result.blocked) {
-          const now = Math.floor(Date.now() / 1000);
-          await appendTurns(agentId, chatId, [
-            { role: 'user', text: userText, ts: now },
-            { role: 'assistant', text: result.text, ts: now },
-          ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c) });
-        }
-        await stream.writeSSE({ event: 'done', data: 'ok' });
+        await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
       } catch (err) {
-        // Emit a clean code for an enforcement refusal rather than the raw
-        // message (which for the indeterminate strict block would read
-        // "$NaN >= $50.00"). The Chat SSE consumer renders this error text.
-        const data =
-          err instanceof CostCapExceededError
-            ? Number.isNaN(err.spendUsd)
-              ? 'cost_cap_unverifiable'
-              : 'cost_cap_exceeded'
-            : err instanceof KillSwitchActiveError
-              ? `kill_switch_active: ${err.reason}`
-              : err instanceof Error
-                ? err.message
-                : String(err);
-        await stream.writeSSE({ event: 'error', data });
+        if ((err as { name?: string })?.name === 'AbortError') {
+          clearInterval(heartbeat);
+          const text = await scanOutboundReply(guardedChunks?.visibleText() ?? '', { agentId, chatId });
+          const saved = await saveReply({ text, stopped: true });
+          await finishChatTurn(agentId, chatId, clientMessageId, 'stopped');
+          if (regenerate) await stream.writeSSE({ event: 'done', data: saved ? 'ok' : 'not_saved' });
+          return;
+        }
+        if (isOperatorRefusal(err)) logger.warn({ agentId, chatId, err }, 'dashboard chat turn refused');
+        else logger.error({ agentId, chatId, err }, 'dashboard chat turn failed');
+        await finishChatTurn(agentId, chatId, clientMessageId, 'error');
+        if (!finalSent) {
+          const error = classifyTurnError(err);
+          await stream.writeSSE({ event: 'error', data: body?.protocol === 2 ? JSON.stringify(error) : error.message });
+        }
+      } finally {
+        clearInterval(heartbeat);
       }
     });
   });
@@ -2029,60 +2599,67 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
     }
     const projection =
-      'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId';
+      'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId, title, pinned';
     const agentId = c.req.query('agentId')?.trim();
+    const q = c.req.query('q')?.trim() ?? '';
+    if (q.length > 100) return c.json({ error: 'invalid_query' }, 400);
 
-    let items: Record<string, unknown>[] = [];
-    if (agentId) {
-      // Per-agent view (e.g. the Agent detail Sessions tab). Sessions are keyed
-      // PK=AGENT#<id>, so this is a single-partition QUERY — complete and cheap.
-      // The old code Scanned the whole table with a FilterExpression bounded to
-      // 10 pages / 50 items, which (a) could silently omit a busy agent's most
-      // recent sessions and (b) read the entire table on every load. A Query
-      // reads only this agent's partition; we page it to completion (with a sane
-      // guard) and the updatedAt sort below handles recency.
-      const pk = `AGENT#${agentId}`;
-      let exclusiveStartKey: Record<string, unknown> | undefined;
-      do {
-        const out = await ddb().send(
-          new QueryCommand({
-            TableName: TABLE_SESSIONS,
-            KeyConditionExpression: 'PK = :pk',
-            ExpressionAttributeValues: { ':pk': pk },
-            ProjectionExpression: projection,
-            ExclusiveStartKey: exclusiveStartKey,
-          }),
-        );
-        for (const item of out.Items ?? []) items.push(item);
-        exclusiveStartKey = out.LastEvaluatedKey;
-        // Guard against a pathological partition; one agent's chat count is small
-        // in practice, but never page unbounded.
-      } while (exclusiveStartKey && items.length < 1000);
-    } else {
-      // Cross-agent recent view (unchanged): a single 100-row scan, slice 50.
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: projection,
-          Limit: 100,
-        }),
-      );
-      items = out.Items ?? [];
-    }
+    // Per-agent (e.g. the Agent detail Sessions tab) is a Query of one
+    // partition; cross-agent Scans the table. Both read to the END — every
+    // message is a row since P1, so a read bounded by items would undercount
+    // conversations silently (readConversationRows).
+    const { rows: items, truncated } = await readConversationRows(projection, agentId || undefined);
 
-    const rows = items.map((i) => ({
+    // Decision 1: conversations are author-private. A non-admin sees only their
+    // own; an admin sees every one, and seeing someone else's is audited first.
+    const conversations = await visibleConversations(c, items, 'list', agentId || undefined);
+    if (!conversations) return c.json(OVERRIDE_UNAUDITED, 500);
+    const rows = conversations.map((i) => ({
       agentId: String(i.PK ?? '').replace(/^AGENT#/, ''),
       chatId: String(i.SK ?? '').replace(/^CHAT#/, ''),
       updatedAt: i.updatedAt as number,
       modelOverride: (i.modelOverride as string | undefined) ?? null,
       messageCount: (i.messageCount as number | undefined) ?? null,
       firstMessage: (i.firstMessage as string | undefined) ?? null,
+      title: (i.title as string | undefined) ?? null,
+      pinned: i.pinned === true,
       createdAt: (i.createdAt as number | undefined) ?? null,
       surface: (i.surface as string | undefined) ?? null,
       userId: (i.userId as string | undefined) ?? null,
     }));
     rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    return c.json({ sessions: rows.slice(0, 50) });
+    const needle = q.toLowerCase();
+    const matching = needle ? rows.filter((row) =>
+      row.title?.toLowerCase().includes(needle) || row.firstMessage?.toLowerCase().includes(needle)) : rows;
+    return c.json({ sessions: [...matching.filter((row) => row.pinned), ...matching.filter((row) => !row.pinned).slice(0, 50)], truncated });
+  });
+
+  router.patch('/sessions', async (c) => {
+    if (!(await hasCapability(c, 'chat:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'chat:read' }, 403);
+    }
+    const body = await c.req.json<{ agentId?: string; chatId?: string; title?: string | null; pinned?: boolean }>().catch(() => null);
+    const agentId = body?.agentId ?? 'main';
+    const chatId = body?.chatId;
+    if (body?.agentId !== undefined && typeof body.agentId !== 'string') return c.json({ error: 'agentId_invalid' }, 400);
+    if (typeof chatId !== 'string' || !chatId) return c.json({ error: 'chatId_required' }, 400);
+    if (body?.title === undefined && body?.pinned === undefined) return c.json({ error: 'nothing_to_update' }, 400);
+    let title: string | null | undefined;
+    if (body.title !== undefined) {
+      if (body.title !== null && typeof body.title !== 'string') return c.json({ error: 'invalid_title' }, 400);
+      if (typeof body.title === 'string' && UNSAFE_ARTIFACT_TITLE_PATTERN.test(body.title)) {
+        return c.json({ error: 'invalid_title' }, 400);
+      }
+      title = typeof body.title === 'string' ? body.title.trim() || null : null;
+      if (title && title.length > 120) return c.json({ error: 'invalid_title' }, 400);
+    }
+    if (body.pinned !== undefined && typeof body.pinned !== 'boolean') return c.json({ error: 'invalid_pinned' }, 400);
+    const session = await getSession(agentId, chatId);
+    if (!session || !ownsConversation(c, session.userId)) return c.json({ error: 'not_found' }, 404);
+    const patch = { ...(title !== undefined ? { title } : {}), ...(body.pinned !== undefined ? { pinned: body.pinned } : {}) };
+    if (!(await setConversationMeta(agentId, chatId, session.userId!, patch))) return c.json({ error: 'not_found' }, 404);
+    return c.json({ agentId, chatId, title: title !== undefined ? title : session.title ?? null,
+      pinned: body.pinned ?? session.pinned === true });
   });
 
   router.get('/usage', async (c) => {
@@ -2248,13 +2825,24 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = safeDashboardChatId(body.chatId);
     const persist = body.persistTurns ?? true;
 
+    if (!(await isKnownAgent(agentId))) return c.json(refusedSend('unknown_agent', { agentId }), 404);
+    if (body?.modelOverride !== undefined && !listAvailableModels(process.env).some((m) => m.id === body.modelOverride)) {
+      return c.json(refusedSend('unknown_model', { agentId, model: body.modelOverride }), 400);
+    }
+
+    // WI-1.1: the same owner check as the streamed route, before the command
+    // path. persistTurns:false still replays the stored history to the model.
+    const session = await getSession(agentId, chatId);
+    if (session && !ownsConversation(c, session.userId)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+
     // Slash command path — handled inline.
-    const cmd = await runCommand(agentId, chatId, body.text);
+    const cmd = await runCommand(agentId, chatId, body.text, { owner: conversationOwner(c) });
     if (cmd?.reply) {
       return c.json({ kind: 'command', agentId, chatId, reply: cmd.reply });
     }
 
-    const session = await getSession(agentId, chatId);
     const history = session?.turns ?? [];
     const modelOverride = body.modelOverride ?? session?.modelOverride;
 
@@ -2279,10 +2867,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       });
       if (persist && !result.blocked) {
         const now = Math.floor(Date.now() / 1000);
+        // P7 (M1): no request id here, so a chat deleted mid-turn is not re-checked.
         await appendTurns(agentId, chatId, [
           { role: 'user', text: body.text, ts: now },
           { role: 'assistant', text: result.text, ts: now },
-        ], undefined, { surface: 'dashboard', userId: dashboardIdentity(c) });
+        ], undefined, conversationOwner(c));
       }
       logger.info(
         {
@@ -2550,6 +3139,32 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ errMessage: msg }, 'ingest failed');
       return c.json({ error: 'ingest_failed', detail: msg }, 400);
+    }
+  });
+
+  router.post('/chat/uploads', async (c) => {
+    if (!(await hasCapability(c, 'chat:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'chat:read' }, 403);
+    }
+    const body = await c.req.json<{ fileName?: unknown; mimeType?: unknown; size?: unknown }>().catch(() => null);
+    const fileName = body?.fileName;
+    const size = body?.size;
+    if (typeof fileName !== 'string' || !fileName.trim() || typeof size !== 'number' || !Number.isInteger(size) || size < 1) {
+      return c.json({ error: 'invalid_upload' }, 400);
+    }
+    if (size > CHAT_ATTACHMENT_MAX_BYTES) return c.json({ error: 'file_too_large', maxBytes: CHAT_ATTACHMENT_MAX_BYTES }, 413);
+    const format = chatAttachmentFormat(fileName, typeof body?.mimeType === 'string' ? body.mimeType : undefined);
+    if (!format) return c.json({ error: 'unsupported_type' }, 415);
+    const id = randomUUID();
+    const safeName = (fileName.split(/[\\/]/).pop() ?? '').replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.\./g, '_').slice(-120);
+    const segment = safeName === '.' ? 'upload' : safeName || 'upload';
+    const key = `${chatUploadPrefix(c)}${id}/${segment}`;
+    try {
+      const url = await presignChatUploadUrl(key, format.mime, size);
+      return c.json({ url, key, id, headers: { 'Content-Type': format.mime } });
+    } catch (err) {
+      logger.warn({ err }, 'presign chat upload url failed');
+      return c.json({ error: 'presign_failed' }, 503);
     }
   });
 
@@ -3176,6 +3791,136 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
   // also an agent tool, so its shape is frozen), which is why the Sessions page
   // could never render a transcript from it. Gated on sessions:read like the
   // list route so the read boundary is consistent.
+  router.get('/artifacts', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const artifacts = await listArtifactHeads({ agentId, chatId, ownerId: owner.ownerId });
+      return c.json({ artifacts: artifacts.map(({ artifactId, version, fileName, contentType, createdAt }) =>
+        ({ artifactId, version, fileName, contentType, createdAt })) });
+    } catch {
+      return c.json({ error: 'artifacts_unavailable' }, 503);
+    }
+  });
+
+  router.get('/artifacts/versions', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    const artifactId = c.req.query('artifactId')?.trim() ?? '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
+      return c.json({ error: 'invalid_artifact_id' }, 400);
+    }
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const versions = await listArtifactVersions({ agentId, chatId, ownerId: owner.ownerId, artifactId });
+      return c.json({ versions: versions.map(({ artifactId: id, version, fileName, contentType, createdAt }) =>
+        ({ artifactId: id, version, fileName, contentType, createdAt })) });
+    } catch {
+      return c.json({ error: 'artifacts_unavailable' }, 503);
+    }
+  });
+
+  router.get('/artifacts/download', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    const artifactId = c.req.query('artifactId')?.trim() ?? '';
+    const versionText = c.req.query('version') ?? '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
+      return c.json({ error: 'invalid_artifact_id' }, 400);
+    }
+    const version = Number(versionText);
+    if (!/^[1-9]\d*$/.test(versionText) || !Number.isSafeInteger(version)) {
+      return c.json({ error: 'invalid_version' }, 400);
+    }
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const versions = await listArtifactVersions({ agentId, chatId, ownerId: owner.ownerId, artifactId });
+      const selected = versions.find((entry) => entry.version === version);
+      if (!selected) return c.json({ error: 'not_found' }, 404);
+      const url = await presignArtifactDownload({
+        agentId, chatId, ownerId: owner.ownerId, artifactId, version: selected.version,
+      });
+      return c.json({ url, fileName: downloadFileName(selected.fileName, selected.contentType), version: selected.version });
+    } catch {
+      return c.json({ error: 'download_unavailable' }, 503);
+    }
+  });
+
+  router.get('/artifacts/content', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId')?.trim() ?? '';
+    const chatId = c.req.query('chatId')?.trim() ?? '';
+    const artifactId = c.req.query('artifactId')?.trim() ?? '';
+    const versionText = c.req.query('version') ?? '';
+    const view = c.req.query('view');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) ||
+        !/^dashboard:[A-Za-z0-9._:-]{1,256}$/.test(chatId)) {
+      return c.json({ error: 'invalid_scope' }, 400);
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
+      return c.json({ error: 'invalid_artifact_id' }, 400);
+    }
+    const version = Number(versionText);
+    if (!/^[1-9]\d*$/.test(versionText) || !Number.isSafeInteger(version)) {
+      return c.json({ error: 'invalid_version' }, 400);
+    }
+    if (view !== undefined && view !== 'outline') return c.json({ error: 'invalid_view' }, 400);
+    const owner = await artifactReadOwner(c, agentId, chatId);
+    if (owner === 'not_found') return c.json({ error: 'not_found' }, 404);
+    if (owner === 'unaudited') return c.json(OVERRIDE_UNAUDITED, 500);
+    try {
+      const versions = await listArtifactVersions({ agentId, chatId, ownerId: owner.ownerId, artifactId });
+      const selected = versions.find((entry) => entry.version === version);
+      if (!selected) return c.json({ error: 'not_found' }, 404);
+      if (view === 'outline' && selected.contentType !== 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+        return c.json({ error: 'outline_unsupported' }, 400);
+      }
+      const bytes = await readArtifactBody({ agentId, chatId, ownerId: owner.ownerId,
+        artifactId, version: selected.version });
+      if (view === 'outline') return c.json(await deckOutline(bytes));
+      return new Response(bytes, { status: 200, headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': attachmentDisposition(downloadFileName(selected.fileName, selected.contentType)),
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "sandbox; default-src 'none'",
+        'Cache-Control': 'no-store',
+      } });
+    } catch (error) {
+      if (error instanceof DeckOutlineError) return c.json({ error: 'preview_unavailable' }, 422);
+      return c.json({ error: 'content_unavailable' }, 503);
+    }
+  });
+
   router.get('/sessions/transcript', async (c) => {
     if (!(await hasCapability(c, 'sessions:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
@@ -3184,7 +3929,48 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const chatId = c.req.query('chatId');
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
     const session = await getSession(agentId, chatId);
-    return c.json({ turns: session?.turns ?? [] });
+    const none = { turns: [], truncated: false };
+    // Decision 1: author-private. Someone else's conversation reads exactly like
+    // one that does not exist; an admin may read it, and that read is audited.
+    if (session && !ownsConversation(c, session.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json(none);
+      if (!(await auditedOverride(c, 'transcript', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
+    }
+    // WI-1.3: the whole conversation, not only the 20-turn replay window.
+    if (!session) return c.json(none);
+    const history = await getFullHistory(agentId, chatId, session);
+    return c.json({ ...history, turns: history.turns.map((turn) => ({
+      ...turn,
+      ...(turn.attachments ? { attachments: turn.attachments.map(({ id, name, type, size }) => ({ id, name, type, size })) } : {}),
+      ...(turn.artifacts ? { artifacts: safeArtifactDescriptors(turn.artifacts) } : {}),
+    })) });
+  });
+
+  router.get('/sessions/attachment', async (c) => {
+    if (!(await hasCapability(c, 'sessions:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
+    }
+    const agentId = c.req.query('agentId') ?? 'main';
+    const chatId = c.req.query('chatId');
+    const id = c.req.query('id');
+    if (!chatId || !id) return c.json({ error: 'not_found' }, 404);
+    const session = await getSession(agentId, chatId);
+    if (!session) return c.json({ error: 'not_found' }, 404);
+    if (!ownsConversation(c, session.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json({ error: 'not_found' }, 404);
+      if (!(await auditedOverride(c, 'attachment', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
+    }
+    const history = await getFullHistory(agentId, chatId, session);
+    const attachment = history.turns.flatMap((turn) => turn.attachments ?? []).find((a) => a.id === id);
+    if (!attachment) return c.json({ error: 'not_found' }, 404);
+    let url: string;
+    try {
+      url = await presignRawAttachment(attachment.key, attachment.name);
+    } catch (err) {
+      logger.warn({ err, agentId, chatId, id }, 'presign attachment download failed');
+      return c.json({ error: 'download_unavailable' }, 503);
+    }
+    return c.json({ url, name: attachment.name });
   });
 
   // War Room transcript PDF. Deliberately NOT under /api/warroom/* (that's
@@ -3214,20 +4000,37 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       sinceSeq = page[page.length - 1]!.seq;
     }
 
-    // ponytail: pdfkit standard Helvetica is WinAnsi — emoji/CJK in replies will not render; embed a TTF if that matters.
-    const title = meeting.title || 'War Room';
-    const buf = await buildPdf({
-      title,
-      sections: [
-        {
-          body: `Participants: ${(meeting.participants ?? []).join(', ')} · Created ${meeting.createdAt ?? ''}`,
-        },
-        ...turns.map((t) => ({
-          heading: t.type === 'agent' ? t.agentId || t.speaker : t.speaker,
-          body: t.content,
-        })),
-      ],
-    });
+    // pdfkit's built-in Helvetica is WinAnsi, so `buildPdf` REFUSES anything
+    // outside it rather than emit a garbled file. That refusal is right for a
+    // document the caller authored and wrong here: nobody controls what an
+    // agent puts in a reply, and a single emoji would otherwise fail the whole
+    // export. Substitute instead, so the transcript always downloads.
+    const title = toPdfSafeText(meeting.title || 'War Room');
+    let buf: Buffer;
+    try {
+      buf = await buildPdf({
+        title,
+        sections: [
+          {
+            body: toPdfSafeText(
+              `Participants: ${(meeting.participants ?? []).join(', ')} · Created ${meeting.createdAt ?? ''}`,
+            ),
+          },
+          ...turns.map((t) => ({
+            heading: toPdfSafeText(t.type === 'agent' ? t.agentId || t.speaker : t.speaker),
+            body: toPdfSafeText(t.content),
+          })),
+        ],
+      });
+    } catch (err) {
+      // Backstop for anything substitution missed. A 500 here reads as "the
+      // server is broken"; this says what actually happened.
+      logger.warn({ meetingId, err }, 'war room transcript PDF failed to render');
+      return c.json(
+        { error: 'pdf_render_failed', detail: err instanceof Error ? err.message : String(err) },
+        422,
+      );
+    }
     const slug =
       title
         .toLowerCase()
@@ -3242,10 +4045,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
 
   // Delete ONE conversation. Narrower than DELETE /export below, which is the
   // admin-only GDPR purge (memories + scheduled tasks + inbox + session); this
-  // removes exactly the session row the Chat sidebar lists. Because `turns` is
-  // an attribute ARRAY on that row rather than a child table, the single
-  // DeleteItem takes the conversation and every stored message atomically —
-  // there is no cascade to perform and no orphan to sweep.
+  // removes the conversation the Chat sidebar lists. Since P1 every message is
+  // also its own record beside the conversation row (WI-1.2), so deleteSession
+  // CASCADES: it removes the conversation's records first and the row last, so
+  // a delete that stops part-way leaves the row to retry. A message written
+  // while the delete runs can still be left behind (the P1 critics' A3).
   router.delete('/sessions', async (c) => {
     // Destructive mutation, so agents:write — the operator-tier capability this
     // repo already uses for every per-tab delete (scheduled-task delete, vector
@@ -3270,7 +4074,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // reasoning validateMagicToken applies to magic-link lookups above).
     const session = await getSession(agentId, chatId);
     const me = dashboardIdentity(c);
-    const owned = session?.userId !== undefined && session.userId === me;
+    const owned = ownsConversation(c, session?.userId);
     // Admin/owner-tier principals may remove any conversation on the agent —
     // the same tier that already holds the GDPR purge. Rows written before the
     // dashboard stamped `userId` (or by Telegram/Slack) have no owner to match,
@@ -3304,6 +4108,14 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const agentId = c.req.query('agentId') ?? 'main';
     const chatId = c.req.query('chatId');
     if (!chatId) return c.json({ error: 'chatId_required' }, 400);
+    // Decision 1: one chat's full export is its author's, or an audited admin's.
+    const session = await getSession(agentId, chatId);
+    // A chat with no conversation row is refused too: its memories and tasks
+    // are nobody's to take but an admin's.
+    if (!ownsConversation(c, session?.userId)) {
+      if (!(await hasCapability(c, 'security:write'))) return c.json({ error: 'not_found' }, 404);
+      if (!(await auditedOverride(c, 'chat-export', { agentId, chatId }))) return c.json(OVERRIDE_UNAUDITED, 500);
+    }
     const payload = await exportChatData(agentId, chatId);
     return c.json(payload);
   });
@@ -3503,6 +4315,49 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     }, 201);
   });
 
+  // Owner decision 1: link a token that has no person of its own — the env root
+  // token, a legacy per-operator token — to exactly ONE user, once. Until it is
+  // linked its conversations are not durable (see personOf); once linked, the
+  // user owns them. Addressed by the hashPrefix GET /tokens hands out, like
+  // DELETE /tokens/:hashPrefix, but it must name exactly one token: a link is
+  // never moved, so an ambiguous prefix must not pick one.
+  router.post('/tokens/:hashPrefix/link', async (c) => {
+    if (!(await hasCapability(c, 'tokens:write'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'tokens:write' }, 403);
+    }
+    const prefix = c.req.param('hashPrefix');
+    const body = await c.req.json<{ userId?: unknown }>().catch(() => null);
+    const userId = typeof body?.userId === 'string' ? body.userId.trim() : '';
+    if (!/^[0-9a-f]{16,64}$/.test(prefix)) return c.json({ error: 'invalid_hash_prefix' }, 400);
+    if (!userId) return c.json({ error: 'userId_required' }, 400);
+    const user = await getUser(userId);
+    if (!user || user.status === 'disabled') return c.json({ error: 'unknown_user' }, 400);
+    const matches = (await listTokens()).filter((t) => t.tokenHash.startsWith(prefix));
+    if (matches.length !== 1) return c.json({ error: 'token_not_found' }, 404);
+    const tokenHash = matches[0]!.tokenHash;
+    const requestedBy = dashboardIdentity(c);
+    const outcome = await linkTokenToUser(tokenHash, userId, requestedBy);
+    if (outcome === 'not_found') return c.json({ error: 'token_not_found' }, 404);
+    if (outcome === 'session_token') return c.json({ error: 'token_has_its_own_user' }, 409);
+    if (outcome === 'already_linked') return c.json({ error: 'already_linked' }, 409);
+    // C5c, as for a token mint: awaited and non-suppressible. An unauditable
+    // link returns 500 — the link exists, and nobody should rely on it unseen.
+    const principal = getPrincipal(c);
+    try {
+      await writeAuditOrThrow({
+        action: 'token_linked',
+        surface: 'dashboard',
+        result: 'ok',
+        userId: principal?.hashPrefix16 ?? 'dashboard',
+        operatorLabel: principal?.label ?? 'dashboard',
+        detail: { hashPrefix: tokenHash.slice(0, 16), userId, requestedBy },
+      });
+    } catch {
+      return c.json({ error: 'token linked but the audit write failed; investigate before relying on it' }, 500);
+    }
+    return c.json({ linked: true, hashPrefix: tokenHash.slice(0, 16), userId });
+  });
+
   router.delete('/tokens/:hashPrefix', async (c) => {
     const prefix = c.req.param('hashPrefix');
     const tokens = await listTokens();
@@ -3619,24 +4474,20 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'sessions:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'sessions:read' }, 403);
     }
-    const allItems: DDBRow[] = [];
-    let exclusiveStartKey: Record<string, unknown> | undefined;
-    do {
-      const out = await ddb().send(
-        new ScanCommand({
-          TableName: TABLE_SESSIONS,
-          ProjectionExpression: 'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId',
-          ExclusiveStartKey: exclusiveStartKey,
-        }),
-      );
-      for (const item of out.Items ?? []) allItems.push(item);
-      exclusiveStartKey = out.LastEvaluatedKey;
-      if (allItems.length >= 10_000) break;
-    } while (exclusiveStartKey);
-    const truncated = allItems.length >= 10_000;
+    // Read to the end and cap the FILE at 10,000 conversations — the cap used to
+    // count items, and since P1 message rows are items too (readConversationRows).
+    const EXPORT_CAP = 10_000;
+    const { rows: allItems, truncated: readTruncated } = await readConversationRows(
+      'PK, SK, updatedAt, modelOverride, messageCount, firstMessage, createdAt, surface, userId',
+    );
     const today = new Date().toISOString().slice(0, 10);
     const headers = ['agentId', 'chatId', 'updatedAt', 'createdAt', 'surface', 'userId', 'messageCount', 'firstMessage', 'modelOverride'];
-    const csvRows = allItems.map((i) => [
+    // Decision 1, the same rule as GET /sessions: your own rows, or every row
+    // for an admin with the override audited first.
+    const conversations = await visibleConversations(c, allItems, 'export');
+    if (!conversations) return c.json(OVERRIDE_UNAUDITED, 500);
+    const truncated = readTruncated || conversations.length > EXPORT_CAP;
+    const csvRows = conversations.slice(0, EXPORT_CAP).map((i) => [
       String(i.PK ?? '').replace(/^AGENT#/, ''),
       String(i.SK ?? '').replace(/^CHAT#/, ''),
       String(i.updatedAt ?? ''), String(i.createdAt ?? ''),
@@ -3649,7 +4500,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     c.header('Content-Disposition', `attachment; filename="sessions-${today}.csv"`);
     c.header('X-Export-Row-Count', String(csvRows.length));
     c.header('X-Export-Truncated', String(truncated));
-    if (truncated) c.header('X-Export-Cap', '10000');
+    if (truncated) c.header('X-Export-Cap', String(EXPORT_CAP));
     return c.body(csv);
   });
 
