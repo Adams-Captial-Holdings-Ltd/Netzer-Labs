@@ -35,8 +35,8 @@ as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
 
 These come from the [decision log](decision-log.md), not from the original plan:
 
-- **A remote kill switch or call-home for lapsed customers** (decision 17). A customer who stops paying keeps running the copy they already have. Resale is forbidden by the license, not by code.
-- **Staff tooling or logins that can read customer data** (decision 18). In a customer's AWS account, Netzer staff use a limited login that installs, upgrades and removes packs and the platform and shows system health only: status, counts, IDs and error codes. `pack status` and alerts show IDs and counts only.
+- **A remote kill switch or call-home for lapsed customers** (decision 17). A customer who stops paying keeps running the copy they already have. Reselling, redistributing or sublicensing Netzer or a pack is forbidden and the license says so; it is backed by what the plans already do: no source code in customer accounts, signed updates and packs only from Netzer staff, and the per-customer `deploymentId` in logs and audit rows.
+- **Staff tooling or logins that can read customer data** (decision 18). In a customer's AWS account, Netzer staff use a limited login that installs, upgrades and removes packs and the platform and shows system health only: status, counts, IDs and error codes. Staff cannot read cases, records, documents, secrets or content-bearing logs, open the Paperclip screens there, or grant themselves more access. `pack status` and alerts show IDs and counts only.
 
 ## What this list is not
 

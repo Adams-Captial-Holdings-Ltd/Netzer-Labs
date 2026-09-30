@@ -20,6 +20,8 @@ The owner asked for a plan to finish the Paperclip integration. It widened into 
 
 **Commercial model.** The customer buys a pack. Netzer staff install, configure, test and support it in the customer's own AWS account. One pack + customer configuration + connector mapping = many customers.
 
+> **Later decision (decision 18).** Decision 18 (owner, 2026-09-28) limits what staff do in a customer's AWS account: they install, upgrade and remove packs and the platform with a limited login and see system health only. They never read customer data (see B10).
+
 ## A. Executive answer
 
 **Yes.** Netzer can responsibly sell a managed Solution Pack once the ten MUST-HAVE items in B are built, the two step-2 feasibility spikes pass (held-request limit, shadow-user lifecycle), and the first pack passes the L release checklist. That is MSP track steps 1-10 in [Build steps](#build-steps).
@@ -38,7 +40,7 @@ Two items are **real blockers** and cannot be manual:
 1. **Correct execution semantics.** Today Paperclip marks a run "succeeded" the moment Netzer answers, which causes duplicate AI work. This is VERIFIED in source.
 2. **Retry-safe business actions.** An AI retry must never create a second EHR record or a second calendar booking.
 
-> **Later decisions (decision 16 and decision 19).** Decision 16 (owner, 2026-09-27): the Behavioral Health Referral pack used as the example in this document is a staging-only **test** pack, never shipped and never a customer. Step 9 proves the platform with it. Step 10 is the owner's first real pack, which passes the same L checklist on its own and goes to Customer #1. Decision 19 (owner, 2026-09-28): Customer #1 is a willing pilot. After go-live, a hand-over block (steps 11 and 14, extended) runs before customers 2-5, and the customer then maintains their own system.
+> **Later decisions (decision 16 and decision 19).** Decision 16 (owner, 2026-09-27): the Behavioral Health Referral pack used as the example in this document is a staging-only **test** pack, never shipped and never a customer. Step 9 proves the platform with it. Step 10 is the owner's first real pack, which passes the same L checklist on its own and goes to Customer #1. Decision 19 (Jev 0.98 for the pilot hand-off after go-live; owner, 2026-09-28: Customer #1 is a willing pilot). After go-live, a hand-over block (steps 11 and 14, extended) runs before customers 2-5, and the customer then maintains their own system.
 
 ## B. MUST HAVE
 
@@ -57,7 +59,7 @@ Blockers before the first paid customer. Each one fails the owner's risk filter.
 | B9 | **Secrets and connectors**: pack declares requirements only; values live in AgentCore Identity (OAuth) or Secrets Manager (API keys); activation blocked unless every mandatory connector is READY and every model the pack uses is invocable in-region | credential exposure; dead-on-arrival workflows |
 | B10 | **Recoverability + PHI eligibility**: joint restore drill (Aurora + EFS, which holds Paperclip's secrets master key, + the DynamoDB effect ledger) followed by a reconcile runbook; every PHI-carrying service confirmed HIPAA-eligible (Bedrock, AgentCore Gateway/Identity, Aurora, EFS, DynamoDB, S3, ECS, CloudWatch); Netzer↔customer BAA and a staff-access model signed at kickoff | unrecoverable deployment; compliance breach |
 
-> **Later decision (decision 18), B10.** Decision 18 (owner, 2026-09-28) defines B10's staff-access model: **Netzer staff never access customer data.** In a customer's AWS account, staff use a limited login that can install, upgrade and remove packs and the platform, and see system health (status, counts, IDs and error codes). They cannot read cases, records, documents, secrets or content-bearing logs, open the Paperclip screens there, or grant themselves more access. The customer admin does anything that touches real data, with the Netzer runbook: entering secrets, connecting their systems (OAuth), looking at a stuck case, `effect resolve` decisions, UAT on their systems, and restores. `pack status` and alerts show IDs and counts only. **Open:** how installs run without staff holding data keys (for example an installer job inside their account) is decided in step 8 with Jev. The BAA stays only if counsel still requires it.
+> **Later decisions (decision 18, X1).** X1 (release plan, 2026-09-26): customer installs verify the release, import its signed digests and **never build**. B3's remark that every customer deploy builds the image predates X1, which names only §C and §25 step 4; the two are not reconciled here. Decision 18 (owner, 2026-09-28) defines B10's staff-access model: **Netzer staff never access customer data.** In a customer's AWS account, staff use a limited login that can install, upgrade and remove packs and the platform, and see system health (status, counts, IDs and error codes). They cannot read cases, records, documents, secrets or content-bearing logs, open the Paperclip screens there, or grant themselves more access. The customer admin does anything that touches real data, with the Netzer runbook: entering secrets, connecting their systems (OAuth), looking at a stuck case, `effect resolve` decisions, UAT on their systems, and restores. `pack status` and alerts show IDs and counts only. **Open:** how installs run without staff holding data keys (for example an installer job inside their account) is decided in step 8 with Jev. The BAA stays only if counsel still requires it.
 
 **B1 details: SYNC_ATTACH** ([ADR 0013](../../adr/0013-sync-attach-execution-contract.md)).
 
@@ -201,7 +203,7 @@ A runbook. ★ = must be a script, never hand-run.
 
 **Upgrade.** `pack upgrade --to v1.0.1` runs a permission/connector **diff that must be acknowledged**, then steps 1-11 against new pipeline keys. **Rollback:** `pack rollback --to v1.0.0`. Both scripts are scale-track step 11, which must land **before the first pack update ships**. The first sale is a v1.0 install and needs neither.
 
-> **Later decisions (X1, X2).** Step 3 above is refined by X2: preflight verifies the deployed release's signature; the running ECS digests must equal the signed digests, and the signed Paperclip digest must be in `compatibility.paperclip.tested`. The deploy-manifest `release` field is only a pointer. Work Platform step 8 depends on release step 4. X1 applies to the environment step of the customer deployment model (§25): the install verifies the release and never builds.
+> **Later decisions (X1, X2).** Steps 2-3 above are refined by X2: preflight verifies the deployed release's signature; the running ECS digests must equal the signed digests, and the signed Paperclip digest must be in `compatibility.paperclip.tested`. The deploy-manifest `release` field is only a pointer. Work Platform step 8 depends on release step 4. X1 applies to the environment step of the customer deployment model (§25): the install verifies the release and never builds.
 
 ## H. Minimum Work UI
 
@@ -283,7 +285,9 @@ A private, Netzer-internal **deployment registry** (git repo `netzer-deployments
 
 **Later:** the same `checkEntitlement()` seam reads a signed entitlement file or AWS Marketplace entitlement instead.
 
-> **Later decisions (decision 17, decision 19).** Decision 17 (owner, 2026-09-28): resale is forbidden and a customer who stops paying keeps what they have. A lapsed customer may keep running the copy they already have (no remote kill switch, no call-home). Reselling, redistributing or sublicensing Netzer or a pack is forbidden, and the license says so (counsel, release step 11). It is backed by what the plans already do: no source code in customer accounts; signed updates and packs only from Netzer staff; and the per-customer `deploymentId` in logs and audit rows (§15). The account-bound signed license file stays in step 14 (signed entitlement seam), not before Customer #1. Decision 19 changes the premise that customers receive pack artifacts only through Netzer staff: after hand-over, customers install signed pack files themselves (step 14 extended).
+> **Later decisions (decision 17, decision 19).** Decision 17 (owner, 2026-09-28): resale is forbidden and a customer who stops paying keeps what they have. A lapsed customer may keep running the copy they already have (no remote kill switch, no call-home). Reselling, redistributing or sublicensing Netzer or a pack is forbidden, and the license says so (counsel, release step 11). It is backed by what the plans already do: no source code in customer accounts; signed updates and packs only from Netzer staff; and the per-customer `deploymentId` in logs and audit rows (§15). The account-bound signed license file stays in step 14 (signed entitlement seam), not before Customer #1. Decision 19 (owner, 2026-09-28) extends step 14 with the customer's own install flow for signed pack files (for example an admin screen that runs decision 18's in-account installer).
+
+> **Later decision (X10).** The new repos `netzer-packs` and `netzer-deployments` get the release plan's ruleset shapes (release step 3): `*/v*` tags are immutable, and branches need a PR with zero approvals.
 
 ## L. Release checklist
 
@@ -533,6 +537,8 @@ Customer user ─ Netzer Work UI (Inbox · Cases · Case Detail · Approvals) / 
                ─▶ AgentCore Identity / Secrets Manager ─▶ Jira · M365 · EHR …   (CloudTrail, KMS)
 ```
 
+> **Later decision (decision 18).** For customer accounts, decision 18 replaces "SPA = operators over SSM" in the diagram: staff there never open the Paperclip screens.
+
 ### How a case runs
 
 A routine or API ingest creates a case (the L1 ingest step resolves the pack's current pipeline key). Stage entry runs a routine → issue → dispatch → Netzer. The attempt's outcome is written back, and the completion writer transitions the case. The L1, L2 and L3 execution model is in [ADR 0013](../../adr/0013-sync-attach-execution-contract.md). The upgrade strategy and IP boundary are in [ADR 0019](../../adr/0019-paperclip-compatibility-program.md).
@@ -559,11 +565,11 @@ After two clean production weeks (metrics defined at go-live):
 
 ## Build steps
 
-The numbering used across this record: MSP track steps 1-10 are the B-list, and the scale track (11-18) is the D list. Owner gates apply to every step: push, PR, merge, every staging trip, any AWS call, customer accounts, production, money and external PRs.
+The numbering used across this record: MSP track steps 1-10 are the B-list, and the scale track (11-18) is the D list. Owner gates apply to every step: push, PR, merge, every staging trip (shared with the Netzar Chat Gauntlet), any AWS call, customer accounts, production, money, external PRs and Fable/astra.
 
 | # | Step | Delivers | Exit gate |
 |---|---|---|---|
-| 1 | Architecture + MSP record | ADRs 0012-0020, amend 0010, supersede 0009; DO-NOT-BUILD; MSP doc; old plan pieces marked superseded | docs gates; owner review |
+| 1 | Architecture + MSP record | ADRs 0012-0020 (numbered one higher than the plan, X8; see the [decision log](decision-log.md#adr-numbers)), amend 0010, supersede 0009; DO-NOT-BUILD; MSP doc; old plan pieces marked superseded | docs gates; owner review |
 | 2 | Re-pin + runtime lock + feasibility spikes (B3) | P0-0b landed; contract suite (run on the old pin first) → digest v2026.916.x; patch deleted; instance settings; fail-closed check; private dispatch + allowlist; public route denied; telemetry off. **Spikes:** (a) held response ≥ 6 min through the http adapter; (b) shadow-user lifecycle at LATEST (sign-up closed, create, membership, board key, approve, revoke); (c) import `existing_company` + adapter override + `skip`; (d) routine and per-agent concurrency defaults | suite green; spike results recorded. **A failed spike (a) or (b) sends B1 or B5 back to Jev for rework before step 4.** Staging trip (Aurora snapshot first) |
 | 3 | Pack format + schemas (B8 part) | `pack.json`, canonical agent schema (templates migrated), `policies.json`/`decisionClasses`, config schema, `connectors.json` with aliases, UI key-field metadata; `pack validate` (schema, placeholders, secret scan, `always_enqueue`, no customer identifiers) | validator tests incl. known-bad packs |
 | 4 | Execution contract (B1) | SYNC_ATTACH with attempt identity, renewable fenced lease, cross-task attach, error codes, blocked waits, completion writer, `pending_dispatch` sweep, SIGTERM drain, forging replies removed | live proofs: Paperclip restart, Netzer restart and deploy mid-attempt, duplicate dispatch → one execution with true run states; genuine re-wake runs a new attempt |
@@ -573,16 +579,27 @@ The numbering used across this record: MSP track steps 1-10 are the B-list, and 
 | 8 | Install tooling (B8, B9) | `pack preflight` (entitlement, versions, settings, connector READY/MISSING, model invocation probe, config, secret refs); `pack install` (dry run, journaled, projection, key minting, per-key routines and agent configs, concurrency); `activate`/`deactivate`/`status`; registry layout; installation record | full install on staging incl. partial-install resume |
 | 9 | Behavioral Health **test pack** (staging only, never production or a customer; decision 16) | pipeline, routines, agents, skills, config, connectors (Jira/M365/EHR aliases), policies, tests, 4 docs; joint restore drill; reuse test with Customer-B config. Healthcare-shaped on purpose, to exercise PHI, human-only decisions and action-bound approvals | **L checklist all green on staging → platform proven** (the test pack itself is never SELLABLE) |
 | 10 | Owner's first real pack → Customer #1 | finish the owner's pack in the format (designed on paper since step 1, written after step 3, installed on staging after step 8); it passes the full L checklist **on its own** (SELLABLE); then the §25 model end to end in the customer account (every action owner-gated; BAA and staff-access model at kickoff) | real pack SELLABLE; UAT sign-off; activation; two-week monitoring |
-| 11 | `pack upgrade` (permission diff) + `pack rollback` | required before the first pack update ships | |
-| 12 | AgentCore interceptor + Cedar (CDK) | approvals verified at the Gateway | |
-| 13 | WORM mirror of Paperclip events + ledger budget partitions + operator dashboards | | |
-| 14 | Pack signing + key ceremony (`TRUST_ROOTS`); signed entitlement seam | | |
-| 15 | Upstream pipeline-portability PR | can start after step 2 | |
-| 16 | Prod provisioning guard + Netzer production hygiene (back-merge, P13, RCA 34184592522) + vendor token migration + retire `salesforce_record` | | |
-| 17 | Work UI v2 (Active Workflows, Automations, SLA status) + chat notifications + automated pack CI harness + internal operator UI | | |
-| 18 | Legacy retirement after clean production weeks | | |
 
-> **Later decisions (decision 16, decision 19, X6, X7).** After step 10 the order is 11 → 14 → 12 → 13 → 15-18 (decision 19), and steps 11 and 14 are extended for the customer hand-over. "Back-merge" leaves step 16 for release step 8 (X6), and the "prod provisioning guard" leaves step 16 for release step 5 (X7). Step 9 is the test pack and step 10 the owner's real pack (decision 16). Step 8 depends on release step 4 (X2).
+**Scale track: customers 2-5 (steps 11-18, the D list)**
+
+| # | Step |
+|---|---|
+| 11 | `pack upgrade` (permission diff) + `pack rollback`, required before the first pack update ships |
+| 12 | AgentCore interceptor + Cedar (CDK), approvals verified at the Gateway |
+| 13 | WORM mirror of Paperclip events + ledger budget partitions + operator dashboards |
+| 14 | Pack signing + key ceremony (`TRUST_ROOTS`); signed entitlement seam |
+| 15 | Upstream pipeline-portability PR (can start after step 2) |
+| 16 | Prod provisioning guard + Netzer production hygiene (back-merge, P13, RCA 34184592522) + vendor token migration + retire `salesforce_record` |
+| 17 | Work UI v2 (Active Workflows, Automations, SLA status) + chat notifications + automated pack CI harness + internal operator UI |
+| 18 | Legacy retirement after clean production weeks |
+
+> **Later decisions (decision 16, decision 19, X2, X3, X4, X5, X6, X7).**
+> - After step 10 the order is 11 → 14 → 12 → 13 → 15-18, and steps 11 and 14 are extended for the customer hand-over (decision 19). Step 9 is the test pack and step 10 the owner's real pack (decision 16).
+> - Step 8 depends on release step 4 (X2).
+> - Step 9 validates the test pack on `rc/v1.1.0` (the rc does not wait for counsel), and step 10 installs the owner's real pack on the final v1.1.0. Both depend on release steps 10-12 (X4).
+> - Step 14 pack signing reuses the release signing module with a separate pack trust-root set: a pack key must never verify a Netzer release, and there is no second platform ceremony (X3).
+> - Local deploys to staging (for example step 2's trip) must run code that includes release step 1, or the old ECR rule comes back; re-read the policy afterwards. No staging trips while a release rc is frozen on staging. Step 2 and release step 5 both touch the image path, so whichever lands second rebases and re-runs the `paperclip-image-pipeline` tests (X5).
+> - "Back-merge" leaves step 16 for release step 8 (X6). The "prod provisioning guard" leaves step 16 for release step 5, and production never creates Paperclip without an owner-set variable (X7).
 
 ## Where each decision is recorded
 

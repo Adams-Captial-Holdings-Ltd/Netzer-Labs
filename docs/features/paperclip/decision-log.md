@@ -17,7 +17,7 @@ The architecture is recorded in [ADRs 0012-0020](../../adr/README.md) and the [m
 - **By.** *Jev* is the decision model (`typesafe/jev-1.13` on OpenRouter) and the number is its confidence. *Owner* is the owner's own answer, given where Jev was unsure or where the owner decides. *Cross-plan (release)* comes from the release pipeline plan.
 - **Precedence.** Where a later decision touches text in the minimum sellable product, the decision wins, and that text carries a marked "Later decision" note. Decisions 16-19 and X1-X11 were made after the roadmap text was last written, so the roadmap does not contain them.
 - **Labels.** VERIFIED (checked against source), LIKELY (probable; a step-2 spike or contract test settles it), UNVERIFIED.
-- **Process labels.** The Reversibility and Revisit-trigger line in each ADR was added when the ADR was written (2026-09-29), as the development process requires. Those lines classify the approved decisions and change none of them.
+- **Process labels.** The Reversibility and Revisit-trigger line in each ADR was added when the ADR was written (2026-09-29), as the Gauntlet's Product Mode requires (process metadata, not a repository rule). Those lines classify the approved decisions and change none of them.
 - **"Recorded in"** columns are the recorder's cross-reference to the ADR or document that carries each decision.
 
 ## ADR numbers
@@ -99,7 +99,7 @@ Jev returns choices and scores; "why" is the selected dossier rationale. Transcr
 | Agent templates → one format | 0.88 | **YES** | — | 0018 |
 | Skills in Netzer agent config | 0.88 | — | — | 0018 |
 | SLAs via pack thresholds + Paperclip timers | 0.99 | — | VERIFIED: monitors `timeoutAt`/`escalate_to_board`; routines | 0012 |
-| Compat program 1.0 · private dispatch 0.93 · issue claim 0.91 · fail-closed checks 1.0 · declarative packs 0.91 · built-ins same policy 0.91 · retire dup connectors 0.93 · tokens to AWS 0.90 · ledger cost authority 0.91 · WORM compliance 1.0 · surface control 1.0 · deterministic actions 0.98 · scheduling boundary 1.0 · one company/deployment 1.0 · offline entitlements (target) 1.0 | as listed | — | — | see the next table |
+| Compat program 1.0 · private dispatch 0.93 · issue claim 0.91 · fail-closed checks 1.0 · declarative packs 0.91 · built-ins same policy 0.91 · retire dup connectors 0.93 · tokens to AWS 0.90 · ledger cost authority 0.91 · WORM compliance 1.0 · surface control 1.0 · deterministic actions 0.98 · scheduling boundary 1.0 · one company/deployment 1.0 · offline entitlements (target) 1.0 | as listed | — | — | see the mapping below |
 | **MSP:** writes only in deterministic steps 0.99 · config in registry + install record 0.98 · signing should-have-soon 0.85 · entitlement via registry 0.98 · four screens 1.0 · namespaced agents + optional mapping 0.81 · runbook + scripts 1.0 · audit rows first, mirror next 0.93 | as listed | — | archived-pipeline and routine-portability mechanics VERIFIED | 0013, 0018, 0017, 0020 |
 
 **Where the granular Jev items landed** (the recorder's mapping): compatibility program → 0019 · private dispatch, fail-closed checks → 0014 · issue claim, deterministic actions → 0013 · declarative packs, offline entitlements → 0018 · built-ins same policy, retire duplicate connectors, tokens to AWS → 0015 · ledger cost authority, WORM compliance → 0020 · surface control → 0017 · scheduling boundary, one company per deployment → 0012.
@@ -132,4 +132,4 @@ Recorded so the next steps do not treat them as settled:
 - **Decision 18:** how installs run without staff holding data keys (for example an installer job inside the customer's account) is decided in step 8 with Jev. Whether the Netzer↔customer BAA is still required depends on counsel.
 - **Decision 19:** how a customer updates the platform without receiving source code. The options are a customer-approved deploy by Netzer's pipeline through a data-blind role, or signed pre-built templates run by an in-account job. Decided with Jev in the hand-over block.
 
-When these are settled, each gets its own ADR at that time.
+Recorded 2026-09-29 (Jev: log and fold, 0.87): decisions 17-19 are logged here and folded into ADR 0017, ADR 0018 and the DO NOT BUILD list, with no ADR of their own; each open part above gets its own ADR when it is settled.
