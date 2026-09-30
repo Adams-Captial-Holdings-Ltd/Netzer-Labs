@@ -1,6 +1,6 @@
 # ADR 0013 — SYNC_ATTACH execution contract and the deterministic-writes rule
 
-**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29; touched by decision 18). Plan number 0012; repo number 0013 — [why](../features/paperclip/decision-log.md#adr-numbers).
+**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29; touched by decisions 18 and 30). Plan number 0012; repo number 0013 — [why](../features/paperclip/decision-log.md#adr-numbers).
 
 ## Context
 
@@ -19,7 +19,7 @@ What Netzer does today (checked at 29309c8): `tryClaimOnce` has neither a renewa
 - **Outcome.** 2xx comes back only after the outcome is written. Failure returns non-2xx with an error code: `agent_failed`, `connector_auth`, `cost_cap` or `model_access`.
 - **Attempt identity** is `(issueId, wake cause/revision)`, not the run ID. A genuine re-wake (a comment, an unblock) starts a new attempt. A retry of the same attempt attaches to it or gets its recorded result.
 - **Leases** are renewable and carry a fencing token checked on every ledger write; attach and wait work across ECS tasks. On SIGTERM no new L1 write starts, and scale-in protection covers tasks with attempts in progress.
-- **Held-request limit.** Node fetch likely gives up after about 300 s (LIKELY; step-2 spike). If confirmed, attempts are capped at about 240 s and continue through a new wake.
+- **Held-request limit (decision 30).** Step-2 spike (a) measured it on 2026-09-30: at v2026.916.1 a dispatch to a hostname is cut at 30 s, and one to a raw private IP at about 302 s; raw-IP holds of 240 s and 280 s succeed. So the dispatch goes to a raw private IP (the fixed-address hop is chosen in step 4), attempts are capped at about 240 s, and longer work continues through a new wake. There is no Paperclip patch. If a digest we must take closes the raw-IP path, the named fallback is a two-line `responseTimeoutMs` patch on the http adapter: an ADR 0019 last resort, with an upstream issue. The held-open attempt is built in step 4; until then the interim dispatch address is a private DNS name (decision 34).
 - **Waits and pauses.** A wait ends the attempt as `blocked` or `in_review` with a durable wait path. Pause is done by disabling routines and agents, never by 202 `agent_not_enabled` or 503 kill-switch replies, which would forge outcomes; those replies are removed.
 - **Completion.** A completion writer (with `X-Paperclip-Run-Id`) and a `pending_dispatch` sweep are part of the contract ([step 4](../features/paperclip/minimum-sellable-product.md#build-steps)).
 
@@ -29,7 +29,7 @@ What Netzer does today (checked at 29309c8): `tryClaimOnce` has neither a renewa
 - **Paperclip writes** (transition, review, comment) are ledgered too, with read-before-retry.
 - **Unknown outcomes** go to `blocked: verify`, never a blind retry. `pack effect resolve` clears them; in a customer's AWS account, `effect resolve` decisions are the customer admin's (decision 18).
 
-**Decided by.** Jev: SYNC_ATTACH 1.0 (revised from NATIVE_ASYNC_MONITOR 1.0 after the owner requirement), writes only in deterministic steps 0.99, deterministic actions 0.98, issue claim 0.91. The blindspot review folded in the effect-ledger key, Paperclip-write coverage, attempt identity, lease fencing, the SIGTERM drain, the fetch-limit spike and removal of the forging replies.
+**Decided by.** Jev: SYNC_ATTACH 1.0 (revised from NATIVE_ASYNC_MONITOR 1.0 after the owner requirement), writes only in deterministic steps 0.99, deterministic actions 0.98, issue claim 0.91. The blindspot review folded in the effect-ledger key, Paperclip-write coverage, attempt identity, lease fencing, the SIGTERM drain, the fetch-limit spike and removal of the forging replies. Decision 30 (owner, 2026-09-30, after Jev was unsure at 0.63 and the council voted 4 of 4): the dispatch goes to a raw private IP.
 
 ## Consequences
 
@@ -39,10 +39,10 @@ Bad:
 
 - Held-open dispatch across restarts is the top risk (High). Mitigation: attach semantics, lease takeover and live restart proofs (step 4).
 - Unknown-outcome writes stop for an operator instead of retrying (High); the effect ledger records them as `unknown`.
-- The held-request limit is unproven until the step-2 spike. Failure behavior is specified in the [failure-handling matrix](../features/paperclip/minimum-sellable-product.md#j-minimum-testing-gate).
+- The held-request limit is measured, not assumed (decision 30), and the raw-IP path is re-proved at every digest bump. Failure behavior is specified in the [failure-handling matrix](../features/paperclip/minimum-sellable-product.md#j-minimum-testing-gate).
 
 - **Reversibility:** two-way before the first live pack run; one-way after, because the effect-ledger key is a persisted schema that customer data depends on.
-- **Revisit trigger:** step-2 spike (a), a held response of 6 minutes or more through the http adapter, fails. The plan then sends B1 back to Jev for rework before step 4.
+- **Revisit trigger:** the per-digest-bump hold test (a 45 s and a 250 s held response through the real hop to a raw private IP) fails at a digest that must be taken. Spike (a) failed as written on 2026-09-30, for a hostname; decision 30 is the rework.
 
 ## Alternatives considered
 
@@ -50,3 +50,5 @@ Bad:
 - **Forging 202 or 503 replies to pause work.** Rejected: they forge outcomes. Pause by disabling routines and agents.
 - **AI steps that write.** Rejected: writes only in deterministic steps (Jev 0.99), so a retry cannot double-write.
 - **Blind retry of an unknown-outcome write.** Rejected: `blocked: verify`.
+- **A hostname for the dispatch address.** Rejected by decision 30: the new pin cuts a hostname dispatch at 30 s.
+- **A patch that lifts the http adapter's timeout.** Not taken; held in reserve as the named fallback (ADR 0019 last resort, with an upstream issue).
