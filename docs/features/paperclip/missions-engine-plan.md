@@ -241,6 +241,8 @@ work** -- if the tab surfaces Paperclip's own board under Paperclip's own permis
 cross-board mutation may not need to exist. Settle that before building it. P0-0b and A61
 are needed under every version of the plan.
 
+> **SUPERSEDED (2026-09-29) — P0-3b.** See the marker on P0-3b in the P0 list below.
+
 ### Phase 0 status, corrected by measurement (2026-09-07/08)
 
 P0-1 is live PASS. P0-0, P0-2 and P0-3 shipped code, and the live checks that followed

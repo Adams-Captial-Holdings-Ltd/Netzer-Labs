@@ -213,7 +213,7 @@ owner delegation) → Phase 8.5 → the same-origin UI/session bridge → Phases
 10–12 → the final legacy retirement. The volatile pass/fail counts and exact
 next action belong in [HANDOFF.md](HANDOFF.md), not this index.
 
-**Added 2026-09-29.** This order is unchanged except for the pieces [missions-engine-plan.md](missions-engine-plan.md) marks SUPERSEDED, which include the same-origin UI/session bridge (the board bridge is on the [DO NOT BUILD list](do-not-build.md)). The code claims in this README are still as of `f0c26fb`; the 2026-09-29 record re-verified none of them.
+**Added 2026-09-29.** The Work Platform record supersedes the pieces of [missions-engine-plan.md](missions-engine-plan.md) that it marks SUPERSEDED, which include the same-origin UI/session bridge (the board bridge is on the [DO NOT BUILD list](do-not-build.md)). Its build order is the [build steps](minimum-sellable-product.md#build-steps). The code claims in this README are still as of `f0c26fb`; the 2026-09-29 record re-verified none of them.
 
 ## 4. Source of truth
 
@@ -456,7 +456,7 @@ Measured by the Phase 0 live critic (P1-1) creating a small parent/child/blocked
 | Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order: Phase 0 (P0-2 live re-check and P0-3's update case after this branch's deploy and the bootstrap repair) → Phase 1 (including P1-3 parent-owner delegation) → 8.5 from the observed shapes in section 6 → the UI/session bridge → 10–12 |
 | Dispatch was rejected on every push until the P0-2 fix; the research adapter had no url until the bootstrap reconcile runs | 2026-09-06 Phase 0 live critic (staging `dd16ca4`, run 34021795520): every push 400 `invalid_body`; Research's `adapterConfig` had no `url` and Paperclip escalated its issues to Main within ~1 s | Fixed on `fix/paperclip-p0-2-dispatch-push`; deploy this branch, run the bootstrap over the tunnel with `PAPERCLIP_DISPATCH_SLUGS=main,research`, then re-run the live critic for P0-2 and P0-3's update case |
 
-**Added 2026-09-29.** The next work above is unchanged except for the pieces [missions-engine-plan.md](missions-engine-plan.md) marks SUPERSEDED. The Work Platform build order is the [build steps](minimum-sellable-product.md#build-steps).
+**Added 2026-09-29.** The Work Platform record supersedes the pieces of [missions-engine-plan.md](missions-engine-plan.md) that it marks SUPERSEDED. Its build order is the [build steps](minimum-sellable-product.md#build-steps).
 
 ## 8. Exact focused and full validation commands
 

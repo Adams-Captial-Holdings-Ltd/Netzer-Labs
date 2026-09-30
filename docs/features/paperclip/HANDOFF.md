@@ -17,7 +17,7 @@ This section was checked on 2026-09-29 against `origin/development` `29309c8`. *
 - **Deployment:** none. No code changed and no AWS call was made; staging and production are untouched.
 - **Other branches, pushed and untouched by this session:** `fix/paperclip-p0-0b-image-build` at `5a7af9b` (the plan folds P0-0b into step 2) and `feat/paperclip-b2-missions-board-infra` at `9fcd6a3`. B-2 belongs to the superseded board bridge; what happens to that branch is the owner's call.
 
-**Next action:** Work Platform step 2 of 18, re-pin + runtime lock + P0-0b + feasibility spikes ([build steps](minimum-sellable-product.md#build-steps)). It includes a staging trip, so every owner gate applies: push, PR, merge, staging and any AWS call each need the owner's yes in that session. The 2026-09-17 "Smallest next action" further down is the earlier plan for the P0-0b lanes.
+**Next action:** the owner gates for this branch (push, PR, merge), then Work Platform step 2 of 18, re-pin + runtime lock + P0-0b + feasibility spikes ([build steps](minimum-sellable-product.md#build-steps)). Step 2 includes a staging trip, so every owner gate applies: push, PR, merge, staging and any AWS call each need the owner's yes in that session. The 2026-09-17 "Smallest next action" further down is the earlier plan for the P0-0b lanes.
 
 ## State as of 2026-09-17
 
