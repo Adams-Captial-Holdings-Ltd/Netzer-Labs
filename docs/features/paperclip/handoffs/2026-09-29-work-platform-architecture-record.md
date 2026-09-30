@@ -27,7 +27,7 @@ supersedes: 2026-09-17-machine-transfer.md
 
 ## 2. Current state summary
 
-This session recorded the owner-approved Work Platform plan (2026-09-26) in the repository, as documentation only. It wrote nine ADRs (repo numbers 0012–0020: the plan numbered them 0011–0019 before the chat ADR took 0011), amended ADR 0010, superseded ADR 0009, and added three documents to this folder: the [DO NOT BUILD list](../do-not-build.md), the [decision log](../decision-log.md) and the [minimum sellable product](../minimum-sellable-product.md). It marked eleven pieces of [missions-engine-plan.md](../missions-engine-plan.md) SUPERSEDED in place, pointed the feature [README](../README.md) and [HANDOFF](../HANDOFF.md) at the record, and carried the campaign ledger forward from both 2026-09-17 handoffs. It decides nothing new: every decision is transcribed from the plan or from the owner's later decisions. The branch is local and unpushed. The heavy validation list has not run (section 7), because the Netzar Chat stack is holding this machine's local ports. Next: the owner's yes to push and open the PR, then Work Platform step 2 of 18.
+This session recorded the owner-approved Work Platform plan (2026-09-26) in the repository, as documentation only. It wrote nine ADRs (repo numbers 0012–0020: the plan numbered them 0011–0019 before the chat ADR took 0011), amended ADR 0010, superseded ADR 0009, and added three documents to this folder: the [DO NOT BUILD list](../do-not-build.md), the [decision log](../decision-log.md) and the [minimum sellable product](../minimum-sellable-product.md). It marked eleven pieces of [missions-engine-plan.md](../missions-engine-plan.md) SUPERSEDED in place, pointed the feature [README](../README.md) and [HANDOFF](../HANDOFF.md) at the record, and carried the campaign ledger forward from both 2026-09-17 handoffs. It decides nothing new: every decision is transcribed from the plan or from the owner's later decisions. The branch is local and unpushed. Two independent read-only reviews fixed their findings before the validation list ran on `6c50fde`: everything in it ran except the local integration test, which the owner chose to skip while the Netzar Chat stack holds the emulator's port (section 7). Next: the owner's yes to push and open the PR, then Work Platform step 2 of 18.
 
 ## 3. Codebase understanding
 
@@ -67,7 +67,8 @@ The architecture itself is in [ADRs 0012–0020](../../../adr/README.md) and the
 - [x] DO NOT BUILD list, decision log and minimum sellable product
 - [x] SUPERSEDED markers: B-1 to B-6, 8.5-4, 10-4, 11-2, 12-2 and P0-3b, plus a banner
 - [x] Feature README pointers, feature HANDOFF and this session handoff
-- [ ] Heavy validation list (typecheck, `npm test`, both builds, integration): not run; see sections 6.3 and 7
+- [x] Validation list on `6c50fde`: typecheck, `npm test`, both builds, both docs gates and `git diff --check` ran (section 7)
+- [ ] `npm run local:test:integration`: not run, an owner-approved skip (section 7)
 - [ ] Push, PR, merge: owner gates, waiting
 
 ### 4.2 Files modified
@@ -541,16 +542,17 @@ Sections 5.1 to 5.25 above are carried forward byte for byte from [the 2026-09-1
 | M79 | Mistake | ADR 0020's first draft said a failed audit write "fails the action". `writeAuditOrThrow` (`src/lib/audit/audit-writer.ts:399-414`) is awaited, cannot be suppressed by the `audit_log_disabled` kill switch and throws when neither store accepts the event, but it does not roll the mutation back. | Corrected before commit (ADR 0020, Decision item 1 and Consequences). Read the code at the cited line before an ADR states failure semantics. |
 | M80 | Mistake | First drafts of ADRs 0017–0020 and the minimum sellable product added rationale the plan does not state (for example a reason for the Missions page, a `pack status` extension, "idempotent" for every script). The frozen gate proves required facts are present; it cannot prove no extra claim is. | Each was cut back to the roadmap's or the decision's own wording before commit. In a record step every sentence must trace to the roadmap, the state file's Decisions table or the code, and the fresh critic checks for invented rationale. |
 | P64 | Precaution | `scripts/ci/feature-knowledge.mjs` requires every relationship target in a feature README's frontmatter to be a Git-tracked file ([framework](../../README.md)). A new file the README names fails the gate until it is added to Git. | `git add` a new doc before naming it in frontmatter; this session committed the nine ADRs before naming them in the README. |
-| P65 | Precaution | On this Mac the Netzar Chat Gauntlet keeps a local stack up (orchestrator on :3000, Vite on :5173, Floci on :4566). `npm run local:test:integration` would run against that Floci and mutate it, and the owner's rule bars heavy suites beside the Chat Gauntlet. | Before any heavy validation run `lsof -nP -iTCP:4566 -sTCP:LISTEN`. If it is held, run no heavy suite, ask the owner (or wait for the stack to stop), and record the commands `NOT RUN` with the reason. Never touch the Chat worktree. |
+| P65 | Precaution | On this Mac the Netzar Chat Gauntlet keeps a local stack up (orchestrator on :3000, Vite on :5173, Floci on :4566). `npm run local:test:integration` would run against that Floci and mutate it, and the owner's rule bars heavy suites beside the Chat Gauntlet. | Before any heavy validation run `lsof -nP -iTCP:4566 -sTCP:LISTEN`. If it is held, run no heavy suite, ask the owner (or wait for the stack to stop), and record the commands `NOT RUN` with the reason. Never touch the Chat worktree. On 2026-09-29 the owner allowed the other five commands to run gently for that one docs-only step; that yes does not carry to later steps. |
 | P66 | Precaution | Real `~/.aws` profiles exist on this machine, so the SDK's default credential chain can find real credentials in any local test run. | Run validation through a wrapper that points `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` at `/dev/null`, sets `AWS_EC2_METADATA_DISABLED=true` and unsets every other `AWS_*` variable. This is in addition to A1's endpoint guard. Never run `npm run local` here without the owner's yes. |
 | A74 | Assumption (open) | The roadmap words the approval comment three ways: its human-approvals section says the comment is required for Reject and Request Changes, its Work UI section says Approve, Reject and Request Changes have "a required comment", and the B5 details say each decision carries a comment. ADRs 0016 and 0017 use the human-approvals wording; the product doc repeats each roadmap sentence as written. | Ask the owner whether Approve needs a comment before step 6 or step 7 builds the rule. |
+| M81 | Mistake | The validation wrapper passed `npm test -- --maxWorkers=3` alone. Vitest's config here sets a minimum, so the run died at start with `options.minThreads and options.maxThreads must not conflict` and "no tests", which reads like a red suite but is a bad flag. | Pass `--minWorkers=1 --maxWorkers=3` together (the 2026-09-06 HANDOFF commands already did). Before calling a run red or green, check its log shows test files collected. |
 
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Ask the owner for a yes to push `chore/work-platform-docs`, open the PR into `development` and, later, merge it. Owner gates for this step are push, PR and merge; it needs no staging trip and no AWS call. Before pushing, run `git fetch` and confirm `ls docs/adr` still leaves 0012–0020 free (P63).
+Ask the owner for a yes to push `chore/work-platform-docs`, open the PR into `development` and, later, merge it. Owner gates for this step are push, PR and merge; it needs no staging trip and no AWS call. Before pushing, run `git fetch` and confirm `ls docs/adr` still leaves 0012–0020 free (P63). The fresh critic's verdict and Jev's review of the pushed HEAD go in the PR body, not in this file: a file cannot record a review of its own commit.
 
 ### 6.2 Immediate next steps
 
@@ -560,7 +562,7 @@ Ask the owner for a yes to push `chore/work-platform-docs`, open the PR into `de
 
 ### 6.3 Blockers and open questions
 
-- [ ] Blocker: the heavy validation list is held. The Netzar Chat stack holds :3000, :5173 and Floci on :4566, and the owner's rule forbids heavy suites beside the Chat Gauntlet. Needs: the Chat stack stopped, or the owner's decision (P65).
+- [ ] Known gap: `npm run local:test:integration` did not run. The Netzar Chat stack's Floci holds :4566 and the run would mutate it (P65). The owner chose on 2026-09-29 to skip it for this docs-only step. Needs: the Chat stack stopped, or the PR's CI result.
 - [ ] Question: keep, archive or delete the parked B-2 branch? Suggested: leave it until step 2 is planned; the owner decides.
 - [ ] Question: the open parts of decisions 18 and 19 ([A71](#527-added-2026-09-29-work-platform-architecture-record)). Suggested: as the decision log says, decision 18's install model in step 8 with Jev, the BAA question with counsel, and decision 19's update path in the hand-over block (steps 11 and 14).
 
@@ -572,26 +574,26 @@ Ask the owner for a yes to push `chore/work-platform-docs`, open the PR into `de
 
 ## 7. Verification actually performed
 
-`not run` means the command did not run at this commit. Run logs live outside the repository in `~/.claude/plans/netzer-work-platform-logs/`.
+Run logs live outside the repository in `~/.claude/plans/netzer-work-platform-logs/`. Every result below is from `6c50fde`, the last commit before this table was written; `git diff 6c50fde..HEAD` shows only files under `docs/` after it (this table and the HANDOFF wording).
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
-| `npm run typecheck` | not run: heavy baseline held (P65) | not run |
-| `npm test` | not run: heavy baseline held (P65) | not run |
-| `npm run build` | not run: heavy baseline held (P65) | not run |
-| `npm --prefix web run typecheck` | not run: heavy baseline held (P65) | not run |
-| `npm --prefix web run build` | not run: heavy baseline held (P65) | not run |
-| `npm run local:test:integration` | not run: it would run against the Chat stack's Floci (P65) | not run |
-| `node scripts/ci/docs-links.mjs` | exit 0 on `29309c8` (log `s1-29309c8-baseline-node-scripts-ci-docs-links-mjs.log`) | not yet re-run at this commit |
-| `node scripts/ci/feature-knowledge.mjs` | exit 0 on `29309c8` (log `s1-29309c8-baseline-node-scripts-ci-feature-knowledge-mjs.log`) | not yet re-run at this commit |
-| `git diff --check` | exit 0 on `29309c8` (log `s1-29309c8-baseline-git-diff-check.log`) | not yet re-run at this commit |
+| `npm run typecheck` | same run as After: no code outside `docs/` changed (`git diff 29309c8..6c50fde` lists `docs/` paths only) | exit 0 on `6c50fde` (log `s1-6c50fde-final-npm-run-typecheck.log`) |
+| `npm test` | same run as After | exit 0 on `6c50fde`: 287 files and 3587 tests passed (log `s1-6c50fde-final-npm-test.log`) |
+| `npm run build` | same run as After | exit 0 on `6c50fde` (log `s1-6c50fde-final-npm-run-build.log`) |
+| `npm --prefix web run typecheck` | same run as After | exit 0 on `6c50fde` (log `s1-6c50fde-final-npm-prefix-web-run-typecheck.log`) |
+| `npm --prefix web run build` | same run as After | exit 0 on `6c50fde` (log `s1-6c50fde-final-npm-prefix-web-run-build.log`) |
+| `npm run local:test:integration` | not run | NOT RUN: the Netzar Chat stack's Floci holds port 4566 and the run would mutate it (P65). The owner chose to skip it on 2026-09-29; the PR's CI runs it |
+| `node scripts/ci/docs-links.mjs` | exit 0 on `29309c8` (log `s1-29309c8-baseline-node-scripts-ci-docs-links-mjs.log`) | exit 0 on `6c50fde` (log `s1-6c50fde-final-node-scripts-ci-docs-links-mjs.log`) |
+| `node scripts/ci/feature-knowledge.mjs` | exit 0 on `29309c8` (log `s1-29309c8-baseline-node-scripts-ci-feature-knowledge-mjs.log`) | exit 0 on `6c50fde` (log `s1-6c50fde-final-node-scripts-ci-feature-knowledge-mjs.log`) |
+| `git diff --check` | exit 0 on `29309c8` (log `s1-29309c8-baseline-git-diff-check.log`) | exit 0 on `6c50fde`, run as `git diff --check origin/development` (log `s1-6c50fde-final-git-diff-check.log`) |
 
-Anything not run, and why: the six heavy commands, for the reason in P65. This step changed only files under `docs/`.
+Anything not run, and why: `npm run local:test:integration`, for the reason in P65. The owner chose on 2026-09-29 to run the other five commands gently (low priority, `--minWorkers=1 --maxWorkers=3`, AWS SDK blinded, P66) and to skip this one. One run of the five serves as the baseline too, because the change touches only files under `docs/`, and the docs gates below ran on the real tree. PR CI also runs `runnable-blocks.mjs`, `docs-assets.mjs` and `diagrams-drift.mjs`; all three exited 0 locally on this branch's content (`GITHUB_BASE_REF=development` for the last; logs named `s1-*-extra-*.log`, listed in the step log). `docs-mermaid.mjs` was not run: no touched doc has a mermaid block, and it needs the network. The first `npm test` attempt (log `s1-41097ec-early-npm-test.log`) never started: the runner passed `--maxWorkers=3` without `--minWorkers` (M81). It was fixed and re-run green (log `s1-41097ec-early2-npm-test.log`), and the final run above repeated it on `6c50fde`.
 
 ## 8. Environment state
 
-- **Tools and services**: Node from the machine's default install for the docs gates; nothing else was needed.
-- **Active processes**: none started by this session. The Netzar Chat stack (orchestrator, Vite, Floci) is running and belongs to the Chat Gauntlet; it was not touched.
+- **Tools and services**: Node 24.3.0 (Homebrew) and the dependencies installed with `npm ci --ignore-scripts` (root) and `npm --prefix web ci` inside the worktree; both `node_modules` folders and `dist/` are gitignored.
+- **Active processes**: none left running by this session (the validation runs have exited). The Netzar Chat stack (orchestrator, Vite, Floci) is running and belongs to the Chat Gauntlet; it was not touched.
 - **Environment variables**: names only. The validation wrapper sets `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` and `AWS_EC2_METADATA_DISABLED` for its own child processes (P66).
 - **Uncommitted work left in the tree**: none. The worktree `Netzer-Labs/.worktrees/work-platform-docs` was clean at the last commit.
 
