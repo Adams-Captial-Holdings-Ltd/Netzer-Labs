@@ -8,7 +8,7 @@ as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
 
 # Work Platform: DO NOT BUILD
 
-> **Binding.** This list comes from the owner-approved Work Platform plan (2026-09-26) and was recorded on 2026-09-29. Building any item below means superseding the ADR that forbids it, not winning a code review. Check it before starting any build in this feature. Feature home: [README](README.md).
+> **Binding.** This list comes from the owner-approved Work Platform plan (2026-09-26) and was recorded on 2026-09-29. Building any item below means superseding the ADR that forbids it (for item 12, changing the owner's constraint), not winning a code review. Check it before starting any build in this feature. Feature home: [README](README.md).
 
 ## The list
 

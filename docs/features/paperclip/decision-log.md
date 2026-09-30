@@ -8,7 +8,7 @@ as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
 
 # Work Platform decision log
 
-The durable copy of every decision behind the Work Platform architecture: the owner-approved plan of 2026-09-26 (decisions 1-15 and the Jev adjudication record), the owner's later decisions (16-19, 2026-09-27 and 2026-09-28) and the cross-plan rows from the release pipeline plan (X1-X11). Transcribed on 2026-09-29 (Work Platform step 1). Nothing here is a new decision.
+The durable copy of every decision behind the Work Platform architecture: the owner-approved plan of 2026-09-26 (decisions 1-15 and the Jev adjudication record), the owner's later decisions (16-19, 2026-09-27 and 2026-09-28) and the cross-plan rows from the release pipeline plan (X1-X11). Transcribed on 2026-09-29 (Work Platform step 1). Nothing here is a new product decision; the one recorder's choice (log and fold) is attributed under "Parts of decisions 18 and 19 still open".
 
 The architecture is recorded in [ADRs 0012-0020](../../adr/README.md) and the [minimum sellable product](minimum-sellable-product.md). The [DO NOT BUILD list](do-not-build.md) is binding. Feature home: [README](README.md).
 
@@ -18,6 +18,7 @@ The architecture is recorded in [ADRs 0012-0020](../../adr/README.md) and the [m
 - **Precedence.** Where a later decision touches text in the minimum sellable product, the decision wins, and that text carries a marked "Later decision" note. Decisions 16-19 and X1-X11 were made after the roadmap text was last written, so the roadmap does not contain them.
 - **Labels.** VERIFIED (checked against source), LIKELY (probable; a step-2 spike or contract test settles it), UNVERIFIED.
 - **Process labels.** The Reversibility and Revisit-trigger line in each ADR was added when the ADR was written (2026-09-29), as the Gauntlet's Product Mode requires (process metadata, not a repository rule). Those lines classify the approved decisions and change none of them.
+- **Where the sources live.** The plan ("roadmap", Parts 1-4), the owner-decision table and the release pipeline plan are local Gauntlet files outside this repository. This log and the [minimum sellable product](minimum-sellable-product.md) are their durable copy: Part 1 sections A-O are the product doc's sections A-O, and Part 2 is its "Target architecture". A reference such as "Part 2, §N" points into those local files.
 - **"Recorded in"** columns are the recorder's cross-reference to the ADR or document that carries each decision.
 
 ## ADR numbers
