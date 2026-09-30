@@ -957,6 +957,8 @@ export interface SweepResult {
   /** Why a pass did no work. Absent when `ran` is true. */
   reason?:
     | 'mode-off'
+    /** The runtime lock's latest verdict is not clean. */
+    | 'lock-closed'
     | 'not-configured'
     | 'boot-probe-failed'
     /** The probe REQUEST failed, which is not evidence either way. Retried next tick. */

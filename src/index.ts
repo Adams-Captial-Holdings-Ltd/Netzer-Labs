@@ -35,6 +35,9 @@ import {
   stopInvalidationListener,
 } from './lib/config/invalidation-listener.js';
 import { initXray } from './lib/observability/xray.js';
+import { paperclipRoutingEnabled } from './lib/missions/mission-acl.js';
+import { loadPaperclipConfig } from './lib/paperclip/config.js';
+import { enforceStartupLock, readRuntimeLockVerdict, startPaperclipLockWatcher } from './lib/paperclip/runtime-lock.js';
 import { attachJarvisWebSocket } from './adapters/dashboard/jarvis.js';
 import { teardownAllJarvisSessions } from './lib/voice/session-registry.js';
 import type { Server as HttpServer } from 'node:http';
@@ -47,6 +50,16 @@ async function main(): Promise<void> {
   // Init X-Ray before any AWS SDK client is created; the SDK wrappers
   // are no-ops when CCE_XRAY_ENABLED is unset.
   initXray();
+  let lockWatcher: ReturnType<typeof startPaperclipLockWatcher> | undefined;
+  if (paperclipRoutingEnabled()) {
+    const read = async () => {
+      const config = await loadPaperclipConfig();
+      if (!config.baseUrl || !config.companyId) throw new Error('Paperclip runtime lock configuration missing');
+      return readRuntimeLockVerdict({ fetchFn: fetch, baseUrl: config.baseUrl, companyId: config.companyId, auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY });
+    };
+    await enforceStartupLock({ read });
+    lockWatcher = startPaperclipLockWatcher({ read });
+  }
   logger.info(
     {
       region: env.AWS_REGION,
@@ -132,6 +145,7 @@ async function main(): Promise<void> {
     stopDriftWatch();
     stopWebhookMonitor();
     stopPaperclipReconciler();
+    lockWatcher?.stop();
     // Close any live Jarvis voice sessions cleanly before the socket closes.
     await teardownAllJarvisSessions('shutdown').catch(() => {});
     // Await the listener teardown (unsubscribe + delete the ephemeral queue) so

@@ -54,6 +54,7 @@ import { tryAcquireRunnerLease } from '../state/runner-lease.js';
 import { PaperclipClient, paperclipClientFromEnvironment } from './client.js';
 import { PaperclipDisabledError, PaperclipInvalidInputError } from './error.js';
 import { PAPERCLIP_CONFIG_CATEGORY } from './config.js';
+import { getPaperclipLockState } from './runtime-lock.js';
 import {
   advancePaperclipWatermark,
   paperclipPollSinceMs,
@@ -311,6 +312,9 @@ export async function runPaperclipReconcilePassOnce(
 
   if (mode === 'off' && !opts.force) {
     return emptyResult('mode-off', mode, pollIntervalMs, enabledAgents);
+  }
+  if (getPaperclipLockState().closed) {
+    return emptyResult('lock-closed', mode, pollIntervalMs, enabledAgents);
   }
   if (bootProbe === 'failed') {
     // RE-LOGGED EVERY TICK, deliberately. A single line at the moment of failure

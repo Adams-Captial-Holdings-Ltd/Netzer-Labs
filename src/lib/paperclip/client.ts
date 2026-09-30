@@ -45,6 +45,7 @@
 import { logger } from '../../observability/logger.js';
 import { isKillSwitchActive } from '../state/kill-switches-repo.js';
 import { loadPaperclipConfig, paperclipConfig, type PaperclipConfig, type PaperclipConfigInput } from './config.js';
+import { getPaperclipLockState } from './runtime-lock.js';
 import {
   PaperclipCompanyMismatchError,
   PaperclipDisabledError,
@@ -569,6 +570,17 @@ export class PaperclipClient {
   ): Promise<PaperclipRawResponse<T>> {
     const query = normalizeQuery(opts.query);
     const request: PaperclipRequestContext = { method, path, query };
+
+    const lock = getPaperclipLockState();
+    if (lock.closed) {
+      throw new PaperclipDisabledError({
+        request,
+        body: {
+          error: `Paperclip runtime lock closed: ${lock.code}`,
+          remediation: 'check the paperclip lock verdict log line',
+        },
+      });
+    }
 
     // (1) THE KILL SWITCH, at every invoke and BEFORE the breaker.
     // `isKillSwitchActive` is itself fail-open on a DDB error, so an outage
