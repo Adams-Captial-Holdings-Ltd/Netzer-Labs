@@ -23,7 +23,7 @@ as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
 | 7 | Customer-facing Paperclip SPA or board bridge | The Netzer Work UI | [ADR 0017](../../adr/0017-netzer-identity-and-work-ui.md) |
 | 8 | A separate skills store | Skills live in Netzer agent config | [ADR 0018](../../adr/0018-managed-solution-packs-v1.md) |
 | 9 | A second agent format | One canonical agent format everywhere | [ADR 0018](../../adr/0018-managed-solution-packs-v1.md) |
-| 10 | An online license server as a runtime dependency | A registry check now, a signed entitlement later | [ADR 0018](../../adr/0018-managed-solution-packs-v1.md) |
+| 10 | An online license server as a runtime dependency | A registry check plus a signed license file checked offline (step 8) | [ADR 0018](../../adr/0018-managed-solution-packs-v1.md) |
 | 11 | Paperclip budgets for AI spend | The Netzer ledger is the cost authority | [ADR 0020](../../adr/0020-worm-audit-and-ledger-cost-authority.md) |
 | 12 | Renaming agent tools | Keep the tool names | Owner constraint (below) |
 
@@ -40,4 +40,4 @@ These come from the [decision log](decision-log.md), not from the original plan:
 
 ## What this list is not
 
-Section E of the [minimum sellable product](minimum-sellable-product.md#e-defer) is a separate list of things to **defer** until there is revenue (marketplace, one-click install, visual designer, and so on). A deferral is a sequencing call. Everything on this page is a prohibition.
+Section E of the [minimum sellable product](minimum-sellable-product.md#e-defer) is a separate list of things to **defer** until there is revenue (the public marketplace, in-app checkout, customer-built workflows, and so on). A deferral is a sequencing call. Everything on this page is a prohibition.

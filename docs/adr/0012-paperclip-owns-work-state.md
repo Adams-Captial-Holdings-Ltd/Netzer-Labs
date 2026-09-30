@@ -17,7 +17,7 @@ Mechanics that shape versioning (VERIFIED at plan time):
 ## Decision
 
 1. **Paperclip owns work state**: workflow definitions, cases, stages, transitions, business schedules and triggers, and SLA timers (pipelines, routines, monitors). Netzer's scheduler stays only for personal chat reminders (EventBridge).
-2. **Pipelines are the canonical workflow engine.** Packs carry native Paperclip create-pipeline bodies and transitions. That is INTERIM: Netzer contributes pipeline portability upstream ([step 15](../features/paperclip/minimum-sellable-product.md#build-steps)), and the interim files are deleted when it ships.
+2. **Pipelines are the canonical workflow engine.** Packs carry native Paperclip create-pipeline bodies and transitions. That is INTERIM: Netzer contributes pipeline portability upstream ([step 17](../features/paperclip/minimum-sellable-product.md#build-steps)), and the interim files are deleted when it ships.
 3. **Key per pack version.** Each pack version installs under its own pipeline key `<pipeline>.v<major-minor>`, with its own routines. Running cases stay pinned to the key they started on, and the Netzer runtime picks the agent-config version from the case's pipeline key in the dispatch context. Rollback moves ingest back; no case is ever deleted.
 4. **Exactly one Paperclip company per deployment**: a single-tenant AWS account per customer ([ADR 0002](0002-single-tenant.md); ADR 0010 DL-5).
 5. **Ingest routines are forced to `always_enqueue`**, per-agent concurrency is set at install, and timer heartbeats are off on pack agents. Routine concurrency can merge or skip triggers while a run is active (LIKELY), so a two-webhook test proves it.
@@ -36,8 +36,8 @@ Bad:
 - Old pipeline keys must be kept alive until they drain, so upgrades leave several keys live.
 - The interim serialized pipeline and routine bodies must be replaced when upstream portability ships.
 
-- **Reversibility:** two-way until Customer #1 goes live (step 10); one-way after, because case data and pipeline keys then live in Paperclip.
-- **Revisit trigger:** upstream ships pipeline versioning or portability (step 15), or a contract-suite failure on a pipeline route at a candidate digest (step 2).
+- **Reversibility:** two-way until Customer #1 goes live (step 14); one-way after, because case data and pipeline keys then live in Paperclip.
+- **Revisit trigger:** upstream ships pipeline versioning or portability (step 17), or a contract-suite failure on a pipeline route at a candidate digest (step 2).
 
 ## Alternatives considered
 

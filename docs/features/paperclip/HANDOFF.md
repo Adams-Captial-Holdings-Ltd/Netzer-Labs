@@ -2,22 +2,22 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-09-29
-as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
+observed_at: 2026-09-30
+as_of_commit: c9897c5e879155e68cda26ac34621ca756953080
 ---
 
 # Paperclip integration handoff
 
-## Current state (2026-09-29)
+## Current state (2026-09-30)
 
-This section was checked on 2026-09-29 against `origin/development` `29309c8`. **Everything below it is prior state as of 2026-09-17 (`4f1a860`) and was not re-checked.**
+This section was checked on 2026-09-30 against `origin/development` `c9897c5`. **Everything below it is prior state as of 2026-09-17 (`4f1a860`) and was not re-checked.**
 
-- **Branch:** `chore/work-platform-docs` (from `origin/development` `29309c8`; merge target `development`). Docs only. **Pushed:** no. **PR:** none.
-- **What it does:** records the owner-approved Work Platform plan (2026-09-26): ADRs 0012–0020, the ADR 0010 amendment and the ADR 0009 supersession, the [DO NOT BUILD list](do-not-build.md), the [decision log](decision-log.md) and the [minimum sellable product](minimum-sellable-product.md); marks the superseded pieces of [missions-engine-plan.md](missions-engine-plan.md). It decides nothing new. Session: [2026-09-29 handoff](handoffs/2026-09-29-work-platform-architecture-record.md).
-- **Deployment:** none. No code changed and no AWS call was made; staging and production are untouched.
-- **Other branches, pushed and untouched by this session:** `fix/paperclip-p0-0b-image-build` at `5a7af9b` (the plan folds P0-0b into step 2) and `feat/paperclip-b2-missions-board-infra` at `9fcd6a3`. B-2 belongs to the superseded board bridge; what happens to that branch is the owner's call.
+- **Branch:** `feature/wp-step2-repin-runtime-lock` (from `origin/development` `c9897c5`; merge target `development`). **Pushed:** no. **PR:** none. Its first commit is the roadmap-v2 docs amendment (decision 27): this file, the [decision log](decision-log.md), the [minimum sellable product](minimum-sellable-product.md), the [DO NOT BUILD list](do-not-build.md) and ADRs 0012, 0015, 0017, 0018 and 0020 now say roadmap v2 (decisions 20-29, X12 and X13). The rest of the step (P0-0b, the contract suite, the re-pin, the runtime lock and the four spikes) has no code committed as of that commit.
+- **Step 1 is merged:** PR #198 merged into `development` as `c9897c5` on 2026-09-30 (ADRs 0012-0020, the DO NOT BUILD list, the decision log, the minimum sellable product). Docs only; nothing was deployed.
+- **Deployment:** none. No AWS call has been made for this step; staging and production are untouched. `development` deploys nothing.
+- **Other branches, pushed and untouched by this commit:** `fix/paperclip-p0-0b-image-build` at `5a7af9b` (step 2 lands its two code commits, `74d403d` and `73f0812`; its session handoffs are already on `development`) and `feat/paperclip-b2-missions-board-infra` at `9fcd6a3` (superseded bridge work; what happens to it is the owner's call).
 
-**Next action:** the owner gates for this branch (push, PR, merge), then Work Platform step 2 of 18, re-pin + runtime lock + P0-0b + feasibility spikes ([build steps](minimum-sellable-product.md#build-steps)). Step 2 includes a staging trip, so every owner gate applies: push, PR, merge, staging and any AWS call each need the owner's yes in that session. The 2026-09-17 "Smallest next action" further down is the earlier plan for the P0-0b lanes.
+**Next action:** Work Platform step 2 of 18 (re-pin + runtime lock + P0-0b + feasibility spikes, [build steps](minimum-sellable-product.md#build-steps)) continues on this branch. Its owner gates are push, PR, merge, the staging trip (Aurora snapshot first) and any AWS call; each needs the owner's yes in that session. The 2026-09-17 "Smallest next action" further down is the earlier plan for the P0-0b lanes.
 
 ## State as of 2026-09-17
 
