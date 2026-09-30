@@ -28,7 +28,7 @@ Mechanics that shape versioning (VERIFIED at plan time):
 
 ## Consequences
 
-Good: one workflow engine, one source of case truth, and pack upgrades that never migrate a running case.
+Good: one workflow engine, one source of case truth, and pack upgrades that leave running cases on the key they started on (explicit migration is a manual, documented operation).
 
 Bad:
 
