@@ -128,9 +128,10 @@ export const PAPERCLIP_NO_RETRY: PaperclipRetryPolicy = { ...PAPERCLIP_RETRY_POL
 
 /**
  * Extends `RequestInit`, and every key this client does not name is re-spread
- * into `fetch`, so `keepalive`, `redirect`, `cache` and a caller `signal` work
- * for free. `headers` is destructured out in the constructor precisely so the
- * rest-spread cannot clobber the assembled header block.
+ * into `fetch`, so `keepalive`, `cache` and a caller `signal` work for free;
+ * redirects are fixed to 'error'. `headers` is destructured out in the
+ * constructor precisely so the rest-spread cannot clobber the assembled
+ * header block.
  */
 export interface PaperclipClientOptions extends RequestInit, PaperclipConfigInput {
   fetchFn?: typeof fetch;
@@ -644,6 +645,7 @@ export class PaperclipClient {
     try {
       response = await this.fetchFn(url, {
         ...this.requestInit,
+        redirect: 'error',
         method,
         signal,
         headers: {
