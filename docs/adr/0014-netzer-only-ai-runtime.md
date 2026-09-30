@@ -33,4 +33,3 @@ Bad:
 
 - **Paperclip's native runner for some agents.** Rejected: a second AI runtime ([DO NOT BUILD](../features/paperclip/do-not-build.md)).
 - **Local adapters or remote profiles.** Rejected for the same reason.
-- **A warning instead of a fail-closed check.** Rejected: fail-closed checks 1.0.

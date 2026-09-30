@@ -8,7 +8,7 @@
 
 Paperclip already ships the parts: pipelines (stages, transitions, review stages), routines (triggers, variables, concurrency) and monitors (`timeoutAt`, `escalate_to_board`). Netzer building its own would create a second workflow engine ([do-not-build](../features/paperclip/do-not-build.md)).
 
-Mechanics that shape versioning (VERIFIED at plan time against `pc:` @LATEST v2026.916.1 `d554c47`):
+Mechanics that shape versioning (VERIFIED at plan time):
 
 - Pipelines have no definition versioning, and an archived pipeline blocks transitions. So an old key must stay un-archived until it drains; only new ingest moves.
 - The teams catalog already imports through Paperclip's portability path (`pc:services/teams-catalog.ts:12-19`). Pipelines and routines are not portable: routines only as recurring tasks.
@@ -42,6 +42,6 @@ Bad:
 ## Alternatives considered
 
 - **A Netzer workflow engine, state machine, case store or business scheduler.** Rejected: [DO NOT BUILD](../features/paperclip/do-not-build.md).
-- **One pipeline edited in place per pack.** Rejected: no definition versioning, and archiving blocks transitions.
+- **Waiting for upstream pipeline versioning.** Not available; it is the later path, and key per pack version is the v1 workaround.
 - **Several companies in one Paperclip instance.** Rejected in ADR 0010 DL-5.
 - **Netzer's scheduler for business timers.** Rejected: the scheduling boundary puts business schedules and SLA timers in Paperclip.

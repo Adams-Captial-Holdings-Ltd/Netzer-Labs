@@ -1,6 +1,6 @@
 # ADR 0016 — Human decisions are recorded in Paperclip through shadow users; high-impact classes are human by default
 
-**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29). Plan number 0015; repo number 0016 — [why](../features/paperclip/decision-log.md#adr-numbers).
+**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29; touched by decision 18). Plan number 0015; repo number 0016 — [why](../features/paperclip/decision-log.md#adr-numbers).
 
 ## Context
 
@@ -10,7 +10,7 @@ VERIFIED at plan time: board API keys are bound to a user (`board_api_keys.user_
 
 ## Decision
 
-1. **Each approver gets a headless Paperclip shadow user** with its own board key. The Netzer BFF writes to Paperclip as that shadow user: `approvals/:id/approve|reject`, or the pipeline `review` with `approve|reject|request_changes`. Netzer stays the identity authority ([ADR 0017](0017-netzer-identity-and-work-ui.md)). Creation, membership and key minting are proven by the step-2 spike (b). Keys live in Secrets Manager. Rotation and RBAC sync are a staff runbook for ten or fewer approvers. There is no delegation engine in v1.
+1. **Each approver gets a headless Paperclip shadow user** with its own board key. The Netzer BFF writes to Paperclip as that shadow user: `approvals/:id/approve|reject`, or the pipeline `review` with `approve|reject|request_changes`. Netzer stays the identity authority ([ADR 0017](0017-netzer-identity-and-work-ui.md)). Creation, membership and key minting are proven by the step-2 spike (b). Keys live in Secrets Manager. Rotation and RBAC sync are a staff runbook for ten or fewer approvers. In a customer's AWS account, what staff may do is set by decision 18 ([ADR 0017](0017-netzer-identity-and-work-ui.md)). There is no delegation engine in v1.
 2. **Every decision carries** the approver (a real person via the shadow user), a timestamp, a comment (required for Reject and Request Changes), the case and stage, and a Netzer audit row with the Netzer user ID, shadow ID, decision class and correlation IDs ([ADR 0020](0020-worm-audit-and-ledger-cost-authority.md)). The decisions are Approve, Reject and Request Changes.
 3. **Frozen payload.** AI output is persisted once per `(case, stage, round)` and is never regenerated after approval is requested.
 4. **Hash-bound approval.** The approval carries the sha256 of the exact L1 payload. The executor checks that hash and that `decidedByUserId` is a shadow user entitled to the decision class. Operator accounts never count.

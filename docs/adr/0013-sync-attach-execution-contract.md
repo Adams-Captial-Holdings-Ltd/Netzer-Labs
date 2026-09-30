@@ -1,6 +1,6 @@
 # ADR 0013 — SYNC_ATTACH execution contract and the deterministic-writes rule
 
-**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29). Plan number 0012; repo number 0013 — [why](../features/paperclip/decision-log.md#adr-numbers).
+**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29; touched by decision 18). Plan number 0012; repo number 0013 — [why](../features/paperclip/decision-log.md#adr-numbers).
 
 ## Context
 
@@ -8,7 +8,7 @@ Today Paperclip marks a run "succeeded" the moment Netzer answers its dispatch, 
 
 Jev first chose NATIVE_ASYNC_MONITOR (1.0), then **revised to SYNC_ATTACH (1.0)** after the owner made true run states a blocker.
 
-What Paperclip does (VERIFIED against `pc:` @LATEST): the http adapter's `timeoutMs` 0 means no timeout and a non-2xx answer marks the run failed (`pc:adapters/http/execute.ts:11-41`); the silence watchdog fires at 60 min / 4 h (`pc:recovery/service.ts:80-81`); an active run skips stranded-run recovery; blocked waits have a durable wait path (`pc:recovery/service.ts:857,3544`, and the handoff skip in `pc:successful-run-handoff.ts:97`); the run-id header is not status-checked (`pc:middleware/auth.ts:155-218`).
+What Paperclip does (VERIFIED at plan time in the Paperclip source, `pc:`): the http adapter's `timeoutMs` 0 means no timeout and a non-2xx answer marks the run failed (`pc:adapters/http/execute.ts:11-41` @LATEST); the silence watchdog fires at 60 min / 4 h (`pc:recovery/service.ts:80-81`); an active run skips stranded-run recovery; blocked waits have a durable wait path (`pc:recovery/service.ts:857,3544`, and the handoff skip in `pc:successful-run-handoff.ts:97`); the run-id header is not status-checked (`pc:middleware/auth.ts:155-218`).
 
 What Netzer does today (checked at 29309c8): `tryClaimOnce` has neither a renewable lease nor a fencing token and records no holder (`src/lib/state/runner-lease.ts:113`); the dispatch route answers 202 `agent_not_enabled` and 503 `paperclip_disabled` (`src/adapters/dashboard/paperclip-dispatch.ts:154,192`), which forge outcomes; shutdown force-exits after 28 s (`src/index.ts:127`).
 
@@ -27,7 +27,7 @@ What Netzer does today (checked at 29309c8): `tryClaimOnce` has neither a renewa
 
 - **Effect ledger.** The key is `(caseKey, stage, step, stageEntryNo)`, using the ingest `caseKey`; it survives Request Changes rounds and database restores. A retry returns the recorded result.
 - **Paperclip writes** (transition, review, comment) are ledgered too, with read-before-retry.
-- **Unknown outcomes** go to `blocked: verify`, never a blind retry. Staff resolve them with `pack effect resolve`.
+- **Unknown outcomes** go to `blocked: verify`, never a blind retry. `pack effect resolve` clears them; in a customer's AWS account, `effect resolve` decisions are the customer admin's (decision 18).
 
 **Decided by.** Jev: SYNC_ATTACH 1.0 (revised from NATIVE_ASYNC_MONITOR 1.0 after the owner requirement), writes only in deterministic steps 0.99, deterministic actions 0.98, issue claim 0.91. The blindspot review folded in the effect-ledger key, Paperclip-write coverage, attempt identity, lease fencing, the SIGTERM drain, the fetch-limit spike and removal of the forging replies.
 

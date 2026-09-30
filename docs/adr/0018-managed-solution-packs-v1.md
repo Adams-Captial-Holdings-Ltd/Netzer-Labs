@@ -1,10 +1,10 @@
 # ADR 0018 — Managed Solution Packs v1: format, registry and entitlement
 
-**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29; touched by decisions 16, 17 and 19 and cross-plan rows X1, X2, X3 and X10). Plan number 0017; repo number 0018 — [why](../features/paperclip/decision-log.md#adr-numbers).
+**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29; touched by decisions 16, 17, 18 and 19 and cross-plan rows X1, X2, X3 and X10). Plan number 0017; repo number 0018 — [why](../features/paperclip/decision-log.md#adr-numbers).
 
 ## Context
 
-Netzer sells a managed Solution Pack: staff install, configure, test and support it in the customer's own AWS account, and one pack plus customer configuration plus connector mapping serves many customers without a fork ([minimum sellable product](../features/paperclip/minimum-sellable-product.md)). The first sale needs a repeatable format, install path and licensing check, and nothing more. Installs must not be hand-edited, or they become forks.
+Netzer sells a managed Solution Pack: staff install, configure, test and support it in the customer's own AWS account (decision 18, below, limits what staff can do there), and one pack plus customer configuration plus connector mapping serves many customers without a fork ([minimum sellable product](../features/paperclip/minimum-sellable-product.md)). The first sale needs a repeatable format, install path and licensing check, and nothing more. Installs must not be hand-edited, or they become forks.
 
 ## Decision
 
@@ -19,6 +19,7 @@ Netzer sells a managed Solution Pack: staff install, configure, test and support
 9. **Later owner decisions that touch this ADR** (full text in the [decision log](../features/paperclip/decision-log.md)):
    - **decision 16:** Behavioral Health is a staging-only test pack; the owner's first real pack goes to Customer #1; authoring uses the same files and tools as staff, with no visual builder in v1.
    - **decision 17:** resale is forbidden and a lapsed customer keeps what they have (no remote kill switch, no call-home); the account-bound signed license file stays in step 14.
+   - **decision 18:** Netzer staff never access customer data. In a customer's AWS account, staff use a limited login that installs, upgrades and removes packs and the platform and sees system health only; entering secrets, connecting the customer's systems (OAuth), UAT and restores are the customer admin's. How installs run without staff holding data keys is decided in step 8 with Jev.
    - **decision 19:** customers maintain their own system after hand-over, with pack upgrade and signing extended for it.
 
 **Decided by.** Jev: envelope over Paperclip bundles 1.0, key-per-version 1.0, declarative packs 0.91, config in the registry and installation record 0.98, entitlement via the registry 0.98, signing should-have-soon 0.85, namespaced agents with optional mapping 0.81, runbook plus scripts 1.0, agent templates to one format 0.88, skills in Netzer agent config 0.88, offline entitlements as the later target 1.0. Owner: YES on one agent format. VERIFIED: the teams catalog uses portability import.

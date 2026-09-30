@@ -13,7 +13,7 @@ Paperclip ships a full SPA, but it has no base path (VERIFIED, `pc:ui/src/api/cl
    - **Work Inbox**: items needing this person: approvals waiting on them, blocked cases (connector, config or failure), cases they own.
    - **Cases**: active workflow instances for the installed packs, filtered by pack, stage and status. A thin list.
    - **Case Detail**: current stage and status, owner (agent or human), key fields, timeline (case events and issue comments), agent activity (turns and tool calls from the Netzer audit), blockers, approvals.
-   - **Approvals**: a queue with Approve, Reject and Request Changes, each with a required comment. It shows the exact action payload being approved.
+   - **Approvals**: a queue with Approve, Reject and Request Changes, each carrying a comment (required for Reject and Request Changes). It shows the exact action payload being approved.
 3. **The Missions page is not the foundation.** The UI is redesigned around Paperclip's work model, and `/missions` redirects to Work Inbox ([step 7](../features/paperclip/minimum-sellable-product.md#build-steps)).
 4. **Customers never use the Paperclip SPA.** It is operator-only: reached over SSM with named accounts, sign-up disabled, telemetry off. Not in v1, and staying operator or admin only: a designer, dashboards, a pipeline builder, a routine editor.
 5. **Decision 18 (owner, 2026-09-28) amends item 4 for customer accounts.** Netzer staff never access customer data. In a customer's AWS account they use a limited login that can install, upgrade and remove packs and the platform and can see system health (status, counts, IDs and error codes). They cannot read cases, records, documents, secrets or content-bearing logs, open the Paperclip screens there, or grant themselves more access. Decision 18 replaces "operators over SSM" for customer accounts; the plan does not change it elsewhere. Details and the parts still open (decided in step 8): [decision log](../features/paperclip/decision-log.md).
@@ -34,6 +34,6 @@ Bad:
 
 ## Alternatives considered
 
-- **Hybrid UI** (Netzer chrome around Paperclip's own SPA): Jev's first pick, revised away by the owner.
+- **Hybrid UI.** Jev's first pick (1.0), revised to the Netzer Work UI (1.0); owner: YES, extended.
 - **The Missions page as the foundation.** Rejected by the owner.
 - **A customer-facing Paperclip SPA or a board bridge.** Rejected: [DO NOT BUILD](../features/paperclip/do-not-build.md). Paperclip cannot be served under a base path.

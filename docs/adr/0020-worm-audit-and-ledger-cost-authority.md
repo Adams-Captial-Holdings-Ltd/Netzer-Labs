@@ -6,11 +6,11 @@
 
 A regulated customer needs a compliance trail of every AI turn, tool call and human decision, and a support team needs the same identifiers to diagnose failures, billing disputes and incidents ([minimum sellable product](../features/paperclip/minimum-sellable-product.md), B6). The risk is on both sides: no trail, or PHI locked into a 7-year WORM record.
 
-Netzer's audit path is `writeAuditOrThrow` (`src/lib/audit/audit-writer.ts:414`). Its existing redaction is switch-gated, covers only top-level strings and lands in 7-year Object Lock (`src/lib/audit/audit-writer.ts:306-323`), so it is not relied on for PHI.
+Netzer's audit path is `writeAuditOrThrow` (`src/lib/audit/audit-writer.ts:414`). Its existing redaction is switch-gated and covers only top-level strings (`src/lib/audit/audit-writer.ts:306-323`), and audit rows land in a 7-year Object Lock bucket (governance mode, tier 2 and above: `infra/lib/storage-stack.ts:306`), so it is not relied on for PHI.
 
 ## Decision
 
-1. **Netzer WORM audit rows** are written for every AI turn, tool call and human decision. Human decisions and L1 writes use `writeAuditOrThrow`: it is awaited, the `audit_log_disabled` kill switch cannot suppress it, and it throws when neither audit store accepted the event, so a missing trail is loud instead of silently absorbed. It runs after the mutation persists and does not roll it back (`src/lib/audit/audit-writer.ts:399-414`). Paperclip case events are retained as operational history.
+1. **Netzer WORM audit rows** are written for every AI turn, tool call and human decision. Human decisions and L1 writes use `writeAuditOrThrow`: it is awaited, the `audit_log_disabled` kill switch cannot suppress it, and it throws when neither audit store accepted the event, so a missing trail is loud instead of silently absorbed. As documented for its existing callers (token and IAM changes), it runs after the mutation persists and does not roll it back (`src/lib/audit/audit-writer.ts:399-414`). Paperclip case events are retained as operational history.
 2. **IDs and hashes only.** Audit rows carry no tool arguments and no PHI.
 3. **Correlation IDs** (carried in dispatch, audit rows, structured logs and the effect ledger): `deploymentId`, `packId@version`, `pipelineKey`, `caseId`, `stageKey`, `issueId`, `paperclipRunId`, `attemptNo`, `netzerTurnId`, `agentId`, `userId` and `shadowUserId`, `toolCallId` and `effectKey`, `bedrockRequestId`, timestamp and outcome.
 4. **Audit rows first, mirror next.** Customer #1 ships with Netzer audit rows; a full mirror of Paperclip case and approval events follows ([step 13](../features/paperclip/minimum-sellable-product.md#build-steps)).
@@ -26,9 +26,9 @@ Good: support, compliance, failure diagnosis, billing disputes and incident resp
 Bad:
 
 - The Customer #1 trail does not yet include Paperclip's own events; that is the step-13 mirror.
-- When both audit stores fail, `writeAuditOrThrow` throws to the caller after the mutation has already persisted, so the failure is loud but the action is not rolled back.
+- As documented for its existing callers, when both audit stores fail `writeAuditOrThrow` throws to the caller after the mutation has already persisted, so the failure is loud but the action is not rolled back.
 
-- **Reversibility:** one-way. WORM rows cannot be edited or removed, which is why they carry IDs and hashes only.
+- **Reversibility:** one-way. Rows are kept for 7 years under Object Lock (governance mode at the base), so nothing sensitive can go in them; that is why they carry IDs and hashes only.
 - **Revisit trigger:** step 13 (the event mirror and ledger budget partitions), or counsel's answer on whether the BAA is still required (decision 18).
 
 ## Alternatives considered
