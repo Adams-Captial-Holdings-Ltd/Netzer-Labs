@@ -18,8 +18,9 @@
  * source. Nothing in this file cites a Paperclip line number.
  */
 import { readFileSync } from 'node:fs';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
+  LOCK_AUDITOR_KEY_FIELD,
   RECONCILER_KEY_NAME,
   agentKeyName,
   agentSpecs,
@@ -32,9 +33,148 @@ import {
   type AgentKeyRecord,
   type AgentRecord,
   type PaperclipRequest,
+  assertPrivateDispatchUrl,
+  ensureNativeRunnerOff,
+  ensureLockAuditor,
+  lockVerdictProblem,
 } from './bootstrap-core.js';
 
 const COMPANY = 'company-uuid';
+
+describe('runtime lock bootstrap', () => {
+  const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+
+  it('keeps the lock auditor secret field name in sync', () => {
+    // Deploy phases seed, the orchestrator task injects, and the orchestrator reads this same name.
+    expect(LOCK_AUDITOR_KEY_FIELD).toBe('lock_auditor_key');
+  });
+
+  it('accepts a private dispatch url and rejects unsafe dispatch url values', () => {
+    for (const host of ['orchestrator.claudeclaw-dispatch.internal', '10.0.4.7']) {
+      expect(() => assertPrivateDispatchUrl(`http://${host}:3001/api/paperclip/dispatch`)).not.toThrow();
+    }
+    for (const value of [
+      'https://10.0.4.7:3001/api/paperclip/dispatch',
+      'http://example.com:3001/api/paperclip/dispatch',
+      'http://10.0.4.7:3002/api/paperclip/dispatch',
+      'http://10.0.4.7:3001/wrong',
+      'http://10.0.4.7:3001/api/paperclip/dispatch?q=1',
+      'http://user:password@10.0.4.7:3001/api/paperclip/dispatch',
+      'http://internal:3001/api/paperclip/dispatch',
+    ]) {
+      expect(() => assertPrivateDispatchUrl(value)).toThrow(/PAPERCLIP_DISPATCH_URL.*private.*public address/);
+    }
+  });
+
+  it('leaves an already disabled enableNativeRunner alone, then patches and verifies false', async () => {
+    let enabled = false;
+    const calls: Recorded[] = [];
+    const request: PaperclipRequest = async (path, init = {}) => {
+      calls.push({ pathname: path, method: init.method ?? 'GET', body: init.body });
+      if (init.method === 'PATCH') enabled = false;
+      return json({ enableNativeRunner: enabled });
+    };
+    expect(await ensureNativeRunnerOff(request)).toBe('already-off');
+    expect(calls.map((c) => c.method)).toEqual(['GET']);
+    enabled = true;
+    calls.length = 0;
+    expect(await ensureNativeRunnerOff(request)).toBe('turned-off');
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'PATCH', 'GET']);
+    expect(JSON.parse(String(calls[1].body))).toEqual({ enableNativeRunner: false });
+  });
+
+  it('rejects an old pin whose enableNativeRunner PATCH does not stick', async () => {
+    const request: PaperclipRequest = async () => json({});
+    await expect(ensureNativeRunnerOff(request)).rejects.toThrow(/no enableNativeRunner.*v2026\.916\.1/);
+  });
+
+  it('creates a viewer auditor through sign-up, board-api-keys and company-access', async () => {
+    const calls: Recorded[] = [];
+    const key = 'fake-minted-key';
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, pathname: path, body });
+      if (path === '/api/auth/sign-up/email') return json({}, 201);
+      if (path === '/api/auth/profile') return json({});
+      if (path === '/api/board-api-keys') return json({ token: key }, 201);
+      if (path === '/api/cli-auth/me') {
+        if (new Headers(init?.headers).get('authorization') === 'Bearer fake-stale-key') return json({}, 401);
+        return json({ userId: 'auditor-user', companyIds: [COMPANY], isInstanceAdmin: false });
+      }
+      throw new Error(`Unexpected ${path}`);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchFn);
+    try {
+      const request: PaperclipRequest = async (path, init = {}) => {
+        calls.push({ method: init.method ?? 'GET', pathname: path, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (path.endsWith('/members')) return json({ members: [{ id: 'member-1', principalId: 'auditor-user' }] });
+        return json(path.endsWith('/member-1') ? { membershipRole: 'viewer' } : {});
+      };
+      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey: 'fake-stale-key', fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toEqual({ action: 'created', key });
+      expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('POST /api/auth/sign-up/email');
+      expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('PATCH /api/auth/profile');
+      expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('POST /api/board-api-keys');
+      expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain(`PUT /api/admin/users/auditor-user/company-access`);
+      const createdInOrder = [
+        'POST /api/auth/sign-up/email',
+        'PATCH /api/auth/profile',
+        'POST /api/board-api-keys',
+        `PUT /api/admin/users/auditor-user/company-access`,
+        `PATCH /api/companies/${COMPANY}/members/member-1`,
+      ].map((call) => calls.findIndex((c) => `${c.method} ${c.pathname}` === call));
+      expect(createdInOrder).toEqual([...createdInOrder].sort((a, b) => a - b));
+      expect(createdInOrder.every((index) => index >= 0)).toBe(true);
+      expect(calls.find((c) => c.pathname.endsWith('/member-1'))?.body).toEqual({ membershipRole: 'viewer' });
+      expect(calls.find((c) => c.pathname === '/api/board-api-keys')?.body).toEqual({ name: 'netzer-lock-auditor', expiresAt: null });
+      const signup = calls.find((c) => c.pathname === '/api/auth/sign-up/email')?.body as { email: string; password: string };
+      expect(signup.email).toMatch(/@netzer\.invalid$/);
+      expect(signup.password).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(calls.filter((c) => c.pathname !== '/api/auth/sign-up/email'))).not.toContain(signup.password);
+      expect(JSON.stringify(calls)).not.toContain(key);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it.each(['', 'REPLACE_ME'])('creates an auditor for absent stored key %j', async (storedKey) => {
+    const calls: string[] = [];
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      calls.push(`${init?.method ?? 'GET'} ${path}`);
+      if (path === '/api/board-api-keys') return json({ token: 'fake-minted-key' }, 201);
+      if (path === '/api/cli-auth/me') return json({ userId: 'auditor-user', companyIds: [COMPANY], isInstanceAdmin: false });
+      return json({});
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchFn);
+    try {
+      const request: PaperclipRequest = async (path) => path.endsWith('/members')
+        ? json({ members: [{ id: 'member-1', principalId: 'auditor-user' }] })
+        : json({ membershipRole: 'viewer' });
+      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey, fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toEqual({ action: 'created', key: 'fake-minted-key' });
+      expect(calls[0]).toBe('POST /api/auth/sign-up/email');
+      expect(calls.filter((call) => call === 'GET /api/cli-auth/me')).toHaveLength(2);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('reuses a valid key without writes and rejects an admin key', async () => {
+    const calls: Recorded[] = [];
+    let admin = false;
+    const fetchFn = vi.fn(async () => json({ userId: 'auditor-user', companyIds: [COMPANY], isInstanceAdmin: admin })) as typeof fetch;
+    const request: PaperclipRequest = async (path, init = {}) => { calls.push({ pathname: path, method: init.method ?? 'GET', body: undefined }); return json({}); };
+    const opts = { request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey: 'fake-stored-key', fetchFn };
+    expect(await ensureLockAuditor(opts)).toEqual({ action: 'reused' });
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([]);
+    admin = true;
+    await expect(ensureLockAuditor(opts)).rejects.toThrow(/administrator/);
+    await expect(ensureLockAuditor(opts)).rejects.not.toThrow(/fake-stored-key/);
+  });
+
+  it('explains clean, unknown, and non_http_agent violations', () => {
+    expect(lockVerdictProblem({ verdict: 'clean' })).toBeUndefined();
+    expect(lockVerdictProblem({ verdict: 'unknown', reason: 'auditor_key_rejected' })).toMatch(/auditor_key_rejected.*could not read Paperclip/);
+    expect(lockVerdictProblem({ verdict: 'violated', violations: [{ code: 'non_http_agent', detail: 'worker uses process' }] })).toMatch(/non_http_agent.*worker uses process.*never deletes agents.*refuse to start/);
+  });
+});
 
 interface Recorded {
   method: string;

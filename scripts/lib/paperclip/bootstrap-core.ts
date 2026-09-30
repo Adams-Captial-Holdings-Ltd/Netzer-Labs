@@ -27,8 +27,124 @@
  * nowhere else.
  */
 
+import { randomBytes } from 'node:crypto';
+import { DISPATCH_PORT } from '../../../infra/lib/constants.js';
+import type { LockVerdict } from '../../../src/lib/paperclip/runtime-lock.js';
+
 /** A board-session-bound request. The caller owns cookies and base URL. */
 export type PaperclipRequest = (pathname: string, init?: RequestInit) => Promise<Response>;
+
+export const LOCK_AUDITOR_KEY_FIELD = 'lock_auditor_key';
+
+export function assertPrivateDispatchUrl(value: string): void {
+  const invalid = () => { throw new Error('PAPERCLIP_DISPATCH_URL dispatch route is private and must not use a public address'); };
+  let url: URL;
+  try { url = new URL(value); } catch { invalid(); return; }
+  const host = url.hostname.toLowerCase();
+  const parts = host.split('.');
+  const ipv4 = parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+  const privateIp = ipv4 && (Number(parts[0]) === 10 ||
+    (Number(parts[0]) === 172 && Number(parts[1]) >= 16 && Number(parts[1]) <= 31) ||
+    (Number(parts[0]) === 192 && Number(parts[1]) === 168));
+  const internal = host.endsWith('.internal') && /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal$/.test(host);
+  if (url.protocol !== 'http:' || url.username || url.password || value.includes('?') || value.includes('#') ||
+      url.pathname !== '/api/paperclip/dispatch' || url.port !== String(DISPATCH_PORT) ||
+      !(privateIp || internal)) invalid();
+}
+
+export async function ensureNativeRunnerOff(request: PaperclipRequest): Promise<'already-off' | 'turned-off'> {
+  const path = '/api/instance/settings/experimental';
+  const settings = await jsonResponse<{ enableNativeRunner?: unknown }>(await request(path), 'Paperclip experimental settings');
+  if (settings.enableNativeRunner === false) return 'already-off';
+  await jsonResponse<unknown>(await request(path, {
+    method: 'PATCH', body: JSON.stringify({ enableNativeRunner: false }),
+  }), 'Paperclip native runner update');
+  const verified = await jsonResponse<{ enableNativeRunner?: unknown }>(await request(path), 'Paperclip experimental settings verification');
+  if (verified.enableNativeRunner === false) return 'turned-off';
+  if (verified.enableNativeRunner === undefined) {
+    throw new Error('This Paperclip has no enableNativeRunner setting; the runtime lock needs v2026.916.1 or later');
+  }
+  throw new Error('Paperclip enableNativeRunner is still on after update');
+}
+
+export async function ensureLockAuditor(opts: {
+  request: PaperclipRequest;
+  companyId: string;
+  baseUrl: string;
+  storedKey?: string | undefined;
+  fetchFn?: typeof fetch;
+  randomBytesFn?: typeof randomBytes;
+}): Promise<{ action: 'reused' } | { action: 'created'; key: string }> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const whoami = async (key: string) => fetchFn(`${opts.baseUrl}/api/cli-auth/me`, {
+    headers: { authorization: `Bearer ${key}` },
+  });
+  const identity = async (response: Response) => {
+    if (!response.ok) throw new Error(`Paperclip auditor identity returned HTTP ${response.status}`);
+    return response.json() as Promise<{ userId?: string; companyIds?: string[]; isInstanceAdmin?: boolean }>;
+  };
+  const stored = opts.storedKey && opts.storedKey !== 'REPLACE_ME' ? opts.storedKey : undefined;
+  if (stored) {
+    const response = await whoami(stored);
+    if (response.ok) {
+      const me = await identity(response);
+      if (me.isInstanceAdmin === true) throw new Error('An administrator key cannot be kept as the lock auditor');
+      if (me.isInstanceAdmin === false && me.companyIds?.includes(opts.companyId)) return { action: 'reused' };
+    } else if (response.status !== 401 && response.status !== 403) {
+      throw new Error(`Paperclip stored auditor identity returned HTTP ${response.status}`);
+    }
+  }
+
+  const random = opts.randomBytesFn ?? randomBytes;
+  const user = {
+    email: `lock-auditor-${random(16).toString('hex')}@netzer.invalid`,
+    password: random(32).toString('hex'),
+    name: 'Netzer lock auditor',
+  };
+  const auditorRequest = makeBoardRequest(opts.baseUrl, new CookieJar());
+  const signup = await auditorRequest('/api/auth/sign-up/email', { method: 'POST', body: JSON.stringify(user) });
+  if (!signup.ok) throw new Error(`Paperclip lock auditor sign-up returned HTTP ${signup.status}`);
+  const rename = await auditorRequest('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name: 'Netzer lock auditor' }) });
+  if (!rename.ok) throw new Error(`Paperclip lock auditor rename returned HTTP ${rename.status}`);
+  const minted = await auditorRequest('/api/board-api-keys', {
+    method: 'POST', body: JSON.stringify({ name: 'netzer-lock-auditor', expiresAt: null }),
+  });
+  if (!minted.ok) throw new Error(`Paperclip lock auditor key creation returned HTTP ${minted.status}`);
+  const mintedRecord = await minted.json() as { token?: string };
+  if (typeof mintedRecord.token !== 'string' || !mintedRecord.token) throw new Error('Paperclip lock auditor key was not returned');
+  const key = mintedRecord.token;
+  const meBefore = await identity(await whoami(key));
+  if (!meBefore.userId || meBefore.isInstanceAdmin === true) throw new Error('Paperclip lock auditor identity is invalid');
+  const access = await opts.request(`/api/admin/users/${encodeURIComponent(meBefore.userId)}/company-access`, {
+    method: 'PUT', body: JSON.stringify({ companyIds: [opts.companyId] }),
+  });
+  if (!access.ok) throw new Error(`Paperclip lock auditor company-access returned HTTP ${access.status}`);
+  const members = await opts.request(`/api/companies/${encodeURIComponent(opts.companyId)}/members`);
+  if (!members.ok) throw new Error(`Paperclip lock auditor member list returned HTTP ${members.status}`);
+  const rows = await members.json() as { members?: Array<{ id: string; principalId: string }> };
+  const member = rows.members?.find((row) => row.principalId === meBefore.userId);
+  if (!member) throw new Error('Paperclip lock auditor company membership was not found');
+  const role = await opts.request(`/api/companies/${encodeURIComponent(opts.companyId)}/members/${encodeURIComponent(member.id)}`, {
+    method: 'PATCH', body: JSON.stringify({ membershipRole: 'viewer' }),
+  });
+  if (!role.ok) throw new Error(`Paperclip lock auditor viewer role returned HTTP ${role.status}`);
+  const updated = await role.json() as { membershipRole?: string };
+  if (updated.membershipRole !== 'viewer') throw new Error('Paperclip lock auditor role is not viewer');
+  const meAfter = await identity(await whoami(key));
+  if (meAfter.isInstanceAdmin !== false || !meAfter.companyIds?.includes(opts.companyId)) {
+    throw new Error('Paperclip lock auditor key cannot read the company or has administrator access');
+  }
+  return { action: 'created', key };
+}
+
+export function lockVerdictProblem(verdict: LockVerdict): string | undefined {
+  if (verdict.verdict === 'clean') return undefined;
+  if (verdict.verdict === 'unknown') return `Lock ${verdict.reason}: auditor key could not read Paperclip`;
+  const details = verdict.violations.map(({ code, detail }) => `${code}: ${detail}`).join('; ');
+  const noDeletion = verdict.violations.some((item) => item.code === 'non_http_agent')
+    ? ' The bootstrap never deletes agents.' : '';
+  return `Runtime lock violated: ${details}.${noDeletion} The orchestrator will refuse to start until they are fixed`;
+}
 
 export interface CompanyRecord {
   id: string;
