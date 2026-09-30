@@ -15,7 +15,7 @@
  */
 
 import { serve } from '@hono/node-server';
-import { buildApp } from './server.js';
+import { buildApp, buildPrivateDispatchApp } from './server.js';
 import { loadEnv } from './config/env.js';
 import { logger } from './observability/logger.js';
 import { startScheduler, stopScheduler } from './agent/scheduler.js';
@@ -76,6 +76,12 @@ async function main(): Promise<void> {
     hostname: '0.0.0.0',
   });
   logger.info({ port: env.PORT }, 'listening');
+  const dispatchPort = Number(env.PAPERCLIP_DISPATCH_PORT ?? 3001);
+  if (!Number.isInteger(dispatchPort) || dispatchPort < 1 || dispatchPort > 65535 || dispatchPort === env.PORT) {
+    throw new Error('Invalid PAPERCLIP_DISPATCH_PORT');
+  }
+  const privateServer = serve({ fetch: buildPrivateDispatchApp().fetch, port: dispatchPort, hostname: '0.0.0.0' });
+  logger.info({ port: dispatchPort }, 'private dispatch listener up');
 
   // Jarvis voice relay: intercept the WS upgrade on the raw http.Server. The
   // upgrade event fires before Hono's fetch handler, so the two coexist.
@@ -156,6 +162,7 @@ async function main(): Promise<void> {
       stopInvalidationListener(),
       new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref()),
     ]).catch(() => {});
+    privateServer.close();
     server.close((err) => {
       if (err) {
         logger.error({ err: err.message }, 'shutdown error');

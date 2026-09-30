@@ -7,31 +7,43 @@
  * truncated to 100 chars in log output. Full text only in DDB.
  */
 
-import { pino, type Logger } from 'pino';
+import { pino, type DestinationStream, type Logger } from 'pino';
 
 // pino-pretty is a devDependency only. Enable it explicitly via LOG_PRETTY=1
 // in dev shells. In production (and any unknown env) we emit raw JSON so
 // CloudWatch Logs ingests structured fields cleanly.
 const isPretty = process.env.LOG_PRETTY === '1';
 
-export const logger: Logger = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: {
-    service: 'orchestrator',
-    env: process.env.NODE_ENV ?? 'development',
-  },
-  timestamp: pino.stdTimeFunctions.isoTime,
-  transport: isPretty
-    ? {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'HH:MM:ss.l',
-          ignore: 'pid,hostname,service,env',
-        },
-      }
-    : undefined,
-});
+export function createLogger(destination?: DestinationStream): Logger {
+  const options = {
+    level: process.env.LOG_LEVEL ?? 'info',
+    base: {
+      service: 'orchestrator',
+      env: process.env.NODE_ENV ?? 'development',
+    },
+    timestamp: pino.stdTimeFunctions.isoTime,
+    redact: {
+      paths: [
+        'authorization', '*.authorization', 'headers.authorization', 'req.headers.authorization',
+        'password', '*.password', 'token', '*.token', 'secret', '*.secret', 'apiKey', '*.apiKey',
+      ],
+      censor: '[redacted]',
+    },
+    transport: !destination && isPretty
+      ? {
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'HH:MM:ss.l',
+            ignore: 'pid,hostname,service,env',
+          },
+        }
+      : undefined,
+  };
+  return destination ? pino(options, destination) : pino(options);
+}
+
+export const logger: Logger = createLogger();
 
 /**
  * Truncate user-facing text for logs. Full text belongs in DDB only.
