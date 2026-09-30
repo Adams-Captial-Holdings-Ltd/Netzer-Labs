@@ -24,6 +24,13 @@ services:
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
       PAPERCLIP_MIGRATION_AUTO_APPLY: "true"
+      PAPERCLIP_HIDDEN_SETTINGS: "instance.adapters,instance.plugins,instance.general.feedbackDataSharingPreference"
+      PAPERCLIP_ADAPTERS: '[{"adapterType":"http"}]'
+      PAPERCLIP_SETTING_DEFAULTS: '{"feedbackDataSharingPreference":"not_allowed"}'
+      PAPERCLIP_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      PAPERCLIP_ANNOUNCEMENTS_ENABLED: "false"
+      PAPERCLIP_MIGRATION_PROMPT: "never"
       BETTER_AUTH_SECRET: ${PAPERCLIP_TEST_AUTH_SECRET:?set in CI env}
     depends_on:
       paperclip-db:

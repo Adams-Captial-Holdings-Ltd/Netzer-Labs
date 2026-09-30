@@ -49,9 +49,11 @@ import { Role, ServicePrincipal, PolicyStatement, Effect, type IRole } from 'aws
 import { Secret as SmSecret } from 'aws-cdk-lib/aws-secretsmanager';
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
+import { PrivateDnsNamespace, DnsRecordType } from 'aws-cdk-lib/aws-servicediscovery';
 import { LambdaFunction as LambdaTarget } from 'aws-cdk-lib/aws-events-targets';
 import {
   APP,
+  DISPATCH_PORT,
   BEDROCK_MODELS,
   RESOURCE_NAMES,
   TAGS,
@@ -314,7 +316,10 @@ export class ComputeStack extends Stack implements ComputeOutputs {
     taskDef.addContainer('orchestrator', {
       image: ContainerImage.fromEcrRepository(ecrRepo, imageTag),
       containerName: 'orchestrator',
-      portMappings: [{ containerPort: 3000 }],
+      portMappings: [
+        { containerPort: 3000 },
+        ...(paperclipProvisioned(props.tier) ? [{ containerPort: DISPATCH_PORT }] : []),
+      ],
       essential: true,
       logging: LogDrivers.awsLogs({
         streamPrefix: 'task',
@@ -549,7 +554,10 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         // URL there would turn `PaperclipDisabledError` ("no base URL", with
         // the remediation) into a DNS failure inside a fetch.
         ...(paperclipProvisioned(props.tier)
-          ? { PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl }
+          ? {
+              PAPERCLIP_BASE_URL: RESOURCE_NAMES.paperclipInternalUrl,
+              PAPERCLIP_DISPATCH_PORT: String(DISPATCH_PORT),
+            }
           : {}),
       },
       secrets: {
@@ -593,14 +601,19 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         ),
         // Referenced only when Paperclip is provisioned: an ECS secret naming a
         // field the stored secret lacks fails the task at start. Deploy phase b
-        // merge-adds a REPLACE_ME placeholder (env.ts treats it as unset) and the
-        // tenant bootstrap writes the real company id into the same retained
-        // secret; ECS resolves the current version on the next rollout.
+        // merge-adds REPLACE_ME defaults for company_id and lock_auditor_key;
+        // bootstrap writes their real values later. env.ts treats REPLACE_ME
+        // as unset, so the lock reports unknown/lock_auditor_key_missing
+        // (fail closed) until then.
         ...(paperclipProvisioned(props.tier)
           ? {
               PAPERCLIP_COMPANY_ID: EcsSecret.fromSecretsManager(
                 paperclipSecret,
                 'company_id',
+              ),
+              PAPERCLIP_LOCK_AUDITOR_KEY: EcsSecret.fromSecretsManager(
+                paperclipSecret,
+                'lock_auditor_key',
               ),
             }
           : {}),
@@ -1276,10 +1289,26 @@ exports.handler = async () => {
         }),
       );
     }
+    const dispatchNamespace = paperclipProvisioned(props.tier)
+      ? new PrivateDnsNamespace(this, 'DispatchNamespace', {
+          name: RESOURCE_NAMES.dispatchNamespace,
+          vpc: props.vpc,
+        })
+      : undefined;
     this.service = new FargateService(this, 'Service', {
       serviceName: RESOURCE_NAMES.fargateService,
       cluster: this.cluster,
       taskDefinition: taskDef,
+      ...(dispatchNamespace
+        ? {
+            cloudMapOptions: {
+              cloudMapNamespace: dispatchNamespace,
+              name: RESOURCE_NAMES.dispatchDiscoveryName,
+              dnsRecordType: DnsRecordType.A,
+              dnsTtl: Duration.seconds(10),
+            },
+          }
+        : {}),
       // Intentionally NO desiredCount: autoscaling (below) owns the running
       // count. Setting desiredCount here writes it into the CFN template, so
       // every deploy would reconcile capacity back to the floor and yank tasks

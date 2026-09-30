@@ -472,6 +472,16 @@ export class PaperclipStack extends Stack {
         // first probe request). Bare hostname, no port: the guard compares
         // URL.hostname, and this list replaces config.json's allowedHostnames.
         PAPERCLIP_ALLOWED_HOSTNAMES: new URL(RESOURCE_NAMES.paperclipInternalUrl).hostname,
+        // Keep adapters private and stop telemetry. The native-runner flag
+        // stays visible: a fresh database defaults it on, and bootstrap turns it off.
+        PAPERCLIP_HIDDEN_SETTINGS: 'instance.adapters,instance.plugins,instance.general.feedbackDataSharingPreference',
+        PAPERCLIP_ADAPTERS: '[{"adapterType":"http"}]',
+        PAPERCLIP_SETTING_DEFAULTS: '{"feedbackDataSharingPreference":"not_allowed"}',
+        PAPERCLIP_TELEMETRY_DISABLED: '1',
+        DO_NOT_TRACK: '1',
+        PAPERCLIP_ANNOUNCEMENTS_ENABLED: 'false',
+        PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: RESOURCE_NAMES.dispatchInternalOrigin,
+        PAPERCLIP_MIGRATION_PROMPT: 'never',
         // PAPERCLIP_MIGRATION_AUTO_APPLY is deliberately ABSENT here. See the
         // class doc; paperclip-stack.test.ts asserts the absence.
       },
@@ -537,6 +547,7 @@ export class PaperclipStack extends Stack {
       environment: {
         NODE_ENV: 'production',
         PAPERCLIP_HOME: '/tmp/paperclip',
+        PAPERCLIP_MIGRATION_PROMPT: 'never',
       },
       secrets: {
         DATABASE_URL: EcsSecret.fromSecretsManager(paperclipSecret, 'database_url'),
