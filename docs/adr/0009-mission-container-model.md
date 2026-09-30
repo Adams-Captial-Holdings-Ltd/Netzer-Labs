@@ -1,6 +1,8 @@
 # ADR 0009 — Missions are the durable work container for multi-agent collaboration
 
-**Status:** Accepted (2026-08, Missions v2 design)
+**Status:** Superseded (2026-09-29) by [ADR 0010](0010-paperclip-work-engine.md) and the Work Platform ADRs [0012](0012-paperclip-owns-work-state.md)–[0020](0020-worm-audit-and-ledger-cost-authority.md). Was: Accepted (2026-08, Missions v2 design).
+
+> **Superseded (2026-09-29).** The owner-approved Work Platform plan (2026-09-26) supersedes this ADR: work items live in Paperclip ([ADR 0010](0010-paperclip-work-engine.md), [ADR 0012](0012-paperclip-owns-work-state.md)), and customers use a Netzer-owned Work UI with the Missions page no longer the foundation ([ADR 0017](0017-netzer-identity-and-work-ui.md)). The note below said this status would flip only when the retirement stage completes; the plan supersedes that timing. The code stays in place until the legacy retirement (scale-track step 18, after two clean production weeks). This ADR is kept so old links resolve. Its history follows, unedited.
 
 > **Superseding note (2026-08-18).** [ADR 0010](0010-paperclip-work-engine.md)
 > supersedes this ADR's **storage and execution model**: Paperclip becomes the

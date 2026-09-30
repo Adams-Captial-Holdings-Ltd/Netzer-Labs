@@ -2,19 +2,32 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-09-17
-as_of_commit: 4f1a860355146c34f59a2f35731819cfedb6d2c2
+observed_at: 2026-09-29
+as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
 ---
 
 # Paperclip integration handoff
+
+## Current state (2026-09-29)
+
+This section was checked on 2026-09-29 against `origin/development` `29309c8`. **Everything below it is prior state as of 2026-09-17 (`4f1a860`) and was not re-checked.**
+
+- **Branch:** `chore/work-platform-docs` (from `origin/development` `29309c8`; merge target `development`). Docs only. **Pushed:** no. **PR:** none.
+- **What it does:** records the owner-approved Work Platform plan (2026-09-26): ADRs 0012–0020, the ADR 0010 amendment and the ADR 0009 supersession, the [DO NOT BUILD list](do-not-build.md), the [decision log](decision-log.md) and the [minimum sellable product](minimum-sellable-product.md); marks the superseded pieces of [missions-engine-plan.md](missions-engine-plan.md). It decides nothing new. Session: [2026-09-29 handoff](handoffs/2026-09-29-work-platform-architecture-record.md).
+- **Deployment:** none. No code changed and no AWS call was made; staging and production are untouched.
+- **Other branches, pushed and untouched by this session:** `fix/paperclip-p0-0b-image-build` at `5a7af9b` (the plan folds P0-0b into step 2) and `feat/paperclip-b2-missions-board-infra` at `9fcd6a3`. B-2 belongs to the superseded board bridge; what happens to that branch is the owner's call.
+
+**Next action:** the owner gates for this branch (push, PR, merge), then Work Platform step 2 of 18, re-pin + runtime lock + P0-0b + feasibility spikes ([build steps](minimum-sellable-product.md#build-steps)). Step 2 includes a staging trip, so every owner gate applies: push, PR, merge, staging and any AWS call each need the owner's yes in that session. The 2026-09-17 "Smallest next action" further down is the earlier plan for the P0-0b lanes.
+
+## State as of 2026-09-17
 
 - **Branch:** `fix/paperclip-p0-0b-image-build` (from `development`, merged up to `271339b`); P0-0b image-build repair; no PR. **Pushed:** not yet at the time of writing; the coordinator pushes this branch to origin under the same name immediately after the 2026-09-17 commit as an owner-approved backup (no PR, no merge, no deploy) - confirm with `git ls-remote origin refs/heads/fix/paperclip-p0-0b-image-build`.
 - **Source state:** Phase 0 merged (#156 -> `development` `0a59063`, #157 -> `qa` `ec65ca5`, #158 -> `staging` `dd16ca4`). **Phase 1 also merged and deployed** (#162 -> `development`, #163 -> `qa`, #164 -> `staging` `4442d86`); `origin/development` is now `271339b` after the War Room table fix (#165).
 - **Deployment:** staging Deploy run [34021795520](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/actions/runs/34021795520) is green. Live verdicts from the Phase 0 live critic (2026-09-06 13:15-13:50Z, staging `dd16ca4`): **P0-1 PASS** (board read live over the tunnel, `CCE_PAPERCLIP_ENABLED=1` confirmed on task definition `:19`); **P0-2 FAIL then fixed on this branch** (every adapter push rejected 400 `invalid_body` -- the pinned image sends `context.issueId`, not top-level `issueId`; Research's adapter had no `url` -- both fixed, critic PASS, live re-check pending this branch's deploy plus the bootstrap repair); **P0-3 refusal/list PASS, update confounded** by the P0-2 dispatch defect cascading into a heartbeat re-block (re-check after P0-2 deploys). Production is untouched.
 
-## Current objective and required order
+## Objective and required order (2026-09-17)
 
-**Now (2026-09-17):** development is moving to a new machine. Read [the 2026-09-17 machine-transfer handoff](handoffs/2026-09-17-machine-transfer.md) first, then [the 2026-09-15 handoff](handoffs/2026-09-15-p0-0b-validate-and-ship.md) with its correction in mind (ledger M74). That correction: on 2026-09-15 the plan in force (`gauntlet-mode-direct-coordinator-gauntle-agile-hamster.md`) ran STEP 1. Lanes 1.1 (image gate 3/3), 1.2 (text tests 11/11) and 1.3 (red-first, 5 expected failures) passed. Lane 1.4 (the no-cache build-stage build) failed at `exporting to image` with a containerd input/output error because `C:` reached 0 bytes free, after its install step had logged `added 5 packages`. Lanes 1.5 and 1.6 never ran, and STEPS 3-7 never started. There is no P0-0b PR and no staging deploy. Phase 1 is shipped; what remains is Phase 0's three open items, and two of the three were mis-recorded until the 2026-09-08 session measured them. [The Phase 0 completion handoff](handoffs/2026-09-08-p0-completion-and-workflows-direction.md)'s section 6 is still the ordered next-action list. The campaign ledger (section 5) is carried forward, with the 2026-09-17 additions, in the machine-transfer handoff.
+**Then (2026-09-17):** development is moving to a new machine. Read [the 2026-09-17 machine-transfer handoff](handoffs/2026-09-17-machine-transfer.md) first, then [the 2026-09-15 handoff](handoffs/2026-09-15-p0-0b-validate-and-ship.md) with its correction in mind (ledger M74). That correction: on 2026-09-15 the plan in force (`gauntlet-mode-direct-coordinator-gauntle-agile-hamster.md`) ran STEP 1. Lanes 1.1 (image gate 3/3), 1.2 (text tests 11/11) and 1.3 (red-first, 5 expected failures) passed. Lane 1.4 (the no-cache build-stage build) failed at `exporting to image` with a containerd input/output error because `C:` reached 0 bytes free, after its install step had logged `added 5 packages`. Lanes 1.5 and 1.6 never ran, and STEPS 3-7 never started. There is no P0-0b PR and no staging deploy. Phase 1 is shipped; what remains is Phase 0's three open items, and two of the three were mis-recorded until the 2026-09-08 session measured them. [The Phase 0 completion handoff](handoffs/2026-09-08-p0-completion-and-workflows-direction.md)'s section 6 is still the ordered next-action list. The campaign ledger (section 5) is carried forward, with the 2026-09-17 additions, in the machine-transfer handoff.
 
 **Three corrections that change what the next session should do:**
 
@@ -122,7 +135,7 @@ Phase 0 live critic (2026-09-06 13:15-13:50Z, staging `dd16ca4`, run 34021795520
 - This host cannot run the remaining image lanes. `C:` had 2.6-3.0 GB free on 2026-09-17, and Docker Desktop's engine has answered HTTP 500 since 2026-09-16 (ledger P57 and A65 in [the 2026-09-17 machine-transfer handoff](handoffs/2026-09-17-machine-transfer.md)). The work resumes on a new machine with at least 10 GB free and a healthy Docker.
 - After that: lanes 1.1-1.6, the full suite in both flag states, and the PR ladder for `fix/paperclip-p0-0b-image-build` -> `development` (agile-hamster STEPS 1-4; 2026-09-08 handoff, section 6, item 1). The owner-approved backup push is not a ladder rung (ledger P58): open no PR from it until STEPS 1-3 pass on the proposed tip.
 
-## Smallest next action
+## Smallest next action (2026-09-17)
 
 On the new machine, run agile-hamster STEP 0 preflight:
 
@@ -150,6 +163,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Work Platform architecture record](handoffs/2026-09-29-work-platform-architecture-record.md) | 2026-09-29 | Recorded the owner-approved Work Platform plan as ADRs 0012–0020, an ADR 0010 amendment, the ADR 0009 supersession, the DO NOT BUILD list, the decision log and the minimum sellable product; marked the superseded pieces of the missions engine plan. Docs only; nothing built or deployed |
 | [Machine transfer](handoffs/2026-09-17-machine-transfer.md) | 2026-09-17 | Landed the 2026-09-15 drafts byte-exact from a temp scratchpad. Corrected that record: lanes 1.1-1.3 passed, 1.4 failed at export on a full disk, 1.5-1.6 never ran. Recorded the Docker engine damage and the owner-approved backup push, plus a path map and resume prompt for the new machine. Nothing built or deployed |
 | [B-2 machine transfer](handoffs/2026-09-17-b2-machine-transfer.md) | 2026-09-17 | Parked bridge piece B-2 (missions board at missions.staging.pgnos.ai) behind Phase 0; its RED test e5168f9 and this log live on `feat/paperclip-b2-missions-board-infra`. Nothing built or deployed |
 | [P0-0b ship attempt, interrupted by a full disk](handoffs/2026-09-15-p0-0b-validate-and-ship.md) | 2026-09-15 | Reconfirmed the build-stage integration test (3/3, FACT 8); found the host disk at 0 bytes free before any image build ran; corrected a ten-ID collision in the section 5 ledger; nothing pushed, built, or deployed |
@@ -175,4 +189,4 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 | [updatedSince patch and Phase 0](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | 2026-08-18 | Added the approved artifact patch and ADR |
 | [Codex review](handoffs/2026-08-18-codex-review.md) | 2026-08-18 | Established the original release-contract finding |
 
-Authorities: [README](README.md), [implementation plan](implementation-plan.md), [plan audit](plan-audit.md), [bar and phases](bar-and-phases.md), [ADR 0010](../../adr/0010-paperclip-work-engine.md), and [the newest session handoff](handoffs/2026-09-17-machine-transfer.md).
+Authorities: [README](README.md), [implementation plan](implementation-plan.md), [plan audit](plan-audit.md), [bar and phases](bar-and-phases.md), [ADR 0010](../../adr/0010-paperclip-work-engine.md), the [Work Platform record](minimum-sellable-product.md) with its [DO NOT BUILD list](do-not-build.md) and [decision log](decision-log.md), and [the newest session handoff](handoffs/2026-09-29-work-platform-architecture-record.md).

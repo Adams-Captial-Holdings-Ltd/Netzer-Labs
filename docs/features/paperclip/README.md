@@ -73,6 +73,15 @@ tested_by:
   - src/adapters/dashboard/missions-hierarchy.test.ts
 decisions:
   - docs/adr/0010-paperclip-work-engine.md
+  - docs/adr/0012-paperclip-owns-work-state.md
+  - docs/adr/0013-sync-attach-execution-contract.md
+  - docs/adr/0014-netzer-only-ai-runtime.md
+  - docs/adr/0015-agentcore-connector-credential-plane.md
+  - docs/adr/0016-human-decisions-via-shadow-users.md
+  - docs/adr/0017-netzer-identity-and-work-ui.md
+  - docs/adr/0018-managed-solution-packs-v1.md
+  - docs/adr/0019-paperclip-compatibility-program.md
+  - docs/adr/0020-worm-audit-and-ledger-cost-authority.md
   - docs/adr/0009-mission-container-model.md
 evidence:
   - docs/features/paperclip/implementation-plan.md
@@ -90,6 +99,8 @@ agent work-tracking system, self-hosted as a pinned container — the system of
 record behind Netzar's Missions feature. **Everything needed to continue this
 work is in this folder or is linked from it.** Nothing lives in a chat log or a
 scratchpad any more.
+
+> **Direction (2026-09-29).** The owner-approved Work Platform plan sets where this integration goes next. It is recorded in [minimum-sellable-product.md](minimum-sellable-product.md) (what ships, in what order), [do-not-build.md](do-not-build.md) (binding prohibitions), [decision-log.md](decision-log.md) (every decision and where it is recorded) and [ADRs 0012–0020](../../adr/README.md). It is a record only: no code moved. The pieces of [missions-engine-plan.md](missions-engine-plan.md) that it replaces are marked SUPERSEDED in place.
 
 Read in this order:
 
@@ -174,7 +185,7 @@ Paperclip is live in staging as the missions system of record; the 2026-09-06 li
   linked from the Netzar SPA. Operators reach port 3100 only through an
   AWS-authenticated ECS Exec/SSM tunnel. This network boundary contains the
   pinned artifact's open email-signup route until upstream provides a safe
-  signup control or a separately reviewed access-controlled listener exists. The plan replaces SSM-only access with a host-based bridge on missions.staging.pgnos.ai (plan B-1..B-6) once Phase 1 and 8.5 land.
+  signup control or a separately reviewed access-controlled listener exists. The plan replaces SSM-only access with a host-based bridge on missions.staging.pgnos.ai (plan B-1..B-6) once Phase 1 and 8.5 land. That bridge is superseded (2026-09-29) and will not be built: see [do-not-build.md](do-not-build.md).
 
 The behavior above is present in source and deployed to staging: the Paperclip
 base went green in run `33067242593` on `ac70509`, and the staging contract
@@ -202,6 +213,8 @@ owner delegation) → Phase 8.5 → the same-origin UI/session bridge → Phases
 10–12 → the final legacy retirement. The volatile pass/fail counts and exact
 next action belong in [HANDOFF.md](HANDOFF.md), not this index.
 
+**Added 2026-09-29.** The Work Platform record supersedes the pieces of [missions-engine-plan.md](missions-engine-plan.md) that it marks SUPERSEDED, which include the same-origin UI/session bridge (the board bridge is on the [DO NOT BUILD list](do-not-build.md)). Its build order is the [build steps](minimum-sellable-product.md#build-steps). The code claims in this README are still as of `f0c26fb`; the 2026-09-29 record re-verified none of them.
+
 ## 4. Source of truth
 
 Read this table top-down. **A row beats every row below it** where they
@@ -211,6 +224,7 @@ conflict.
 |---|---|---|---|
 | 1 | Present runtime behavior | [the code](../../../src/lib/paperclip/mission-projection.ts) and its [tests](../../../src/lib/paperclip/mission-projection.test.ts) | What the system actually does today. Beats every document. |
 | 2 | Ratified architecture | [ADR 0010](../../adr/0010-paperclip-work-engine.md) | DL-1 … DL-9, the hard constraints, the 2026-08-18 patch amendment |
+| 2a | Work Platform record (2026-09-29) | [ADRs 0012–0020](../../adr/README.md), [minimum-sellable-product.md](minimum-sellable-product.md), [do-not-build.md](do-not-build.md), [decision-log.md](decision-log.md) | Where the integration is going, what is forbidden and why. Target scope, not present behavior: row 1 still decides what runs today. Amends ADR 0010 and supersedes ADR 0009. |
 | 3 | Volatile state | [HANDOFF.md](HANDOFF.md) | Branch, PR, deploy state, blockers, the next action |
 | 4 | Plan corrections | [plan-audit.md](plan-audit.md) | The 16 wrong citations and 4 structural defects. Beats the plan. |
 | 5 | Design and build sheet | [implementation-plan.md](implementation-plan.md) | §1–§34: why this architecture, and the phase-by-phase plan for Phases 2–10 |
@@ -442,6 +456,8 @@ Measured by the Phase 0 live critic (P1-1) creating a small parent/child/blocked
 | Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order: Phase 0 (P0-2 live re-check and P0-3's update case after this branch's deploy and the bootstrap repair) → Phase 1 (including P1-3 parent-owner delegation) → 8.5 from the observed shapes in section 6 → the UI/session bridge → 10–12 |
 | Dispatch was rejected on every push until the P0-2 fix; the research adapter had no url until the bootstrap reconcile runs | 2026-09-06 Phase 0 live critic (staging `dd16ca4`, run 34021795520): every push 400 `invalid_body`; Research's `adapterConfig` had no `url` and Paperclip escalated its issues to Main within ~1 s | Fixed on `fix/paperclip-p0-2-dispatch-push`; deploy this branch, run the bootstrap over the tunnel with `PAPERCLIP_DISPATCH_SLUGS=main,research`, then re-run the live critic for P0-2 and P0-3's update case |
 
+**Added 2026-09-29.** The Work Platform record supersedes the pieces of [missions-engine-plan.md](missions-engine-plan.md) that it marks SUPERSEDED. Its build order is the [build steps](minimum-sellable-product.md#build-steps).
+
 ## 8. Exact focused and full validation commands
 
 The Paperclip live suite needs Docker **and** `PAPERCLIP_TEST_AUTH_SECRET` set
@@ -499,6 +515,10 @@ step 7. Run the **full** `npm test`, never a scoped run.
   deploy lifecycle
 - [Implementation plan](implementation-plan.md) and its [audit](plan-audit.md)
 - [ADR 0010 — Paperclip is the missions work engine](../../adr/0010-paperclip-work-engine.md)
+- [Minimum sellable product](minimum-sellable-product.md) — what the Work Platform ships first, its architecture and the 18 build steps (2026-09-29)
+- [DO NOT BUILD](do-not-build.md) — the binding prohibitions
+- [Decision log](decision-log.md) — every Work Platform decision and where it is recorded
+- [ADRs 0012–0020](../../adr/README.md) — the Work Platform architecture
 - [Feature knowledge framework](../README.md)
 - [Documentation index](../../README.md)
 - [Repository development guidance](../../../development.md)
