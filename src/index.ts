@@ -51,6 +51,8 @@ async function main(): Promise<void> {
   // are no-ops when CCE_XRAY_ENABLED is unset.
   initXray();
   let lockWatcher: ReturnType<typeof startPaperclipLockWatcher> | undefined;
+  // The runtime lock is checked only while Paperclip routing is on
+  // (CCE_PAPERCLIP_ENABLED); with the flag off nothing here talks to Paperclip.
   if (paperclipRoutingEnabled()) {
     const read = async () => {
       const config = await loadPaperclipConfig();
