@@ -513,7 +513,10 @@ export class PaperclipClient {
     });
   }
 
-  /** At v2026.916.1 agent comments need a valid heartbeat run; callers pass `opts.runId`, and run-less is 403 (C-3). */
+  /**
+   * At v2026.916.1 agent comments need a valid heartbeat run; callers pass
+   * `opts.runId`, and run-less is 403 (C-3).
+   */
   addComment(
     issueId: string,
     body: PaperclipCreateCommentBody,

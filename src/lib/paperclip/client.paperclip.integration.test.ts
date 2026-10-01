@@ -108,7 +108,9 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image
       );
     };
 
-    // At v2026.916.1, a watermark equal to the row's own millisecond stamp re-returns it (microsecond column); the reconciler subtracts an overlap and dedupes for that reason.
+    // At v2026.916.1, a watermark equal to the row's own millisecond stamp
+    // re-returns it (microsecond column); the reconciler subtracts an overlap
+    // and dedupes for that reason.
     const oneMillisecondAfter = new Date(updatedAt.getTime() + 1).toISOString();
     const afterWatermark = await listFrom(oneMillisecondAfter);
     expect(afterWatermark).toHaveLength(0);

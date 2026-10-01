@@ -232,7 +232,10 @@ async function enableSqlStateLogging(): Promise<void> {
 }
 
 async function createBootstrapInvite(containerId: string): Promise<string> {
-  // Onboard writes the config, then tries to start a server and may exit 1 as root at v2026.916.1 (decision-signing ownership check) or when :3100 is taken; the next step reads the config and fails loudly if it was not written.
+  // Onboard writes the config, then tries to start a server and may exit 1 as
+  // root at v2026.916.1 (decision-signing ownership check) or when :3100 is
+  // taken; the next step reads the config and fails loudly if it was not
+  // written.
   const onboard = await runDocker([
     'exec',
     containerId,

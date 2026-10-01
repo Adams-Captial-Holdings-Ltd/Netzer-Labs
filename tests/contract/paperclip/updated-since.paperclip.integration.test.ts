@@ -37,7 +37,9 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip updatedSince
   });
 
   it("updatedSince one millisecond after an issue's updatedAt excludes it, one millisecond before includes it, on both pins", async () => {
-    // The old pin excludes at T because its patch adds 1ms; v2026.916.1 re-returns at T (5 of 5 measured), so this test avoids asserting that boundary.
+    // The old pin excludes at T because its patch adds 1ms; v2026.916.1
+    // re-returns at T (5 of 5 measured), so this test avoids asserting that
+    // boundary.
     const created = await withBearer(fixture.agents.main.key)(issues(), {
       method: 'POST',
       body: JSON.stringify({ title: `Watermark contract ${Date.now()}`, description: 'Contract probe', priority: 'medium' }),

@@ -18,15 +18,18 @@
  * widened. `GET /api/openapi.json` is snapshotted to
  * `tests/contract/openapi.snapshot.json` by the probe "A1-15: GET
  * /api/openapi.json is snapshotted, and it types no response field". That
- * document is authoritative for REQUEST BODY FIELD NAMES and their enums, for
- * security, and for route existence - it is how the `task_bridge` key scope in
- * the A1-9 probe was resolved. It is authoritative for nothing else, and the
+ * document is authoritative for field names and enums of the request bodies it
+ * declares, for security, and for route existence - it is how the `task_bridge`
+ * key scope in the A1-9 probe was resolved. It is authoritative for nothing
+ * else, and the
  * same probe pins the two counterexamples so this claim cannot quietly widen
  * again: `GET /api/companies/{companyId}/issues` declares exactly TWO
  * parameters, `companyId` and `view`, while the route reads far more of them -
  * `updatedSince`, the whole reason A1-8 exists, is absent from the document
- * entirely - and `POST /api/companies/{companyId}/issues` declares `status`
- * REQUIRED while every create probe in the suite omits it and is answered 201.
+ * entirely. `POST /api/companies/{companyId}/issues` has an empty body schema
+ * at v2026.916.1 (the previous pin declared `status` required, though every
+ * create probe omitted it and got 201), so those field names come from probes
+ * and upstream source, not this document.
  * A `parameters` list and a `required` list in that document are not facts.
  *
  * It is NOT authoritative for responses either: at the pinned artifact every
@@ -345,9 +348,9 @@ export type PaperclipIssueDetail = PaperclipIssue;
  * unknown until a probe asserts the field. The failure direction is benign
  * here: the ACL never reads the default, it re-reads the row.
  *
- * The OpenAPI document declares `status` required on this operation, which the
- * omitted form contradicts and the artifact accepts anyway - see the A1-15 note
- * in the file header. The field stays on `CreateIssueBody` as an optional
+ * The previous pin's document declared `status` required (v2026.916.1's has no
+ * body schema), and the omitted form is accepted either way - see the A1-15
+ * note in the file header. The field stays on `CreateIssueBody` as an optional
  * because nothing has characterized what the server does with it; sending it is
  * UNVERIFIED, and `listFilterValidation` shows an unrecognized status is a
  * silent 200 rather than a 400, so a wrong value would not announce itself.
@@ -363,9 +366,9 @@ export interface PaperclipCreateIssueBody extends CreateIssueBody {
    * does establish is the body shape the proven `200 + deduplicated: true`
    * replay was observed on - `idempotencyKey` AND `allowDuplicate: true`
    * together - which is why `createMission` sends exactly that pair on a write
-   * `client.ts` auto-retries. The spelling is also one of the 28 properties of
-   * `POST /api/companies/{companyId}/issues` in the committed
-   * `tests/contract/openapi.snapshot.json`, re-checked byte for byte by A1-15.
+   * `client.ts` auto-retries. This is the spelling the A1-13 probe sends; the
+   * v2026.916.1 snapshot no longer lists the create-body properties (the
+   * previous pin listed 28).
    * It stays optional until the probe named in the Phase 1 handoff exists: send
    * `allowDuplicate: false` against a duplicate title and record the outcome.
    */
@@ -386,8 +389,9 @@ export interface PaperclipCreateIssueResponse extends PaperclipIssue {
  *
  * WHERE THESE NAMES COME FROM: the committed `tests/contract/openapi.snapshot.
  * json`, which the A1-15 probe re-checks byte for byte and which IS
- * authoritative for request field names. That operation declares 29 properties
- * and NO `required` array; only the six a caller here actually sends are typed,
+ * authoritative for request field names. At v2026.916.1 that operation has an
+ * empty body schema (the previous pin declared 29 properties and NO `required`
+ * array); only the six a caller here actually sends are typed,
  * because a field nothing produces is a compile-time obstacle rather than a
  * contract.
  *

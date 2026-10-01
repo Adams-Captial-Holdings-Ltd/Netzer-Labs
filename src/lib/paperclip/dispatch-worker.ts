@@ -629,7 +629,7 @@ export async function runDispatchWork(
       );
     }
     // A33: an agent comment needs a valid heartbeat run at v2026.916.1, and this
-    // one holds a run, so the comment carries its id. The dispatch path does NOT degrade to
+    // one holds a run, so the comment carries its id. The dispatch path does NOT
     // `/wakeup` for a comment.
     boardAttempted = true;
     await engine.comment(ctx.issueId, result.text, invoke);

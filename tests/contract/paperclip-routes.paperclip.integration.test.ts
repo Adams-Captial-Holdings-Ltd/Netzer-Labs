@@ -394,7 +394,8 @@ function runHeaders(): Record<string, string> {
 }
 
 async function postComment(issueId: string, body: string): Promise<ProbeResult<PaperclipIssueComment>> {
-  // Agent comments need a heartbeat run at v2026.916.1 (C-3 pins that); these probes test listing, paging and updatedAt, not authorship.
+  // Agent comments need a heartbeat run at v2026.916.1 (C-3 pins that);
+  // these probes test listing, paging and updatedAt, not authorship.
   const response = await paperclipAdminRequest(`/api/issues/${issueId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body }),
@@ -1963,10 +1964,11 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     // claim cannot quietly widen back:
     //
     // (a) parameters. The issue list declares exactly two - `companyId` and
-    //     `view` - while the route reads far more of them. `updatedSince`, the
-    //     route and probes are the evidence A1-8 exists, but it is absent from
-    //     the document entirely, and `offset`, `limit`, `sortField`, `sortDir`, `status`, `assigneeAgentId`
-    //     and `parentId` are all proven acted on by probes above.
+    //     `view` - while the route reads far more of them. `updatedSince` is
+    //     absent from the document entirely (the route and the probes are the
+    //     evidence it exists, and A1-8 is why that matters), and `offset`,
+    //     `limit`, `sortField`, `sortDir`, `status`, `assigneeAgentId` and
+    //     `parentId` are all proven acted on by probes above.
     const issueList = paths['/api/companies/{companyId}/issues'].get as { parameters?: unknown[] };
     expect(
       (issueList.parameters ?? []).map((parameter) => (parameter as { name?: string }).name).sort(),
@@ -1975,16 +1977,21 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     expect(JSON.stringify(issueList), 'updatedSince is absent from the document; the route and the probes are the only evidence it exists')
       .not.toContain('updatedSince');
 
-    // (b) `required`. The create body declares `status` required, and every
-    //     create probe in this file omits it and is answered 201 - which is what
-    //     entitles `createdUnassignedIssue` to rely on the backlog default.
+    // (b) At v2026.916.1 the document leaves the create body empty (the previous
+    //     pin declared `status` required and 28 properties). Every create probe
+    //     in this file omits `status` and is answered 201, which is what entitles
+    //     `createdUnassignedIssue` to rely on the backlog default.
     const createSchema = (paths['/api/companies/{companyId}/issues'].post as {
-      requestBody: { content: Record<string, { schema: { required?: string[] } }> };
+      requestBody: { content: Record<string, { schema: { required?: string[]; properties?: unknown } }> };
     }).requestBody.content['application/json'].schema;
     expect(
       createSchema.required,
-      "the document's `required` list is not the artifact's: `status` is declared required and omitting it is a 201",
-    ).toContain('status');
+      'the document now declares the create body required list; re-read the A1-15 narrowing in types.ts before relying on it',
+    ).toBeUndefined();
+    expect(
+      createSchema.properties,
+      'the document now declares create body properties; re-read the A1-15 narrowing in types.ts before relying on it',
+    ).toBeUndefined();
 
     // `/api/health` is the one route the document does type, so it is the one
     // place the bar's "the field must exist in the snapshot" rule is real.
