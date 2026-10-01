@@ -33,7 +33,7 @@
   "createdBy": "deploy-script",
   "ownership": "app-owned",
   "teardown": "delete",
-  "notes": "Paperclip work engine (ADR 0010): the repo holding the pinned+patched Paperclip image built from vendor/paperclip/Dockerfile. Created idempotently by deploy phase a whenever the tier provisions Paperclip (Tier 1+ by default, or the staging override), so it is absent on an unoverridden Tier 0 install. Kept out of CDK for the same reason as the orchestrator repo: the image must exist before Compute synth. Named from buildResourceNames().paperclipEcrRepo so it tracks CCE_NAME_SUFFIX. Teardown deletes it with --force in the final sweep, tolerating not-found."
+  "notes": "Paperclip work engine (ADR 0010): the repo holding the pinned Paperclip image built from vendor/paperclip/Dockerfile. Created idempotently by deploy phase a whenever the tier provisions Paperclip (Tier 1+ by default, or the staging override), so it is absent on an unoverridden Tier 0 install. Kept out of CDK for the same reason as the orchestrator repo: the image must exist before Compute synth. Named from buildResourceNames().paperclipEcrRepo so it tracks CCE_NAME_SUFFIX. Teardown deletes it with --force in the final sweep, tolerating not-found."
  },
  {
   "id": "paperclip-cloud-build",

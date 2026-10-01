@@ -169,7 +169,7 @@ describe('contentImageTag', () => {
 
 // ─────────────────────────────────────────────────────────────────────
 // The skip's guard. contentImageTag hashes HEAD, so the tag cannot see the
-// working tree: edit vendor/paperclip/updated-since.patch (the re-pin
+// working tree: edit vendor/paperclip/Dockerfile (the re-pin
 // workflow's own step), do not commit, deploy, and the OLD tag is already in
 // ECR - build skipped, old digest recorded as this deploy's Paperclip image,
 // deploy green. The only "committed files only" warning in cloud-build.ts

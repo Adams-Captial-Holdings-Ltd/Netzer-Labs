@@ -48,7 +48,7 @@ list. Every viable path changed a plan decision, and the user chose to patch
 our self-hosted copy.
 
 The deployed Paperclip artifact is therefore the pinned immutable digest
-**plus** [`vendor/paperclip/updated-since.patch`](../../vendor/paperclip/updated-since.patch)
+**plus** `vendor/paperclip/updated-since.patch` (deleted by the v2026.916.1 re-pin, ADR 0019)
 (37 lines: route parsing/validation and an indexed millisecond-resolution
 strict-greater-than filter served by the pre-existing
 `issues_company_updated_idx`), applied at image build time by

@@ -177,8 +177,7 @@ async function main(): Promise<void> {
     imageTag,
     deployTier: process.env.DEPLOY_TIER ?? '1',
     repoRoot,
-    // The Dockerfile COPYs updated-since.patch from beside itself, so the
-    // context is the vendor directory, not the repo root.
+    // The Dockerfile and its build context live in the vendor directory.
     dockerfile: `${PAPERCLIP_CONTEXT}/Dockerfile`,
     buildContext: PAPERCLIP_CONTEXT,
     // No floating :latest in this repo. Its only legitimate consumer is a task

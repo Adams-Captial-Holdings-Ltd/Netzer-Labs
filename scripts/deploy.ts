@@ -544,8 +544,7 @@ async function main(): Promise<void> {
           // which is also why it is correctly absent from the content tag.
           deployTier: env.DEPLOY_TIER ?? '1',
           repoRoot,
-          // The Dockerfile COPYs updated-since.patch from beside itself, so
-          // the context is the vendor directory, not the repo root.
+          // The Dockerfile and its build context live in the vendor directory.
           dockerfile: 'vendor/paperclip/Dockerfile',
           buildContext: 'vendor/paperclip',
           // No `:latest` in this repo. Its only legitimate consumer is a task

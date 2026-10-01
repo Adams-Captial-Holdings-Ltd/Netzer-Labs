@@ -41,14 +41,15 @@
  * was this parser: it demanded a TOP-LEVEL `issueId` and the push has none.
  *
  * WHAT THE PUSH ACTUALLY SENDS, read from the PINNED image (digest in
- * `vendor/paperclip/Dockerfile:20`) at `/app/server/src/adapters/http/execute.ts:13`:
+ * `vendor/paperclip/Dockerfile:20`) at `/app/server/src/adapters/http/execute.ts:14` at v2026.916.1:
  *   `const body = { ...payloadTemplate, agentId: agent.id, runId, context };`
+ * It also adds `paperclipRuntimeTools` when the run has runtime tools.
  * `payloadTemplate` is ours by construction — `agentSpecs()` in
- * `scripts/lib/paperclip/bootstrap-core.ts:423-434` writes each agent's
+ * `scripts/lib/paperclip/bootstrap-core.ts:661-667` writes each agent's
  * `adapter_config` as `{ url, method: 'POST', headers: { authorization:
  * 'Bearer <secret>' }, payloadTemplate: { netzarAgentId: <slug> }, timeoutMs:
  * 10_000 }` — and `context` is the run's contextSnapshot, onto which
- * `heartbeat.ts:4219` writes `contextSnapshot.issueId = issueIdFromPayload`
+ * `heartbeat.ts:7045` at v2026.916.1 writes `contextSnapshot.issueId = issueIdFromPayload`
  * alongside wakeReason, taskId, taskKey, wakeSource and wakeTriggerDetail. So
  * the wire JSON is
  *   `{ netzarAgentId, agentId, runId, context: { issueId, wakeReason, ... } }`

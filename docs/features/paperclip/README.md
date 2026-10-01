@@ -30,7 +30,6 @@ implemented_by:
   - src/ops/paperclip-phase-probe.ts
   - tests/fixtures/paperclip-bootstrap.ts
   - vendor/paperclip/Dockerfile
-  - vendor/paperclip/updated-since.patch
   - docker-compose.paperclip.yml
   - infra/lib/database-stack.ts
   - infra/lib/filesystem-stack.ts
@@ -135,9 +134,9 @@ Present in the current source and working tree:
 
 Paperclip is live in staging as the missions system of record; the 2026-09-06 live critic found the inbound dispatch push being rejected and one agent's adapter missing a working push URL, and both were fixed and merged to `development` (`#159`, `277095e`). Phase 1 (hierarchy on the wire, parent-owned delegation, the detail modal) is code-complete, validated by the full suite in both flag states on `feat/paperclip-p1-hierarchy` `f0c26fb`, and pending promotion (see [HANDOFF.md](HANDOFF.md)).
 
-- **A patched, pinned artifact and disposable live harness.**
-  `vendor/paperclip/` builds `netzer-paperclip:2026.722.0-netzar.1` from an
-  immutable upstream digest plus the approved `updatedSince` patch;
+- **An upstream pinned artifact and disposable live harness.**
+  `vendor/paperclip/` builds `netzer-paperclip:2026.916.1-netzar.1` from an
+  immutable upstream digest with no source patch;
   `docker-compose.paperclip.yml` runs it with PostgreSQL 17. The bootstrap paths
   create exactly one company, mapped HTTP agents and their API keys without
   logging secrets.
@@ -229,7 +228,7 @@ conflict.
 | 4 | Plan corrections | [plan-audit.md](plan-audit.md) | The 16 wrong citations and 4 structural defects. Beats the plan. |
 | 5 | Design and build sheet | [implementation-plan.md](implementation-plan.md) | §1–§34: why this architecture, and the phase-by-phase plan for Phases 2–10 |
 | 6 | Session history | [handoffs/](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | What was already attempted and why it failed. Never a statement of present state. |
-| — | Exactly what runs in the harness | [Dockerfile](../../../vendor/paperclip/Dockerfile) + [patch](../../../vendor/paperclip/updated-since.patch) | The byte-exact artifact; re-evaluate on every re-pin |
+| — | Exactly what runs in the harness | [Dockerfile](../../../vendor/paperclip/Dockerfile) | The byte-exact artifact; re-evaluate on every re-pin |
 | — | Live contract evidence | [integration test](../../../src/lib/paperclip/client.paperclip.integration.test.ts) | I3 and FI-4, the two proven contracts |
 | — | Superseded storage model | [ADR 0009](../../adr/0009-mission-container-model.md) | What Missions v2 was; the wire contract and roles that survive |
 
@@ -247,7 +246,7 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Missions ACL and privacy | `src/lib/missions/mission-acl.ts` (`canReadBoard`, `canMutateMission`), `src/adapters/dashboard/missions.ts`, `src/lib/tools/privacy-tools.ts` | Preserves the four `/api/missions*` envelopes/capability gates, resolves the public 8-character reference without silent ambiguity, and joins Netzar-side provenance into privacy exports |
 | Mission surfaces and tools | `src/lib/missions/format.ts`, `src/lib/tools/mission-tools.ts`, `src/lib/tools/paperclip-tools.ts` | One status/priority vocabulary across chat surfaces; assignment notification parity; exact approved Paperclip verbs; one audit record per successful mutation |
 | Dashboard and CLI | `web/src/pages/Missions.tsx`, `web/src/lib/glossary.ts`, `scripts/mission.ts` | Six ordered kanban lanes, four priority labels and no due-date rendering; CLI list uses `owner`, create sends the actual route body, and show scans bounded real owner boards because no detail route exists |
-| Harness and artifact | `docker-compose.paperclip.yml`, `vendor/paperclip/` | Builds and runs the immutable pinned image plus the approved `updatedSince` patch with PostgreSQL 17; `npm run test:paperclip:up/down/all` |
+| Harness and artifact | `docker-compose.paperclip.yml`, `vendor/paperclip/` | Builds and runs the immutable pinned upstream image with PostgreSQL 17; `npm run test:paperclip:up/down/all` |
 | Bootstrap | `tests/fixtures/paperclip-bootstrap.ts`, `scripts/paperclip-bootstrap.ts` | Better Auth first-admin flow; exactly-one-company check; company/agent/key provisioning; secret-safe, fail-closed idempotency |
 | Kill switch and authz pin | `src/lib/state/kill-switches-repo.ts`, `src/adapters/dashboard/authz-matrix.test.ts` | `paperclip_disabled` is permanent and checked at the transport/ACL boundary; the four mission routes keep their coarse authorization envelopes and capability decisions |
 | Database and filesystem | `infra/lib/database-stack.ts`, `infra/lib/filesystem-stack.ts` | Aurora Serverless v2 PG 17 (0.5 ACU floor, tiered ceiling, deletion protection, RETAIN, backups) and encrypted EFS/logging; resources are empty at ordinary T0 and provisioned at T1+ or the environment override |
@@ -409,7 +408,7 @@ Measured by the Phase 0 live critic (staging `dd16ca4`, run 34021795520) over th
 - `GET /api/companies/{cid}/agents` -- the two Netzar http agents (Main, Research) each carry `{adapterType, adapterConfig, metadata.netzarAgentId, role, ...}` (measured on Main; Research shares the shape minus `url`); two `claude_local` agents (Summarizer, Reflection Coach) are also present, paused, and were not probed. The armed Main agent's `adapterConfig` keys are `[headers(authorization), method, payloadTemplate, timeoutMs, url]` and its `payloadTemplate` is `{netzarAgentId: <slug>}`; an agent not in `PAPERCLIP_DISPATCH_SLUGS` at bootstrap time has `adapterConfig` keys `[method, payloadTemplate, timeoutMs]` -- no `url`, so it cannot receive a push.
 - `POST /agents/:id/wakeup` -- 202 body keys include `agentId, companyId, contextSnapshot{actorId, forceFreshSession, triggeredBy, wakeReason, wakeSource, wakeTriggerDetail}, continuationAttempt, createdAt, id, invocationSource, resultJson, status, wakeupRequestId` (and more); waking an agent that is not the caller's own returns 403 `{error:'Agent can only invoke itself'}`.
 - Orchestrator rejection log line, one per bad push: `{env, level:40, msg:'paperclip dispatch body rejected', reason:'invalid_body', service, time}`.
-- The adapter push body itself (pinned image `/app/server/src/adapters/http/execute.ts:13`, digest pinned at `vendor/paperclip/Dockerfile:20` -- read from source and confirmed by the live 400s, not a captured log line, since the body is never logged): `{netzarAgentId, agentId, runId, context: {issueId, wakeReason, taskId, taskKey, wakeSource, wakeTriggerDetail, ...}}`, headers `content-type: application/json` plus whatever is configured under `adapterConfig.headers` (ours: `authorization`); there is no `X-Paperclip-*` header. The issue id rides under `context.issueId`, not top-level -- the defect this branch's dispatch-parser fix corrects.
+- The adapter push body itself (pinned image `/app/server/src/adapters/http/execute.ts:14` at v2026.916.1, digest pinned at `vendor/paperclip/Dockerfile:20` -- source read at v2026.916.1; the live 400s were observed at v2026.722.0, not captured body logs): `{netzarAgentId, agentId, runId, context: {issueId, wakeReason, taskId, taskKey, wakeSource, wakeTriggerDetail, ...}}`, headers `content-type: application/json` plus whatever is configured under `adapterConfig.headers` (ours: `authorization`); there is no `X-Paperclip-*` header. The issue id rides under `context.issueId`, not top-level -- the defect this branch's dispatch-parser fix corrects.
 
 ### Issue hierarchy and blocking (staging, 2026-09-06)
 

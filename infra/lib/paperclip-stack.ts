@@ -108,7 +108,7 @@ export interface PaperclipStackProps extends BaseStackProps {
   /** `/claudeclaw[-suffix]/paperclip` — better_auth_secret + database_url. */
   paperclipSecret: ISecret;
   /**
-   * `sha256:...` of the patched image built in Phase 3. Read from the env by
+   * `sha256:...` of the pinned image built in Phase 3. Read from the env by
    * `infra/bin/app.ts`, never by this file: a stack that reads the ambient
    * process environment decides what EXISTS from ambient state, which is the
    * M33 defect. A colocated test greps this file to keep it that way.
@@ -238,7 +238,7 @@ export class PaperclipStack extends Stack {
     const region = this.region;
 
     // ── Image, pinned BY DIGEST ─────────────────────────────────
-    // Phase 3 builds the pinned+patched image into this repo and records its
+    // Phase 3 builds the pinned image into this repo and records its
     // digest in the deploy manifest. The task definition references the
     // DIGEST, never a tag: `:latest` is deliberately never published into
     // this repo, and a mutable tag would make an archived-template rollback
