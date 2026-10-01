@@ -17,9 +17,12 @@ The [implementation plan](implementation-plan.md) goes Phase 1 (substrate) →
 Phase 2 (service online). Phase 2's build sheet assumes an image is already
 sitting in ECR: its step 8 reads "built, **or retagged from the pinned upstream
 tag**". [ADR 0010](../../adr/0010-paperclip-work-engine.md)'s amendment killed
-the retag option — the artifact must be built through
-`vendor/paperclip/Dockerfile`, or the `updatedSince` patch is absent and DL-3's
-durable poll silently breaks.
+the retag option at the old pin — the artifact had to be built through
+`vendor/paperclip/Dockerfile`, or the `updatedSince` patch was absent and DL-3's
+durable poll silently broke. The v2026.916.1 re-pin ([ADR 0019](../../adr/0019-paperclip-compatibility-program.md))
+deleted that patch (the upstream filter is native), so the Dockerfile is now a
+pure digest pin; the build path still exists to record the digest in the
+operator's own ECR.
 
 So the plan contains a step that **nothing in this repository performs**.
 
@@ -50,7 +53,7 @@ in the operator's ECR, and a teardown removes every resource that path created.
 | Thing | State | Where |
 |---|---|---|
 | The Dockerfile | **Works.** `docker-compose.paperclip.yml:16` builds it today for the integration harness, so the recipe is exercised, not theoretical. | `vendor/paperclip/Dockerfile` |
-| ARM64 support | **Confirmed.** The pinned base digest `sha256:6b9daa3c…` is an OCI image *index*; its `linux/arm64` child manifest is `sha256:6ab3c816…`. The Dockerfile pins the **index**, which is what lets an ARM64 builder select that child. The two digests differing is correct, not a mismatch. No experiment owed. | **A22** |
+| ARM64 support | **Confirmed.** The pinned base digest `sha256:a02ac35a…` (v2026.916.1) is an OCI image *index*, and the image runs natively on an arm64 host: it started and answered in the live runs of 2026-10-01 (`docker image inspect` reports `arm64`/`linux`). The Dockerfile pins the **index**, which is what lets an ARM64 builder select the arm64 child; this re-pin did not record that child's own digest. At the previous pin the index was `sha256:6b9daa3c…` with a `linux/arm64` child of `sha256:6ab3c816…`; an index and its child digests differing is correct, not a mismatch. | **A22** |
 | The ECR repository | **Created, gated**, on *both* deploy drivers as of [#82](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/82). Proven in CI: the step ran during the 2026-08-20 staging deploy and correctly created nothing with the flag off. | `scripts/deploy.ts` phase a, `.github/workflows/deploy.yml` |
 | The whole Docker-free build path | **Exists for the orchestrator**: git-archive the source to the operator's state bucket, one-shot CodeBuild project on a **native ARM64** container, push to their ECR, resolve the digest. Its buildspec already self-verifies `test "$ARCH" = "arm64"`. | `scripts/lib/lifecycle/cloud-build.ts` |
 
@@ -123,7 +126,7 @@ Each of these is a trap this repository has already paid for once.
    HEAD:vendor/paperclip` — HEAD, never the working tree, because that is
    exactly what `git archive HEAD` ships to CodeBuild. That makes the skip
    correct about the *tag* and silent about the *operator*: edit
-   `vendor/paperclip/updated-since.patch` (step 6's own instruction), skip the
+   `vendor/paperclip/Dockerfile` (a re-pin's own step), skip the
    commit, deploy, and the tag still names the old content, that image is
    already in ECR, no build runs, the old digest is recorded as this deploy's
    Paperclip image, and the deploy reports success. The only "tracked,
@@ -241,7 +244,8 @@ before arming the flag there.
 - Populating `/claudeclaw[-suffix]/paperclip`. CI populates **no** secrets at
   all (**A26**), which is a separate architectural gap.
 - Re-pinning the upstream Paperclip release. **A7** must be re-verified on any
-  re-pin, and the patch re-evaluated per ADR 0010's amendment.
+  re-pin. (Done later, in Work Platform step 2, to v2026.916.1: the patch is
+  deleted; see [ADR 0019](../../adr/0019-paperclip-compatibility-program.md).)
 
 ## 7. What this unblocks
 
