@@ -85,6 +85,16 @@ Every audited action (agent turns, tool invokes, kill-switch blocks, exports, IA
 - **Inbound:** the ALB terminates TLS with an ACM cert. In the no-domain `infra-only` mode the ALB is synthesized **internal**, there is no public listener at all, and access is an SSM port-forward (`npm run dashboard:tunnel`); `npm run verify` scans live listeners and security groups and fails if any public path reaches the dashboard, and fails in **every** mode if dashboard auth answers on plain HTTP.
 - **Edge (tier-gated):** WAFv2 on the ALB at T2+ (rate limit + AWS managed rule groups), CloudFront + GuardDuty + AWS Config at T3.
 
+## Paperclip runtime lock
+
+Paperclip, the work engine, runs as a private container beside the orchestrator. It must never become a second AI runtime: [ADR 0014](adr/0014-netzer-only-ai-runtime.md) keeps its native runner, local adapters and remote profiles off and fails closed. Three controls hold that line.
+
+- **The Paperclip task's environment** makes the adapter, plugin and feedback settings operator-managed, allows only the `http` adapter, and turns Paperclip's own call-home off: `PAPERCLIP_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1` and `PAPERCLIP_ANNOUNCEMENTS_ENABLED=false` (`infra/lib/paperclip-stack.ts`, mirrored in `docker-compose.paperclip.yml`).
+- **A live check in the orchestrator.** At start and every 60 s it reads the five conditions (native runner off, no non-http agent, no remote profile, no tool access, no timer heartbeat) through one read-only company-member key, the **lock auditor** (`lock_auditor_key` in the Paperclip secret). A violation at start makes the orchestrator refuse to start, so the deploy fails and rolls back. A Paperclip that cannot be read starts the orchestrator with the Paperclip surface closed until a later read is clean. Each verdict change is logged once as `paperclip lock verdict`, with codes and never a credential.
+- **A private dispatch listener.** Paperclip reaches the orchestrator on port 3001, open to Paperclip's security group only. The public app answers 404 for the dispatch route.
+
+`scripts/paperclip-bootstrap.ts` creates the auditor. **Rotation is manual:** set `lock_auditor_key` to `REPLACE_ME` in the Paperclip secret and run the bootstrap. It creates a new auditor; until then the lock reads `unknown` and the surface stays closed. Residuals: the auditor key is a long-lived read-only member key, so a leak exposes company work data read-only; a retired auditor stays an inert member until an operator removes it in Paperclip; a bootstrap run that fails before it saves the secret leaves an orphan auditor too; tool gateways are not read at start; a violation that appears while running is caught within 60 s.
+
 ## Surface authentication
 
 - **Slack:** HMAC signature verification on the raw body with a 5-minute replay window, on `/slack/events`, `/slack/commands`, and `/slack/interactive`. A missing signing secret fails **closed** (requests rejected, 401). Verification is unconditional — there is no `slack_signature_check_disabled` kill switch (it was removed as an auth-bypass primitive); break-glass for a broken secret is to close ingress, not to accept unsigned traffic.
