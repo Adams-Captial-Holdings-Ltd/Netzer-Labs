@@ -80,16 +80,11 @@ export function paperclipWatermarkFrom(
 /**
  * The `updatedSince` value for the next poll, in ms since epoch.
  *
- * C-2/M30 SUPERSEDES ADR 0010's RATIFIED PREDICATE. The vendored patch compiles
- * `updatedSince` to `updated_at >= watermark + 1ms` against a column that stores
- * MICROSECONDS while every API caller only ever observes the millisecond-
- * truncated value. Passing the last-seen stamp straight back therefore
- * PERMANENTLY loses any row whose true timestamp falls in `[T, T+1ms)` and was
- * not already in the page that produced T. The probe "C-2 (BLOCKING): a
- * truncated watermark loses rows, and overlap-and-dedupe delivers them exactly
- * once" reproduces the loss (a re-poll at a row's own observed `updatedAt`
- * returns 200 without that row) and proves the fix: poll from
- * `maxUpdatedAt - poll_overlap_ms` and dedupe client-side on `(id, updatedAt)`.
+ * Native `updatedSince` is strict `updated_at > since` against a microsecond
+ * column. The removed `>= watermark + 1ms` patch caused a 1 ms loss when API
+ * stamps were millisecond-truncated. ADR 0019 keeps overlap-and-dedupe on
+ * purpose: poll from `maxUpdatedAt - poll_overlap_ms` and dedupe client-side on
+ * `(id, updatedAt)` so the cursor tolerates the two-clock skew described below.
  *
  * COLD START IS `now - overlap`, NEVER EPOCH. An epoch cold start asks for the
  * entire board through a route with no totals endpoint, which is a page-storm on
@@ -105,9 +100,9 @@ export function paperclipWatermarkFrom(
  * `poll_overlap_ms` bounds it. If the two clocks ever disagree by more than the
  * overlap in the direction that matters — a row stamped by the slower clock
  * BELOW a cursor the faster clock already advanced past — that row is not
- * recovered by this arithmetic and is lost. What the overlap is proven to fix is
- * the C-2/M30 truncation hazard, which is a fixed 1 ms window; treating it as
- * skew insurance is a hope, not a measurement. Bounding it needs a probe that
+ * recovered by this arithmetic and is lost. The overlap was proven against the
+ * old C-2/M30 patch truncation hazard, a fixed 1 ms window that native filtering
+ * removes; its protection against skew is unmeasured. Bounding it needs a probe that
  * inserts and updates under load and records the observed disagreement, and that
  * probe does not exist. `poll_overlap_ms` is a runtime-config value precisely so
  * an operator can raise it without a deploy when one does.

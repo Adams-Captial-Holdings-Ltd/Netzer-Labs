@@ -36,25 +36,24 @@ const T2 = '2026-08-21T11:59:59.002Z';
 const T5 = '2026-08-21T11:59:59.005Z';
 
 /**
- * A faithful-enough stand-in for the pinned artifact's issue list: offset/limit
- * slicing, and the `updatedSince` behaviour BOTH ways round —
+ * A faithful-enough stand-in for native issue listing: offset/limit slicing,
+ * and the `updatedSince` behaviour BOTH ways round —
  *
- *   patched:   a value without an explicit UTC offset is a 400 naming the
- *              parameter, and rows are filtered with the patch's own predicate.
- *   unpatched: the parameter is SILENTLY IGNORED and every request answers 200
+ *   honored:   malformed values answer 400; parseable values, with or without
+ *              an offset, filter rows with strict greater-than.
+ *   ignored:   the parameter is SILENTLY IGNORED and every request answers 200
  *              with the full unfiltered board (A1-8 / M28).
  *
- * Both behaviours are transcribed from the probes "A1-8 (BLOCKING): updatedSince
- * one hour in the future returns an empty list" and "A1-5 (BLOCKING): offset
- * pages the list", not from any Paperclip source line.
+ * The native behavior matches Paperclip's issue route and service; the ignored
+ * behavior preserves the A1-8 boot trap.
  */
 function fakePaperclip(opts: {
   board: PaperclipIssue[];
-  patched?: boolean;
+  honorsUpdatedSince?: boolean;
   /**
    * Mutable so a test can make the transport fail and then heal it — the shape of
    * "the probe request failed", which must never be read as "this build is
-   * unpatched".
+   * ignored".
    */
   failWith?: { status: number | null };
   /**
@@ -70,7 +69,7 @@ function fakePaperclip(opts: {
   served: string[];
   maxInFlight: () => number;
 } {
-  const patched = opts.patched ?? true;
+  const honorsUpdatedSince = opts.honorsUpdatedSince ?? true;
   const calls: { method: string; url: URL }[] = [];
   const served: string[] = [];
   let inFlight = 0;
@@ -94,13 +93,11 @@ function fakePaperclip(opts: {
       opts.onRead?.(url);
       const since = url.searchParams.get('updatedSince');
       let rows = opts.board;
-      if (patched && since !== null) {
-        if (!/^\d{4}-.*(Z|[+-]\d{2}:\d{2})$/.test(since)) {
-          return json({ error: 'updatedSince must be ISO-8601 with an explicit UTC offset' }, 400);
+      if (honorsUpdatedSince && since !== null) {
+        if (!Number.isFinite(new Date(since).getTime())) {
+          return json({ error: 'updatedSince must be a valid ISO 8601 timestamp when provided' }, 400);
         }
-        // The vendored patch's own predicate: `updated_at >= updatedSince + 1ms`.
-        const floor = Date.parse(since) + 1;
-        rows = rows.filter((r) => Date.parse(r.updatedAt) >= floor);
+        rows = rows.filter((r) => Date.parse(r.updatedAt) > Date.parse(since));
       }
       // `sortField=updated&sortDir=asc` is what the sweep asks for and what keyset
       // paging depends on. A fake that ignored the sort would make the sweep look
@@ -127,7 +124,7 @@ function issue(id: string, updatedAt: string): PaperclipIssue {
 function deps(
   over: {
     board?: PaperclipIssue[];
-    patched?: boolean;
+    honorsUpdatedSince?: boolean;
     config?: Record<string, string>;
     lease?: ReturnType<typeof vi.fn>;
     advance?: ReturnType<typeof vi.fn>;
@@ -144,7 +141,7 @@ function deps(
 } {
   const server = fakePaperclip({
     board: over.board ?? [],
-    patched: over.patched,
+    honorsUpdatedSince: over.honorsUpdatedSince,
     failWith: over.failWith,
     onRead: over.onRead,
   });
@@ -187,8 +184,8 @@ afterEach(() => {
 // ── A1-8 / M28: the boot probe ────────────────────────────────────────────
 
 describe('the A1-8 boot probe', () => {
-  it('REFUSES TO START when an unpatched build answers a future updatedSince with rows', async () => {
-    const t = deps({ board: [issue('a', T0)], patched: false });
+  it('REFUSES TO START when a build that ignores updatedSince answers a future stamp with rows', async () => {
+    const t = deps({ board: [issue('a', T0)], honorsUpdatedSince: false });
     const result = await runPaperclipReconcilePassOnce({}, t.deps);
     expect(result.ran).toBe(false);
     expect(result.reason).toBe('boot-probe-failed');
@@ -201,20 +198,19 @@ describe('the A1-8 boot probe', () => {
   });
 
   it('REFUSES TO START on an EMPTY board too — signal (b) catches what signal (a) cannot', async () => {
-    // An unpatched build with nothing on the board answers `[]` to the future
-    // watermark, so the first signal passes vacuously. The offset-less value
-    // being ACCEPTED proves the parameter is not parsed at all.
-    const t = deps({ board: [], patched: false });
+    // A build that ignores the parameter answers `[]` on an empty board, so
+    // the future stamp passes vacuously. Accepting malformed input catches it.
+    const t = deps({ board: [], honorsUpdatedSince: false });
     const result = await runPaperclipReconcilePassOnce({}, t.deps);
     expect(result.reason).toBe('boot-probe-failed');
     expect(logError).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringContaining('not parsing the parameter at all'),
+      expect.stringContaining('a malformed updatedSince was accepted'),
     );
   });
 
   it('the refusal is PERMANENT: a later pass never sweeps, and `force` cannot override it', async () => {
-    const t = deps({ board: [issue('a', T0)], patched: false });
+    const t = deps({ board: [issue('a', T0)], honorsUpdatedSince: false });
     await runPaperclipReconcilePassOnce({}, t.deps);
     const callsAfterFirst = t.calls.length;
     const second = await runPaperclipReconcilePassOnce({ force: true }, t.deps);
@@ -223,7 +219,7 @@ describe('the A1-8 boot probe', () => {
   });
 
   it('the permanent refusal is RE-LOGGED on every later tick, not once and then silence', async () => {
-    const t = deps({ board: [issue('a', T0)], patched: false });
+    const t = deps({ board: [issue('a', T0)], honorsUpdatedSince: false });
     await runPaperclipReconcilePassOnce({}, t.deps);
     logError.mockClear();
     await runPaperclipReconcilePassOnce({}, t.deps);
@@ -257,11 +253,19 @@ describe('the A1-8 boot probe', () => {
     expect(second).toMatchObject({ ran: true, candidates: 1 });
   });
 
-  it('passes on a patched build and then sweeps', async () => {
+  it('passes on a build that honors updatedSince and then sweeps', async () => {
     const t = deps({ board: [issue('a', T0)] });
     const result = await runPaperclipReconcilePassOnce({}, t.deps);
     expect(result.ran).toBe(true);
     expect(result.candidates).toBe(1);
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it('passes on a native build that accepts an offset-less stamp and rejects malformed input', async () => {
+    const t = deps({ board: [issue('a', T0)] });
+    await expect(t.deps.client!.listIssues({ updatedSince: '2026-08-21T11:59:58', limit: 1 })).resolves.toBeDefined();
+    const result = await runPaperclipReconcilePassOnce({}, t.deps);
+    expect(result).toMatchObject({ ran: true, candidates: 1 });
     expect(logError).not.toHaveBeenCalled();
   });
 });
@@ -321,8 +325,8 @@ describe('pagination and the watermark', () => {
     });
     const result = await runPaperclipReconcilePassOnce({}, t.deps);
     // 3 rows at one per page. Each keyset re-anchor is INCLUSIVE of the page max
-    // (`max - 1ms`, because the patch compiles `updatedSince = v` to
-    // `>= v + 1ms`), so every boundary row is read twice — 6 reads — plus the
+    // (`max - 1ms`, because native `updatedSince` is strict `> v`), so every
+    // boundary row is read twice — 6 reads — plus the
     // empty page that ends the sweep. That extra row per page is the price of
     // never skipping one, and at the seeded limit of 500 it is 1 row in 500.
     expect(result.pages).toBe(7);

@@ -497,16 +497,11 @@ export interface PaperclipIssueListQuery {
    */
   view?: 'compact';
   /**
-   * NOT upstream at the pinned release - supplied by the vendored patch. On an
-   * unpatched build it is silently ignored and the poll returns the whole world
-   * with a 200, so the reconciler must refuse to start until the probe
-   * "A1-8 (blocking): updatedSince in the future returns an empty list" is
-   * green. Must be ISO 8601 with an explicit UTC offset or the patched server
-   * answers 400. The predicate is a STRICT `updatedAt > value`, observed by the
-   * probes "C-2 (BLOCKING): a truncated watermark loses rows" and "I3:
-   * updatedSince is a strict greater-than watermark" - which is why a caller
-   * must subtract an overlap rather than pass its last-seen watermark directly.
-   * (The ADR amendment's `>= value + 1ms` is superseded by those probes.)
+   * Native from v2026.916.1. A build without it silently ignores the parameter
+   * and returns the full board, so the reconciler probes before sweeping.
+   * Parseable timestamps with or without a UTC offset are accepted; malformed
+   * values answer 400. The predicate is strict `updatedAt > value`, so callers
+   * subtract an overlap and dedupe instead of passing the last-seen watermark.
    */
   updatedSince?: string;
 }

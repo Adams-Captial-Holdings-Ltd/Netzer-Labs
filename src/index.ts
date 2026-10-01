@@ -112,8 +112,8 @@ async function main(): Promise<void> {
   startWebhookMonitor();
   // Paperclip durability sweep (ADR 0010 DL-3). Inert until runtime-config
   // paperclip/reconciler_mode leaves 'off' and a base URL is configured, and it
-  // refuses to sweep at all unless the A1-8 boot probe proves the vendored
-  // updatedSince patch is present in the running Paperclip image.
+  // refuses to sweep unless the A1-8 boot probe proves the running Paperclip
+  // image honors native updatedSince.
   startPaperclipReconciler();
   // Daily cost evaluator. No-ops until runtime-config cost/watch_enabled='true',
   // so this is inert until explicitly turned on.
