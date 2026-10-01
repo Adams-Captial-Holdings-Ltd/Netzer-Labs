@@ -399,10 +399,9 @@ export interface PaperclipCreateIssueResponse extends PaperclipIssue {
  *   - `status` and `assigneeAgentId`. The only PATCH any probe has ever driven
  *     is `{title}` on an unassigned, status-omitted issue, inside the `boardMutationGuard`
  *     characterization - and that records a 200, it does not assert one.
- *   - The run-id rule. Plan text says a run id is needed only when the issue is
- *     `in_progress` AND assigned to the actor; `runIdBoundary` records
- *     `requiresRunId: false` for PATCH on an unassigned, status-omitted issue and
- *     nothing more. That is not a per-route property.
+ *   - The run-id rule. At v2026.916.1 agent comments and PATCH field updates
+ *     return 403 without a valid run; `runIdBoundary` records the measured
+ *     route outcomes, including the older 401 guard on checkout.
  *
  * Produce the probes before narrowing anything below.
  */
@@ -540,8 +539,8 @@ export interface PaperclipCheckoutBody {
  * A1-11: `POST /api/issues/{id}/release` takes NO validated body - the agent id
  * comes from the actor, never from the caller - and answers with the issue row.
  * Asserted field by field against a live 200 by the A1-11 probe, which also
- * observes that release demands a run id (401 `Agent run id required`) even
- * though comments and PATCH do not (C-3).
+ * observes that release demands a run id (401 `Agent run id required`); agent
+ * comments and PATCH field updates return 403 without a valid run (C-3).
  */
 export type PaperclipReleaseResponse = PaperclipIssue;
 

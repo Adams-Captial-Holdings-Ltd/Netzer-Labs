@@ -628,8 +628,8 @@ export async function runDispatchWork(
         { surface: 'system', userId: `paperclip:${ctx.netzarAgentId}` },
       );
     }
-    // A33: a run-less agent actor may comment, and this one holds a run, so the
-    // comment carries the run id. The dispatch path does NOT degrade to
+    // A33: an agent comment needs a valid heartbeat run at v2026.916.1, and this
+    // one holds a run, so the comment carries its id. The dispatch path does NOT degrade to
     // `/wakeup` for a comment.
     boardAttempted = true;
     await engine.comment(ctx.issueId, result.text, invoke);

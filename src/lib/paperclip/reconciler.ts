@@ -405,13 +405,15 @@ export async function runPaperclipReconcilePassOnce(
   //
   // THE CURSOR CAP BELOW IS WHAT CLOSES IT, and it is a bound rather than a hope.
   //
-  //  WHERE a skipped row can be. When the fallback fires, every row on that page
-  //  sits at ONE stamp: native filtering is strict `> since`, and the fallback
-  //  condition is `pageMax - 1 <= since`, so every observed stamp on the page is
-  //  exactly `since + 1ms == pageMax`. Call it S. The positional walk that follows
-  //  is anchored at `S - 1ms`, so every row it can return — and therefore every row a
-  //  shift can drop — carries a stamp at or above S. Refusing to move the cursor
-  //  past S leaves the next poll's floor at `S - overlap`, below all of them.
+  //  WHERE a skipped row can be. Native filtering is strict `updated_at > since`
+  //  against microseconds, and the API shows stamps cut to the millisecond, so
+  //  every row a page returns shows a stamp of `since` or later. The fallback
+  //  condition is `pageMax - 1 <= since`, so the page's stamps all lie within
+  //  `since` and `since + 1ms`. Call its latest stamp S, so `S - 1ms <= since`.
+  //  The positional walk that follows keeps the same `since`, so every row it can
+  //  return — and therefore every row a shift can drop — shows a stamp at or above
+  //  `S - 1ms`. Refusing to move the cursor past S leaves the next poll's floor at
+  //  `S - overlap`, below all of them.
   //
   //  WHEN a skip is possible at all, exactly. A shift drops a row only if the row
   //  that moved to the tail was ALREADY READ in this sweep: if its old index was

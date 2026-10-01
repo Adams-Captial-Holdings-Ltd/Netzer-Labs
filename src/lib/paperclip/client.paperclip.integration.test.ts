@@ -75,7 +75,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image
     fixture = await bootstrapPaperclip();
   }, 120_000);
 
-  it('I3: updatedSince is a strict greater-than watermark', async () => {
+  it('I3: updatedSince is a strict greater-than watermark (one millisecond after excludes, one before includes)', async () => {
     // Both assertions below are EXACT SETS - zero rows, then one specific row -
     // so they only hold while nothing else on this board moves inside the
     // window. The board is shared: `tests/contract/paperclip-routes.paperclip.
@@ -86,7 +86,10 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image
     // suite's own offset probe does, so the set is this test's rows and no
     // others.
     const parent = await createIssue(fixture, `I3 watermark scope ${Date.now()}`);
-    const issue = await createAssignedIssue(fixture, `I3 strict watermark ${Date.now()}`, { parentId: parent.id });
+    const issue = await createAssignedIssue(fixture, `I3 strict watermark ${Date.now()}`, {
+      parentId: parent.id,
+      assigneeAgentId: fixture.agents.research.id,
+    });
     const updatedAt = new Date(issue.updatedAt);
     expect(Number.isNaN(updatedAt.getTime())).toBe(false);
 
@@ -105,8 +108,10 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-image
       );
     };
 
-    const atWatermark = await listFrom(issue.updatedAt);
-    expect(atWatermark).toHaveLength(0);
+    // At v2026.916.1, a watermark equal to the row's own millisecond stamp re-returns it (microsecond column); the reconciler subtracts an overlap and dedupes for that reason.
+    const oneMillisecondAfter = new Date(updatedAt.getTime() + 1).toISOString();
+    const afterWatermark = await listFrom(oneMillisecondAfter);
+    expect(afterWatermark).toHaveLength(0);
 
     const oneMillisecondBefore = new Date(updatedAt.getTime() - 1).toISOString();
     const beforeWatermark = await listFrom(oneMillisecondBefore);

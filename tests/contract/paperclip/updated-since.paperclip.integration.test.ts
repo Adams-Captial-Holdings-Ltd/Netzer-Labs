@@ -36,8 +36,8 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip updatedSince
     if (pin === 'new') expect(Array.isArray(body), `new pin body: ${observed}`).toBe(true);
   });
 
-  it('updatedSince equal to an issue updatedAt excludes that issue on both pins', async () => {
-    // I3's existing live probe establishes strict greater-than on the old pin.
+  it("updatedSince one millisecond after an issue's updatedAt excludes it, one millisecond before includes it, on both pins", async () => {
+    // The old pin excludes at T because its patch adds 1ms; v2026.916.1 re-returns at T (5 of 5 measured), so this test avoids asserting that boundary.
     const created = await withBearer(fixture.agents.main.key)(issues(), {
       method: 'POST',
       body: JSON.stringify({ title: `Watermark contract ${Date.now()}`, description: 'Contract probe', priority: 'medium' }),
@@ -46,11 +46,14 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip updatedSince
     const issue = await created.json() as { id: string; updatedAt: string };
     try {
       expect(Number.isNaN(new Date(issue.updatedAt).getTime())).toBe(false);
-      const response = await list(issue.updatedAt);
-      expect(response.status).toBe(200);
-      const rows = await response.json() as Array<{ id: string }>;
-      expect(Array.isArray(rows)).toBe(true);
-      expect(rows.some((row) => row.id === issue.id), `${pin} pin included the issue at its own updatedAt`).toBe(false);
+      for (const [offset, shouldInclude] of [[1, false], [-1, true]] as const) {
+        const watermark = new Date(new Date(issue.updatedAt).getTime() + offset).toISOString();
+        const response = await list(watermark);
+        expect(response.status).toBe(200);
+        const rows = await response.json() as Array<{ id: string }>;
+        expect(Array.isArray(rows)).toBe(true);
+        expect(rows.some((row) => row.id === issue.id), `${pin} pin inclusion at ${offset}ms from updatedAt`).toBe(shouldInclude);
+      }
     } finally {
       const removed = await paperclipAdminRequest(`/api/issues/${issue.id}`, { method: 'DELETE' });
       expect(removed.status).toBe(200);

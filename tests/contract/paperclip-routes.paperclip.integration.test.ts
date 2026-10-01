@@ -182,15 +182,15 @@ const PROVISIONED_KEY_NAMES = new Set(['netzar-reconciler', 'netzar-agent-main',
 
 /**
  * C-2. The overlap a poller subtracts from its watermark before re-reading.
- * Wide enough to swallow the `+1ms` predicate the vendored patch compiles and
- * the microsecond-to-millisecond truncation underneath it.
+ * Native filtering is strict `>` over microseconds at v2026.916.1; the old
+ * patch's `>= since + 1ms` predicate is gone.
  */
 const POLL_OVERLAP_MS = 2_000;
 
 /**
  * C-2's same-millisecond collision hunt, which is MANDATORY - the probe fails if
- * it never reproduces one. It used to skip the sibling half on a lost race, and
- * a soft pass is indistinguishable from a broken hunt.
+ * it never reproduces one. It proves the page anchor recovers same-stamp rows,
+ * and a soft pass is indistinguishable from a broken hunt.
  *
  * The budget is set from measurement, not hope: six concurrent creates against
  * this harness collide in roughly two batches out of three, so twelve attempts
@@ -394,10 +394,17 @@ function runHeaders(): Record<string, string> {
 }
 
 async function postComment(issueId: string, body: string): Promise<ProbeResult<PaperclipIssueComment>> {
-  return probe<PaperclipIssueComment>(`/api/issues/${issueId}/comments`, fixture.agents.main.key, {
+  // Agent comments need a heartbeat run at v2026.916.1 (C-3 pins that); these probes test listing, paging and updatedAt, not authorship.
+  const response = await paperclipAdminRequest(`/api/issues/${issueId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body }),
   });
+  const text = await response.text();
+  let parsed: unknown = null;
+  if (text) {
+    try { parsed = JSON.parse(text); } catch { parsed = { error: text }; }
+  }
+  return { status: response.status, headers: response.headers, body: parsed as PaperclipIssueComment };
 }
 
 /**
@@ -432,10 +439,16 @@ async function acquireRunId(agent: PaperclipBootstrapAgent = fixture.agents.main
 }
 
 /**
- * C-3. Packet 1 says the run-id guard covers comments; Packet 4 says comments
- * need none and PATCH needs one only conditionally. Settle it by probe, once,
- * in the hook - every later probe that writes needs the answer.
+ * C-3. At v2026.916.1 agent comments and field updates need a run via the
+ * cross-issue guard; checkout, release and work-products use the older guard.
+ * Settle it by probe, once, in the hook - every later probe needs the answer.
  */
+function requiresRunId(result: ProbeResult<PaperclipErrorBody>): boolean {
+  const error = errorOf(result.body);
+  return (result.status === 401 && error === 'Agent run id required')
+    || (result.status === 403 && error?.startsWith('Cross-issue writes need a run to attribute them to') === true);
+}
+
 async function characterizeRunIdBoundary(): Promise<RunIdBoundary> {
   const shapes: Array<[string, () => Promise<ProbeResult<PaperclipErrorBody>>]> = [
     ['POST /api/issues/{id}/comments', async () => {
@@ -472,7 +485,7 @@ async function characterizeRunIdBoundary(): Promise<RunIdBoundary> {
   for (const [route, run] of shapes) {
     const result = await run();
     expectNotServerError(route, result);
-    routes[route] = { ...outcomeOf(result), requiresRunId: result.status === 401 };
+    routes[route] = { ...outcomeOf(result), requiresRunId: requiresRunId(result) };
   }
 
   // A1-3, the other half: an EMPTY header must never be sent. This records what
@@ -603,9 +616,9 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
   });
 
   it('A1-8 (BLOCKING): updatedSince one hour in the future returns an empty list', async () => {
-    // The board must be non-empty first, or an unpatched server answering with
-    // the full unfiltered list would still look like [] and the trap would pass
-    // vacuously - which is exactly the silent failure this probe exists to stop.
+    // The board must be non-empty first, or a server ignoring native
+    // `updatedSince` and answering with the full list could pass this trap
+    // vacuously, which is the silent failure the reconciler boot probe guards.
     await createdIssue(`A1-8 watermark trap ${Date.now()}`);
     const unfiltered = await probe<PaperclipIssue[]>(companyIssues('limit=1'), fixture.reconcilerKey);
     expect(unfiltered.status).toBe(200);
@@ -619,13 +632,12 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     expect(filtered.status).toBe(200);
     expect(
       filtered.body,
-      'updatedSince returned rows: the vendored patch is absent and this build silently ignores the param. The reconciler must refuse to start.',
+      'updatedSince returned rows for a future stamp: this build ignores the param. The reconciler must refuse to start.',
     ).toEqual([]);
 
-    // Independent second signal. An unknown query param is silently ignored, so
-    // a build that rejects a malformed value is provably parsing it.
+    // Independent second signal: native parsing rejects a malformed timestamp.
     const malformed = await probe<PaperclipErrorBody>(
-      companyIssues('updatedSince=2026-01-01T00:00:00'),
+      companyIssues('updatedSince=not-a-date'),
       fixture.reconcilerKey,
     );
     expect(malformed.status).toBe(400);
@@ -688,11 +700,11 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     }
   }, 60_000);
 
-  it('A1-7: sortField accepts only `updated`, limit over the max is clamped, limit<=0 is a 400', async () => {
+  it('A1-7: sortField accepts only `updated` or `id`, limit over the max is clamped, limit<=0 is a 400', async () => {
     const badSort = await probe<PaperclipErrorBody>(companyIssues('sortField=created'), fixture.reconcilerKey);
     expect(badSort.status).toBe(400);
     expectErrorEnvelope(badSort);
-    expect(errorOf(badSort.body)).toBe("sortField must be 'updated' when provided");
+    expect(errorOf(badSort.body)).toBe("sortField must be 'updated' or 'id' when provided");
 
     const goodSort = await probe<PaperclipIssue[]>(
       companyIssues('sortField=updated&sortDir=asc&limit=1'),
@@ -765,7 +777,11 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
 
   it('A1-7: the status, assigneeAgentId and parentId filters are acted on, not silently ignored', async () => {
     const parent = await createdUnassignedIssue(`A1-7 filter parent ${Date.now()}`);
-    const child = await createIssue(`A1-7 filter child ${Date.now()}`, { parentId: parent.id });
+    // Assigning the child to its creator would trigger the delegation-cycle guard.
+    const child = await createIssue(`A1-7 filter child ${Date.now()}`, {
+      parentId: parent.id,
+      assigneeAgentId: fixture.agents.research.id,
+    });
     expect(child.status, `child creation failed: ${describeFailure(child)}`).toBeLessThan(300);
 
     const backlog = await probe<PaperclipIssue[]>(companyIssues('status=backlog&limit=25'), fixture.reconcilerKey);
@@ -1527,15 +1543,18 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
   }, 180_000);
 
   it('C-3 (CHARACTERIZATION): which agent write shapes require X-Paperclip-Run-Id', () => {
-    // The requirement is per-route AND per-issue-state: checkout always needs a
-    // run, while `POST /api/issues/{id}/work-products` needs one only while the
-    // issue has a live execution run. The ACL must therefore treat "Agent run
-    // id required" as a runtime answer, not a compile-time property of a route.
+    // At v2026.916.1 comments and field updates need a run via the cross-issue
+    // guard; checkout, release and work-products use the older run-id guard.
     for (const [route, outcome] of Object.entries(runIdBoundary.routes)) {
-      // Whatever the answer, a 401 here can only be the run-id guard, and its
-      // string is the one the ACL must map to a typed error.
-      if (outcome.requiresRunId) expect(outcome.error, route).toBe('Agent run id required');
-      // A run-less write that is not a 401 must not be a run-id failure wearing
+      // Both measured guards have distinct exact error text.
+      if (outcome.requiresRunId) {
+        expect(
+          outcome.error === 'Agent run id required'
+            || outcome.error?.startsWith('Cross-issue writes need a run to attribute them to') === true,
+          `unexpected run guard error for ${route}: ${outcome.error}`,
+        ).toBe(true);
+      }
+      // A write that does not require a run must not be a run-id failure wearing
       // a different code, or the ACL would degrade to wakeup for no reason.
       if (!outcome.requiresRunId) expect(outcome.error ?? '', route).not.toContain('run id');
     }
@@ -1543,6 +1562,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     // A1-3: an empty header buys nothing - it is rejected exactly like an
     // absent one - which is why the client omits the header instead.
     const runless = runIdBoundary.routes['POST /api/issues/{id}/checkout'];
+    expect(runless.error).toBe('Agent run id required');
     expect(
       runIdBoundary.emptyHeader,
       'an empty X-Paperclip-Run-Id must be treated exactly like an absent one',
@@ -1578,10 +1598,10 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     });
   });
 
-  it('C-2 (BLOCKING): a truncated watermark loses rows, and overlap-and-dedupe delivers them exactly once', async () => {
-    // The vendored patch compiles `updatedAt >= watermark + 1ms` while
-    // updatedAt stores microseconds and callers only ever see millisecond
-    // truncation. Every issue this probe writes is UNASSIGNED, so no assignment
+  it('C-2 (BLOCKING): a millisecond-truncated watermark cannot lose a row, and overlap-and-dedupe delivers each exactly once', async () => {
+    // Native filtering is strict `updated_at > since` over microseconds at
+    // v2026.916.1; the old patch's `>= since + 1ms` is gone. Every issue this
+    // probe writes is UNASSIGNED, so no assignment
     // wakeup follows the create and moves `updatedAt` out from under the
     // `(id, updatedAt)` key the dedupe is keyed on.
     const poll = async (since: Date): Promise<PaperclipIssue[]> => {
@@ -1593,18 +1613,17 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
       return result.body;
     };
 
-    // PART 1, the hazard, proven with ONE row and no race at all. A row's own
-    // truncated stamp T names an instant at or before its true updatedAt, and
-    // the server's predicate starts at T + 1ms, so a poller that stores T and
-    // re-queries with it can never see that row again - nor any sibling written
-    // in the same millisecond that its page did not already contain. This is
-    // deterministic: it does not depend on two writes racing.
+    // PART 1, the watermark boundary, proven with ONE row and no race at all.
     const anchor = await createdUnassignedIssue(`C-2 truncation anchor ${Date.now()}`);
-    const atOwnStamp = await poll(new Date(anchor.updatedAt));
+    // At T the new pin re-returns the row in all 5 measured probes; don't assert
+    // that boundary, because the microsecond fraction could be exactly zero.
+    const oneMillisecondBefore = await poll(new Date(new Date(anchor.updatedAt).getTime() - 1));
     expect(
-      atOwnStamp.map((issue) => issue.id),
-      'a row re-queried at its own truncated updatedAt came back, so the +1ms predicate is not what this build compiles; re-derive the reconciler predicate before trusting the overlap below',
-    ).not.toContain(anchor.id);
+      oneMillisecondBefore.map((issue) => issue.id),
+      'a poll one millisecond before the anchor stamp must include it',
+    ).toContain(anchor.id);
+    const oneMillisecondAfter = await poll(new Date(new Date(anchor.updatedAt).getTime() + 1));
+    expect(oneMillisecondAfter.map((issue) => issue.id)).not.toContain(anchor.id);
 
     const withOverlap = await poll(new Date(new Date(anchor.updatedAt).getTime() - POLL_OVERLAP_MS));
     expect(
@@ -1636,15 +1655,14 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
       `no two of ${written.length} concurrent writes shared a millisecond across ${COLLISION_ATTEMPTS} batches, so the sibling hazard was never reproduced and C-2 is unproven. On this harness a batch of ${COLLISION_BATCH} collides roughly two times in three; a run that reaches this line has a different write path or a different clock resolution, and the reconciler's overlap must be re-derived rather than assumed.`,
     ).toBeDefined();
 
-    // The naive watermark - a poller storing the row's own truncated stamp -
-    // must return NEITHER sibling: the predicate starts one millisecond after
-    // the stamp they share, so both are lost, not just the one already seen.
-    const naive = await poll(new Date(collided![0].updatedAt));
-    const naiveIds = new Set(naive.map((issue) => issue.id));
+    // The reconciler's page anchor is T - 1ms; that floor must recover BOTH
+    // siblings sharing T under native microsecond strict-greater filtering.
+    const anchored = await poll(new Date(new Date(collided![0].updatedAt).getTime() - 1));
+    const anchoredIds = new Set(anchored.map((issue) => issue.id));
     expect(
-      naiveIds.has(collided![0].id) || naiveIds.has(collided![1].id),
-      'the naive watermark unexpectedly returned a same-millisecond sibling; re-derive the reconciler predicate before trusting this',
-    ).toBe(false);
+      [anchoredIds.has(collided![0].id), anchoredIds.has(collided![1].id)],
+      'the page anchor one millisecond before T must return both same-millisecond siblings',
+    ).toEqual([true, true]);
 
     // PART 3, the fix, exercised the way the reconciler will run it: two
     // OVERLAPPING polls, then one dedupe across both. A single response can
@@ -1932,7 +1950,8 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     // that starts typing these turns this red, which is the signal to revisit.
     for (const [method, template] of OPAQUE_RESPONSE_ROUTES) {
       const operation = paths[template][method] as { responses: Record<string, { content?: Record<string, { schema?: Record<string, unknown> }> }> };
-      const success = operation.responses['200'] ?? operation.responses['201'];
+      // v2026.916.1 documents the wakeup success as 202 (it was 200).
+      const success = operation.responses['200'] ?? operation.responses['201'] ?? operation.responses['202'];
       const schema = success?.content?.['application/json']?.schema ?? {};
       expect(schema.properties, `${method.toUpperCase()} ${template} now declares response fields`).toBeUndefined();
       expect(schema.additionalProperties, `${method.toUpperCase()} ${template} is no longer an opaque object`).toEqual({});
@@ -1945,15 +1964,15 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
     //
     // (a) parameters. The issue list declares exactly two - `companyId` and
     //     `view` - while the route reads far more of them. `updatedSince`, the
-    //     whole reason A1-8 exists, is absent from the document entirely, and
-    //     `offset`, `limit`, `sortField`, `sortDir`, `status`, `assigneeAgentId`
+    //     route and probes are the evidence A1-8 exists, but it is absent from
+    //     the document entirely, and `offset`, `limit`, `sortField`, `sortDir`, `status`, `assigneeAgentId`
     //     and `parentId` are all proven acted on by probes above.
     const issueList = paths['/api/companies/{companyId}/issues'].get as { parameters?: unknown[] };
     expect(
       (issueList.parameters ?? []).map((parameter) => (parameter as { name?: string }).name).sort(),
       'the document now declares more issue-list parameters; re-read the A1-15 narrowing in types.ts before widening it',
     ).toEqual(['companyId', 'view']);
-    expect(JSON.stringify(issueList), 'updatedSince is absent from the document; the patch is the only evidence it exists')
+    expect(JSON.stringify(issueList), 'updatedSince is absent from the document; the route and the probes are the only evidence it exists')
       .not.toContain('updatedSince');
 
     // (b) `required`. The create body declares `status` required, and every

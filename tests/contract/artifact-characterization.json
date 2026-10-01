@@ -9,13 +9,13 @@
     },
     {
       "shape": "PATCH /api/issues/{id}",
-      "status": 200,
-      "error": null
+      "status": 403,
+      "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry."
     },
     {
       "shape": "POST /api/issues/{id}/comments",
-      "status": 201,
-      "error": null
+      "status": 403,
+      "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry."
     },
     {
       "shape": "POST /api/issues/{id}/checkout",
@@ -31,14 +31,14 @@
   "runIdBoundary": {
     "routes": {
       "POST /api/issues/{id}/comments": {
-        "status": 201,
-        "error": null,
-        "requiresRunId": false
+        "status": 403,
+        "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry.",
+        "requiresRunId": true
       },
       "PATCH /api/issues/{id}": {
-        "status": 200,
-        "error": null,
-        "requiresRunId": false
+        "status": 403,
+        "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry.",
+        "requiresRunId": true
       },
       "POST /api/issues/{id}/checkout": {
         "status": 401,
@@ -175,9 +175,12 @@
     "anonymous": [
       "bootstrapInviteActive",
       "bootstrapStatus",
+      "commit",
       "databaseBackup",
       "deploymentExposure",
       "deploymentMode",
+      "hiddenSettings",
+      "localAiLoginSupported",
       "status",
       "warnings"
     ],
@@ -185,12 +188,17 @@
       "authReady",
       "bootstrapInviteActive",
       "bootstrapStatus",
+      "commit",
       "databaseBackup",
       "deploymentExposure",
       "deploymentMode",
       "features",
+      "hiddenSettings",
+      "localAiLoginSupported",
+      "nativeRecovery",
       "serverInfo",
       "serverVersion",
+      "startupRecovery",
       "status",
       "version",
       "warnings"
@@ -323,7 +331,7 @@
     "empty object request": {
       "status": 400,
       "error": "Validation error",
-      "details": "title: Required"
+      "details": "title: Invalid input: expected string, received undefined"
     },
     "title-only request": {
       "status": 201,
@@ -347,11 +355,19 @@
         "assigneeUserId",
         "billingCode",
         "blockedBy",
+        "blockedOwnerNotifiedAt",
+        "blockedTransitionAt",
         "blocks",
         "cancelledAt",
         "checkoutRunId",
         "companyId",
         "completedAt",
+        "continuationIdentityContextId",
+        "conversationAgentId",
+        "conversationBoundaryCommentId",
+        "conversationSessionGeneration",
+        "conversationState",
+        "conversationUserId",
         "createdAt",
         "createdByAgentId",
         "createdByUserId",
@@ -372,6 +388,7 @@
         "issueNumber",
         "labelIds",
         "labels",
+        "lastStatusDecisionId",
         "monitorAttemptCount",
         "monitorLastTriggeredAt",
         "monitorNextCheckAt",
@@ -380,6 +397,7 @@
         "monitorWakeRequestedAt",
         "originFingerprint",
         "originId",
+        "originIdentityContextId",
         "originKind",
         "originRunId",
         "parentId",
@@ -388,10 +406,13 @@
         "projectWorkspaceId",
         "requestDepth",
         "responsibleUserId",
+        "reviewPolicy",
         "sourceTrust",
         "startedAt",
         "status",
+        "statusVersion",
         "title",
+        "unblockDescriptor",
         "updatedAt",
         "watchdog",
         "workMode"
@@ -423,10 +444,18 @@
         "assigneeAgentId",
         "assigneeUserId",
         "billingCode",
+        "blockedOwnerNotifiedAt",
+        "blockedTransitionAt",
         "cancelledAt",
         "checkoutRunId",
         "companyId",
         "completedAt",
+        "continuationIdentityContextId",
+        "conversationAgentId",
+        "conversationBoundaryCommentId",
+        "conversationSessionGeneration",
+        "conversationState",
+        "conversationUserId",
         "createdAt",
         "createdByAgentId",
         "createdByUserId",
@@ -447,6 +476,7 @@
         "issueNumber",
         "labelIds",
         "labels",
+        "lastStatusDecisionId",
         "monitorAttemptCount",
         "monitorLastTriggeredAt",
         "monitorNextCheckAt",
@@ -455,6 +485,7 @@
         "monitorWakeRequestedAt",
         "originFingerprint",
         "originId",
+        "originIdentityContextId",
         "originKind",
         "originRunId",
         "parentId",
@@ -463,10 +494,13 @@
         "projectWorkspaceId",
         "requestDepth",
         "responsibleUserId",
+        "reviewPolicy",
         "sourceTrust",
         "startedAt",
         "status",
+        "statusVersion",
         "title",
+        "unblockDescriptor",
         "updatedAt",
         "watchdog",
         "workMode"
@@ -529,8 +563,8 @@
           "status": "done"
         }
       },
-      "status": 409,
-      "error": "Issue run ownership conflict"
+      "status": 403,
+      "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry."
     },
     "release": {
       "request": {
