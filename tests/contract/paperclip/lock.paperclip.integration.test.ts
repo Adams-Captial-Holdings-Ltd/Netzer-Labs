@@ -124,6 +124,10 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip runtime lock
       } finally {
         const restored = await paperclipAdminRequest(path, { method: 'PATCH', body: JSON.stringify({ runtimeConfig: original }) });
         expect(restored.status).toBe(200);
+        const reread = await paperclipAdminRequest(path);
+        expect(reread.status).toBe(200);
+        const restoredAgent = await reread.json() as { runtimeConfig: { heartbeat?: { enabled?: unknown } } };
+        expect(restoredAgent.runtimeConfig.heartbeat?.enabled).toBeFalsy();
       }
     });
 

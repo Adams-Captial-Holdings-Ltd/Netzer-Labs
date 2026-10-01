@@ -2,21 +2,23 @@ import { describe } from 'vitest';
 import { ensureLockAuditor } from '../../../scripts/lib/paperclip/bootstrap-core.js';
 import { bootstrapPaperclip, paperclipAdminRequest } from '../../fixtures/paperclip-bootstrap.js';
 
-export const describeLive = describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET);
 export const describeNewPin = describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET);
 
 let detectedPin: Promise<'old' | 'new'> | undefined;
+let auditorKey: Promise<string> | undefined;
 
 export function paperclipPin(): Promise<'old' | 'new'> {
   detectedPin ??= (async () => {
-    const fixture = await bootstrapPaperclip();
-    const response = await withBearer(fixture.reconcilerKey)('/api/health');
-    if (!response.ok) throw new Error(`Authenticated Paperclip health returned HTTP ${response.status}`);
-    const body = await response.json() as { serverVersion?: unknown; version?: unknown };
-    const version = body.serverVersion ?? body.version;
-    if (version === '2026.722.0') return 'old';
-    if (version === '2026.916.1') return 'new';
-    throw new Error(`Paperclip version ${String(version)} has no contract expectations; add expectations for that pin`);
+    const response = await paperclipAdminRequest('/api/instance/settings/experimental');
+    if (response.status !== 200) throw new Error(`Paperclip experimental settings returned HTTP ${response.status}`);
+    const body = await response.json().catch(() => null) as unknown;
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      throw new Error(`Paperclip experimental settings returned HTTP ${response.status} with a non-object body`);
+    }
+    // The server reports its package version, which does not change between releases.
+    if (typeof (body as Record<string, unknown>).enableNativeRunner === 'boolean') return 'new';
+    if (!('enableNativeRunner' in body)) return 'old';
+    throw new Error(`Paperclip experimental settings returned HTTP ${response.status} with an invalid enableNativeRunner`);
   })();
   return detectedPin;
 }
@@ -32,12 +34,23 @@ export function withBearer(key: string): (path: string, init?: RequestInit) => P
 }
 
 export async function freshAuditor(): Promise<string> {
-  const fixture = await bootstrapPaperclip();
-  const result = await ensureLockAuditor({
-    request: paperclipAdminRequest,
-    companyId: fixture.companyId,
-    baseUrl: fixture.baseUrl,
-  });
-  if (result.action !== 'created') throw new Error('Paperclip auditor was not created');
-  return result.key;
+  auditorKey ??= (async () => {
+    const fixture = await bootstrapPaperclip();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await ensureLockAuditor({
+          request: paperclipAdminRequest,
+          companyId: fixture.companyId,
+          baseUrl: fixture.baseUrl,
+        });
+        if (result.action !== 'created') throw new Error('Paperclip auditor was not created');
+        return result.key;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes('HTTP 429') || attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 11_000));
+      }
+    }
+    throw new Error('Paperclip auditor retry exhausted');
+  })();
+  return auditorKey;
 }

@@ -263,7 +263,17 @@ async function createBootstrapInvite(containerId: string): Promise<string> {
 }
 
 async function establishAdminSession(request: PaperclipRequest): Promise<void> {
-  await signUpOrSignIn(request, {
+  const authRequest: PaperclipRequest = async (pathname, init) => {
+    let response: Response;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      response = await request(pathname, init);
+      if (response.status !== 429 || attempt === 3) return response;
+      const retryAfter = Number(response.headers.get('retry-after') ?? response.headers.get('x-retry-after'));
+      await new Promise((resolve) => setTimeout(resolve, (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 11) * 1_000));
+    }
+    throw new Error('Paperclip auth retry exhausted');
+  };
+  await signUpOrSignIn(authRequest, {
     name: 'Netzar Paperclip Integration',
     email: ADMIN_EMAIL,
     password: ADMIN_PASSWORD,
