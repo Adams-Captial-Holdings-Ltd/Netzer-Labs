@@ -14,6 +14,14 @@ import { pino, type DestinationStream, type Logger } from 'pino';
 // CloudWatch Logs ingests structured fields cleanly.
 const isPretty = process.env.LOG_PRETTY === '1';
 
+// Name-based paths cover the top level and one level of nesting only.
+const paperclipSecretNames = [
+  'lock_auditor_key', 'lockAuditorKey', 'PAPERCLIP_LOCK_AUDITOR_KEY',
+  'agent_keys', 'agentKeys', 'PAPERCLIP_AGENT_KEYS_JSON',
+  'reconciler_key', 'reconcilerKey', 'PAPERCLIP_RECONCILER_KEY',
+  'dispatch_secret', 'dispatchSecret', 'PAPERCLIP_DISPATCH_SECRET',
+];
+
 export function createLogger(destination?: DestinationStream): Logger {
   const options = {
     level: process.env.LOG_LEVEL ?? 'info',
@@ -25,7 +33,11 @@ export function createLogger(destination?: DestinationStream): Logger {
     redact: {
       paths: [
         'authorization', '*.authorization', 'headers.authorization', 'req.headers.authorization',
+        '*.headers.authorization',
+        'Authorization', '*.Authorization', 'headers.Authorization', 'req.headers.Authorization',
+        '*.headers.Authorization',
         'password', '*.password', 'token', '*.token', 'secret', '*.secret', 'apiKey', '*.apiKey',
+        ...paperclipSecretNames.flatMap((name) => [name, `*.${name}`]),
       ],
       censor: '[redacted]',
     },

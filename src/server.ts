@@ -65,7 +65,17 @@ import './lib/tools/artifact-read-tools.js';
 export function buildPrivateDispatchApp(deps: PaperclipDispatchDeps = {}): Hono {
   const app = new Hono();
   app.route('/api/paperclip', buildPaperclipDispatchRouter(deps));
+  installErrorHandlers(app);
   return app;
+}
+
+function installErrorHandlers(app: Hono): void {
+  app.onError((err, c) => {
+    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'unhandled error');
+    return c.json({ error: 'internal_error' }, 500);
+  });
+
+  app.notFound((c) => c.json({ error: 'not_found', path: c.req.path }, 404));
 }
 
 export function buildApp(env: Env): Hono {
@@ -170,12 +180,7 @@ export function buildApp(env: Env): Hono {
 
 
 
-  app.onError((err, c) => {
-    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'unhandled error');
-    return c.json({ error: 'internal_error' }, 500);
-  });
-
-  app.notFound((c) => c.json({ error: 'not_found', path: c.req.path }, 404));
+  installErrorHandlers(app);
 
   return app;
 }
