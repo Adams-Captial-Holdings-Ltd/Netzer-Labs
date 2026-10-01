@@ -1,3 +1,9 @@
+/**
+ * Live reader for ADR 0014 item 2, with its verdict, latch, startup gate, and watcher.
+ * An unprovable runtime shape is never clean.
+ * A proven violation beats a failed read.
+ * A stale verdict closes the latch.
+ */
 import { logger } from '../../observability/logger.js';
 
 export const PAPERCLIP_LOCK_RECHECK_MS = 60_000;
@@ -39,10 +45,102 @@ type ReadOptions = { fetchFn: typeof fetch; baseUrl: string; companyId: string; 
 type ReadResult = { body: unknown; reason?: never } | { body?: never; reason: string };
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+const array = (value: unknown): value is unknown[] => Array.isArray(value);
+const strings = (value: unknown): value is string[] => array(value) && value.every((item) => typeof item === 'string');
 
 function booleanLike(value: unknown): boolean {
   if (value === true || value === 1) return true;
   return typeof value === 'string' && ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+function parseAgent(value: unknown): { agent?: RuntimeLockSnapshot['agents'][number]; provable: boolean } {
+  if (!record(value) || typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.adapterType !== 'string') {
+    return { provable: false };
+  }
+  const runtime = value.runtimeConfig;
+  const runtimeValid = runtime == null || record(runtime);
+  const heartbeat = record(runtime) ? runtime.heartbeat : undefined;
+  const heartbeatValid = heartbeat == null || record(heartbeat);
+  return {
+    agent: {
+      id: value.id, name: value.name, adapterType: value.adapterType,
+      heartbeatEnabled: record(heartbeat) && booleanLike(heartbeat.enabled),
+    },
+    provable: runtimeValid && heartbeatValid,
+  };
+}
+
+function parseAgents(value: unknown): { agents: RuntimeLockSnapshot['agents']; provable: boolean } {
+  if (!array(value)) return { agents: [], provable: false };
+  const agents: RuntimeLockSnapshot['agents'] = [];
+  let provable = true;
+  for (const row of value) {
+    const parsed = parseAgent(row);
+    if (parsed.agent) agents.push(parsed.agent);
+    if (!parsed.provable) provable = false;
+  }
+  return { agents, provable };
+}
+
+function parseCount(value: unknown, key?: string): number | null {
+  const list = key ? (record(value) ? value[key] : undefined) : value;
+  return array(list) ? list.length : null;
+}
+
+function parseHiddenSettings(value: unknown): string[] | null {
+  if (!record(value)) return null;
+  const hidden = value.hiddenSettings === undefined ? [] : value.hiddenSettings;
+  return strings(hidden) ? hidden : null;
+}
+
+function parseRunner(value: unknown): boolean | null {
+  return record(value) && typeof value.enableNativeRunner === 'boolean' ? value.enableNativeRunner : null;
+}
+
+function parseSnapshot(reads: ReadResult[]): { snapshot: RuntimeLockSnapshot; provable: boolean } {
+  const [health, settings, rows, profiles, applications, connections] = reads.map((item) => item.body);
+  const hiddenSettings = parseHiddenSettings(health);
+  const enableNativeRunner = parseRunner(settings);
+  const agents = parseAgents(rows);
+  const remoteProfileCount = parseCount(profiles);
+  const toolApplicationCount = parseCount(applications, 'applications');
+  const toolConnectionCount = parseCount(connections, 'connections');
+  return {
+    snapshot: {
+      hiddenSettings: hiddenSettings ?? [...REQUIRED_HIDDEN_SETTINGS],
+      enableNativeRunner: enableNativeRunner ?? false,
+      agents: agents.agents,
+      remoteProfileCount: remoteProfileCount ?? 0,
+      toolApplicationCount: toolApplicationCount ?? 0,
+      toolConnectionCount: toolConnectionCount ?? 0,
+    },
+    provable: hiddenSettings !== null && enableNativeRunner !== null &&
+      agents.provable && remoteProfileCount !== null && toolApplicationCount !== null && toolConnectionCount !== null,
+  };
+}
+
+async function readPath(fetchFn: typeof fetch, baseUrl: string, path: string, index: number, auditorKey: string): Promise<ReadResult> {
+  try {
+    const response = await fetchFn(`${baseUrl.replace(/\/+$/, '')}${path}`, {
+      method: 'GET', redirect: 'error', signal: AbortSignal.timeout(10_000),
+      ...(index ? { headers: { authorization: `Bearer ${auditorKey}` } } : {}),
+    });
+    if (!response.ok) {
+      logger.warn({ path, status: response.status }, 'paperclip lock read failed');
+      if (response.status === 408 || response.status === 429 || response.status >= 500 ||
+          (index === 0 && (response.status === 401 || response.status === 403))) return { reason: 'paperclip_unreachable' };
+      return { reason: response.status === 401 || response.status === 403 ? 'auditor_key_rejected' : 'unexpected_shape' };
+    }
+    try { return { body: await response.json() }; }
+    catch {
+      logger.warn({ path, status: response.status, errMessage: 'invalid JSON' }, 'paperclip lock read failed');
+      return { reason: 'unexpected_shape' };
+    }
+  } catch (error) {
+    const errMessage = (error instanceof Error ? error.message : String(error)).replaceAll(auditorKey, '[redacted]');
+    logger.warn({ path, errMessage }, 'paperclip lock read failed');
+    return { reason: 'paperclip_unreachable' };
+  }
 }
 
 export async function readRuntimeLockVerdict({ fetchFn, baseUrl, companyId, auditorKey }: ReadOptions): Promise<LockVerdict> {
@@ -56,66 +154,15 @@ export async function readRuntimeLockVerdict({ fetchFn, baseUrl, companyId, audi
     `${company}/tools/applications`,
     `${company}/tools/connections`,
   ];
-  const reads = await Promise.all(paths.map(async (path, index): Promise<ReadResult> => {
-    try {
-      const response = await fetchFn(`${baseUrl.replace(/\/+$/, '')}${path}`, {
-        method: 'GET',
-        redirect: 'error',
-        signal: AbortSignal.timeout(10_000),
-        ...(index ? { headers: { authorization: `Bearer ${auditorKey}` } } : {}),
-      });
-      if (response.status === 401 || response.status === 403) return { reason: 'auditor_key_rejected' };
-      if (response.status >= 500) return { reason: 'paperclip_unreachable' };
-      if (!response.ok) return { reason: 'unexpected_shape' };
-      try { return { body: await response.json() }; } catch { return { reason: 'unexpected_shape' }; }
-    } catch {
-      return { reason: 'paperclip_unreachable' };
-    }
-  }));
-
-  const [health, settings, agentRows, profiles, applications, connections] = reads.map((item) => item.body);
-  let observed: LockVerdict = { verdict: 'clean' };
-  if (record(health) && record(settings) && typeof settings.enableNativeRunner === 'boolean' &&
-      Array.isArray(agentRows) && Array.isArray(profiles) && record(applications) &&
-      Array.isArray(applications.applications) && record(connections) && Array.isArray(connections.connections) &&
-      (health.hiddenSettings === undefined || (Array.isArray(health.hiddenSettings) && health.hiddenSettings.every((x) => typeof x === 'string'))) &&
-      agentRows.every((row) => record(row) && typeof row.id === 'string' && typeof row.name === 'string' && typeof row.adapterType === 'string')) {
-    observed = evaluateRuntimeLock({
-      hiddenSettings: (health.hiddenSettings ?? []) as string[],
-      enableNativeRunner: settings.enableNativeRunner,
-      agents: agentRows.map((row) => {
-        const runtime = record(row.runtimeConfig) ? row.runtimeConfig : {};
-        const heartbeat = record(runtime.heartbeat) ? runtime.heartbeat : {};
-        return { id: row.id as string, name: row.name as string, adapterType: row.adapterType as string, heartbeatEnabled: booleanLike(heartbeat.enabled) };
-      }),
-      remoteProfileCount: profiles.length,
-      toolApplicationCount: applications.applications.length,
-      toolConnectionCount: connections.connections.length,
-    });
-  }
-  // A proven violation wins even when another read failed.
-  const partial: RuntimeLockSnapshot = {
-    hiddenSettings: record(health) && Array.isArray(health.hiddenSettings) ? health.hiddenSettings.filter((x): x is string => typeof x === 'string') : [...REQUIRED_HIDDEN_SETTINGS],
-    enableNativeRunner: record(settings) && settings.enableNativeRunner === true,
-    agents: Array.isArray(agentRows) ? agentRows.filter((row) => record(row) && typeof row.adapterType === 'string').map((row) => {
-      const runtime = record(row.runtimeConfig) ? row.runtimeConfig : {};
-      const heartbeat = record(runtime.heartbeat) ? runtime.heartbeat : {};
-      return { id: typeof row.id === 'string' ? row.id : '', name: typeof row.name === 'string' ? row.name : '', adapterType: row.adapterType as string, heartbeatEnabled: booleanLike(heartbeat.enabled) };
-    }) : [],
-    remoteProfileCount: Array.isArray(profiles) ? profiles.length : 0,
-    toolApplicationCount: record(applications) && Array.isArray(applications.applications) ? applications.applications.length : 0,
-    toolConnectionCount: record(connections) && Array.isArray(connections.connections) ? connections.connections.length : 0,
-  };
-  const violations = evaluateRuntimeLock(partial);
-  if (violations.verdict === 'violated') return violations;
+  const reads = await Promise.all(paths.map((path, index) => readPath(fetchFn, baseUrl, path, index, auditorKey)));
+  const parsed = parseSnapshot(reads);
+  let observed: LockVerdict = { verdict: 'unknown', reason: 'unexpected_shape' };
+  const evaluated = evaluateRuntimeLock(parsed.snapshot);
+  if (evaluated.verdict === 'violated') return evaluated;
   const failure = reads.find((item) => item.reason);
   if (failure?.reason) return { verdict: 'unknown', reason: failure.reason };
-  return observed.verdict === 'clean' && !(record(health) && record(settings) && typeof settings.enableNativeRunner === 'boolean' &&
-    Array.isArray(agentRows) && agentRows.every((row) => record(row) && typeof row.id === 'string' && typeof row.name === 'string' && typeof row.adapterType === 'string') &&
-    Array.isArray(profiles) && record(applications) && Array.isArray(applications.applications) &&
-    record(connections) && Array.isArray(connections.connections) &&
-    (health.hiddenSettings === undefined || (Array.isArray(health.hiddenSettings) && health.hiddenSettings.every((x) => typeof x === 'string'))))
-    ? { verdict: 'unknown', reason: 'unexpected_shape' } : observed;
+  if (parsed.provable) observed = { verdict: 'clean' };
+  return observed;
 }
 
 let state: { closed: boolean; code: string | null } = { closed: false, code: null };
@@ -138,7 +185,10 @@ function applyVerdict(verdict: LockVerdict): void {
 }
 
 async function safeRead(read: () => Promise<LockVerdict>): Promise<LockVerdict> {
-  try { return await read(); } catch { return { verdict: 'unknown', reason: 'paperclip_unreachable' }; }
+  try { return await read(); } catch (error) {
+    logger.warn({ errMessage: error instanceof Error ? error.message : String(error) }, 'paperclip lock read threw');
+    return { verdict: 'unknown', reason: 'paperclip_unreachable' };
+  }
 }
 
 export async function enforceStartupLock({ read, sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)), attempts = 3, retryDelayMs = 1_000 }: {
