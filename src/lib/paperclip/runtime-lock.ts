@@ -7,6 +7,7 @@
 import { logger } from '../../observability/logger.js';
 
 export const PAPERCLIP_LOCK_RECHECK_MS = 60_000;
+export const PAPERCLIP_LOCK_STALE_MS = 5 * PAPERCLIP_LOCK_RECHECK_MS;
 export const REQUIRED_HIDDEN_SETTINGS = ['instance.adapters', 'instance.plugins'] as const;
 
 export interface RuntimeLockSnapshot {
@@ -119,16 +120,17 @@ function parseSnapshot(reads: ReadResult[]): { snapshot: RuntimeLockSnapshot; pr
   };
 }
 
-async function readPath(fetchFn: typeof fetch, baseUrl: string, path: string, index: number, auditorKey: string): Promise<ReadResult> {
+async function readPath(fetchFn: typeof fetch, baseUrl: string, path: string, authed: boolean, auditorKey: string): Promise<ReadResult> {
+  const requestTimeoutMs = 10_000;
   try {
     const response = await fetchFn(`${baseUrl.replace(/\/+$/, '')}${path}`, {
-      method: 'GET', redirect: 'error', signal: AbortSignal.timeout(10_000),
-      ...(index ? { headers: { authorization: `Bearer ${auditorKey}` } } : {}),
+      method: 'GET', redirect: 'error', signal: AbortSignal.timeout(requestTimeoutMs),
+      ...(authed ? { headers: { authorization: `Bearer ${auditorKey}` } } : {}),
     });
     if (!response.ok) {
       logger.warn({ path, status: response.status }, 'paperclip lock read failed');
       if (response.status === 408 || response.status === 429 || response.status >= 500 ||
-          (index === 0 && (response.status === 401 || response.status === 403))) return { reason: 'paperclip_unreachable' };
+          (!authed && (response.status === 401 || response.status === 403))) return { reason: 'paperclip_unreachable' };
       return { reason: response.status === 401 || response.status === 403 ? 'auditor_key_rejected' : 'unexpected_shape' };
     }
     try { return { body: await response.json() }; }
@@ -147,14 +149,14 @@ export async function readRuntimeLockVerdict({ fetchFn, baseUrl, companyId, audi
   if (!auditorKey) return { verdict: 'unknown', reason: 'lock_auditor_key_missing' };
   const company = `/api/companies/${encodeURIComponent(companyId)}`;
   const paths = [
-    '/api/health',
-    '/api/instance/settings/experimental',
-    `${company}/agents`,
-    `${company}/remote-agent-profiles`,
-    `${company}/tools/applications`,
-    `${company}/tools/connections`,
+    { path: '/api/health', authed: false },
+    { path: '/api/instance/settings/experimental', authed: true },
+    { path: `${company}/agents`, authed: true },
+    { path: `${company}/remote-agent-profiles`, authed: true },
+    { path: `${company}/tools/applications`, authed: true },
+    { path: `${company}/tools/connections`, authed: true },
   ];
-  const reads = await Promise.all(paths.map((path, index) => readPath(fetchFn, baseUrl, path, index, auditorKey)));
+  const reads = await Promise.all(paths.map(({ path, authed }) => readPath(fetchFn, baseUrl, path, authed, auditorKey)));
   const parsed = parseSnapshot(reads);
   let observed: LockVerdict = { verdict: 'unknown', reason: 'unexpected_shape' };
   const evaluated = evaluateRuntimeLock(parsed.snapshot);
@@ -165,11 +167,35 @@ export async function readRuntimeLockVerdict({ fetchFn, baseUrl, companyId, audi
   return observed;
 }
 
+export async function readConfiguredLockVerdict({ loadConfig, fetchFn, auditorKey }: {
+  loadConfig: () => Promise<{ baseUrl?: string | undefined; companyId?: string | undefined }>;
+  fetchFn: typeof fetch;
+  auditorKey?: string | undefined;
+}): Promise<LockVerdict> {
+  let config: Awaited<ReturnType<typeof loadConfig>>;
+  try { config = await loadConfig(); } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const errMessage = auditorKey ? message.replaceAll(auditorKey, '[redacted]') : message;
+    try { logger.warn({ errMessage }, 'paperclip lock cannot load its configuration'); } catch { /* logging must not reject the reader */ }
+    return { verdict: 'unknown', reason: 'paperclip_config_unavailable' };
+  }
+  if (!config.baseUrl || !config.companyId) return { verdict: 'unknown', reason: 'paperclip_config_missing' };
+  try { return await readRuntimeLockVerdict({ fetchFn, baseUrl: config.baseUrl, companyId: config.companyId, auditorKey }); }
+  catch { return { verdict: 'unknown', reason: 'paperclip_unreachable' }; }
+}
+
 let state: { closed: boolean; code: string | null } = { closed: false, code: null };
 let previous: string | null = null;
+let lastAppliedAt: number | null = null;
+let staleWarned = false;
 
-export function getPaperclipLockState(): { closed: boolean; code: string | null } { return { ...state }; }
-export function __resetPaperclipLockForTest(): void { state = { closed: false, code: null }; previous = null; }
+export function getPaperclipLockState(): { closed: boolean; code: string | null } {
+  if (lastAppliedAt !== null && !state.closed && Date.now() - lastAppliedAt > PAPERCLIP_LOCK_STALE_MS) {
+    return { closed: true, code: 'unknown:lock_check_stale' };
+  }
+  return { ...state };
+}
+export function __resetPaperclipLockForTest(): void { state = { closed: false, code: null }; previous = null; lastAppliedAt = null; staleWarned = false; }
 export function startupLockAction(verdict: LockVerdict): 'proceed' | 'refuse' | 'latch' {
   return verdict.verdict === 'clean' ? 'proceed' : verdict.verdict === 'violated' ? 'refuse' : 'latch';
 }
@@ -177,6 +203,8 @@ export function startupLockAction(verdict: LockVerdict): 'proceed' | 'refuse' | 
 function applyVerdict(verdict: LockVerdict): void {
   const codes = verdict.verdict === 'violated' ? verdict.violations.map((v) => v.code) : verdict.verdict === 'unknown' ? [verdict.reason] : [];
   state = { closed: verdict.verdict !== 'clean', code: verdict.verdict === 'clean' ? null : `${verdict.verdict}:${codes.join(',')}` };
+  lastAppliedAt = Date.now();
+  staleWarned = false;
   const signature = JSON.stringify(verdict);
   if (signature !== previous) {
     logger[verdict.verdict === 'clean' ? 'info' : 'warn']({ verdict: verdict.verdict, codes, closed: state.closed }, 'paperclip lock verdict');
@@ -195,23 +223,39 @@ export async function enforceStartupLock({ read, sleep = (ms: number) => new Pro
   read: () => Promise<LockVerdict>; sleep?: (ms: number) => Promise<void>; attempts?: number; retryDelayMs?: number;
 }): Promise<LockVerdict> {
   let verdict: LockVerdict = { verdict: 'unknown', reason: 'paperclip_unreachable' };
-  for (let attempt = 0; attempt < Math.max(1, attempts); attempt++) {
+  const maxAttempts = Number.isInteger(attempts) && attempts >= 1 ? attempts : 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     verdict = await safeRead(read);
     applyVerdict(verdict);
-    if (verdict.verdict === 'violated') throw new Error(`Refusing to start: Paperclip runtime lock violated: ${verdict.violations.map((v) => v.code).join(',')}`);
-    if (verdict.verdict === 'clean') return verdict;
-    if (attempt < attempts - 1) await sleep(retryDelayMs);
+    switch (startupLockAction(verdict)) {
+      case 'refuse':
+        throw new Error(`Refusing to start: Paperclip runtime lock violated: ${verdict.verdict === 'violated' ? verdict.violations.map((v) => v.code).join(',') : ''}`);
+      case 'proceed': return verdict;
+      case 'latch': if (attempt < maxAttempts - 1) await sleep(retryDelayMs);
+    }
   }
   return verdict;
 }
 
 export function startPaperclipLockWatcher({ read }: { read: () => Promise<LockVerdict> }): { stop: () => void } {
   let reading = false;
+  let stopped = false;
   const timer = setInterval(() => {
-    if (reading) return;
+    if (reading) {
+      if (!staleWarned && lastAppliedAt !== null && Date.now() - lastAppliedAt > PAPERCLIP_LOCK_STALE_MS) {
+        staleWarned = true;
+        try { logger.warn({ ageMs: Date.now() - lastAppliedAt }, 'paperclip lock verdict is stale'); } catch { /* logging must not stop checks */ }
+      }
+      return;
+    }
     reading = true;
-    void safeRead(read).then(applyVerdict).finally(() => { reading = false; });
+    void safeRead(read).then((verdict) => { if (!stopped) applyVerdict(verdict); })
+      .finally(() => { reading = false; })
+      .catch((error) => {
+        try { logger.warn({ errMessage: error instanceof Error ? error.message : String(error) }, 'paperclip lock watcher tick failed'); }
+        catch { /* logging must not reject the watcher chain */ }
+      });
   }, PAPERCLIP_LOCK_RECHECK_MS);
   timer.unref();
-  return { stop: () => clearInterval(timer) };
+  return { stop: () => { stopped = true; clearInterval(timer); } };
 }
