@@ -447,9 +447,9 @@ export class PaperclipStack extends Stack {
         PAPERCLIP_HOME: '/paperclip',
         PAPERCLIP_INSTANCE_ID: 'default',
         PAPERCLIP_CONFIG: '/paperclip/instances/default/config.json',
-        // Phase 4.5: serve Paperclip's own built board. The image already
-        // ships /app/ui/dist; vendor/paperclip/Dockerfile symlinks it to the
-        // /app/server/ui-dist path the server actually resolves.
+        // Phase 4.5: serve Paperclip's own built board. The image ships it at
+        // /app/ui/dist; the server tries ../ui-dist, then ../../ui/dist, so
+        // the Dockerfile adds no bridge.
         //
         // LEDGER A38, and it is the reason no browser listener is emitted:
         // serving the board also serves `POST /api/auth/sign-up/email`, which
