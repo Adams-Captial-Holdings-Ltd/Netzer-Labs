@@ -48,7 +48,7 @@ import {
   type MissionPriority,
 } from '../state/mission-tasks-repo.js';
 import type { MissionEngineOptions } from '../paperclip/mission-engine.js';
-import { PaperclipDisabledError, PaperclipRunIdRequiredError } from '../paperclip/error.js';
+import { PaperclipDisabledError, PaperclipLockClosedError, PaperclipRunIdRequiredError } from '../paperclip/error.js';
 
 /**
  * Surfaces on `GET /api/addons`. `configured` is computed from these env vars
@@ -90,6 +90,9 @@ function spec(name: string, description: string, schema: unknown): BedrockTool {
  * rather than always handing a switch's free text to a principal.
  */
 function friendly(err: unknown): string {
+  if (err instanceof PaperclipLockClosedError) {
+    return `Paperclip is locked: its runtime lock is closed (code: ${err.lockCode}). This is not the kill switch; an operator has to fix the lock condition.`;
+  }
   if (err instanceof PaperclipDisabledError) {
     return 'The Paperclip integration is switched off (kill switch: paperclip_disabled). An operator has to clear it.';
   }

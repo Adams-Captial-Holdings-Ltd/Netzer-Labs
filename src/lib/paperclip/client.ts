@@ -49,6 +49,7 @@ import { getPaperclipLockState } from './runtime-lock.js';
 import {
   PaperclipCompanyMismatchError,
   PaperclipDisabledError,
+  PaperclipLockClosedError,
   PaperclipPaginationTruncatedError,
   PaperclipRatelimitedError,
   PaperclipUnavailableError,
@@ -134,7 +135,7 @@ export const PAPERCLIP_NO_RETRY: PaperclipRetryPolicy = { ...PAPERCLIP_RETRY_POL
  * constructor precisely so the rest-spread cannot clobber the assembled
  * header block.
  */
-export interface PaperclipClientOptions extends RequestInit, PaperclipConfigInput {
+export interface PaperclipClientOptions extends Omit<RequestInit, 'redirect'>, PaperclipConfigInput {
   fetchFn?: typeof fetch;
   retry?: PaperclipRetryPolicy;
   /** Injected so a test drives the switch without touching DynamoDB. */
@@ -576,13 +577,13 @@ export class PaperclipClient {
 
     const lock = getPaperclipLockState();
     if (lock.closed) {
-      throw new PaperclipDisabledError({
+      throw new PaperclipLockClosedError({
         request,
         body: {
           error: `Paperclip runtime lock closed: ${lock.code}`,
           remediation: 'check the paperclip lock verdict log line',
         },
-      });
+      }, lock.code ?? 'unknown');
     }
 
     // (1) THE KILL SWITCH, at every invoke and BEFORE the breaker.
@@ -660,6 +661,7 @@ export class PaperclipClient {
     try {
       response = await this.fetchFn(url, {
         ...this.requestInit,
+        // Never follow a redirect with the Paperclip authorization header.
         redirect: 'error',
         method,
         signal,

@@ -7,6 +7,7 @@ import {
   PaperclipCompanyMismatchError,
   PaperclipConflictError,
   PaperclipDisabledError,
+  PaperclipLockClosedError,
   PaperclipError,
   PaperclipInvalidInputError,
   PaperclipProjectPausedError,
@@ -45,6 +46,14 @@ const ALL_TYPES: PaperclipErrorType[] = [
 ];
 
 describe('PaperclipError', () => {
+  it('PaperclipLockClosedError preserves the disabled error hierarchy and lock code', () => {
+    const err = new PaperclipLockClosedError({ message: 'locked' }, 'unknown:auditor');
+    expect(err).toBeInstanceOf(PaperclipDisabledError);
+    expect(err).toBeInstanceOf(PaperclipError);
+    expect(err.type).toBe('disabled');
+    expect(err.lockCode).toBe('unknown:auditor');
+  });
+
   it('A2-1: the base error retains all seven post-mortem fields and never discards the original', () => {
     const original = new TypeError('fetch failed');
     const err = parsePaperclipError(original, {

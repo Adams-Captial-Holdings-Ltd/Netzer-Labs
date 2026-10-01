@@ -259,3 +259,11 @@ export function startPaperclipLockWatcher({ read }: { read: () => Promise<LockVe
   timer.unref();
   return { stop: () => { stopped = true; clearInterval(timer); } };
 }
+
+export async function startPaperclipLock({ enabled, read }: {
+  enabled: boolean; read: () => Promise<LockVerdict>;
+}): Promise<{ stop: () => void }> {
+  if (!enabled) return { stop: () => {} };
+  await enforceStartupLock({ read });
+  return startPaperclipLockWatcher({ read });
+}

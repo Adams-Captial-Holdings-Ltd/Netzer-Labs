@@ -21,6 +21,33 @@ describe('env.ts', () => {
   });
 
   describe('loadEnv', () => {
+    it('parses optional Paperclip ports and auditor key', () => {
+      delete process.env.PAPERCLIP_DISPATCH_PORT;
+      expect(loadEnv().PAPERCLIP_DISPATCH_PORT).toBeUndefined();
+      for (const value of ['REPLACE_ME', '']) {
+        process.env.PAPERCLIP_DISPATCH_PORT = value;
+        resetEnvCache();
+        expect(loadEnv().PAPERCLIP_DISPATCH_PORT).toBeUndefined();
+      }
+      process.env.PAPERCLIP_DISPATCH_PORT = '3002';
+      resetEnvCache();
+      expect(loadEnv().PAPERCLIP_DISPATCH_PORT).toBe(3002);
+      for (const value of ['abc', '0', '70000', '3001.5']) {
+        process.env.PAPERCLIP_DISPATCH_PORT = value;
+        resetEnvCache();
+        expect(() => loadEnv()).toThrow(/PAPERCLIP_DISPATCH_PORT/);
+      }
+      delete process.env.PAPERCLIP_DISPATCH_PORT;
+      for (const value of ['REPLACE_ME', '']) {
+        process.env.PAPERCLIP_LOCK_AUDITOR_KEY = value;
+        resetEnvCache();
+        expect(loadEnv().PAPERCLIP_LOCK_AUDITOR_KEY).toBeUndefined();
+      }
+      process.env.PAPERCLIP_LOCK_AUDITOR_KEY = 'test-auditor-key-value';
+      resetEnvCache();
+      expect(loadEnv().PAPERCLIP_LOCK_AUDITOR_KEY).toBe('test-auditor-key-value');
+    });
+
     it('returns defaults when only minimal env is set', () => {
       delete process.env.NODE_ENV;
       delete process.env.PORT;

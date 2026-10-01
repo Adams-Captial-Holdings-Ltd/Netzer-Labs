@@ -37,7 +37,7 @@ import {
 import { initXray } from './lib/observability/xray.js';
 import { paperclipRoutingEnabled } from './lib/missions/mission-acl.js';
 import { loadPaperclipConfig } from './lib/paperclip/config.js';
-import { enforceStartupLock, readRuntimeLockVerdict, startPaperclipLockWatcher } from './lib/paperclip/runtime-lock.js';
+import { readConfiguredLockVerdict, startPaperclipLock } from './lib/paperclip/runtime-lock.js';
 import { attachJarvisWebSocket } from './adapters/dashboard/jarvis.js';
 import { teardownAllJarvisSessions } from './lib/voice/session-registry.js';
 import type { Server as HttpServer } from 'node:http';
@@ -50,18 +50,10 @@ async function main(): Promise<void> {
   // Init X-Ray before any AWS SDK client is created; the SDK wrappers
   // are no-ops when CCE_XRAY_ENABLED is unset.
   initXray();
-  let lockWatcher: ReturnType<typeof startPaperclipLockWatcher> | undefined;
-  // The runtime lock is checked only while Paperclip routing is on
-  // (CCE_PAPERCLIP_ENABLED); with the flag off nothing here talks to Paperclip.
-  if (paperclipRoutingEnabled()) {
-    const read = async () => {
-      const config = await loadPaperclipConfig();
-      if (!config.baseUrl || !config.companyId) throw new Error('Paperclip runtime lock configuration missing');
-      return readRuntimeLockVerdict({ fetchFn: fetch, baseUrl: config.baseUrl, companyId: config.companyId, auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY });
-    };
-    await enforceStartupLock({ read });
-    lockWatcher = startPaperclipLockWatcher({ read });
-  }
+  // CCE_PAPERCLIP_ENABLED arms agents and enables the runtime lock. With it off,
+  // the lock does not run, the reconciler stays read-only (default shadow mode),
+  // and dispatch stays inert; turn it on before arming agents or leaving shadow mode.
+  const lock = await startPaperclipLock({ enabled: paperclipRoutingEnabled(), read: () => readConfiguredLockVerdict({ loadConfig: loadPaperclipConfig, fetchFn: fetch, auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY }) });
   logger.info(
     {
       region: env.AWS_REGION,
@@ -72,16 +64,16 @@ async function main(): Promise<void> {
   );
 
   const app = buildApp(env);
+  const dispatchPort = env.PAPERCLIP_DISPATCH_PORT ?? 3001;
+  if (dispatchPort === env.PORT) {
+    throw new Error(`PAPERCLIP_DISPATCH_PORT ${dispatchPort} must differ from PORT ${env.PORT}`);
+  }
   const server = serve({
     fetch: app.fetch,
     port: env.PORT,
     hostname: '0.0.0.0',
   });
   logger.info({ port: env.PORT }, 'listening');
-  const dispatchPort = Number(env.PAPERCLIP_DISPATCH_PORT ?? 3001);
-  if (!Number.isInteger(dispatchPort) || dispatchPort < 1 || dispatchPort > 65535 || dispatchPort === env.PORT) {
-    throw new Error('Invalid PAPERCLIP_DISPATCH_PORT');
-  }
   const privateServer = serve({ fetch: buildPrivateDispatchApp().fetch, port: dispatchPort, hostname: '0.0.0.0' });
   logger.info({ port: dispatchPort }, 'private dispatch listener up');
 
@@ -153,7 +145,7 @@ async function main(): Promise<void> {
     stopDriftWatch();
     stopWebhookMonitor();
     stopPaperclipReconciler();
-    lockWatcher?.stop();
+    lock.stop();
     // Close any live Jarvis voice sessions cleanly before the socket closes.
     await teardownAllJarvisSessions('shutdown').catch(() => {});
     // Await the listener teardown (unsubscribe + delete the ephemeral queue) so

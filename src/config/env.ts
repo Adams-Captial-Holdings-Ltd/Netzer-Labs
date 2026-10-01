@@ -313,8 +313,16 @@ const envSchema = z.object({
   PAPERCLIP_LOCK_AUDITOR_KEY: optionalNonPlaceholder(),
   /** Secret field `dispatch_secret`; the shared secret C-17 settled on for the dispatch route. */
   PAPERCLIP_DISPATCH_SECRET: optionalNonPlaceholder(),
-  /** Port of the private dispatch listener; parsed where used, defaults to 3001. */
-  PAPERCLIP_DISPATCH_PORT: optionalNonPlaceholder(),
+  /** Port of the private dispatch listener; defaults to 3001. */
+  PAPERCLIP_DISPATCH_PORT: z.string().optional().transform((v, ctx) => {
+    if (!v || v === 'REPLACE_ME') return undefined;
+    const port = Number(v);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'PAPERCLIP_DISPATCH_PORT must be an integer from 1 to 65535' });
+      return z.NEVER;
+    }
+    return port;
+  }),
   /** Agent slug signing requests that name no actor. Defaults to `main`. */
   PAPERCLIP_DEFAULT_AGENT: optionalNonPlaceholder(),
   /** Milliseconds. Overrides the 10 s read timeout (A2-11's divergence from Linear). */

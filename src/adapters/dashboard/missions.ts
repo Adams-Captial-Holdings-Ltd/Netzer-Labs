@@ -61,6 +61,7 @@ import {
 } from '../../lib/missions/mission-acl.js';
 import {
   PaperclipDisabledError,
+  PaperclipLockClosedError,
   PaperclipError,
   PaperclipPaginationTruncatedError,
   PaperclipProjectPausedError,
@@ -235,6 +236,7 @@ export function registerMissionRoutes(router: Hono<DashboardEnv>, deps: MissionR
     // The switch flipped between two round trips. Same condition as the gate,
     // so the same body — including the operator's `reason`, which the gate
     // supplies and this path used to drop.
+    if (err instanceof PaperclipLockClosedError) return c.json({ error: 'paperclip_locked', code: err.lockCode }, 503);
     if (err instanceof PaperclipDisabledError) return refuse(c);
     const mapped = paperclipFailure(err, ctx);
     if (!mapped) throw err;

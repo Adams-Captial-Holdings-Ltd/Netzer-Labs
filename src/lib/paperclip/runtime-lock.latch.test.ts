@@ -8,6 +8,7 @@ import {
   getPaperclipLockState,
   readConfiguredLockVerdict,
   startPaperclipLockWatcher,
+  startPaperclipLock,
   type LockVerdict,
 } from './runtime-lock.js';
 
@@ -94,6 +95,49 @@ describe('runtime lock latch', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
+  });
+});
+
+describe('startPaperclipLock', () => {
+  beforeEach(() => { vi.useFakeTimers(); __resetPaperclipLockForTest(); });
+  afterEach(() => { vi.useRealTimers(); __resetPaperclipLockForTest(); });
+
+  it('does nothing when disabled', async () => {
+    const read = vi.fn(async () => clean);
+    const lock = await startPaperclipLock({ enabled: false, read });
+    expect(read).not.toHaveBeenCalled();
+    expect(getPaperclipLockState()).toEqual({ closed: false, code: null });
+    lock.stop();
+    expect(getPaperclipLockState()).toEqual({ closed: false, code: null });
+  });
+
+  it('starts a watcher after a clean startup and stops it', async () => {
+    const read = vi.fn(async () => clean);
+    const lock = await startPaperclipLock({ enabled: true, read });
+    expect(getPaperclipLockState()).toEqual({ closed: false, code: null });
+    await vi.advanceTimersByTimeAsync(PAPERCLIP_LOCK_RECHECK_MS);
+    expect(read).toHaveBeenCalledTimes(2);
+    lock.stop();
+    await vi.advanceTimersByTimeAsync(PAPERCLIP_LOCK_RECHECK_MS * 2);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a violated startup verdict without starting a watcher', async () => {
+    const read = vi.fn(async (): Promise<LockVerdict> => ({ verdict: 'violated', violations: [{ code: 'blocked', detail: 'blocked' }] }));
+    await expect(startPaperclipLock({ enabled: true, read })).rejects.toThrow('Refusing to start');
+    await vi.advanceTimersByTimeAsync(PAPERCLIP_LOCK_RECHECK_MS * 2);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('latches an unknown verdict and keeps watching', async () => {
+    const read = vi.fn(async (): Promise<LockVerdict> => ({ verdict: 'unknown', reason: 'auditor_missing' }));
+    const starting = startPaperclipLock({ enabled: true, read });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const lock = await starting;
+    expect(getPaperclipLockState()).toEqual({ closed: true, code: 'unknown:auditor_missing' });
+    await vi.advanceTimersByTimeAsync(PAPERCLIP_LOCK_RECHECK_MS);
+    expect(read).toHaveBeenCalledTimes(4);
+    lock.stop();
   });
 });
 

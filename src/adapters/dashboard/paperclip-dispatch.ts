@@ -139,6 +139,8 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
       return c.json({ error: 'unauthorized' }, 401);
     }
 
+    // Authenticate before revealing lock state, then refuse a closed lock
+    // before the kill switch or any work can be claimed.
     const lock = getPaperclipLockState();
     if (lock.closed) return c.json({ error: 'paperclip_locked', code: lock.code }, 503);
 
