@@ -10,7 +10,7 @@ as_of_commit: 87a8fa8072008ece181d6226c0c989ab89d0e884
 
 **Status:** contract document. Every later builder and critic works from this.
 **Precedence (unchanged from the plan preamble):** running code > ADR 0010 > `docs/features/paperclip/plan-audit.md` > `docs/features/paperclip/implementation-plan.md`. **Added here:** a green contract probe against the pinned artifact beats all four.
-**Pinned artifact:** `netzer-paperclip:2026.722.0-netzar.1` = upstream release **`v2026.722.0`** (tag, not `2026.722.0` — `GET /releases/tags/2026.722.0` is a 404) pinned by immutable digest, plus `vendor/paperclip/updated-since.patch` applied at build time by `vendor/paperclip/Dockerfile`.
+**Pinned artifact:** `netzer-paperclip:2026.722.0-netzar.1` = upstream release **`v2026.722.0`** (tag, not `2026.722.0` — `GET /releases/tags/2026.722.0` is a 404) pinned by immutable digest, plus `vendor/paperclip/updated-since.patch` applied at build time by `vendor/paperclip/Dockerfile`. (Superseded by the v2026.916.1 re-pin, which deleted the patch: ADR 0019.)
 
 ---
 
