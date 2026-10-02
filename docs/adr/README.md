@@ -32,6 +32,7 @@ Keep ADRs short (1 page). When a decision is reversed, write a new ADR that supe
 | [0018](0018-managed-solution-packs-v1.md) | Managed Solution Packs v1: format, registry and entitlement | Accepted |
 | [0019](0019-paperclip-compatibility-program.md) | Paperclip compatibility program | Accepted |
 | [0020](0020-worm-audit-and-ledger-cost-authority.md) | WORM compliance record and ledger cost authority | Accepted |
+| [0021](0021-pack-format-v1-file-shapes.md) | Pack format v1: the exact file shapes and what `pack validate` enforces | Accepted |
 
 0012–0020 record the Work Platform architecture. The plan numbered them 0011–0019 before the chat ADR took 0011; the mapping and every decision behind them are in the [decision log](../features/paperclip/decision-log.md#adr-numbers). The Reversibility and Revisit-trigger lines in those nine ADRs were added by the recorder on 2026-09-29 as process metadata; they classify the approved decisions and change none of them.
 
