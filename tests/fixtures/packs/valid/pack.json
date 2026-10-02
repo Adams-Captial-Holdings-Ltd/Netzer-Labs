@@ -1,0 +1,35 @@
+{
+  "packFormat": 1,
+  "id": "example-referrals",
+  "name": "Example Referrals",
+  "version": "1.0.0",
+  "description": "Fixture pack: routes inbound referrals to review. Used only by the pack validator tests.",
+  "industry": "healthcare",
+  "compatibility": {
+    "netzer": { "min": "1.1.0" },
+    "paperclip": { "min": "v2026.916.1", "tested": ["v2026.916.1"] }
+  },
+  "resources": {
+    "bundle": "paperclip/bundle",
+    "pipelines": ["paperclip/pipelines/referral.json"],
+    "routines": [
+      { "path": "paperclip/routines/intake.json", "kind": "ingest", "pipeline": "referral" },
+      { "path": "paperclip/routines/sla-check.json", "kind": "timer", "pipeline": "referral" }
+    ],
+    "skills": ["skills/intake.md"],
+    "connectors": "connectors.json",
+    "policies": "policies.json",
+    "ui": "ui.json",
+    "studioLayout": "studio/layout.json"
+  },
+  "agents": [{ "role": "intake", "definition": "agents/intake.yaml", "mappable": true }],
+  "requires": {
+    "connectors": ["ehr.client"],
+    "permissions": { "capabilities": ["work:read"], "tools": { "intake": ["get_time"] } },
+    "config": "config/schema.json",
+    "secrets": [{ "name": "EHR_API_KEY", "store": "secrets-manager" }]
+  },
+  "decisionClasses": [{ "id": "clinical_disposition", "impact": "high", "default": "human_required" }],
+  "dataClasses": ["PHI"],
+  "supportOwner": "netzer-support"
+}

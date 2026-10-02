@@ -1,0 +1,13 @@
+id: intake
+name: Intake Agent
+description: Reads a new referral and fills the case fields.
+model: us.anthropic.claude-sonnet-4-6
+knowledgeScope: default
+persona: |
+  You read inbound referrals and fill in the case fields.
+  You never decide a clinical disposition.
+tools:
+  - ehr.client.search
+  - get_time
+skills:
+  - skills/intake.md

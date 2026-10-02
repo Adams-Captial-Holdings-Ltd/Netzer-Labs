@@ -1,0 +1,5 @@
+{
+  "title": "Referral SLA check",
+  "description": "Escalates a referral that waited longer than ${config.escalation_hours} hours.",
+  "concurrencyPolicy": "skip_if_active"
+}

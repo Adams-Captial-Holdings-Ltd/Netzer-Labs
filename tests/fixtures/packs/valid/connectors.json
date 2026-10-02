@@ -1,0 +1,10 @@
+{
+  "capabilities": {
+    "ehr.client": {
+      "description": "Look up clients in the EHR.",
+      "mandatory": true,
+      "scopes": ["client.read"],
+      "aliases": { "ehr.client.search": { "defaultTool": "searchClient" } }
+    }
+  }
+}

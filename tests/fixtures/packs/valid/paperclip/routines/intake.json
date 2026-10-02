@@ -1,0 +1,7 @@
+{
+  "title": "Referral intake",
+  "description": "Creates one case per inbound referral and hands it to ${agent:intake}.",
+  "concurrencyPolicy": "always_enqueue",
+  "catchUpPolicy": "enqueue_missed_with_cap",
+  "variables": [{ "name": "site", "type": "text", "defaultValue": "${config.site}" }]
+}
