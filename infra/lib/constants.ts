@@ -59,7 +59,7 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
   return {
     // ECR
     ecrRepo: `${app}-orchestrator`,
-    // Paperclip work engine (ADR 0010). Second repo so the pinned+patched
+    // Paperclip work engine (ADR 0010). Second repo so the pinned
     // Paperclip image never shares a tag namespace with the orchestrator.
     paperclipEcrRepo: `${app}-paperclip`,
 

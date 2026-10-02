@@ -11,15 +11,14 @@ const object = (value: unknown): value is Record<string, unknown> =>
 
 describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip runtime lock contracts', () => {
   let fixture: PaperclipBootstrap;
-  let pin: 'old' | 'new';
 
   beforeAll(async () => {
     fixture = await bootstrapPaperclip();
-    pin = await paperclipPin();
+    await paperclipPin();
   }, 120_000);
 
-  it('recognizes the live pin', () => {
-    expect(['old', 'new']).toContain(pin);
+  it('recognizes the pinned live behaviour', async () => {
+    expect(await paperclipPin()).toBe('new');
   });
 
   describeNewPin('v2026.916.1 lock reads', () => {
@@ -30,8 +29,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip runtime lock
       auditorKey: key,
     });
 
-    it('returns the six shapes the production reader consumes', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('returns the six shapes the production reader consumes', async () => {
       const key = await freshAuditor();
       const company = `/api/companies/${fixture.companyId}`;
       const paths = [
@@ -63,8 +61,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip runtime lock
         `tools/connections shape; top-level keys: ${keysOf(connections)}`).toBe(true);
     });
 
-    it('creates a viewer auditor through board-api-keys and company-access, with no write power', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('creates a viewer auditor through board-api-keys and company-access, with no write power', async () => {
       const key = await freshAuditor();
       const me = await withBearer(key)('/api/cli-auth/me');
       expect(me.status).toBe(200);
@@ -81,14 +78,36 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip runtime lock
       expect(write.status).toBe(403);
     });
 
-    it('reads a clean runtime through the real auditor', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('reads a clean runtime through the real auditor', async () => {
       await ensureNativeRunnerOff(paperclipAdminRequest);
       expect(await read(await freshAuditor())).toEqual({ verdict: 'clean' });
     });
 
-    it('detects the native runner and restores it', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('detects a tool application and restores clean runtime state', async () => {
+      const key = await freshAuditor();
+      await ensureNativeRunnerOff(paperclipAdminRequest);
+      const createdResponse = await paperclipAdminRequest(`/api/companies/${fixture.companyId}/tools/applications`, {
+        method: 'POST',
+        body: JSON.stringify({ name: 'lock-contract-probe', type: 'mcp_http', status: 'active' }),
+      });
+      const createdBody = await createdResponse.text();
+      expect(createdResponse.status, `create tool application: HTTP ${createdResponse.status}; body: ${createdBody}`).toBe(201);
+      const created = JSON.parse(createdBody) as { id?: unknown };
+      expect(typeof created.id, `create tool application: HTTP ${createdResponse.status}; body: ${createdBody}`).toBe('string');
+      try {
+        const verdict = await read(key);
+        expect(verdict.verdict).toBe('violated');
+        expect(verdict.verdict === 'violated' ? verdict.violations.map((v) => v.code) : []).toContain('tool_access_present');
+      } finally {
+        const removed = await paperclipAdminRequest(`/api/tool-applications/${String(created.id)}`, { method: 'DELETE' });
+        const removedBody = await removed.text();
+        expect(removed.status, `delete tool application: HTTP ${removed.status}; body: ${removedBody}`).toBe(200);
+        const restored = await read(key);
+        expect(restored, `runtime lock after tool application deletion`).toEqual({ verdict: 'clean' });
+      }
+    });
+
+    it('detects the native runner and restores it', async () => {
       const key = await freshAuditor();
       await ensureNativeRunnerOff(paperclipAdminRequest);
       const path = '/api/instance/settings/experimental';
@@ -103,8 +122,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip runtime lock
       }
     });
 
-    it('detects a timer heartbeat and restores the agent runtimeConfig', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('detects a timer heartbeat and restores the agent runtimeConfig', async () => {
       const key = await freshAuditor();
       await ensureNativeRunnerOff(paperclipAdminRequest);
       const path = `/api/agents/${fixture.agents.main.id}`;
@@ -131,8 +149,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip runtime lock
       }
     });
 
-    it('classifies a rejected auditor key without exposing it', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('classifies a rejected auditor key without exposing it', async () => {
       expect(await read('invalid-auditor-key')).toEqual({ verdict: 'unknown', reason: 'auditor_key_rejected' });
     });
   });

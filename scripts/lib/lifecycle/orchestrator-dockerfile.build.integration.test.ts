@@ -1,25 +1,15 @@
 /**
  * WI-1 / P0-0b: does the orchestrator `build` stage actually build?
  *
- * `orchestrator-dockerfile.test.ts` asserts the Dockerfile TEXT, and says so in
- * its own header (M54): nine `readFileSync` + `String.includes` checks that
- * "cannot prove any image builds". All nine are green right now against a build
- * stage that cannot work, which is exactly the hole this file closes.
+ * `orchestrator-dockerfile.test.ts` checks source text; it cannot prove an
+ * image builds. The earlier Dockerfile installed compiler types under
+ * `--omit=dev`, where npm skipped them, then `npx tsc` fetched an unrelated
+ * package. P0-0b fixed that by installing the three locked compiler packages
+ * in an empty directory and invoking TypeScript directly.
  *
- * The defect the text tests cannot see: Dockerfile:61-63 installs typescript,
- * @types/pdfkit and @types/ws under `--omit=dev`, and all three already carry a
- * dev edge in package-lock.json. npm's arborist infers that dev edge for any
- * name already listed in devDependencies (`--no-save` only suppresses the
- * manifest write), and a node marked dev under `--omit=dev` is "treated as
- * undefined for the purposes of diffing" - so it is never reified. The install
- * therefore succeeds having added nothing, and Dockerfile:68 `RUN npx tsc` runs
- * with no local compiler.
- *
- * So this file does the one thing text cannot: it builds the stage and looks
- * INSIDE it. A build that merely exits 0 is not enough - a `tsc` fetched from
- * the registry at build time would also exit 0 while reintroducing the very
- * download the fix exists to remove - so the assertions are positive facts
- * about the produced filesystem, not just the exit code.
+ * This test builds the current stage and checks its filesystem: TypeScript is
+ * the lockfile version and the compiled entrypoint exists. A successful build
+ * alone would not prove that the compiler was installed locally.
  *
  * Lane: linux/amd64. npm's tree resolution is architecture-independent, so this
  * lane settles whether the three packages install, and it runs native on an

@@ -1034,6 +1034,19 @@ describe('Paperclip first install (.github/workflows/deploy.yml)', () => {
     expect(populateAt).toBeLessThan(deployAt);
   });
 
+  it('seeds every Paperclip secret default in CI without replacing live fields', () => {
+    const phases = read('scripts/lib/lifecycle/deploy-phases.ts');
+    const paperclipPlan = phases.slice(phases.indexOf("leaf: 'paperclip'"));
+    const defaults = paperclipPlan.match(/defaults: JSON\.stringify\((\{[^\n]+\})\)/)?.[1];
+    expect(defaults, 'Paperclip secret defaults').toBeDefined();
+    const keys = [...defaults!.matchAll(/([a-z_]+):\s*'REPLACE_ME'/g)].map((match) => match[1]!);
+    const populate = workflowStep('Populate Paperclip secret');
+    for (const key of keys) {
+      expect(populate, `CI must merge-add Paperclip default ${key}`).toContain(`has("${key}")`);
+      expect(populate, `CI must seed Paperclip default ${key}`).toContain(`.${key} = "REPLACE_ME"`);
+    }
+  });
+
   it('seeds a missing Better Auth secret once without exposing the value', () => {
     const populate = workflowStep('Populate Paperclip secret');
     expect(populate).toContain(".better_auth_secret // \"REPLACE_ME\"");

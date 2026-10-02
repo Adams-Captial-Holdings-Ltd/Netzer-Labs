@@ -4,20 +4,21 @@ import { bootstrapPaperclip, paperclipAdminRequest } from '../../fixtures/paperc
 
 export const describeNewPin = describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET);
 
-let detectedPin: Promise<'old' | 'new'> | undefined;
+let detectedPin: Promise<'new'> | undefined;
 let auditorKey: Promise<string> | undefined;
 
-export function paperclipPin(): Promise<'old' | 'new'> {
-  detectedPin ??= (async () => {
+export function paperclipPin(): Promise<'new'> {
+  detectedPin ??= (async (): Promise<'new'> => {
     const response = await paperclipAdminRequest('/api/instance/settings/experimental');
     if (response.status !== 200) throw new Error(`Paperclip experimental settings returned HTTP ${response.status}`);
     const body = await response.json().catch(() => null) as unknown;
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
       throw new Error(`Paperclip experimental settings returned HTTP ${response.status} with a non-object body`);
     }
-    // The server reports its package version, which does not change between releases.
     if (typeof (body as Record<string, unknown>).enableNativeRunner === 'boolean') return 'new';
-    if (!('enableNativeRunner' in body)) return 'old';
+    if (!('enableNativeRunner' in body)) {
+      throw new Error('Paperclip under test answered experimental-settings without a boolean enableNativeRunner: this suite pins v2026.916.1 behaviour; re-pin, fix the image under test, or update the suite deliberately.');
+    }
     throw new Error(`Paperclip experimental settings returned HTTP ${response.status} with an invalid enableNativeRunner`);
   })();
   return detectedPin;

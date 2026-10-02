@@ -473,7 +473,7 @@ async function main(): Promise<void> {
     });
     await journal('foundation-complete', { stacks: foundationStacks });
     await ensureSchedulerGroup(env, nameSuffix);
-    // Paperclip work engine (ADR 0010): the ECR repo the pinned+patched
+    // Paperclip work engine (ADR 0010): the ECR repo the pinned
     // image is built into, just below. Gated on the SAME tier gate as the two
     // stacks above, so a Tier 0 install creates nothing - the previously
     // ungated version left an empty, uncatalogued repo on every deploy
@@ -484,7 +484,7 @@ async function main(): Promise<void> {
     if (paperclipEnabled) {
       const paperclipRepoName = buildResourceNames(nameSuffix).paperclipEcrRepo;
       await ensureEcrRepo(env, paperclipRepoName);
-      // Phase 1.5: build the pinned+patched Paperclip image (ADR 0010) into
+      // Phase 1.5: build the pinned Paperclip image (ADR 0010) into
       // that repo. ALWAYS through CodeBuild, never the local Docker path:
       // the point of the phase is ONE path that needs no daemon on the
       // operator's machine, and the buildspec's `test "$ARCH" = "arm64"`

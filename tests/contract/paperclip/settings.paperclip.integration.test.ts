@@ -5,16 +5,14 @@ import { describeNewPin, paperclipPin } from './harness.js';
 
 describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip operator settings contracts', () => {
   let fixture: PaperclipBootstrap;
-  let pin: 'old' | 'new';
 
   beforeAll(async () => {
     fixture = await bootstrapPaperclip();
-    pin = await paperclipPin();
+    await paperclipPin();
   }, 120_000);
 
   describeNewPin('v2026.916.1 managed settings', () => {
-    it('stores enableNativeRunner=false after the production bootstrap write', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('stores enableNativeRunner=false after the production bootstrap write', async () => {
       const path = '/api/instance/settings/experimental';
       const first = await paperclipAdminRequest(path);
       expect(first.status).toBe(200);
@@ -27,8 +25,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip operator set
       }
     });
 
-    it('publishes exactly the operator hiddenSettings without hiding experimental', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('publishes exactly the operator hiddenSettings without hiding experimental', async () => {
       const response = await fetch(`${fixture.baseUrl}/api/health`);
       expect(response.status).toBe(200);
       const body = await response.json() as { hiddenSettings?: unknown };
@@ -40,8 +37,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip operator set
       expect(hidden.some((setting) => setting.startsWith('instance.experimental'))).toBe(false);
     });
 
-    it('floors a changed feedback value with settings_operator_managed, but accepts the same value', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('floors a changed feedback value with settings_operator_managed, but accepts the same value', async () => {
       const path = '/api/instance/settings/general';
       const current = await paperclipAdminRequest(path);
       expect(current.status).toBe(200);
@@ -59,8 +55,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip operator set
       expect((await again.json() as { feedbackDataSharingPreference?: unknown }).feedbackDataSharingPreference).toBe('not_allowed');
     });
 
-    it('disables non-http adapters and refuses a process agent', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('disables non-http adapters and refuses a process agent', async () => {
       const adapters = await paperclipAdminRequest('/api/adapters');
       expect(adapters.status).toBe(200);
       const rows = await adapters.json() as Array<{ type: string; disabled: boolean }>;
@@ -79,8 +74,7 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip operator set
       expect(body.error).toMatch(/Adapter "process" is not available on this instance/);
     });
 
-    it('creates an http agent with heartbeat off and removes it', async (ctx) => {
-      if (pin === 'old') ctx.skip();
+    it('creates an http agent with heartbeat off and removes it', async () => {
       const response = await paperclipAdminRequest(`/api/companies/${fixture.companyId}/agents`, {
         method: 'POST',
         body: JSON.stringify({
