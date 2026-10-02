@@ -73,6 +73,9 @@ Commits on `feature/wp-step3-pack-format`, oldest first:
 - [x] `54f14aa` five more red tests.
 - [x] `d02ad4d` two fixes (Codex gpt-6-luna).
 - [x] `80fcfa6` refactor, no behavior change (Codex gpt-6-luna).
+- [x] `de4aa64` this handoff, decision 37 in the decision log, links to pack format v1.
+- [x] `ffa85f2` twelve red tests from the first independent critic, which returned FAIL on `de4aa64` (an account id split by an invisible character such as U+2060 passed; a file name could repeat an identifier; unlisted files were judged for syntax; routine chains were not followed; `primary_key_column` was refused).
+- [x] `16321b7` the fixes for those (Codex gpt-6-sol).
 - [ ] Push, PR and merge: not done; they wait for the owner's yes (section 6).
 
 ### 4.2 Files modified
@@ -687,7 +690,7 @@ The full validation list on the final commit, the independent critic and the rev
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
 | `npm run typecheck` | exit 0 on `2a354c4` | exit 0 on `80fcfa6` |
-| `npm test` | exit 0 on `2a354c4`: 296 files, 3823 tests | the pack tests: 153 of 153 pass on `80fcfa6`; the full run is recorded in the PR body |
+| `npm test` | exit 0 on `2a354c4`: 296 files, 3823 tests | the pack tests: 153 of 153 pass on `80fcfa6` and 165 of 165 on `16321b7`. Full run on `de4aa64`: 301 files, 3971 tests, with the flag off and with `CCE_PAPERCLIP_ENABLED=1`; build, web typecheck and web build exit 0; docs gates OK; `npm run local:test:integration` NOT RUN (A129). The full run on the final commit is recorded in the PR body |
 | `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `2a354c4`: 296 files, 3823 tests | recorded in the PR body |
 | `npm run build` | exit 0 on `2a354c4` | recorded in the PR body |
 | `npm --prefix web run typecheck` | exit 0 on `2a354c4` | recorded in the PR body |
@@ -697,7 +700,7 @@ The full validation list on the final commit, the independent critic and the rev
 | `node scripts/ci/feature-knowledge.mjs` | OK on `2a354c4` | recorded in the PR body |
 | `git diff --check` | clean on `2a354c4` | recorded in the PR body |
 
-The frozen gate (outside the repository) passes 26 of 26 at `80fcfa6`.
+The frozen gate (outside the repository) passes 26 of 26 at `80fcfa6` and at `16321b7`. The first independent critic returned FAIL on `de4aa64`; its findings are fixed in `16321b7` and a second critic's verdict is recorded in the PR body.
 
 Anything not run, and why: `npm run local:test:integration`, at baseline and at verification, because another project's Floci emulator holds port 4566 and a run would change its data (A129). This is a named blocker in the PR body, not a pass.
 
