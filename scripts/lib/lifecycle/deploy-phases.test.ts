@@ -190,7 +190,7 @@ describe('planSecretWrites', () => {
       (p) => p.leaf === 'paperclip',
     )!;
     expect(JSON.parse(withoutAuth.value)).toEqual({});
-    expect(JSON.parse(withoutAuth.defaults!)).toEqual({ company_id: 'REPLACE_ME' });
+    expect(JSON.parse(withoutAuth.defaults!)).toEqual({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME' });
   });
 
   it('paperclip owns only better_auth_secret and defaults company_id without replacing it', () => {
@@ -200,7 +200,7 @@ describe('planSecretWrites', () => {
     // The SHIPPED field spelling (infra/lib/secrets-stack.ts), NOT the plan's
     // agent_keys_json / dispatch_token variant. plan-audit P1-C4, code wins.
     expect(JSON.parse(plan.value)).toEqual({ better_auth_secret: 's3cret' });
-    expect(JSON.parse(plan.defaults!)).toEqual({ company_id: 'REPLACE_ME' });
+    expect(JSON.parse(plan.defaults!)).toEqual({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME' });
     // Merge, or the next deploy wipes reconciler_key / agent_keys /
     // dispatch_secret, which are minted against the RUNNING instance.
     expect(plan.mergeExisting).toBe(true);
@@ -215,6 +215,11 @@ describe('planSecretWrites', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('mergeSecretValue', () => {
+  it('adds a missing lock auditor key without replacing a live key', () => {
+    const defaults = JSON.stringify({ lock_auditor_key: 'REPLACE_ME' });
+    expect(JSON.parse(mergeSecretValue('{}', '{}', defaults))).toEqual({ lock_auditor_key: 'REPLACE_ME' });
+    expect(JSON.parse(mergeSecretValue('{"lock_auditor_key":"live"}', '{}', defaults))).toEqual({ lock_auditor_key: 'live' });
+  });
   it('keeps every populated live Paperclip field, including the auth secret', () => {
     // Secrets Manager owns better_auth_secret after its first seed. A stale
     // local .env must not rotate it on a later deploy.
@@ -322,6 +327,7 @@ describe('populateSecretsV2', () => {
       agent_keys: 'minted-2',
       dispatch_secret: 'minted-3',
       company_id: 'company-live',
+      lock_auditor_key: 'REPLACE_ME',
     });
   });
 
@@ -348,6 +354,7 @@ describe('populateSecretsV2', () => {
       agent_keys: 'minted-2',
       dispatch_secret: 'minted-3',
       company_id: 'company-live',
+      lock_auditor_key: 'REPLACE_ME',
     });
   });
 

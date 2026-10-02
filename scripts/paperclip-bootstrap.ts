@@ -6,7 +6,7 @@
  * Provisions the deployed Paperclip instance into the shape the ACL, the
  * reconciler and the dispatch route all assume: ONE company, ONE responsible
  * user, N agents wired to `adapterType: "http"` pointing back at Netzar, and
- * N+1 API keys — one per agent plus the company-wide reconciler key — and the
+ * N+2 API keys — one per agent, the reconciler, and a viewer lock auditor — and the
  * company id written into `/claudeclaw[-suffix]/paperclip`.
  *
  * FOUR PROPERTIES THIS SCRIPT IS BUILT AROUND
@@ -48,7 +48,7 @@
  *   PAPERCLIP_BASE_URL        exact origin of the running instance
  *   CCE_PAPERCLIP_ADMIN_EMAIL per-environment responsible user; named, never shared
  *   PAPERCLIP_ADMIN_PASSWORD  its password
- *   PAPERCLIP_DISPATCH_URL    Netzar's inbound dispatch route (Phase 6)
+ *   PAPERCLIP_DISPATCH_URL    private Netzar dispatch route on port 3001
  * OPTIONAL
  *   PAPERCLIP_AGENTS          comma-separated Netzar agent slugs, default
  *                             `main,research`; `main` is the `ceo` and every
@@ -85,14 +85,18 @@ import { envFileNameFor, parseEnvFile, resolveEnvFlag } from './lib/env-file.js'
 import { maybePrintHelp } from './lib/help.js';
 import {
   CookieJar,
+  assertPrivateDispatchUrl,
   RECONCILER_KEY_NAME,
   agentKeyName,
   agentSpecs,
   assertResponsibleUserAuthzUnset,
   ensureAgents,
   ensureCompany,
+  ensureLockAuditor,
+  ensureNativeRunnerOff,
   jsonResponse,
   makeBoardRequest,
+  lockVerdictProblem,
   parseDispatchSlugs,
   reconcileKey,
   signUpOrSignIn,
@@ -104,6 +108,7 @@ import {
   mergeBootstrapSecretFields,
   parseBootstrapAgentKeys,
 } from './lib/paperclip/bootstrap-secret.js';
+import { readRuntimeLockVerdict } from '../src/lib/paperclip/runtime-lock.js';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -172,7 +177,7 @@ async function main(): Promise<void> {
   const secretId = suffix ? `/claudeclaw-${suffix}/paperclip` : '/claudeclaw/paperclip';
   const region = env.AWS_REGION?.trim() || 'us-east-1';
   // Fail fast on the one required value agentSpecs() needs, before any call.
-  required(env, 'PAPERCLIP_DISPATCH_URL');
+  assertPrivateDispatchUrl(required(env, 'PAPERCLIP_DISPATCH_URL'));
   const adminEmail = required(env, 'CCE_PAPERCLIP_ADMIN_EMAIL');
   const adminPassword = required(env, 'PAPERCLIP_ADMIN_PASSWORD');
 
@@ -234,6 +239,12 @@ async function main(): Promise<void> {
     );
     // eslint-disable-next-line no-console
     console.log(info('would ensure one company, the configured agents, and N+1 standard keys'));
+    // eslint-disable-next-line no-console
+    console.log(info('would turn the native runner off'));
+    // eslint-disable-next-line no-console
+    console.log(info('would create or reuse the lock auditor'));
+    // eslint-disable-next-line no-console
+    console.log(info('would prove the six runtime lock reads'));
     const armed = parseDispatchSlugs(env.PAPERCLIP_DISPATCH_SLUGS).join(', ');
     // eslint-disable-next-line no-console
     console.log(info('would re-point any agent whose adapter_config has drifted'));
@@ -314,6 +325,21 @@ async function main(): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(ok(`company ${company.name} (${company.id}) prefix ${company.issuePrefix}`));
 
+  section('Runtime lock');
+  const runner = await ensureNativeRunnerOff(request);
+  // eslint-disable-next-line no-console
+  console.log(ok(`native runner off (${runner === 'already-off' ? 'already off' : 'turned off'})`));
+  const auditor = await ensureLockAuditor({
+    request, companyId: company.id, baseUrl, storedKey: fields.lock_auditor_key,
+  });
+  // eslint-disable-next-line no-console
+  console.log(ok(`lock auditor (${auditor.action})`));
+  if (auditor.action === 'created') {
+    // eslint-disable-next-line no-console
+    console.log(dim('  Roll the orchestrator service (force a new deployment) to pick up the new key. ' +
+      'Until then, running tasks keep the old value and report the lock closed.'));
+  }
+
   // ── N agents ──────────────────────────────────────────────────────
   section('Agents');
   const { agents, created, updated } = await ensureAgents(request, company.id, specs);
@@ -392,6 +418,7 @@ async function main(): Promise<void> {
     companyId: company.id,
     storedAgentKeys,
     outcomes,
+    lockAuditorKey: auditor.action === 'created' ? auditor.key : undefined,
   });
   // C-19: the SHIPPED spellings win — `agent_keys` (a JSON STRING, because an
   // ECS secret injects one field as one env var: PAPERCLIP_AGENT_KEYS_JSON)
@@ -399,7 +426,7 @@ async function main(): Promise<void> {
   // wrong variants, and a field mismatch is a task that cannot start.
   // `fields` already carries a freshly minted dispatch_secret when there was
   // none, so compare against what Secrets Manager actually holds.
-  const changed = mintedDispatchSecret || JSON.stringify(nextFields) !== JSON.stringify(fields);
+  const changed = mintedDispatchSecret || auditor.action === 'created' || JSON.stringify(nextFields) !== JSON.stringify(fields);
   if (changed) {
     await secretsClient.send(
       new PutSecretValueCommand({
@@ -417,6 +444,15 @@ async function main(): Promise<void> {
     console.log(dim('  secret already current; nothing written'));
   }
 
+  const verdict = await readRuntimeLockVerdict({
+    fetchFn: fetch, baseUrl, companyId: company.id,
+    auditorKey: auditor.action === 'created' ? auditor.key : fields.lock_auditor_key,
+  });
+  const problem = lockVerdictProblem(verdict);
+  if (problem) throw new Error(problem);
+  // eslint-disable-next-line no-console
+  console.log(ok('lock clean'));
+
   // ── The no-op proof ───────────────────────────────────────────────
   const createdKeys = outcomes.filter((o) => o.action !== 'reused').length;
   section('Result');
@@ -426,7 +462,7 @@ async function main(): Promise<void> {
       `updated ${updated.length}; ` +
       `keys created ${createdKeys}, reused ${outcomes.length - createdKeys}`,
   );
-  if (created.length === 0 && updated.length === 0 && createdKeys === 0 && !changed) {
+  if (runner !== 'turned-off' && created.length === 0 && updated.length === 0 && createdKeys === 0 && !changed) {
     // eslint-disable-next-line no-console
     console.log(ok('no-op: this run created nothing and wrote nothing'));
   } else {

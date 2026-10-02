@@ -6,6 +6,12 @@ import {
 } from './bootstrap-secret.js';
 
 describe('Paperclip bootstrap secret safety', () => {
+  it('merges lock_auditor_key when given and preserves it otherwise with all other fields', () => {
+    const current = { lock_auditor_key: 'fake-old-key', future_field: 'kept' };
+    const options = { current, companyId: 'company-uuid', storedAgentKeys: {}, outcomes: [] };
+    expect(mergeBootstrapSecretFields({ ...options, lockAuditorKey: 'fake-new-key' })).toMatchObject({ lock_auditor_key: 'fake-new-key', future_field: 'kept' });
+    expect(mergeBootstrapSecretFields(options)).toMatchObject(current);
+  });
   it.each([
     ['an unreadable secret', async () => Promise.reject(new Error('access denied'))],
     ['invalid JSON', async () => '{"agent_keys":"pcp_live"'],

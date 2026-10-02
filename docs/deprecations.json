@@ -872,7 +872,17 @@
     },
     {
       "surface": "env",
+      "id": "PAPERCLIP_LOCK_AUDITOR_KEY",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
       "id": "PAPERCLIP_DISPATCH_SECRET",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_DISPATCH_PORT",
       "introduced": "v1.9.0"
     },
     {

@@ -210,7 +210,7 @@ jobs:
             --exclusively \
             --require-approval never
           # Create the unchanged secret schema first. The Populate step can
-          # then merge-add company_id without CloudFormation replacing live
+          # then merge-add company_id and lock_auditor_key without CloudFormation replacing live
           # credentials during an upgrade.
           npx cdk deploy \
             "${{ steps.cfg.outputs.stack_name }}-Storage" \
@@ -458,7 +458,7 @@ jobs:
       #
       # Ordering. The early prerequisite step deploys Storage + Secrets first,
       # preserving CloudFormation's original Paperclip schema. This step then
-      # merge-adds company_id before Compute references it. The Aurora secret is
+      # merge-adds company_id and lock_auditor_key before Compute references them. The Aurora secret is
       # created by CCE-Database, which only exists once the feature is armed,
       # so on the FIRST deploy of a standard install there is nothing to
       # compose a URL from. The migrate step below sees the absence and arms
@@ -468,7 +468,7 @@ jobs:
       #
       # Failure directions, both stated deliberately (M33):
       #  - missing after the early prerequisite deploy: HARD FAIL. Compute now
-      #    depends on the additive company_id field.
+      #    depends on the additive company_id and lock_auditor_key fields.
       #  - a secret that exists but cannot be READ or WRITTEN (AccessDenied):
       #    HARD FAIL. This is the corrected cloudflared idiom directly above:
       #    "not ready" and "I could not find out" must not be the same answer.
@@ -529,7 +529,7 @@ jobs:
           printf '%s' "$current" > current.json
           cp current.json before.json
 
-          # Additive schema migration. Never put company_id in the CDK
+          # Additive schema migration. Never put company_id or lock_auditor_key in the CDK
           # SecretString: changing that template on an upgrade would publish a
           # placeholder-only version and erase the live database URL and keys.
           # A real id written by paperclip-bootstrap always wins.
@@ -537,6 +537,11 @@ jobs:
             jq '.company_id = "REPLACE_ME"' current.json > next.json
             mv next.json current.json
             echo "added company_id placeholder without replacing live fields"
+          fi
+          if [ "$(jq 'has("lock_auditor_key")' current.json)" != "true" ]; then
+            jq '.lock_auditor_key = "REPLACE_ME"' current.json > next.json
+            mv next.json current.json
+            echo "added lock_auditor_key placeholder without replacing live fields"
           fi
 
           # better_auth_secret has exactly ONE owner: this installation's

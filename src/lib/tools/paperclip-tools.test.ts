@@ -26,7 +26,7 @@ vi.mock('../audit/audit-writer.js', () => ({ writeAudit }));
 import type { MissionEngine } from '../paperclip/mission-engine.js';
 import type { ProjectedMission } from '../paperclip/mission-projection.js';
 import { __setMissionEngineForTest } from '../missions/mission-acl.js';
-import { PaperclipDisabledError } from '../paperclip/error.js';
+import { PaperclipDisabledError, PaperclipLockClosedError } from '../paperclip/error.js';
 import { listAddons } from '../addons/registry.js';
 import './paperclip-tools.js'; // side-effect registration, exactly as server.ts does it
 import { tools } from './registry.js';
@@ -145,6 +145,15 @@ describe('paperclip_add_comment refuses at invoke', () => {
     expect(out.isError).toBe(true);
     expect(out.text).toContain('paperclip_disabled');
     expect(out.text).not.toContain('dashboard Kill switches tab');
+  });
+
+  it('explains a closed runtime lock without calling it the kill switch', async () => {
+    const comment = vi.fn(() => { throw new PaperclipLockClosedError({ message: 'closed' }, 'unknown:auditor'); });
+    injectEngine([projected(MISSION_ID)], comment);
+    const out = await tools.invoke('paperclip_add_comment', { mission_id: MISSION_ID, body: 'progress' }, ctx);
+    expect(out.text).toContain('runtime lock is closed');
+    expect(out.text).toContain('unknown:auditor');
+    expect(out.text).not.toContain('kill switch: paperclip_disabled');
   });
 
   it('refuses an ambiguous 8-char prefix rather than commenting on the wrong mission', async () => {

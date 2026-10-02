@@ -39,6 +39,8 @@ const TIER = 1;
 interface ContainerDef {
   Name?: string;
   Environment?: { Name: string; Value: string }[];
+  Secrets?: { Name: string; ValueFrom: unknown }[];
+  PortMappings?: { ContainerPort: number }[];
 }
 
 interface TaskDefProps {
@@ -62,7 +64,7 @@ describe('ComputeStack — orchestrator War Room table names', () => {
    * frozen from it (constants.ts:236), so it is stubbed here — before the
    * dynamic imports — rather than in a hook that runs after a static import.
    */
-  async function orchestratorEnv(suffix: string): Promise<Record<string, string>> {
+  async function synthCompute(suffix: string, tier: 0 | 1 = TIER) {
     vi.stubEnv('CCE_NAME_SUFFIX', suffix);
     vi.stubEnv('DOMAIN_NAME', '');
 
@@ -85,25 +87,25 @@ describe('ComputeStack — orchestrator War Room table names', () => {
     ]);
 
     const app = new App();
-    const net = new NetworkStack(app, 'CCE-Network', { tier: TIER, env: ENV });
-    const storage = new StorageStack(app, 'CCE-Storage', { tier: TIER, env: ENV });
+    const net = new NetworkStack(app, 'CCE-Network', { tier, env: ENV });
+    const storage = new StorageStack(app, 'CCE-Storage', { tier, env: ENV });
     const secrets = new SecretsStack(app, 'CCE-Secrets', {
-      tier: TIER,
+      tier,
       env: ENV,
       dataKey: storage.dataKey,
     });
     const dynamo = new DynamoStack(app, 'CCE-Dynamo', {
-      tier: TIER,
+      tier,
       env: ENV,
       dataKey: storage.dataKey,
     });
     const messaging = new MessagingStack(app, 'CCE-Messaging', {
-      tier: TIER,
+      tier,
       env: ENV,
       configBucket: storage.configBucket,
     });
     const iam = new IamStack(app, 'CCE-Iam', {
-      tier: TIER,
+      tier,
       env: ENV,
       storage,
       secrets,
@@ -111,7 +113,7 @@ describe('ComputeStack — orchestrator War Room table names', () => {
       messaging,
     });
     const compute = new ComputeStack(app, 'CCE-Compute', {
-      tier: TIER,
+      tier,
       env: ENV,
       vpc: net.vpc,
       albSecurityGroup: net.albSecurityGroup,
@@ -125,8 +127,9 @@ describe('ComputeStack — orchestrator War Room table names', () => {
     // ComputeStack synthesizes more than one task definition (the orchestrator
     // and the consolidation task). Selecting the wrong one would make this test
     // pass or fail for a reason that has nothing to do with the wiring.
+    const template = Template.fromStack(compute);
     const orchestrator = Object.values(
-      Template.fromStack(compute).findResources('AWS::ECS::TaskDefinition'),
+      template.findResources('AWS::ECS::TaskDefinition'),
     )
       .flatMap((r) => (r.Properties as TaskDefProps).ContainerDefinitions ?? [])
       .find((c) => c.Name === 'orchestrator');
@@ -135,7 +138,15 @@ describe('ComputeStack — orchestrator War Room table names', () => {
       throw new Error('no container named "orchestrator" in the synthesized ComputeStack');
     }
 
-    return Object.fromEntries((orchestrator.Environment ?? []).map((e) => [e.Name, e.Value]));
+    return {
+      template,
+      orchestrator,
+      env: Object.fromEntries((orchestrator.Environment ?? []).map((e) => [e.Name, e.Value])),
+    };
+  }
+
+  async function orchestratorEnv(suffix: string) {
+    return (await synthCompute(suffix)).env;
   }
 
   // Seven stacks are synthesized per case, which takes far longer than Vitest's
@@ -145,6 +156,43 @@ describe('ComputeStack — orchestrator War Room table names', () => {
   // is live and the budget has to be stated. Observed 9-62 s depending on
   // whether the transform cache is warm, hence the generous ceiling.
   const BUDGET = 180_000;
+
+  it('registers private dispatch and keeps the ALB on port 3000', async () => {
+    const { template, orchestrator, env } = await synthCompute('');
+    template.hasResourceProperties('AWS::ServiceDiscovery::PrivateDnsNamespace', {
+      Name: 'claudeclaw-dispatch.internal',
+    });
+    template.hasResourceProperties('AWS::ServiceDiscovery::Service', {
+      Name: 'orchestrator',
+      DnsConfig: { DnsRecords: [{ TTL: 10, Type: 'A' }] },
+    });
+    const service = Object.values(template.findResources('AWS::ECS::Service'))[0].Properties;
+    expect(service.ServiceRegistries).toHaveLength(1);
+    expect(JSON.stringify(service.ServiceRegistries)).toMatch(/Service.*Arn/);
+    expect(orchestrator.PortMappings?.map((p) => p.ContainerPort)).toEqual([3000, 3001]);
+    expect(env.PAPERCLIP_DISPATCH_PORT).toBe('3001');
+    expect(orchestrator.Secrets).toContainEqual(expect.objectContaining({
+      Name: 'PAPERCLIP_LOCK_AUDITOR_KEY',
+      ValueFrom: expect.objectContaining({
+        'Fn::Join': ['', expect.arrayContaining([':lock_auditor_key::'])],
+      }),
+    }));
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', { Port: 3000 });
+    expect(service.LoadBalancers.map((lb: { ContainerPort: number }) => lb.ContainerPort)).toEqual([3000]);
+  }, BUDGET);
+
+  it('omits dispatch resources and wiring without Paperclip', async () => {
+    const { template, orchestrator, env } = await synthCompute('', 0);
+    template.resourceCountIs('AWS::ServiceDiscovery::PrivateDnsNamespace', 0);
+    template.resourceCountIs('AWS::ServiceDiscovery::Service', 0);
+    expect(orchestrator.PortMappings?.map((p) => p.ContainerPort)).toEqual([3000]);
+    expect(env.PAPERCLIP_DISPATCH_PORT).toBeUndefined();
+    expect(orchestrator.Secrets?.some((s) => s.Name === 'PAPERCLIP_LOCK_AUDITOR_KEY')).toBe(false);
+    expect(
+      Object.values(template.findResources('AWS::ECS::Service'))[0].Properties.ServiceRegistries,
+    ).toBeUndefined();
+  }, BUDGET);
 
   it(
     'exports the three War Room table names to the orchestrator container',

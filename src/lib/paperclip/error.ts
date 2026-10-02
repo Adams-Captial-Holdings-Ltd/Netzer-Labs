@@ -216,6 +216,11 @@ export class PaperclipError extends Error {
 export class PaperclipDisabledError extends PaperclipError {
   constructor(init: LeafInit = {}) { super({ ...init, type: 'disabled' }); }
 }
+/** A runtime lock refusal, separate from the operator kill switch. */
+export class PaperclipLockClosedError extends PaperclipDisabledError {
+  readonly lockCode: string;
+  constructor(init: LeafInit, code: string) { super(init); this.lockCode = code; }
+}
 export class PaperclipRunIdRequiredError extends PaperclipError {
   constructor(init: LeafInit = {}) { super({ ...init, type: 'run_id_required' }); }
 }

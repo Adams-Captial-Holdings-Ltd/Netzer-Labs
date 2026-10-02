@@ -1,4 +1,3 @@
-# The Paperclip patch is applied with patch(1) inside a Linux container; a
-# CRLF checkout on Windows would make it fail against the image's LF sources.
-vendor/paperclip/updated-since.patch text eol=lf
+# Keep the Paperclip Dockerfile on LF: the pipeline tests compare its FROM
+# line byte for byte, and a CRLF checkout would change those bytes.
 vendor/paperclip/Dockerfile text eol=lf

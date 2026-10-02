@@ -108,7 +108,7 @@ export interface PaperclipStackProps extends BaseStackProps {
   /** `/claudeclaw[-suffix]/paperclip` — better_auth_secret + database_url. */
   paperclipSecret: ISecret;
   /**
-   * `sha256:...` of the patched image built in Phase 3. Read from the env by
+   * `sha256:...` of the pinned image built in Phase 3. Read from the env by
    * `infra/bin/app.ts`, never by this file: a stack that reads the ambient
    * process environment decides what EXISTS from ambient state, which is the
    * M33 defect. A colocated test greps this file to keep it that way.
@@ -238,7 +238,7 @@ export class PaperclipStack extends Stack {
     const region = this.region;
 
     // ── Image, pinned BY DIGEST ─────────────────────────────────
-    // Phase 3 builds the pinned+patched image into this repo and records its
+    // Phase 3 builds the pinned image into this repo and records its
     // digest in the deploy manifest. The task definition references the
     // DIGEST, never a tag: `:latest` is deliberately never published into
     // this repo, and a mutable tag would make an archived-template rollback
@@ -447,9 +447,9 @@ export class PaperclipStack extends Stack {
         PAPERCLIP_HOME: '/paperclip',
         PAPERCLIP_INSTANCE_ID: 'default',
         PAPERCLIP_CONFIG: '/paperclip/instances/default/config.json',
-        // Phase 4.5: serve Paperclip's own built board. The image already
-        // ships /app/ui/dist; vendor/paperclip/Dockerfile symlinks it to the
-        // /app/server/ui-dist path the server actually resolves.
+        // Phase 4.5: serve Paperclip's own built board. The image ships it at
+        // /app/ui/dist; the server tries ../ui-dist, then ../../ui/dist, so
+        // the Dockerfile adds no bridge.
         //
         // LEDGER A38, and it is the reason no browser listener is emitted:
         // serving the board also serves `POST /api/auth/sign-up/email`, which
@@ -472,6 +472,16 @@ export class PaperclipStack extends Stack {
         // first probe request). Bare hostname, no port: the guard compares
         // URL.hostname, and this list replaces config.json's allowedHostnames.
         PAPERCLIP_ALLOWED_HOSTNAMES: new URL(RESOURCE_NAMES.paperclipInternalUrl).hostname,
+        // Keep adapters private and stop telemetry. The native-runner flag
+        // stays visible: a fresh database defaults it on, and bootstrap turns it off.
+        PAPERCLIP_HIDDEN_SETTINGS: 'instance.adapters,instance.plugins,instance.general.feedbackDataSharingPreference',
+        PAPERCLIP_ADAPTERS: '[{"adapterType":"http"}]',
+        PAPERCLIP_SETTING_DEFAULTS: '{"feedbackDataSharingPreference":"not_allowed"}',
+        PAPERCLIP_TELEMETRY_DISABLED: '1',
+        DO_NOT_TRACK: '1',
+        PAPERCLIP_ANNOUNCEMENTS_ENABLED: 'false',
+        PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: RESOURCE_NAMES.dispatchInternalOrigin,
+        PAPERCLIP_MIGRATION_PROMPT: 'never',
         // PAPERCLIP_MIGRATION_AUTO_APPLY is deliberately ABSENT here. See the
         // class doc; paperclip-stack.test.ts asserts the absence.
       },
@@ -537,6 +547,7 @@ export class PaperclipStack extends Stack {
       environment: {
         NODE_ENV: 'production',
         PAPERCLIP_HOME: '/tmp/paperclip',
+        PAPERCLIP_MIGRATION_PROMPT: 'never',
       },
       secrets: {
         DATABASE_URL: EcsSecret.fromSecretsManager(paperclipSecret, 'database_url'),

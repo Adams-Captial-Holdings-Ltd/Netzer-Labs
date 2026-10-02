@@ -104,8 +104,8 @@ export async function contentImageTag(
  * WHY THIS EXISTS. `contentImageTag` hashes `HEAD:<contextPath>`, never the
  * working tree, because that is exactly the bytes `git archive HEAD` ships to
  * CodeBuild. Right for the tag, silent about the operator: edit
- * vendor/paperclip/updated-since.patch (precisely what the re-pin workflow
- * says to do), skip the commit, deploy - and the tag still names the OLD
+ * vendor/paperclip/Dockerfile, precisely what the re-pin workflow says
+ * to edit, skip the commit, deploy - and the tag still names the OLD
  * content, that image is already in ECR, the build is skipped, the old digest
  * is recorded as this deploy's Paperclip image, and the deploy reports
  * success. `packageSource` below holds this module's only "tracked, committed

@@ -1,32 +1,20 @@
-# Netzar-patched Paperclip: the pinned immutable release plus one committed
-# patch (updatedSince watermark filtering on the issues list, required by the
-# missions reconciler's durable feed; absent upstream as of v2026.722.0 — see
-# updated-since.patch). tsc re-emits over the shipped dist, so the runtime
-# entrypoint is unchanged. Re-pin by bumping the digest and re-checking whether
-# the patch is still needed upstream.
+# Pinned, immutable upstream Paperclip release v2026.916.1.
+# It has no Netzer source patch and this file adds no instruction; upstream's
+# native updatedSince filter replaced the old Netzer source patch.
 #
-# It also bridges ONE path so the board actually serves (Phase 4.5). Verified by
-# running the pinned image on 2026-08-21: it ships the BUILT UI at /app/ui/dist
-# (13 MB, with index.html), but the server resolves "../ui-dist" — i.e.
-# /app/server/ui-dist — which does not exist in the image, so SERVE_UI=true
-# alone returns nothing. With the symlink below and SERVE_UI=true, `GET /`
-# answers 200 text/html with the genuine Paperclip document and
-# /assets/index-*.js answers 200 with the 6,484,747-byte bundle. Re-verify this
-# on every re-pin: it is a path convention, not a supported contract, exactly
-# like the runtime branding hooks.
+# The UI needs no bridge. At this tag, server/src/app.ts lines 949 to 955
+# tries ../ui-dist, then ../../ui/dist; the image ships its built UI at
+# /app/ui/dist. Verified live at this pin on 2026-10-01 with SERVE_UI=true:
+# GET / returned 200 text/html from the unmodified image.
+# This is a path convention, not a supported contract. Re-verify on every
+# re-pin with SERVE_UI=true and GET / (status 200, text/html).
 #
 # Changing this file changes the image CONTENT, so contentImageTag() yields a
-# new tag and the pipeline rebuilds once. That is expected, not a regression.
-FROM ghcr.io/paperclipai/paperclip:2026.722.0@sha256:6b9daa3c7b0659cce1ddb1f35454162342bc48bb5682123043fcd4d44aea237c
-
-COPY updated-since.patch /tmp/updated-since.patch
-RUN apt-get update \
- && apt-get install -y --no-install-recommends patch \
- && cd /app \
- && patch -p1 < /tmp/updated-since.patch \
- && cd server \
- && node_modules/.bin/tsc \
- && ln -s /app/ui/dist /app/server/ui-dist \
- && apt-get purge -y patch \
- && apt-get autoremove -y \
- && rm -rf /var/lib/apt/lists/* /tmp/updated-since.patch
+# new tag and the pipeline rebuilds once; that is expected.
+# Keep the FROM citation on line 20 for the contract fixtures.
+#
+# The digest below is the multi-architecture image INDEX digest, so each
+# platform resolves to this one release.
+#
+# Upstream image reference:
+FROM ghcr.io/paperclipai/paperclip:2026.916.1@sha256:a02ac35ac41df911af477422ea0e781cf41d2b2c600c66f0a5ac9d8c63f52c2c

@@ -89,6 +89,9 @@ describe('buildResourceNames', () => {
     expect(names.secrets.dashboard).toBe('/claudeclaw/dashboard');
     expect(names.logGroupOrchestrator).toBe('/claudeclaw/orchestrator');
     expect(names.dataKeyAlias).toBe('alias/claudeclaw-data');
+    expect(names.dispatchNamespace).toBe('claudeclaw-dispatch.internal');
+    expect(names.dispatchDiscoveryName).toBe('orchestrator');
+    expect(names.dispatchInternalOrigin).toBe('http://orchestrator.claudeclaw-dispatch.internal:3001');
   });
 
   it('prefixes every name when a suffix is supplied', () => {
@@ -102,6 +105,9 @@ describe('buildResourceNames', () => {
     expect(names.secrets.dashboard).toBe('/claudeclaw-staging/dashboard');
     expect(names.logGroupOrchestrator).toBe('/claudeclaw-staging/orchestrator');
     expect(names.dataKeyAlias).toBe('alias/claudeclaw-staging-data');
+    expect(names.dispatchNamespace).toBe('claudeclaw-staging-dispatch.internal');
+    expect(names.dispatchDiscoveryName).toBe('orchestrator');
+    expect(names.dispatchInternalOrigin).toBe('http://orchestrator.claudeclaw-staging-dispatch.internal:3001');
   });
 
   it('default RESOURCE_NAMES export resolves the current-process suffix', () => {

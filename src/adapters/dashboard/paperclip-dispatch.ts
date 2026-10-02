@@ -14,16 +14,9 @@
  * `src/config/env.ts` calls it "the shared secret C-17 settled on for the
  * dispatch route". Precedence puts running code and Part C above the plan.
  *
- * MOUNT POSITION IS BEHAVIOR, NOT STYLE. `src/server.ts` mounts this BEFORE
- * `app.route('/api', buildDashboardRouter())`. That router opens with
- * `router.use('*')` (`handler.ts`), which extracts a bearer, calls
- * `authenticateDashboardToken`, and on failure writes an `auth_failure` audit
- * row and returns 401. Paperclip's bearer is not a dashboard-tokens row, so a
- * mount after it would 401 every dispatch AND spam the security audit log.
- * `paperclip-dispatch.mount.test.ts` proves this by EXECUTION through the real
- * `buildApp` — a dispatch request answered by this route with the dashboard
- * authenticate and audit spies never called, against a control request on an
- * unmatched `/api/**` path where both spies do fire.
+ * Served only by `buildPrivateDispatchApp` in `src/server.ts` on the private
+ * port. The public app denies this path; `paperclip-dispatch.private.test.ts`
+ * proves both listeners' behavior.
  *
  * WHY NOT `POST /api/test-turn`. It `await`s `runAgentTurn` inline and responds
  * only after it resolves, which would blow the adapter's `timeoutMs: 10_000`
@@ -52,6 +45,7 @@ import { isKillSwitchActive } from '../../lib/state/kill-switches-repo.js';
 import { getConfigCategory } from '../../lib/state/runtime-config-repo.js';
 import { tryClaimOnce } from '../../lib/state/runner-lease.js';
 import { PAPERCLIP_CONFIG_CATEGORY } from '../../lib/paperclip/config.js';
+import { getPaperclipLockState } from '../../lib/paperclip/runtime-lock.js';
 import { parseEnabledAgents } from '../../lib/paperclip/reconciler.js';
 import { dispatchClaimKey, parseDispatchBody, runDispatchWork } from '../../lib/paperclip/dispatch-worker.js';
 import type { PaperclipDispatchContext } from '../../lib/paperclip/types.js';
@@ -144,6 +138,11 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
       logger.warn({ reason: 'bad_secret' }, 'paperclip dispatch secret mismatch');
       return c.json({ error: 'unauthorized' }, 401);
     }
+
+    // Authenticate before revealing lock state, then refuse a closed lock
+    // before the kill switch or any work can be claimed.
+    const lock = getPaperclipLockState();
+    if (lock.closed) return c.json({ error: 'paperclip_locked', code: lock.code }, 503);
 
     // AFTER authentication, so an unauthenticated caller cannot probe switch
     // state, and BEFORE any work is enqueued — mirroring `client.ts`'s own

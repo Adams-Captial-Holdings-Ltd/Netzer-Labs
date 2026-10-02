@@ -71,7 +71,7 @@ user changes, which remain untouched.
 | Release tooling | `scripts/release/`, `scripts/update/` | Signed-artifact implementation exists; no operational release/trust root |
 | Data-flow inventory | `docs/data-flows.json` | External processors and opt-outs; updated as part of this feature |
 | Third-party evidence | `THIRD_PARTY_NOTICES.md`, `sbom/` | Draft inventory and npm SBOM; built image still blocked |
-| Paperclip call-home | `infra/lib/paperclip-stack.ts`, `docker-compose.paperclip.yml` | Explicitly disabled with both upstream-supported flags |
+| Paperclip call-home | `infra/lib/paperclip-stack.ts`, `docker-compose.paperclip.yml` | Disabled by three env values, `PAPERCLIP_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1` and `PAPERCLIP_ANNOUNCEMENTS_ENABLED=false`, set by step 2 of the work-platform plan (before it, neither file set any flag); flag names read at upstream v2026.916.1 |
 
 ## 6. Current business/state rules
 

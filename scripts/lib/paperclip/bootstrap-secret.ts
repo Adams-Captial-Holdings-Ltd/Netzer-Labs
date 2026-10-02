@@ -1,4 +1,5 @@
 import {
+  LOCK_AUDITOR_KEY_FIELD,
   RECONCILER_KEY_NAME,
   type KeyOutcome,
 } from './bootstrap-core.js';
@@ -78,6 +79,7 @@ interface MergeBootstrapSecretFieldsOptions {
   companyId: string;
   storedAgentKeys: Record<string, string>;
   outcomes: KeyOutcome[];
+  lockAuditorKey?: string;
 }
 
 /** Merge only the bootstrap-owned fields while preserving every other field. */
@@ -92,5 +94,6 @@ export function mergeBootstrapSecretFields(
   }
   next.agent_keys = JSON.stringify(options.storedAgentKeys);
   next.company_id = options.companyId;
+  if (options.lockAuditorKey !== undefined) next[LOCK_AUDITOR_KEY_FIELD] = options.lockAuditorKey;
   return next;
 }

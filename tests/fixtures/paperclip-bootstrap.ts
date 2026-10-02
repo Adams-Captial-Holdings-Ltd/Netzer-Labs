@@ -48,6 +48,7 @@ const CREDENTIAL_CACHE_PATH = '/dev/shm/netzar-paperclip-integration-credentials
 interface DockerResult {
   stdout: string;
   stderr: string;
+  exitCode?: number;
 }
 
 /** The two Netzar agents the harness provisions, in creation order. */
@@ -127,17 +128,19 @@ async function runDocker(args: string[], acceptedExitCodes: number[] = [0]): Pro
       maxBuffer: 4 * 1024 * 1024,
       windowsHide: true,
     });
-    return { stdout: String(result.stdout), stderr: String(result.stderr) };
+    return { stdout: String(result.stdout), stderr: String(result.stderr), exitCode: 0 };
   } catch (error) {
     const commandError = error as Error & { code?: number | string; stdout?: string; stderr?: string };
     const exitCode = typeof commandError.code === 'number' ? commandError.code : Number.NaN;
+    const stderr = (commandError.stderr ?? '').trim().slice(0, 500);
     if (acceptedExitCodes.includes(exitCode)) {
       return {
         stdout: commandError.stdout ?? '',
         stderr: commandError.stderr ?? '',
+        exitCode,
       };
     }
-    throw new Error(`Docker command failed${Number.isNaN(exitCode) ? '' : ` with exit code ${exitCode}`}`);
+    throw new Error(`Docker command failed${Number.isNaN(exitCode) ? '' : ` with exit code ${exitCode}`}${stderr ? `: ${stderr}` : ''}`);
   }
 }
 
@@ -232,14 +235,24 @@ async function enableSqlStateLogging(): Promise<void> {
 }
 
 async function createBootstrapInvite(containerId: string): Promise<string> {
+  // Onboard writes the config, then tries to start a server and may exit 1 as
+  // root at v2026.916.1 (decision-signing ownership check) or when :3100 is
+  // taken. Exit 1 is safe only after verifying that it wrote the config.
   const onboard = await runDocker([
     'exec',
     containerId,
     'sh',
     '-lc',
     `test -f ${CONFIG_PATH} || timeout 12s node --import ./server/node_modules/tsx/dist/loader.mjs cli/src/index.ts onboard --yes`,
-  ], [0, 124]);
-  void onboard;
+  ], [0, 1, 124]);
+  const configState = await runDocker([
+    'exec', containerId, 'sh', '-lc',
+    `test -f ${CONFIG_PATH} && echo present || echo missing`,
+  ]);
+  if (configState.stdout.trim() !== 'present') {
+    const stderr = onboard.stderr.trim().slice(0, 500);
+    throw new Error(`Paperclip onboard did not write ${CONFIG_PATH} (exit ${onboard.exitCode ?? 'unknown'})${stderr ? `: ${stderr}` : ''}`);
+  }
 
   const configure = [
     "const fs=require('node:fs')",
@@ -263,7 +276,17 @@ async function createBootstrapInvite(containerId: string): Promise<string> {
 }
 
 async function establishAdminSession(request: PaperclipRequest): Promise<void> {
-  await signUpOrSignIn(request, {
+  const authRequest: PaperclipRequest = async (pathname, init) => {
+    let response: Response;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      response = await request(pathname, init);
+      if (response.status !== 429 || attempt === 3) return response;
+      const retryAfter = Number(response.headers.get('retry-after') ?? response.headers.get('x-retry-after'));
+      await new Promise((resolve) => setTimeout(resolve, (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 11) * 1_000));
+    }
+    throw new Error('Paperclip auth retry exhausted');
+  };
+  await signUpOrSignIn(authRequest, {
     name: 'Netzar Paperclip Integration',
     email: ADMIN_EMAIL,
     password: ADMIN_PASSWORD,

@@ -27,8 +27,150 @@
  * nowhere else.
  */
 
+import { randomBytes } from 'node:crypto';
+import { DISPATCH_PORT } from '../../../infra/lib/constants.js';
+import type { LockVerdict } from '../../../src/lib/paperclip/runtime-lock.js';
+
 /** A board-session-bound request. The caller owns cookies and base URL. */
 export type PaperclipRequest = (pathname: string, init?: RequestInit) => Promise<Response>;
+
+export const LOCK_AUDITOR_KEY_FIELD = 'lock_auditor_key';
+
+export function assertPrivateDispatchUrl(value: string): void {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error('PAPERCLIP_DISPATCH_URL is not a URL'); }
+  if (url.protocol !== 'http:') throw new Error('PAPERCLIP_DISPATCH_URL protocol must be http');
+  if (url.username || url.password) throw new Error('PAPERCLIP_DISPATCH_URL credentials are not allowed');
+  if (value.includes('?')) throw new Error('PAPERCLIP_DISPATCH_URL query is not allowed');
+  if (value.includes('#')) throw new Error('PAPERCLIP_DISPATCH_URL fragment is not allowed');
+  if (url.pathname !== '/api/paperclip/dispatch') throw new Error('PAPERCLIP_DISPATCH_URL path must be /api/paperclip/dispatch');
+  if (url.port !== String(DISPATCH_PORT)) throw new Error(`PAPERCLIP_DISPATCH_URL port must be ${DISPATCH_PORT}`);
+  const host = url.hostname.toLowerCase();
+  const parts = host.split('.');
+  const ipv4 = parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+  const privateIp = ipv4 && (Number(parts[0]) === 10 ||
+    (Number(parts[0]) === 172 && Number(parts[1]) >= 16 && Number(parts[1]) <= 31) ||
+    (Number(parts[0]) === 192 && Number(parts[1]) === 168));
+  const internal = host.endsWith('.internal') && /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal$/.test(host);
+  if (!(privateIp || internal)) throw new Error('PAPERCLIP_DISPATCH_URL host must not use a public address');
+}
+
+export async function ensureNativeRunnerOff(request: PaperclipRequest): Promise<'already-off' | 'turned-off'> {
+  const path = '/api/instance/settings/experimental';
+  const settings = await jsonResponse<{ enableNativeRunner?: unknown }>(await request(path), 'Paperclip experimental settings');
+  if (settings.enableNativeRunner === false) return 'already-off';
+  await jsonResponse<unknown>(await request(path, {
+    method: 'PATCH', body: JSON.stringify({ enableNativeRunner: false }),
+  }), 'Paperclip native runner update');
+  const verified = await jsonResponse<{ enableNativeRunner?: unknown }>(await request(path), 'Paperclip experimental settings verification');
+  if (verified.enableNativeRunner === false) return 'turned-off';
+  if (verified.enableNativeRunner === undefined) {
+    throw new Error('This Paperclip has no enableNativeRunner setting; the runtime lock needs v2026.916.1 or later');
+  }
+  throw new Error('Paperclip enableNativeRunner is still on after update');
+}
+
+type AuditorIdentity = {
+  userId?: string;
+  companyIds?: string[];
+  isInstanceAdmin?: boolean;
+  memberships?: Array<{ companyId?: string; membershipRole?: string }>;
+};
+
+const auditorIdentity = (response: Response) => jsonResponse<AuditorIdentity>(response, 'Paperclip auditor identity');
+
+async function reusableAuditorKey(response: Response, companyId: string): Promise<boolean> {
+  if (response.status === 401 || response.status === 403) return false;
+  if (!response.ok) throw await httpFailure(response, 'Paperclip stored auditor identity');
+  const me = await auditorIdentity(response);
+  if (me.isInstanceAdmin === true) throw new Error('An administrator key cannot be kept as the lock auditor');
+  return me.isInstanceAdmin === false && Array.isArray(me.companyIds) && me.companyIds.includes(companyId) &&
+    Array.isArray(me.memberships) && me.memberships.some((row) => row.companyId === companyId && row.membershipRole === 'viewer');
+}
+
+const auditorWhoami = (fetchFn: typeof fetch, baseUrl: string, key: string) =>
+  fetchFn(`${baseUrl}/api/cli-auth/me`, { headers: { authorization: `Bearer ${key}` } });
+
+async function createLockAuditor(baseUrl: string, fetchFn: typeof fetch, random: typeof randomBytes): Promise<{ key: string; userId: string }> {
+  const user = {
+    email: `lock-auditor-${random(16).toString('hex')}@netzer.invalid`,
+    password: random(32).toString('hex'),
+    name: 'Netzer lock auditor',
+  };
+  const auditorRequest = makeBoardRequest(baseUrl, new CookieJar(), fetchFn);
+  const signup = await auditorRequest('/api/auth/sign-up/email', { method: 'POST', body: JSON.stringify(user) });
+  if (!signup.ok) throw await httpFailure(signup, 'Paperclip lock auditor sign-up');
+  const rename = await auditorRequest('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name: 'Netzer lock auditor' }) });
+  if (!rename.ok) throw await httpFailure(rename, 'Paperclip lock auditor rename');
+  const minted = await auditorRequest('/api/board-api-keys', {
+    method: 'POST', body: JSON.stringify({ name: 'netzer-lock-auditor', expiresAt: null }),
+  });
+  const mintedRecord = await jsonResponse<{ token?: string }>(minted, 'Paperclip lock auditor key creation');
+  if (typeof mintedRecord.token !== 'string' || !mintedRecord.token) throw new Error('Paperclip lock auditor key was not returned');
+  const key = mintedRecord.token;
+  const meBefore = await auditorIdentity(await auditorWhoami(fetchFn, baseUrl, key));
+  if (!meBefore.userId || meBefore.isInstanceAdmin === true) throw new Error('Paperclip lock auditor identity is invalid');
+  return { key, userId: meBefore.userId };
+}
+
+async function grantLockAuditorViewer(request: PaperclipRequest, companyId: string, userId: string): Promise<void> {
+  const access = await request(`/api/admin/users/${encodeURIComponent(userId)}/company-access`, {
+    method: 'PUT', body: JSON.stringify({ companyIds: [companyId] }),
+  });
+  if (!access.ok) throw await httpFailure(access, 'Paperclip lock auditor company-access');
+  const members = await request(`/api/companies/${encodeURIComponent(companyId)}/members`);
+  const rows = await jsonResponse<{ members?: Array<{ id: string; principalId: string }> }>(members, 'Paperclip lock auditor member list');
+  const member = Array.isArray(rows.members) ? rows.members.find((row) => row.principalId === userId) : undefined;
+  if (!member) throw new Error('Paperclip lock auditor company membership was not found');
+  const role = await request(`/api/companies/${encodeURIComponent(companyId)}/members/${encodeURIComponent(member.id)}`, {
+    method: 'PATCH', body: JSON.stringify({ membershipRole: 'viewer' }),
+  });
+  const updated = await jsonResponse<{ membershipRole?: string }>(role, 'Paperclip lock auditor viewer role');
+  if (updated.membershipRole !== 'viewer') throw new Error('Paperclip lock auditor role is not viewer');
+}
+
+export async function ensureLockAuditor(opts: {
+  request: PaperclipRequest;
+  companyId: string;
+  baseUrl: string;
+  storedKey?: string | undefined;
+  fetchFn?: typeof fetch;
+  randomBytesFn?: typeof randomBytes;
+}): Promise<{ action: 'reused' } | { action: 'created'; key: string }> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const whoami = (key: string) => auditorWhoami(fetchFn, opts.baseUrl, key);
+  const stored = opts.storedKey && opts.storedKey !== 'REPLACE_ME' ? opts.storedKey : undefined;
+  if (stored && await reusableAuditorKey(await whoami(stored), opts.companyId)) return { action: 'reused' };
+
+  const created = await createLockAuditor(opts.baseUrl, fetchFn, opts.randomBytesFn ?? randomBytes);
+  const key = created.key;
+  await grantLockAuditorViewer(opts.request, opts.companyId, created.userId);
+  const meAfter = await auditorIdentity(await whoami(key));
+  if (meAfter.isInstanceAdmin !== false || !Array.isArray(meAfter.companyIds) || !meAfter.companyIds.includes(opts.companyId)) {
+    throw new Error('Paperclip lock auditor key cannot read the company or has administrator access');
+  }
+  return { action: 'created', key };
+}
+
+export function lockVerdictProblem(verdict: LockVerdict): string | undefined {
+  if (verdict.verdict === 'clean') return undefined;
+  if (verdict.verdict === 'unknown') {
+    const causes: Record<string, string> = {
+      lock_auditor_key_missing: 'no lock auditor key is stored',
+      auditor_key_rejected: 'Paperclip rejected the lock auditor key',
+      paperclip_unreachable: 'Paperclip could not be reached',
+      unexpected_shape: 'Paperclip answered in a shape the lock does not recognise: a different version?',
+    };
+    return `Lock ${verdict.reason}: ${causes[verdict.reason] ?? 'the lock could not be read'}`;
+  }
+  const details = verdict.violations.map(({ code, detail }) => {
+    const safe = detail.replace(/[\x00-\x1f\x7f-\x9f]/g, '?');
+    return `${code}: ${safe.length > 120 ? `${safe.slice(0, 120)}...` : safe}`;
+  }).join('; ');
+  const noDeletion = verdict.violations.some((item) => item.code === 'non_http_agent')
+    ? ' The bootstrap never deletes agents.' : '';
+  return `Runtime lock violated: ${details}.${noDeletion} The orchestrator will refuse to start until they are fixed`;
+}
 
 export interface CompanyRecord {
   id: string;
@@ -116,14 +258,14 @@ export class CookieJar {
  * mutations from an untrusted browser origin; sending the base URL as the
  * origin is what makes these calls look like the board talking to itself.
  */
-export function makeBoardRequest(baseUrl: string, jar: CookieJar): PaperclipRequest {
+export function makeBoardRequest(baseUrl: string, jar: CookieJar, fetchFn: typeof fetch = fetch): PaperclipRequest {
   return async (pathname, init = {}) => {
     const headers = new Headers(init.headers);
     headers.set('origin', baseUrl);
     if (init.body !== undefined) headers.set('content-type', 'application/json');
     const cookie = jar.header();
     if (cookie) headers.set('cookie', cookie);
-    const response = await fetch(`${baseUrl}${pathname}`, { ...init, headers });
+    const response = await fetchFn(`${baseUrl}${pathname}`, { ...init, headers });
     jar.capture(response);
     return response;
   };
@@ -137,16 +279,18 @@ export function makeBoardRequest(baseUrl: string, jar: CookieJar): PaperclipRequ
  * defensively and the status is always included.
  */
 export async function jsonResponse<T>(response: Response, operation: string): Promise<T> {
-  if (!response.ok) {
-    const detail = (await response.json().catch(() => null)) as { error?: unknown } | null;
-    const suffix = typeof detail?.error === 'string' ? `: ${detail.error}` : '';
-    throw new Error(`${operation} returned HTTP ${response.status}${suffix}`);
-  }
+  if (!response.ok) throw await httpFailure(response, operation);
   try {
     return (await response.json()) as T;
   } catch {
     throw new Error(`${operation} returned invalid JSON`);
   }
+}
+
+async function httpFailure(response: Response, operation: string): Promise<Error> {
+  const detail = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  const suffix = typeof detail?.error === 'string' ? `: ${detail.error}` : '';
+  return new Error(`${operation} returned HTTP ${response.status}${suffix}`);
 }
 
 /** Sign up the responsible user, falling back to sign-in when it exists. */

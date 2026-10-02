@@ -44,6 +44,8 @@ export { APP as app };
  * compute-stack hands the orchestrator.
  */
 export const PAPERCLIP_PORT = 3100;
+// Private orchestrator listener used only by the Paperclip task.
+export const DISPATCH_PORT = 3001;
 
 /**
  * Per-suffix resource-name shape. `buildResourceNames(suffix)` produces a
@@ -57,7 +59,7 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
   return {
     // ECR
     ecrRepo: `${app}-orchestrator`,
-    // Paperclip work engine (ADR 0010). Second repo so the pinned+patched
+    // Paperclip work engine (ADR 0010). Second repo so the pinned
     // Paperclip image never shares a tag namespace with the orchestrator.
     paperclipEcrRepo: `${app}-paperclip`,
 
@@ -197,6 +199,11 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
     paperclipDiscoveryName: 'paperclip',
     /** What compute-stack sets as PAPERCLIP_BASE_URL on the orchestrator. */
     paperclipInternalUrl: `http://paperclip.${app}.internal:${PAPERCLIP_PORT}`,
+    // A second namespace lives in Compute: Paperclip creates `${app}.internal`
+    // later, so registering the orchestrator there would make a stack cycle.
+    dispatchNamespace: `${app}-dispatch.internal`,
+    dispatchDiscoveryName: 'orchestrator',
+    dispatchInternalOrigin: `http://orchestrator.${app}-dispatch.internal:${DISPATCH_PORT}`,
     alertTopic: `${app}-ops-alerts`,
     cloudTrailName: `${app}-audit`,
 

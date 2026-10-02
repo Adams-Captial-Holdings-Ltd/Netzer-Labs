@@ -178,6 +178,13 @@ describe('header assembly', () => {
 // ── A2-11 ─────────────────────────────────────────────────────────────────
 
 describe('timeouts (A2-11, our divergence from Linear, which has none)', () => {
+  it('forces redirects to error even when an untyped caller supplies follow', async () => {
+    const rec = recorder([jsonResponse(issue())]);
+    const options = { redirect: 'follow' } as unknown as Partial<PaperclipClientOptions>;
+    await client(rec.fetchFn, options).getIssue(ISSUE_ID);
+    expect(rec.calls[0]?.init.redirect).toBe('error');
+  });
+
   function hangingFetch(): typeof fetch {
     return (async (_input: Parameters<typeof fetch>[0], init: RequestInit = {}) =>
       new Promise<Response>((_resolve, reject) => {
@@ -211,7 +218,7 @@ describe('timeouts (A2-11, our divergence from Linear, which has none)', () => {
 
   it('A2-11: undestructured RequestInit keys are re-spread into fetch, and cannot clobber the header block', async () => {
     const rec = recorder([jsonResponse(issue())]);
-    await client(rec.fetchFn, { keepalive: true, redirect: 'error' }).getIssue(ISSUE_ID);
+    await client(rec.fetchFn, { keepalive: true }).getIssue(ISSUE_ID);
     const init = rec.calls[0]?.init as RequestInit & { keepalive?: boolean };
     expect(init.keepalive).toBe(true);
     expect(init.redirect).toBe('error');

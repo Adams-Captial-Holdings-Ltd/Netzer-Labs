@@ -55,11 +55,10 @@ export interface ListMissionsOptions extends MissionEngineOptions {
   /** A Netzar agent slug, mapped to the proven `assigneeAgentId` filter. */
   ownerAgent?: string;
   /**
-   * A strict `>` watermark on the vendored `updatedSince` patch. A caller MUST
-   * subtract an overlap rather than pass its last-seen stamp: the predicate is
-   * strict and API stamps are millisecond-truncated, so a row re-queried at its
-   * own `updatedAt` does not come back (probe "C-2 (BLOCKING): a truncated
-   * watermark loses rows, and overlap-and-dedupe delivers them exactly once").
+   * A strict `>` watermark on native `updatedSince`. A caller MUST
+   * subtract an overlap rather than pass its last-seen stamp: API stamps are
+   * millisecond-truncated, and the overlap protects ties and two-clock skew.
+   * Callers dedupe rows seen more than once.
    */
   updatedSince?: string;
   limit?: number;

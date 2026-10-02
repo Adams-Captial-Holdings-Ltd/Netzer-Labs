@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { buildApp } from './server.js';
+import { describe, it, expect, vi } from 'vitest';
+import { buildApp, buildPrivateDispatchApp } from './server.js';
 import type { Env } from './config/env.js';
+import { logger } from './observability/logger.js';
 
 const baseEnv: Env = {
   NODE_ENV: 'production',
@@ -23,6 +24,27 @@ const baseEnv: Env = {
 };
 
 describe('server', () => {
+  it('private dispatch logs thrown route errors and returns JSON 500', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    try {
+      const res = await buildPrivateDispatchApp({ secret: () => { throw new Error('dispatch failed'); } })
+        .request('/api/paperclip/dispatch', { method: 'POST' });
+      expect(res.status).toBe(500);
+      expect(res.headers.get('content-type')).toContain('application/json');
+      expect(await res.json()).toEqual({ error: 'internal_error' });
+      expect(error).toHaveBeenCalledWith({ err: 'dispatch failed' }, 'unhandled error');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('private dispatch returns JSON 404 for an unknown path', async () => {
+    const res = await buildPrivateDispatchApp().request('/unknown');
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await res.json()).toEqual({ error: 'not_found', path: '/unknown' });
+  });
+
   it('GET /health returns 200 with status ok', async () => {
     const app = buildApp(baseEnv);
     const res = await app.request('/health');

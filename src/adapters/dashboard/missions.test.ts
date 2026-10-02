@@ -114,6 +114,7 @@ import { RESOURCE_META } from '../../lib/jarvis/route-manifest.js';
 import { CAPABILITIES } from '../../lib/auth/permissions.js';
 import {
   PaperclipDisabledError,
+  PaperclipLockClosedError,
   PaperclipInvalidInputError,
   PaperclipRatelimitedError,
   PaperclipUnavailableError,
@@ -604,6 +605,13 @@ describe('ACL-only rungs: gate order and transport-error mapping', () => {
     });
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'paperclip_disabled' });
+  });
+
+  it('a closed runtime lock has its own 503 envelope', async () => {
+    const res = await bare({ setStatus: () => Promise.reject(new PaperclipLockClosedError({}, 'unknown:auditor')) })
+      .request('/missions/main/m1/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'done' }) });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'paperclip_locked', code: 'unknown:auditor' });
   });
 
   it('a Paperclip 404 becomes the byte-identical legacy not_found', async () => {

@@ -280,6 +280,28 @@ describe('readiness gates (M33)', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('private service and container wiring', () => {
+  it('locks Paperclip settings and disables telemetry on the service', () => {
+    const env = envOf(serviceContainer);
+    expect(env.PAPERCLIP_HIDDEN_SETTINGS).toBe('instance.adapters,instance.plugins,instance.general.feedbackDataSharingPreference');
+    expect(env.PAPERCLIP_ADAPTERS).toBe('[{"adapterType":"http"}]');
+    expect(env.PAPERCLIP_SETTING_DEFAULTS).toBe('{"feedbackDataSharingPreference":"not_allowed"}');
+    expect(env.PAPERCLIP_TELEMETRY_DISABLED).toBe('1');
+    expect(env.DO_NOT_TRACK).toBe('1');
+    expect(env.PAPERCLIP_ANNOUNCEMENTS_ENABLED).toBe('false');
+    expect(env.PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST).toBe('http://orchestrator.claudeclaw-dispatch.internal:3001');
+    expect(env.PAPERCLIP_MIGRATION_PROMPT).toBe('never');
+    expect(envOf(migrateContainer).PAPERCLIP_MIGRATION_PROMPT).toBe('never');
+    expect(String(env.PAPERCLIP_HIDDEN_SETTINGS)).not.toContain('instance.experimental');
+  });
+
+  it('derives the staging dispatch origin from the staging app name', () => {
+    const source = readFileSync(new URL('./paperclip-stack.ts', import.meta.url), 'utf8');
+    expect(source).toContain('PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: RESOURCE_NAMES.dispatchInternalOrigin');
+    expect(buildResourceNames('staging').dispatchInternalOrigin).toBe(
+      'http://orchestrator.claudeclaw-staging-dispatch.internal:3001',
+    );
+  });
+
   it('does not attach an orphan target group to the Cloud Map-only service', () => {
     paperclip.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 0);
     expect(JSON.stringify(raw)).not.toContain('"LoadBalancers"');
@@ -600,7 +622,7 @@ describe('orchestrator to Paperclip reachability', () => {
       new URL('../../scripts/lib/lifecycle/deploy-phases.ts', import.meta.url),
       'utf8',
     );
-    expect(deployPhases).toContain("defaults: JSON.stringify({ company_id: 'REPLACE_ME' })");
+    expect(deployPhases).toContain("defaults: JSON.stringify({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME' })");
   });
 
   it('does not reference the additive company-id field at Tier 0', () => {
@@ -637,6 +659,22 @@ describe('orchestrator to Paperclip reachability', () => {
     expect(
       rules.filter((r) => /AlbSg/.test(JSON.stringify(r.SourceSecurityGroupId))),
     ).toHaveLength(0);
+  });
+
+  it('opens FargateSg to PaperclipSg on private dispatch port 3001', () => {
+    const rules = Object.values(network.findResources('AWS::EC2::SecurityGroupIngress'))
+      .map((r) => r.Properties as { FromPort: number; GroupId: unknown; SourceSecurityGroupId: unknown });
+    expect(rules).toContainEqual(
+      expect.objectContaining({
+        FromPort: 3001,
+        GroupId: expect.objectContaining({
+          'Fn::GetAtt': [expect.stringMatching(/FargateSg/), 'GroupId'],
+        }),
+        SourceSecurityGroupId: expect.objectContaining({
+          'Fn::GetAtt': [expect.stringMatching(/PaperclipSg/), 'GroupId'],
+        }),
+      }),
+    );
   });
 
   it('registers a stable Cloud Map A record in a VPC-private namespace', () => {
@@ -764,14 +802,24 @@ describe('service boundary', () => {
     expect(json).not.toMatch(/"s3:/);
   });
 
-  it('leaves the orchestrator Fargate SG untouched', () => {
+  it('keeps the orchestrator Fargate SG private', () => {
+    const fargateSg = Object.entries(network.findResources('AWS::EC2::SecurityGroup'))
+      .find(([logicalId]) => /FargateSg/.test(logicalId))?.[1]!;
+    const inline = (fargateSg.Properties as { SecurityGroupIngress?: Array<Record<string, unknown>> }).SecurityGroupIngress ?? [];
+    expect(inline.some((entry) => 'CidrIp' in entry || 'CidrIpv6' in entry)).toBe(false);
     const fargateRules = Object.values(
       network.findResources('AWS::EC2::SecurityGroupIngress'),
     )
-      .map((r) => r.Properties as { FromPort: number; GroupId: unknown })
+      .map((r) => r.Properties as { FromPort: number; ToPort: number; IpProtocol: string; GroupId: unknown; SourceSecurityGroupId: unknown })
       .filter((r) => /FargateSg/.test(JSON.stringify(r.GroupId)));
-    expect(fargateRules).toHaveLength(1);
-    expect(fargateRules[0].FromPort).toBe(3000);
+    expect(fargateRules.map((r) => r.FromPort).sort()).toEqual([3000, 3001]);
+    for (const rule of fargateRules) {
+      expect(rule.IpProtocol).toBe('tcp');
+      expect(rule.FromPort).toBe(rule.ToPort);
+    }
+    expect(fargateRules.find((r) => r.FromPort === 3001)?.ToPort).toBe(3001);
+    expect(JSON.stringify(fargateRules.find((r) => r.FromPort === 3000)?.SourceSecurityGroupId)).toMatch(/AlbSg/);
+    expect(JSON.stringify(fargateRules.find((r) => r.FromPort === 3001)?.SourceSecurityGroupId)).toMatch(/PaperclipSg/);
   });
 
   it('emits only outputs a deploy script actually reads', () => {

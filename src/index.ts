@@ -15,7 +15,7 @@
  */
 
 import { serve } from '@hono/node-server';
-import { buildApp } from './server.js';
+import { buildApp, buildPrivateDispatchApp } from './server.js';
 import { loadEnv } from './config/env.js';
 import { logger } from './observability/logger.js';
 import { startScheduler, stopScheduler } from './agent/scheduler.js';
@@ -35,6 +35,9 @@ import {
   stopInvalidationListener,
 } from './lib/config/invalidation-listener.js';
 import { initXray } from './lib/observability/xray.js';
+import { paperclipRoutingEnabled } from './lib/missions/mission-acl.js';
+import { loadPaperclipConfig } from './lib/paperclip/config.js';
+import { readConfiguredLockVerdict, startPaperclipLock } from './lib/paperclip/runtime-lock.js';
 import { attachJarvisWebSocket } from './adapters/dashboard/jarvis.js';
 import { teardownAllJarvisSessions } from './lib/voice/session-registry.js';
 import type { Server as HttpServer } from 'node:http';
@@ -47,6 +50,17 @@ async function main(): Promise<void> {
   // Init X-Ray before any AWS SDK client is created; the SDK wrappers
   // are no-ops when CCE_XRAY_ENABLED is unset.
   initXray();
+  // CCE_PAPERCLIP_ENABLED arms agents and enables the runtime lock. With it off,
+  // the lock does not run, the reconciler stays read-only (default shadow mode),
+  // and dispatch stays inert; turn it on before arming agents or leaving shadow mode.
+  const lock = await startPaperclipLock({
+    enabled: paperclipRoutingEnabled(),
+    read: () => readConfiguredLockVerdict({
+      loadConfig: loadPaperclipConfig,
+      fetchFn: fetch,
+      auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY,
+    }),
+  });
   logger.info(
     {
       region: env.AWS_REGION,
@@ -57,12 +71,18 @@ async function main(): Promise<void> {
   );
 
   const app = buildApp(env);
+  const dispatchPort = env.PAPERCLIP_DISPATCH_PORT ?? 3001;
+  if (dispatchPort === env.PORT) {
+    throw new Error(`PAPERCLIP_DISPATCH_PORT ${dispatchPort} must differ from PORT ${env.PORT}`);
+  }
   const server = serve({
     fetch: app.fetch,
     port: env.PORT,
     hostname: '0.0.0.0',
   });
   logger.info({ port: env.PORT }, 'listening');
+  const privateServer = serve({ fetch: buildPrivateDispatchApp().fetch, port: dispatchPort, hostname: '0.0.0.0' });
+  logger.info({ port: dispatchPort }, 'private dispatch listener up');
 
   // Jarvis voice relay: intercept the WS upgrade on the raw http.Server. The
   // upgrade event fires before Hono's fetch handler, so the two coexist.
@@ -93,8 +113,8 @@ async function main(): Promise<void> {
   startWebhookMonitor();
   // Paperclip durability sweep (ADR 0010 DL-3). Inert until runtime-config
   // paperclip/reconciler_mode leaves 'off' and a base URL is configured, and it
-  // refuses to sweep at all unless the A1-8 boot probe proves the vendored
-  // updatedSince patch is present in the running Paperclip image.
+  // refuses to sweep unless the A1-8 boot probe proves the running Paperclip
+  // image honors native updatedSince.
   startPaperclipReconciler();
   // Daily cost evaluator. No-ops until runtime-config cost/watch_enabled='true',
   // so this is inert until explicitly turned on.
@@ -132,6 +152,7 @@ async function main(): Promise<void> {
     stopDriftWatch();
     stopWebhookMonitor();
     stopPaperclipReconciler();
+    lock.stop();
     // Close any live Jarvis voice sessions cleanly before the socket closes.
     await teardownAllJarvisSessions('shutdown').catch(() => {});
     // Await the listener teardown (unsubscribe + delete the ephemeral queue) so
@@ -142,6 +163,7 @@ async function main(): Promise<void> {
       stopInvalidationListener(),
       new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref()),
     ]).catch(() => {});
+    privateServer.close();
     server.close((err) => {
       if (err) {
         logger.error({ err: err.message }, 'shutdown error');

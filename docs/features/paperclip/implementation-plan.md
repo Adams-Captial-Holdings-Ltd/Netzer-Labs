@@ -38,7 +38,7 @@ the *why* and the *how*, not the current *what*.
    all, which invalidated the mandatory durable reconciler feed in §5/§8.5. The
    user approved patching the self-hosted copy; the harness now runs
    `netzer-paperclip:2026.722.0-netzar.1`, built from the immutable upstream
-   digest plus [`vendor/paperclip/updated-since.patch`](../../../vendor/paperclip/updated-since.patch).
+   digest plus `vendor/paperclip/updated-since.patch` (deleted by the v2026.916.1 re-pin, ADR 0019).
    See the **Amendment (2026-08-18)** section of ADR 0010 and
    [the session handoff](handoffs/2026-08-18-updated-since-patch-and-phase-0.md).
 2. **A naive strict `>` watermark.** The ratified predicate is

@@ -18,15 +18,18 @@
  * widened. `GET /api/openapi.json` is snapshotted to
  * `tests/contract/openapi.snapshot.json` by the probe "A1-15: GET
  * /api/openapi.json is snapshotted, and it types no response field". That
- * document is authoritative for REQUEST BODY FIELD NAMES and their enums, for
- * security, and for route existence - it is how the `task_bridge` key scope in
- * the A1-9 probe was resolved. It is authoritative for nothing else, and the
- * same probe pins the two counterexamples so this claim cannot quietly widen
+ * document is authoritative for field names and enums of the request bodies it
+ * declares, for security, and for route existence - it is how the `task_bridge`
+ * key scope in the A1-9 probe was resolved. It is authoritative for nothing
+ * else, and the same probe pins the two counterexamples so this claim cannot
+ * quietly widen
  * again: `GET /api/companies/{companyId}/issues` declares exactly TWO
  * parameters, `companyId` and `view`, while the route reads far more of them -
  * `updatedSince`, the whole reason A1-8 exists, is absent from the document
- * entirely - and `POST /api/companies/{companyId}/issues` declares `status`
- * REQUIRED while every create probe in the suite omits it and is answered 201.
+ * entirely. `POST /api/companies/{companyId}/issues` has an empty body schema
+ * at v2026.916.1 (the previous pin declared `status` required, though every
+ * create probe omitted it and got 201), so those field names come from probes
+ * and upstream source, not this document.
  * A `parameters` list and a `required` list in that document are not facts.
  *
  * It is NOT authoritative for responses either: at the pinned artifact every
@@ -345,9 +348,9 @@ export type PaperclipIssueDetail = PaperclipIssue;
  * unknown until a probe asserts the field. The failure direction is benign
  * here: the ACL never reads the default, it re-reads the row.
  *
- * The OpenAPI document declares `status` required on this operation, which the
- * omitted form contradicts and the artifact accepts anyway - see the A1-15 note
- * in the file header. The field stays on `CreateIssueBody` as an optional
+ * The previous pin's document declared `status` required (v2026.916.1's has no
+ * body schema), and the omitted form is accepted either way - see the A1-15
+ * note in the file header. The field stays on `CreateIssueBody` as an optional
  * because nothing has characterized what the server does with it; sending it is
  * UNVERIFIED, and `listFilterValidation` shows an unrecognized status is a
  * silent 200 rather than a 400, so a wrong value would not announce itself.
@@ -363,9 +366,9 @@ export interface PaperclipCreateIssueBody extends CreateIssueBody {
    * does establish is the body shape the proven `200 + deduplicated: true`
    * replay was observed on - `idempotencyKey` AND `allowDuplicate: true`
    * together - which is why `createMission` sends exactly that pair on a write
-   * `client.ts` auto-retries. The spelling is also one of the 28 properties of
-   * `POST /api/companies/{companyId}/issues` in the committed
-   * `tests/contract/openapi.snapshot.json`, re-checked byte for byte by A1-15.
+   * `client.ts` auto-retries. This is the spelling the A1-13 probe sends; the
+   * v2026.916.1 snapshot no longer lists the create-body properties (the
+   * previous pin listed 28).
    * It stays optional until the probe named in the Phase 1 handoff exists: send
    * `allowDuplicate: false` against a duplicate title and record the outcome.
    */
@@ -386,8 +389,9 @@ export interface PaperclipCreateIssueResponse extends PaperclipIssue {
  *
  * WHERE THESE NAMES COME FROM: the committed `tests/contract/openapi.snapshot.
  * json`, which the A1-15 probe re-checks byte for byte and which IS
- * authoritative for request field names. That operation declares 29 properties
- * and NO `required` array; only the six a caller here actually sends are typed,
+ * authoritative for request field names. At v2026.916.1 that operation has an
+ * empty body schema (the previous pin declared 29 properties and NO `required`
+ * array); only the six a caller here actually sends are typed,
  * because a field nothing produces is a compile-time obstacle rather than a
  * contract.
  *
@@ -399,10 +403,9 @@ export interface PaperclipCreateIssueResponse extends PaperclipIssue {
  *   - `status` and `assigneeAgentId`. The only PATCH any probe has ever driven
  *     is `{title}` on an unassigned, status-omitted issue, inside the `boardMutationGuard`
  *     characterization - and that records a 200, it does not assert one.
- *   - The run-id rule. Plan text says a run id is needed only when the issue is
- *     `in_progress` AND assigned to the actor; `runIdBoundary` records
- *     `requiresRunId: false` for PATCH on an unassigned, status-omitted issue and
- *     nothing more. That is not a per-route property.
+ *   - The run-id rule. At v2026.916.1 agent comments and PATCH field updates
+ *     return 403 without a valid run; `runIdBoundary` records the measured
+ *     route outcomes, including the older 401 guard on checkout.
  *
  * Produce the probes before narrowing anything below.
  */
@@ -497,16 +500,11 @@ export interface PaperclipIssueListQuery {
    */
   view?: 'compact';
   /**
-   * NOT upstream at the pinned release - supplied by the vendored patch. On an
-   * unpatched build it is silently ignored and the poll returns the whole world
-   * with a 200, so the reconciler must refuse to start until the probe
-   * "A1-8 (blocking): updatedSince in the future returns an empty list" is
-   * green. Must be ISO 8601 with an explicit UTC offset or the patched server
-   * answers 400. The predicate is a STRICT `updatedAt > value`, observed by the
-   * probes "C-2 (BLOCKING): a truncated watermark loses rows" and "I3:
-   * updatedSince is a strict greater-than watermark" - which is why a caller
-   * must subtract an overlap rather than pass its last-seen watermark directly.
-   * (The ADR amendment's `>= value + 1ms` is superseded by those probes.)
+   * Native from v2026.916.1. A build without it silently ignores the parameter
+   * and returns the full board, so the reconciler probes before sweeping.
+   * Parseable timestamps with or without a UTC offset are accepted; malformed
+   * values answer 400. The predicate is strict `updatedAt > value`, so callers
+   * subtract an overlap and dedupe instead of passing the last-seen watermark.
    */
   updatedSince?: string;
 }
@@ -545,8 +543,8 @@ export interface PaperclipCheckoutBody {
  * A1-11: `POST /api/issues/{id}/release` takes NO validated body - the agent id
  * comes from the actor, never from the caller - and answers with the issue row.
  * Asserted field by field against a live 200 by the A1-11 probe, which also
- * observes that release demands a run id (401 `Agent run id required`) even
- * though comments and PATCH do not (C-3).
+ * observes that release demands a run id (401 `Agent run id required`); agent
+ * comments and PATCH field updates return 403 without a valid run (C-3).
  */
 export type PaperclipReleaseResponse = PaperclipIssue;
 
@@ -957,6 +955,8 @@ export interface SweepResult {
   /** Why a pass did no work. Absent when `ran` is true. */
   reason?:
     | 'mode-off'
+    /** The runtime lock's latest verdict is not clean. */
+    | 'lock-closed'
     | 'not-configured'
     | 'boot-probe-failed'
     /** The probe REQUEST failed, which is not evidence either way. Retried next tick. */

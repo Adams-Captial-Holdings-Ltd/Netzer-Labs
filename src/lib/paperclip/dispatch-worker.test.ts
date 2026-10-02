@@ -163,11 +163,12 @@ describe('parseDispatchBody (pure; the route turns null into a 400)', () => {
 
   // THE SHAPE PAPERCLIP ACTUALLY PUSHES (measured 2026-09-06, staging dd16ca4,
   // Paperclip v2026.722.0). The adapter builds its body in the PINNED IMAGE at
-  // `/app/server/src/adapters/http/execute.ts:13` (digest in
+  // `/app/server/src/adapters/http/execute.ts:14` at v2026.916.1 (digest in
   // vendor/paperclip/Dockerfile:20) as
-  // `{ ...payloadTemplate, agentId: agent.id, runId, context }`, where
-  // `payloadTemplate` is `{ netzarAgentId: <slug> }` (bootstrap-core.ts:423-434)
-  // and `context` is the run's contextSnapshot, onto which heartbeat.ts:4219
+  // `{ ...payloadTemplate, agentId: agent.id, runId, context }` (plus
+  // optional `paperclipRuntimeTools` when provided), where
+  // `payloadTemplate` is `{ netzarAgentId: <slug> }` (bootstrap-core.ts:661-667)
+  // and `context` is the run's contextSnapshot, onto which heartbeat.ts:7045
   // writes `contextSnapshot.issueId`. So the issue id arrives INSIDE `context`
   // and there is no top-level `issueId` at all — which is why 15 pushes were
   // answered 400 `invalid_body` in CloudWatch while Paperclip logged

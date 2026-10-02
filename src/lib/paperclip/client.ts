@@ -45,9 +45,11 @@
 import { logger } from '../../observability/logger.js';
 import { isKillSwitchActive } from '../state/kill-switches-repo.js';
 import { loadPaperclipConfig, paperclipConfig, type PaperclipConfig, type PaperclipConfigInput } from './config.js';
+import { getPaperclipLockState } from './runtime-lock.js';
 import {
   PaperclipCompanyMismatchError,
   PaperclipDisabledError,
+  PaperclipLockClosedError,
   PaperclipPaginationTruncatedError,
   PaperclipRatelimitedError,
   PaperclipUnavailableError,
@@ -128,11 +130,12 @@ export const PAPERCLIP_NO_RETRY: PaperclipRetryPolicy = { ...PAPERCLIP_RETRY_POL
 
 /**
  * Extends `RequestInit`, and every key this client does not name is re-spread
- * into `fetch`, so `keepalive`, `redirect`, `cache` and a caller `signal` work
- * for free. `headers` is destructured out in the constructor precisely so the
- * rest-spread cannot clobber the assembled header block.
+ * into `fetch`, so `keepalive`, `cache` and a caller `signal` work for free;
+ * redirects are fixed to 'error'. `headers` is destructured out in the
+ * constructor precisely so the rest-spread cannot clobber the assembled
+ * header block.
  */
-export interface PaperclipClientOptions extends RequestInit, PaperclipConfigInput {
+export interface PaperclipClientOptions extends Omit<RequestInit, 'redirect'>, PaperclipConfigInput {
   fetchFn?: typeof fetch;
   retry?: PaperclipRetryPolicy;
   /** Injected so a test drives the switch without touching DynamoDB. */
@@ -511,7 +514,10 @@ export class PaperclipClient {
     });
   }
 
-  /** Proven run-less on an unassigned, status-omitted issue; see `runIdBoundary`. */
+  /**
+   * At v2026.916.1 agent comments need a valid heartbeat run; callers pass
+   * `opts.runId`, and run-less is 403 (C-3).
+   */
   addComment(
     issueId: string,
     body: PaperclipCreateCommentBody,
@@ -568,6 +574,17 @@ export class PaperclipClient {
   ): Promise<PaperclipRawResponse<T>> {
     const query = normalizeQuery(opts.query);
     const request: PaperclipRequestContext = { method, path, query };
+
+    const lock = getPaperclipLockState();
+    if (lock.closed) {
+      throw new PaperclipLockClosedError({
+        request,
+        body: {
+          error: `Paperclip runtime lock closed: ${lock.code}`,
+          remediation: 'check the paperclip lock verdict log line',
+        },
+      }, lock.code ?? 'unknown');
+    }
 
     // (1) THE KILL SWITCH, at every invoke and BEFORE the breaker.
     // `isKillSwitchActive` is itself fail-open on a DDB error, so an outage
@@ -644,6 +661,8 @@ export class PaperclipClient {
     try {
       response = await this.fetchFn(url, {
         ...this.requestInit,
+        // Never follow a redirect with the Paperclip authorization header.
+        redirect: 'error',
         method,
         signal,
         headers: {

@@ -473,7 +473,7 @@ async function main(): Promise<void> {
     });
     await journal('foundation-complete', { stacks: foundationStacks });
     await ensureSchedulerGroup(env, nameSuffix);
-    // Paperclip work engine (ADR 0010): the ECR repo the pinned+patched
+    // Paperclip work engine (ADR 0010): the ECR repo the pinned
     // image is built into, just below. Gated on the SAME tier gate as the two
     // stacks above, so a Tier 0 install creates nothing - the previously
     // ungated version left an empty, uncatalogued repo on every deploy
@@ -484,7 +484,7 @@ async function main(): Promise<void> {
     if (paperclipEnabled) {
       const paperclipRepoName = buildResourceNames(nameSuffix).paperclipEcrRepo;
       await ensureEcrRepo(env, paperclipRepoName);
-      // Phase 1.5: build the pinned+patched Paperclip image (ADR 0010) into
+      // Phase 1.5: build the pinned Paperclip image (ADR 0010) into
       // that repo. ALWAYS through CodeBuild, never the local Docker path:
       // the point of the phase is ONE path that needs no daemon on the
       // operator's machine, and the buildspec's `test "$ARCH" = "arm64"`
@@ -544,8 +544,7 @@ async function main(): Promise<void> {
           // which is also why it is correctly absent from the content tag.
           deployTier: env.DEPLOY_TIER ?? '1',
           repoRoot,
-          // The Dockerfile COPYs updated-since.patch from beside itself, so
-          // the context is the vendor directory, not the repo root.
+          // The Dockerfile and its build context live in the vendor directory.
           dockerfile: 'vendor/paperclip/Dockerfile',
           buildContext: 'vendor/paperclip',
           // No `:latest` in this repo. Its only legitimate consumer is a task

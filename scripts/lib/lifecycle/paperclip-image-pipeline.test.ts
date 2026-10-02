@@ -21,7 +21,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,6 +97,18 @@ function workflowStep(name: string): string {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('cloudBuildBuildSpec parameterization', () => {
+  it('keeps the vendored Paperclip image pinned to one upstream instruction', () => {
+    const dockerfile = read('vendor/paperclip/Dockerfile');
+    const instructions = dockerfile.split('\n').map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith('#'));
+    expect(instructions).toEqual([
+      'FROM ghcr.io/paperclipai/paperclip:2026.916.1@sha256:a02ac35ac41df911af477422ea0e781cf41d2b2c600c66f0a5ac9d8c63f52c2c',
+    ]);
+    expect(dockerfile.split('\n').some((line) => !line.trimStart().startsWith('#') && /\b(RUN|COPY|ADD|patch)\b/i.test(line))).toBe(false);
+    expect(readdirSync(join(REPO_ROOT, 'vendor/paperclip')).sort()).toEqual(['Dockerfile']);
+    expect(read('docker-compose.paperclip.yml')).toContain('netzer-paperclip:2026.916.1-netzar.1');
+  });
+
   it('defaults to the orchestrator build unchanged', () => {
     expect(cloudBuildBuildSpec()).toContain(
       'docker build --build-arg DEPLOY_TIER="$DEPLOY_TIER" -t "$ECR_HOST/$ECR_REPO_NAME:$IMAGE_TAG" -f Dockerfile .',
@@ -169,7 +181,7 @@ describe('contentImageTag', () => {
 
 // ─────────────────────────────────────────────────────────────────────
 // The skip's guard. contentImageTag hashes HEAD, so the tag cannot see the
-// working tree: edit vendor/paperclip/updated-since.patch (the re-pin
+// working tree: edit vendor/paperclip/Dockerfile (the re-pin
 // workflow's own step), do not commit, deploy, and the OLD tag is already in
 // ECR - build skipped, old digest recorded as this deploy's Paperclip image,
 // deploy green. The only "committed files only" warning in cloud-build.ts
@@ -1032,6 +1044,19 @@ describe('Paperclip first install (.github/workflows/deploy.yml)', () => {
     const deployAt = WORKFLOW.indexOf('      - name: CDK deploy');
     expect(earlyAt).toBeLessThan(populateAt);
     expect(populateAt).toBeLessThan(deployAt);
+  });
+
+  it('seeds every Paperclip secret default in CI without replacing live fields', () => {
+    const phases = read('scripts/lib/lifecycle/deploy-phases.ts');
+    const paperclipPlan = phases.slice(phases.indexOf("leaf: 'paperclip'"));
+    const defaults = paperclipPlan.match(/defaults: JSON\.stringify\((\{[^\n]+\})\)/)?.[1];
+    expect(defaults, 'Paperclip secret defaults').toBeDefined();
+    const keys = [...defaults!.matchAll(/([a-z_]+):\s*'REPLACE_ME'/g)].map((match) => match[1]!);
+    const populate = workflowStep('Populate Paperclip secret');
+    for (const key of keys) {
+      expect(populate, `CI must merge-add Paperclip default ${key}`).toContain(`has("${key}")`);
+      expect(populate, `CI must seed Paperclip default ${key}`).toContain(`.${key} = "REPLACE_ME"`);
+    }
   });
 
   it('seeds a missing Better Auth secret once without exposing the value', () => {

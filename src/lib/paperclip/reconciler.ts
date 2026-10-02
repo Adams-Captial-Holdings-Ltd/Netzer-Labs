@@ -14,21 +14,15 @@
  *
  * THE TWO PRECONDITIONS THIS LOOP TURNS ON, both proven by live probes:
  *
- *  1. A1-8 / M28 — THE BOOT TRAP. Paperclip reads query parameters ad hoc with no
- *     strict schema, so a parameter the build does not implement is SILENTLY
- *     IGNORED: an unpatched image answers `updatedSince` with 200 and the FULL
- *     UNFILTERED LIST. That is the failure a reconciler is least able to notice —
- *     it looks like a successful poll that happened to return a lot of rows. So
- *     before the first sweep this loop proves the vendored patch is present, on
- *     two independent signals (see `runBootProbe`), and REFUSES TO SWEEP FOREVER
- *     if either fails. A refusal is loud and permanent for the life of the
- *     process; there is no "try again next tick" that could turn a silent
- *     full-board poll back on.
+ *  1. A1-8 / M28 — THE BOOT TRAP. `updatedSince` is native from v2026.916.1,
+ *     but a build without it silently ignores the parameter and returns the
+ *     full unfiltered board. Before the first sweep, a future stamp must return
+ *     `[]` and a malformed value must return 400 (see `runBootProbe`). Either
+ *     failure permanently refuses to sweep for the life of the process.
  *
- *  2. C-2 / M30 — THE WATERMARK PREDICATE. See `watermark.ts`. ADR 0010 is
- *     amended in this same change: `>= watermark + 1ms` is a correctness hazard,
- *     and the poll is `>= (maxUpdatedAt - poll_overlap_ms)` with client-side
- *     dedupe on `(id, updatedAt)`.
+ *  2. C-2 / M30 — THE WATERMARK PREDICATE. Native `updatedSince` filters with
+ *     strict `updated_at > since`. See `watermark.ts`: the poll subtracts
+ *     `poll_overlap_ms` from the watermark and dedupes on `(id, updatedAt)`.
  *
  * PAGING IS SERIAL AND KEYSET. Serial because A1-10 shape (b) is a per-actor
  * in-flight COALESCER, not a rate limiter, and its polarity is the opposite of the
@@ -54,6 +48,7 @@ import { tryAcquireRunnerLease } from '../state/runner-lease.js';
 import { PaperclipClient, paperclipClientFromEnvironment } from './client.js';
 import { PaperclipDisabledError, PaperclipInvalidInputError } from './error.js';
 import { PAPERCLIP_CONFIG_CATEGORY } from './config.js';
+import { getPaperclipLockState } from './runtime-lock.js';
 import {
   advancePaperclipWatermark,
   paperclipPollSinceMs,
@@ -187,34 +182,27 @@ async function resolveClient(deps: ReconcilerDeps): Promise<PaperclipClient | nu
 // ── The A1-8 boot probe ───────────────────────────────────────────────────
 
 /**
- * Proves the vendored `updatedSince` patch is present in the running image, on
- * two independent signals, because either one alone can pass vacuously:
+ * Proves the running image honors `updatedSince` on two independent signals.
+ * A build without the parameter silently ignores it, including after a downgrade:
  *
- *  (a) `updatedSince = now + 1h` must answer `[]`. On an unpatched build the
- *      parameter is ignored and this returns the whole board. But on a genuinely
- *      empty board an unpatched build also returns `[]`, so this signal alone
- *      cannot distinguish "filtered" from "nothing there".
+ *  (a) `updatedSince = now + 1h` must answer `[]`. An ignored parameter returns
+ *      the whole board, but an empty board also returns `[]` without filtering.
  *
- *  (b) `updatedSince` WITHOUT an explicit UTC offset must be a 400 naming the
- *      parameter. A build that rejects a malformed value is provably PARSING it,
- *      which is exactly what (a) cannot establish on an empty board. The patch's
- *      accepted form requires a four-digit year and an explicit `Z` or `±HH:MM`;
- *      `new Date(...).toISOString()` satisfies it and the string below does not.
- *
- * Both come from the probe "A1-8 (BLOCKING): updatedSince one hour in the future
- * returns an empty list", which asserts the empty body against a board it first
- * asserts is non-empty, and asserts the offset-less 400 as its second signal.
+ *  (b) A malformed `updatedSince` must answer 400. This proves parsing on an
+ *      empty board, but a server that rejects bad input yet ignores valid values
+ *      could pass it alone. Native support since v2026.916.1 accepts parseable
+ *      stamps with or without a UTC offset.
  *
  * THE VERDICT IS THREE-VALUED, AND THAT IS THE POINT. "This build provably
  * ignores the parameter" is a property of the IMAGE: it cannot change without a
- * deploy, so `unpatched` is permanent and refusing forever is correct. "The probe
+ * deploy, so `ignored` is permanent and refusing forever is correct. "The probe
  * request did not complete" is a property of the MOMENT — a timeout, a 5xx, an
  * open breaker, a 429 from a fleet booting together — and it is evidence of
  * nothing at all. Collapsing the two would let one blip on one tick brick the
  * durability layer for the life of the task, so `error` leaves the verdict
  * `unknown` and the next tick asks again.
  */
-type BootProbeVerdict = 'passed' | 'unpatched' | 'error';
+type BootProbeVerdict = 'passed' | 'ignored' | 'error';
 
 async function runBootProbe(client: PaperclipClient, now: number): Promise<BootProbeVerdict> {
   const future = new Date(now + 3_600_000).toISOString();
@@ -223,9 +211,9 @@ async function runBootProbe(client: PaperclipClient, now: number): Promise<BootP
     if (page.nodes.length > 0) {
       logger.error(
         { updatedSince: future, rows: page.nodes.length },
-        'paperclip reconciler REFUSING TO START: updatedSince returned rows for a future watermark — the vendored patch is absent and this build silently ignores the parameter, so every poll would return the full unfiltered board',
+        'paperclip reconciler REFUSING TO START: updatedSince returned rows for a future watermark — this build silently ignores updatedSince, so every poll would return the full unfiltered board',
       );
-      return 'unpatched';
+      return 'ignored';
     }
   } catch (err) {
     logger.warn(
@@ -235,21 +223,20 @@ async function runBootProbe(client: PaperclipClient, now: number): Promise<BootP
     return 'error';
   }
   try {
-    // No offset: the patched server must reject this.
-    await client.listIssues({ updatedSince: '2026-01-01T00:00:00', limit: 1 });
+    await client.listIssues({ updatedSince: 'not-a-date', limit: 1 });
   } catch (err) {
     if (err instanceof PaperclipInvalidInputError) return 'passed';
     logger.warn(
       { errMessage: err instanceof Error ? err.message : String(err) },
-      'paperclip reconciler boot probe could not be completed: an offset-less updatedSince failed with something other than a 400; NOT a verdict — retrying next tick',
+      'paperclip reconciler boot probe could not be completed: a malformed updatedSince failed with something other than a 400; NOT a verdict — retrying next tick',
     );
     return 'error';
   }
   logger.error(
     {},
-    'paperclip reconciler REFUSING TO START: an offset-less updatedSince was ACCEPTED, so this build is not parsing the parameter at all',
+    'paperclip reconciler REFUSING TO START: a malformed updatedSince was accepted, so this build is not parsing the parameter at all',
   );
-  return 'unpatched';
+  return 'ignored';
 }
 
 // ── One pass ──────────────────────────────────────────────────────────────
@@ -312,6 +299,9 @@ export async function runPaperclipReconcilePassOnce(
   if (mode === 'off' && !opts.force) {
     return emptyResult('mode-off', mode, pollIntervalMs, enabledAgents);
   }
+  if (getPaperclipLockState().closed) {
+    return emptyResult('lock-closed', mode, pollIntervalMs, enabledAgents);
+  }
   if (bootProbe === 'failed') {
     // RE-LOGGED EVERY TICK, deliberately. A single line at the moment of failure
     // scrolls off, and what an operator then sees is a loop that ticks forever and
@@ -319,7 +309,7 @@ export async function runPaperclipReconcilePassOnce(
     // The durability layer being off is worth one line per interval.
     logger.error(
       {},
-      'paperclip reconciler is REFUSING TO SWEEP: this build provably ignores updatedSince (see the boot probe). Deploy the patched image; this will not clear by itself.',
+      'paperclip reconciler is REFUSING TO SWEEP: this build provably ignores updatedSince (see the boot probe). Deploy a build that honors it; this will not clear by itself.',
     );
     return emptyResult('boot-probe-failed', mode, pollIntervalMs, enabledAgents);
   }
@@ -331,9 +321,9 @@ export async function runPaperclipReconcilePassOnce(
 
   if (bootProbe === 'unknown') {
     const verdict = await runBootProbe(client, now());
-    // Only a PROVEN unpatched build latches. A failed request leaves the verdict
+    // Only a PROVEN ignored parameter latches. A failed request leaves the verdict
     // unknown so the next tick asks again.
-    if (verdict === 'unpatched') {
+    if (verdict === 'ignored') {
       bootProbe = 'failed';
       return emptyResult('boot-probe-failed', mode, pollIntervalMs, enabledAgents);
     }
@@ -396,16 +386,16 @@ export async function runPaperclipReconcilePassOnce(
   // not an unlucky interleaving; it is what an active board does.
   //
   // Anchoring each page on a VALUE closes it. A page returns the `limit` smallest
-  // rows at or above `since`, so every row it did not return is at or above that
+  // rows after `since`, so every row it did not return is at or above that
   // page's max — re-anchoring `since` there can skip nothing, whatever moved
   // meanwhile. A re-stamped row simply reappears later in the same sweep as a new
   // `(id, updatedAt)` pair, which is a duplicate candidate and not a lost one.
   //
-  // `- 1` because the vendored patch compiles `updatedSince = v` to
-  // `updated_at >= v + 1ms`, so passing `max - 1ms` makes the next window
-  // INCLUSIVE of `max` and the rows sharing its millisecond. That costs one
-  // re-read page-boundary row per page — and it is what gives the `(id, updatedAt)`
-  // dedupe below something real to collapse.
+  // `- 1` because native `updatedSince` is strict `updated_at > since`, so
+  // passing `max - 1ms` makes the next window INCLUSIVE of `max` and the rows
+  // sharing its millisecond. That costs one re-read page-boundary row per page —
+  // and it is what gives the `(id, updatedAt)` dedupe below something real to
+  // collapse.
   //
   // `offset` is the fallback for the one case a value anchor cannot advance: a
   // whole page whose rows all share a single millisecond. Then and only then the
@@ -415,13 +405,15 @@ export async function runPaperclipReconcilePassOnce(
   //
   // THE CURSOR CAP BELOW IS WHAT CLOSES IT, and it is a bound rather than a hope.
   //
-  //  WHERE a skipped row can be. When the fallback fires, every row on that page
-  //  sits at ONE stamp: the patch serves `>= since + 1ms`, and the fallback
-  //  condition is `pageMax - 1 <= since`, so every row on the page is at exactly
-  //  `since + 1ms == pageMax`. Call it S. The positional walk that follows is
-  //  anchored at `S - 1ms`, so every row it can return — and therefore every row a
-  //  shift can drop — carries a stamp at or above S. Refusing to move the cursor
-  //  past S leaves the next poll's floor at `S - overlap`, below all of them.
+  //  WHERE a skipped row can be. Native filtering is strict `updated_at > since`
+  //  against microseconds, and the API shows stamps cut to the millisecond, so
+  //  every row a page returns shows a stamp of `since` or later. The fallback
+  //  condition is `pageMax - 1 <= since`, so the page's stamps all lie within
+  //  `since` and `since + 1ms`. Call its latest stamp S, so `S - 1ms <= since`.
+  //  The positional walk that follows keeps the same `since`, so every row it can
+  //  return — and therefore every row a shift can drop — shows a stamp at or above
+  //  `S - 1ms`. Refusing to move the cursor past S leaves the next poll's floor at
+  //  `S - overlap`, below all of them.
   //
   //  WHEN a skip is possible at all, exactly. A shift drops a row only if the row
   //  that moved to the tail was ALREADY READ in this sweep: if its old index was

@@ -12,7 +12,7 @@ import {
   GatewayVpcEndpoint,
   GatewayVpcEndpointAwsService,
 } from 'aws-cdk-lib/aws-ec2';
-import { TIERS, TAGS, RESOURCE_NAMES, PAPERCLIP_PORT, bucketName } from './constants.js';
+import { TIERS, TAGS, RESOURCE_NAMES, PAPERCLIP_PORT, DISPATCH_PORT, bucketName } from './constants.js';
 import type { BaseStackProps, NetworkOutputs } from './interfaces.js';
 import { CfnFlowLog } from 'aws-cdk-lib/aws-ec2';
 
@@ -128,6 +128,12 @@ export class NetworkStack extends Stack implements NetworkOutputs {
       this.fargateSecurityGroup,
       Port.tcp(PAPERCLIP_PORT),
       'Orchestrator to Paperclip',
+    );
+    // Only Paperclip can call the orchestrator's private dispatch listener.
+    this.fargateSecurityGroup.addIngressRule(
+      this.paperclipSecurityGroup,
+      Port.tcp(DISPATCH_PORT),
+      'Paperclip to orchestrator dispatch',
     );
 
     this.endpointsSecurityGroup = new SecurityGroup(this, 'EndpointsSg', {

@@ -96,9 +96,9 @@ describe('loadPaperclipConfig', () => {
   it('runtime-config paperclip/base_url wins over the env fallback', async () => {
     const input = await loadPaperclipConfig({
       env: { PAPERCLIP_BASE_URL: 'https://from-env' },
-      getConfigFn: fakeGetConfig({ 'paperclip/base_url': 'https://from-config' }),
+      getConfigFn: fakeGetConfig({ 'paperclip/base_url': 'https://from-config.internal' }),
     });
-    expect(input.baseUrl).toBe('https://from-config');
+    expect(input.baseUrl).toBe('https://from-config.internal');
   });
 
   it('an empty-string timeout does not defeat the default and does not throw at load', async () => {

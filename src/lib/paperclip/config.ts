@@ -87,6 +87,34 @@ function disabled(what: string, remediation: string): PaperclipDisabledError {
   });
 }
 
+function isAllowedPaperclipBaseUrl(value: string): boolean {
+  if (/[?#\s]/.test(value)) return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.pathname !== '/'
+  ) return false;
+
+  const hostname = url.hostname;
+  if (hostname === 'localhost' || hostname === '[::1]') return true;
+  const octets = hostname.split('.').map(Number);
+  if (
+    octets.length === 4 &&
+    octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+  ) {
+    const [a, b] = octets;
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.internal$/.test(hostname);
+}
+
 /**
  * Absence and malformation collapse to the same typed error, the way
  * `src/lib/salesforce/client.ts` normalizes both an unset token blob and an
@@ -162,6 +190,12 @@ export async function loadPaperclipConfig(
   // Runtime-config wins over env (C-19: promotion is a config write, not a
   // deploy), and `getConfig`'s fail-open `undefined` simply lets env answer.
   const configured = await read(PAPERCLIP_CONFIG_CATEGORY, PAPERCLIP_BASE_URL_CONFIG_KEY);
+  if (configured && !isAllowedPaperclipBaseUrl(configured)) {
+    throw disabled(
+      'runtime-config paperclip/base_url override is not allowed',
+      'allowed values are http or https origin only, with host localhost, a loopback address, an RFC 1918 address, or a .internal name',
+    );
+  }
   return {
     baseUrl: configured ?? env.PAPERCLIP_BASE_URL,
     companyId: env.PAPERCLIP_COMPANY_ID,
