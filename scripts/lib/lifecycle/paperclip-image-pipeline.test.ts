@@ -21,7 +21,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,6 +97,18 @@ function workflowStep(name: string): string {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('cloudBuildBuildSpec parameterization', () => {
+  it('keeps the vendored Paperclip image pinned to one upstream instruction', () => {
+    const dockerfile = read('vendor/paperclip/Dockerfile');
+    const instructions = dockerfile.split('\n').map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith('#'));
+    expect(instructions).toEqual([
+      'FROM ghcr.io/paperclipai/paperclip:2026.916.1@sha256:a02ac35ac41df911af477422ea0e781cf41d2b2c600c66f0a5ac9d8c63f52c2c',
+    ]);
+    expect(dockerfile.split('\n').some((line) => !line.trimStart().startsWith('#') && /\b(RUN|COPY|ADD|patch)\b/i.test(line))).toBe(false);
+    expect(readdirSync(join(REPO_ROOT, 'vendor/paperclip')).sort()).toEqual(['Dockerfile']);
+    expect(read('docker-compose.paperclip.yml')).toContain('netzer-paperclip:2026.916.1-netzar.1');
+  });
+
   it('defaults to the orchestrator build unchanged', () => {
     expect(cloudBuildBuildSpec()).toContain(
       'docker build --build-arg DEPLOY_TIER="$DEPLOY_TIER" -t "$ECR_HOST/$ECR_REPO_NAME:$IMAGE_TAG" -f Dockerfile .',

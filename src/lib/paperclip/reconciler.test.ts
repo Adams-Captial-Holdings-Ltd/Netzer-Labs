@@ -253,6 +253,22 @@ describe('the A1-8 boot probe', () => {
     expect(second).toMatchObject({ ran: true, candidates: 1 });
   });
 
+  it('a failed second boot-probe request also retries next tick', async () => {
+    const failWith: { status: number | null } = { status: null };
+    let reads = 0;
+    const t = deps({ board: [issue('a', T0)], failWith, onRead: () => {
+      reads++;
+      if (reads === 1) failWith.status = 503;
+    } });
+    const first = await runPaperclipReconcilePassOnce({}, t.deps);
+    expect(first).toMatchObject({ ran: false, reason: 'boot-probe-error' });
+    expect(logError).not.toHaveBeenCalled();
+    failWith.status = null;
+    const second = await runPaperclipReconcilePassOnce({}, t.deps);
+    expect(second).toMatchObject({ ran: true });
+    expect(logError).not.toHaveBeenCalled();
+  });
+
   it('passes on a build that honors updatedSince and then sweeps', async () => {
     const t = deps({ board: [issue('a', T0)] });
     const result = await runPaperclipReconcilePassOnce({}, t.deps);

@@ -803,12 +803,21 @@ describe('service boundary', () => {
   });
 
   it('keeps the orchestrator Fargate SG private', () => {
+    const fargateSg = Object.entries(network.findResources('AWS::EC2::SecurityGroup'))
+      .find(([logicalId]) => /FargateSg/.test(logicalId))?.[1]!;
+    const inline = (fargateSg.Properties as { SecurityGroupIngress?: Array<Record<string, unknown>> }).SecurityGroupIngress ?? [];
+    expect(inline.some((entry) => 'CidrIp' in entry || 'CidrIpv6' in entry)).toBe(false);
     const fargateRules = Object.values(
       network.findResources('AWS::EC2::SecurityGroupIngress'),
     )
-      .map((r) => r.Properties as { FromPort: number; GroupId: unknown; SourceSecurityGroupId: unknown })
+      .map((r) => r.Properties as { FromPort: number; ToPort: number; IpProtocol: string; GroupId: unknown; SourceSecurityGroupId: unknown })
       .filter((r) => /FargateSg/.test(JSON.stringify(r.GroupId)));
     expect(fargateRules.map((r) => r.FromPort).sort()).toEqual([3000, 3001]);
+    for (const rule of fargateRules) {
+      expect(rule.IpProtocol).toBe('tcp');
+      expect(rule.FromPort).toBe(rule.ToPort);
+    }
+    expect(fargateRules.find((r) => r.FromPort === 3001)?.ToPort).toBe(3001);
     expect(JSON.stringify(fargateRules.find((r) => r.FromPort === 3000)?.SourceSecurityGroupId)).toMatch(/AlbSg/);
     expect(JSON.stringify(fargateRules.find((r) => r.FromPort === 3001)?.SourceSecurityGroupId)).toMatch(/PaperclipSg/);
   });

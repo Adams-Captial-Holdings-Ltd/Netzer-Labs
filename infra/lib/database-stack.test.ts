@@ -122,13 +122,16 @@ describe('DatabaseStack (Paperclip Aurora)', () => {
 });
 
 describe('NetworkStack regression (orchestrator untouched by Paperclip)', () => {
-  it('keeps the Fargate SG exactly as before: one 3000 ingress from the ALB, no 3100', () => {
+  it('keeps the Fargate SG private: 3000 from ALB and 3001 from Paperclip, no 3100', () => {
     const fargateRules = ingressRules(network).filter((r) =>
       /FargateSg/.test(JSON.stringify(r.GroupId)),
     );
-    expect(fargateRules).toHaveLength(1);
-    expect(fargateRules[0].FromPort).toBe(3000);
-    expect(fargateRules[0].Description).toBe('ALB to Fargate');
+    expect(fargateRules).toHaveLength(2);
+    expect(fargateRules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ FromPort: 3000, ToPort: 3000, Description: 'ALB to Fargate' }),
+      expect.objectContaining({ FromPort: 3001, ToPort: 3001, Description: 'Paperclip to orchestrator dispatch' }),
+    ]));
+    expect(fargateRules.some((r) => r.FromPort === 3100)).toBe(false);
   });
 
   it('gives Paperclip its own SG with 3100 ingress from only the orchestrator', () => {

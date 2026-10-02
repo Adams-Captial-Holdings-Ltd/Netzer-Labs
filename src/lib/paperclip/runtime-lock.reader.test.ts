@@ -26,6 +26,19 @@ async function read(overrides: Record<string, Route> = {}, auditorKey = 'reader-
 }
 
 describe('runtime lock reader shape and failure handling', () => {
+  it('treats string hiddenSettings as an unexpected shape', async () => {
+    expect(await read({ '/api/health': { body: { hiddenSettings: 'instance.adapters,instance.plugins' } } }))
+      .toEqual({ verdict: 'unknown', reason: 'unexpected_shape' });
+  });
+
+  it.each([
+    [{ name: 'main', adapterType: 'http', runtimeConfig: {} }],
+    [{ id: 'a1', adapterType: 'http', runtimeConfig: {} }],
+  ])('requires agent id and name in a valid http row: %j', async (agent) => {
+    expect(await read({ [agentsPath]: { body: [agent] } }))
+      .toEqual({ verdict: 'unknown', reason: 'unexpected_shape' });
+  });
+
   it('does not treat object hidden-settings entries as a proven violation', async () => {
     expect(await read({ '/api/health': { body: { hiddenSettings: [{ key: 'instance.adapters' }, { key: 'instance.plugins' }] } } }))
       .toEqual({ verdict: 'unknown', reason: 'unexpected_shape' });
