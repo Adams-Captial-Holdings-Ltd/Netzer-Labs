@@ -394,8 +394,8 @@ export async function runPaperclipReconcilePassOnce(
   // `- 1` because native `updatedSince` is strict `updated_at > since`, so
   // passing `max - 1ms` makes the next window INCLUSIVE of `max` and the rows
   // sharing its millisecond. That costs one re-read page-boundary row per page —
-  // and it is what gives the `(id, updatedAt)`
-  // dedupe below something real to collapse.
+  // and it is what gives the `(id, updatedAt)` dedupe below something real to
+  // collapse.
   //
   // `offset` is the fallback for the one case a value anchor cannot advance: a
   // whole page whose rows all share a single millisecond. Then and only then the

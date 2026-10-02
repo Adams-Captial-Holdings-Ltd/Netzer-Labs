@@ -1602,9 +1602,9 @@ describe.skipIf(!process.env.PAPERCLIP_TEST_AUTH_SECRET)('Paperclip pinned-artif
   it('C-2 (BLOCKING): a millisecond-truncated watermark cannot lose a row, and overlap-and-dedupe delivers each exactly once', async () => {
     // Native filtering is strict `updated_at > since` over microseconds at
     // v2026.916.1; the old patch's `>= since + 1ms` is gone. Every issue this
-    // probe writes is UNASSIGNED, so no assignment
-    // wakeup follows the create and moves `updatedAt` out from under the
-    // `(id, updatedAt)` key the dedupe is keyed on.
+    // probe writes is UNASSIGNED, so no assignment wakeup follows the create and
+    // moves `updatedAt` out from under the `(id, updatedAt)` key the dedupe is
+    // keyed on.
     const poll = async (since: Date): Promise<PaperclipIssue[]> => {
       const result = await probe<PaperclipIssue[]>(
         companyIssues(`updatedSince=${encodeURIComponent(since.toISOString())}&sortField=updated&sortDir=asc&limit=${ISSUE_LIST_MAX_LIMIT}`),

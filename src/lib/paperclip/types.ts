@@ -21,8 +21,8 @@
  * document is authoritative for field names and enums of the request bodies it
  * declares, for security, and for route existence - it is how the `task_bridge`
  * key scope in the A1-9 probe was resolved. It is authoritative for nothing
- * else, and the
- * same probe pins the two counterexamples so this claim cannot quietly widen
+ * else, and the same probe pins the two counterexamples so this claim cannot
+ * quietly widen
  * again: `GET /api/companies/{companyId}/issues` declares exactly TWO
  * parameters, `companyId` and `view`, while the route reads far more of them -
  * `updatedSince`, the whole reason A1-8 exists, is absent from the document

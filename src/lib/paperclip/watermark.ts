@@ -102,8 +102,8 @@ export function paperclipWatermarkFrom(
  * BELOW a cursor the faster clock already advanced past — that row is not
  * recovered by this arithmetic and is lost. The overlap was proven against the
  * old C-2/M30 patch truncation hazard, a fixed 1 ms window that native filtering
- * removes; its protection against skew is unmeasured. Bounding it needs a probe that
- * inserts and updates under load and records the observed disagreement, and that
+ * removes; its protection against skew is unmeasured. Bounding it needs a probe
+ * that inserts and updates under load and records the observed disagreement, and that
  * probe does not exist. `poll_overlap_ms` is a runtime-config value precisely so
  * an operator can raise it without a deploy when one does.
  */

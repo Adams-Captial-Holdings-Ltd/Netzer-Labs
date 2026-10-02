@@ -336,7 +336,8 @@ async function main(): Promise<void> {
   console.log(ok(`lock auditor (${auditor.action})`));
   if (auditor.action === 'created') {
     // eslint-disable-next-line no-console
-    console.log(dim('  Roll the orchestrator service (force a new deployment) to pick up the new key. Until then, running tasks keep the old value and report the lock closed.'));
+    console.log(dim('  Roll the orchestrator service (force a new deployment) to pick up the new key. ' +
+      'Until then, running tasks keep the old value and report the lock closed.'));
   }
 
   // ── N agents ──────────────────────────────────────────────────────

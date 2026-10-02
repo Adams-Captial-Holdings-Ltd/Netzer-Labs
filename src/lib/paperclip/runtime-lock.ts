@@ -158,13 +158,11 @@ export async function readRuntimeLockVerdict({ fetchFn, baseUrl, companyId, audi
   ];
   const reads = await Promise.all(paths.map(({ path, authed }) => readPath(fetchFn, baseUrl, path, authed, auditorKey)));
   const parsed = parseSnapshot(reads);
-  let observed: LockVerdict = { verdict: 'unknown', reason: 'unexpected_shape' };
   const evaluated = evaluateRuntimeLock(parsed.snapshot);
   if (evaluated.verdict === 'violated') return evaluated;
   const failure = reads.find((item) => item.reason);
   if (failure?.reason) return { verdict: 'unknown', reason: failure.reason };
-  if (parsed.provable) observed = { verdict: 'clean' };
-  return observed;
+  return parsed.provable ? { verdict: 'clean' } : { verdict: 'unknown', reason: 'unexpected_shape' };
 }
 
 export async function readConfiguredLockVerdict({ loadConfig, fetchFn, auditorKey }: {

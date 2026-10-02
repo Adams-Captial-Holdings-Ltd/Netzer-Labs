@@ -88,28 +88,16 @@ async function reusableAuditorKey(response: Response, companyId: string): Promis
     Array.isArray(me.memberships) && me.memberships.some((row) => row.companyId === companyId && row.membershipRole === 'viewer');
 }
 
-export async function ensureLockAuditor(opts: {
-  request: PaperclipRequest;
-  companyId: string;
-  baseUrl: string;
-  storedKey?: string | undefined;
-  fetchFn?: typeof fetch;
-  randomBytesFn?: typeof randomBytes;
-}): Promise<{ action: 'reused' } | { action: 'created'; key: string }> {
-  const fetchFn = opts.fetchFn ?? fetch;
-  const whoami = async (key: string) => fetchFn(`${opts.baseUrl}/api/cli-auth/me`, {
-    headers: { authorization: `Bearer ${key}` },
-  });
-  const stored = opts.storedKey && opts.storedKey !== 'REPLACE_ME' ? opts.storedKey : undefined;
-  if (stored && await reusableAuditorKey(await whoami(stored), opts.companyId)) return { action: 'reused' };
+const auditorWhoami = (fetchFn: typeof fetch, baseUrl: string, key: string) =>
+  fetchFn(`${baseUrl}/api/cli-auth/me`, { headers: { authorization: `Bearer ${key}` } });
 
-  const random = opts.randomBytesFn ?? randomBytes;
+async function createLockAuditor(baseUrl: string, fetchFn: typeof fetch, random: typeof randomBytes): Promise<{ key: string; userId: string }> {
   const user = {
     email: `lock-auditor-${random(16).toString('hex')}@netzer.invalid`,
     password: random(32).toString('hex'),
     name: 'Netzer lock auditor',
   };
-  const auditorRequest = makeBoardRequest(opts.baseUrl, new CookieJar(), fetchFn);
+  const auditorRequest = makeBoardRequest(baseUrl, new CookieJar(), fetchFn);
   const signup = await auditorRequest('/api/auth/sign-up/email', { method: 'POST', body: JSON.stringify(user) });
   if (!signup.ok) throw await httpFailure(signup, 'Paperclip lock auditor sign-up');
   const rename = await auditorRequest('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name: 'Netzer lock auditor' }) });
@@ -120,21 +108,43 @@ export async function ensureLockAuditor(opts: {
   const mintedRecord = await jsonResponse<{ token?: string }>(minted, 'Paperclip lock auditor key creation');
   if (typeof mintedRecord.token !== 'string' || !mintedRecord.token) throw new Error('Paperclip lock auditor key was not returned');
   const key = mintedRecord.token;
-  const meBefore = await auditorIdentity(await whoami(key));
+  const meBefore = await auditorIdentity(await auditorWhoami(fetchFn, baseUrl, key));
   if (!meBefore.userId || meBefore.isInstanceAdmin === true) throw new Error('Paperclip lock auditor identity is invalid');
-  const access = await opts.request(`/api/admin/users/${encodeURIComponent(meBefore.userId)}/company-access`, {
-    method: 'PUT', body: JSON.stringify({ companyIds: [opts.companyId] }),
+  return { key, userId: meBefore.userId };
+}
+
+async function grantLockAuditorViewer(request: PaperclipRequest, companyId: string, userId: string): Promise<void> {
+  const access = await request(`/api/admin/users/${encodeURIComponent(userId)}/company-access`, {
+    method: 'PUT', body: JSON.stringify({ companyIds: [companyId] }),
   });
   if (!access.ok) throw await httpFailure(access, 'Paperclip lock auditor company-access');
-  const members = await opts.request(`/api/companies/${encodeURIComponent(opts.companyId)}/members`);
+  const members = await request(`/api/companies/${encodeURIComponent(companyId)}/members`);
   const rows = await jsonResponse<{ members?: Array<{ id: string; principalId: string }> }>(members, 'Paperclip lock auditor member list');
-  const member = Array.isArray(rows.members) ? rows.members.find((row) => row.principalId === meBefore.userId) : undefined;
+  const member = Array.isArray(rows.members) ? rows.members.find((row) => row.principalId === userId) : undefined;
   if (!member) throw new Error('Paperclip lock auditor company membership was not found');
-  const role = await opts.request(`/api/companies/${encodeURIComponent(opts.companyId)}/members/${encodeURIComponent(member.id)}`, {
+  const role = await request(`/api/companies/${encodeURIComponent(companyId)}/members/${encodeURIComponent(member.id)}`, {
     method: 'PATCH', body: JSON.stringify({ membershipRole: 'viewer' }),
   });
   const updated = await jsonResponse<{ membershipRole?: string }>(role, 'Paperclip lock auditor viewer role');
   if (updated.membershipRole !== 'viewer') throw new Error('Paperclip lock auditor role is not viewer');
+}
+
+export async function ensureLockAuditor(opts: {
+  request: PaperclipRequest;
+  companyId: string;
+  baseUrl: string;
+  storedKey?: string | undefined;
+  fetchFn?: typeof fetch;
+  randomBytesFn?: typeof randomBytes;
+}): Promise<{ action: 'reused' } | { action: 'created'; key: string }> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const whoami = (key: string) => auditorWhoami(fetchFn, opts.baseUrl, key);
+  const stored = opts.storedKey && opts.storedKey !== 'REPLACE_ME' ? opts.storedKey : undefined;
+  if (stored && await reusableAuditorKey(await whoami(stored), opts.companyId)) return { action: 'reused' };
+
+  const created = await createLockAuditor(opts.baseUrl, fetchFn, opts.randomBytesFn ?? randomBytes);
+  const key = created.key;
+  await grantLockAuditorViewer(opts.request, opts.companyId, created.userId);
   const meAfter = await auditorIdentity(await whoami(key));
   if (meAfter.isInstanceAdmin !== false || !Array.isArray(meAfter.companyIds) || !meAfter.companyIds.includes(opts.companyId)) {
     throw new Error('Paperclip lock auditor key cannot read the company or has administrator access');
