@@ -4,7 +4,7 @@ import { parseAllDocuments, isAlias, isMap, isSeq, type Node } from 'yaml';
 import { scanText } from '../../ci/secret-scan.mjs';
 import type { PackFinding } from './validate.js';
 
-const FORMAT = /\p{Cf}/gu;
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{M}]/gu;
 const ACCOUNT = /(?:^|\D)(?:\d{12}|\d{4}[- ]\d{4}[- ]\d{4})(?!\d)/;
 const EMAIL = /(?:^|[^\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@([^\s/?:#\\'"<>),;]+)/gu;
 const URL = /(?:^|[^a-z0-9+.-])(?:[a-z][a-z0-9+.-]*:\/\/|\/\/|www\.)([^\s/?:#\\'"<>),;]+)/gi;
@@ -17,11 +17,11 @@ function reservedHost(value: string): boolean {
 }
 
 export function hasIdentifier(value: string, denylist: string[]): boolean {
-  const text = value.normalize('NFKC').replace(FORMAT, '');
+  const text = normalizeIdentifier(value);
   if (ACCOUNT.test(text)) return true;
   const lower = text.toLowerCase();
   if (denylist.some((entry) => {
-    const normalized = entry.normalize('NFKC').replace(FORMAT, '').toLowerCase();
+    const normalized = normalizeIdentifier(entry).toLowerCase();
     return normalized && lower.includes(normalized);
   })) return true;
   for (const match of text.matchAll(EMAIL)) if (!reservedHost(match[1] ?? '')) return true;
@@ -34,14 +34,29 @@ export function hasIdentifier(value: string, denylist: string[]): boolean {
   return false;
 }
 
+function normalizeIdentifier(value: string): string {
+  return value.normalize('NFKD').replace(INVISIBLE, '');
+}
+
 export function redactPath(file: string, denylist: string[]): string {
-  return file.split('/').map((segment) => hasIdentifier(segment, denylist) ? '<redacted>' : segment).join('/');
+  const segments = file.split('/');
+  if (hasIdentifier(file, denylist) && !segments.some((segment) => hasIdentifier(segment, denylist))) {
+    return '<redacted>';
+  }
+  return segments.map((segment) => hasIdentifier(segment, denylist) ? '<redacted>' : segment).join('/');
+}
+
+function decodeEscapes(value: string): string {
+  return value.replace(/\\u([\da-fA-F]{4})|\\x([\da-fA-F]{2})/g,
+    (_match, unicode: string | undefined, hex: string | undefined) =>
+      String.fromCharCode(Number.parseInt(unicode ?? hex ?? '', 16)));
 }
 
 export function scanTextValues(file: string, values: string[], denylist: string[]): string[] {
   const found: string[] = [];
-  if (values.some((value) => scanText(value, file).length > 0)) found.push('PV-SECRET');
-  if (values.some((value) => hasIdentifier(value, denylist))) found.push('PV-IDENTIFIER');
+  const candidates = values.flatMap((value) => [value, decodeEscapes(value)]);
+  if (candidates.some((value) => scanText(value, file).length > 0)) found.push('PV-SECRET');
+  if (candidates.some((value) => hasIdentifier(value, denylist))) found.push('PV-IDENTIFIER');
   return found;
 }
 
