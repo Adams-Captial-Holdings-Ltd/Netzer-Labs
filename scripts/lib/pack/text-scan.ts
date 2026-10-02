@@ -4,7 +4,7 @@ import { parseAllDocuments, isAlias, isMap, isSeq, type Node } from 'yaml';
 import { scanText } from '../../ci/secret-scan.mjs';
 import type { PackFinding } from './validate.js';
 
-const ZERO_WIDTH = /[\u200b-\u200d\ufeff\u00ad]/g;
+const FORMAT = /\p{Cf}/gu;
 const ACCOUNT = /(?:^|\D)(?:\d{12}|\d{4}[- ]\d{4}[- ]\d{4})(?!\d)/;
 const EMAIL = /(?:^|[^\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@([^\s/?:#\\'"<>),;]+)/gu;
 const URL = /(?:^|[^a-z0-9+.-])(?:[a-z][a-z0-9+.-]*:\/\/|\/\/|www\.)([^\s/?:#\\'"<>),;]+)/gi;
@@ -17,10 +17,13 @@ function reservedHost(value: string): boolean {
 }
 
 export function hasIdentifier(value: string, denylist: string[]): boolean {
-  const text = value.replace(ZERO_WIDTH, '');
+  const text = value.normalize('NFKC').replace(FORMAT, '');
   if (ACCOUNT.test(text)) return true;
   const lower = text.toLowerCase();
-  if (denylist.some((entry) => entry && lower.includes(entry.replace(ZERO_WIDTH, '').toLowerCase()))) return true;
+  if (denylist.some((entry) => {
+    const normalized = entry.normalize('NFKC').replace(FORMAT, '').toLowerCase();
+    return normalized && lower.includes(normalized);
+  })) return true;
   for (const match of text.matchAll(EMAIL)) if (!reservedHost(match[1] ?? '')) return true;
   for (const match of text.matchAll(URL)) {
     const host = match[1] ?? '';
@@ -29,6 +32,10 @@ export function hasIdentifier(value: string, denylist: string[]): boolean {
     if (!reservedHost(host)) return true;
   }
   return false;
+}
+
+export function redactPath(file: string, denylist: string[]): string {
+  return file.split('/').map((segment) => hasIdentifier(segment, denylist) ? '<redacted>' : segment).join('/');
 }
 
 export function scanTextValues(file: string, values: string[], denylist: string[]): string[] {
@@ -75,23 +82,50 @@ function yamlUnsafe(node: Node | null | undefined): boolean {
   return false;
 }
 
-function parseContent(file: string, text: string): unknown {
+function parseContent(file: string, text: string, strict: boolean): unknown {
   if (file.endsWith('.json')) {
     const value: unknown = JSON.parse(text);
-    if (hasProto(value)) throw new Error('Forbidden JSON key');
+    if (strict && hasProto(value)) throw new Error('Forbidden JSON key');
     return value;
   }
   if (file.endsWith('.yaml') || file.endsWith('.yml')) {
-    const docs = parseAllDocuments(text, { uniqueKeys: true });
-    if (/^\s*%TAG\b/m.test(text) || docs.length !== 1 || docs[0]?.errors.length || yamlUnsafe(docs[0]?.contents)) {
+    const docs = parseAllDocuments(text, { uniqueKeys: strict });
+    if (docs.some((doc) => doc.errors.length) || (strict
+      && (/^\s*%TAG\b/m.test(text) || docs.length !== 1 || yamlUnsafe(docs[0]?.contents)))) {
       throw new Error('Invalid YAML');
     }
-    return docs[0]?.toJS();
+    return strict ? docs[0]?.toJS() : docs.map((doc) => doc.toJS());
   }
   return undefined;
 }
 
+function listedPaths(dir: string): Set<string> {
+  const listed = new Set(['pack.json']);
+  const text = readTextFile(join(dir, 'pack.json'));
+  if (text === undefined) return listed;
+  try {
+    const pack = JSON.parse(text) as Record<string, unknown>;
+    const add = (value: unknown) => { if (typeof value === 'string') listed.add(value); };
+    const addArray = (value: unknown) => { if (Array.isArray(value)) value.forEach(add); };
+    const resources = pack.resources as Record<string, unknown> | undefined;
+    if (resources && typeof resources === 'object') {
+      for (const key of ['connectors', 'policies', 'ui', 'studioLayout']) add(resources[key]);
+      for (const key of ['pipelines', 'skills']) addArray(resources[key]);
+      if (Array.isArray(resources.routines)) for (const item of resources.routines) {
+        add((item as Record<string, unknown> | null)?.path);
+      }
+    }
+    if (Array.isArray(pack.agents)) for (const item of pack.agents) {
+      add((item as Record<string, unknown> | null)?.definition);
+    }
+    add((pack.requires as Record<string, unknown> | undefined)?.config);
+    add(pack.checksums);
+  } catch { /* pack.json gets its own strict syntax finding during the walk. */ }
+  return listed;
+}
+
 export function inspectDirectory(dir: string, add: Add, denylist: string[]) {
+  const listed = listedPaths(dir);
   const parsed = new Map<string, unknown>();
   const scans: PackFinding[] = [];
   const invalid = new Set<string>();
@@ -110,8 +144,14 @@ export function inspectDirectory(dir: string, add: Add, denylist: string[]) {
         continue;
       }
       let value: unknown;
-      try { value = parseContent(file, text); }
-      catch { invalid.add(file); add('PV-SCHEMA', file, 'Invalid file syntax or forbidden key'); continue; }
+      try { value = parseContent(file, text, listed.has(file)); }
+      catch {
+        if (listed.has(file)) {
+          invalid.add(file);
+          add('PV-SCHEMA', file, 'Invalid file syntax or forbidden key');
+          continue;
+        }
+      }
       if (value !== undefined) parsed.set(file, value);
       const values = [text, ...(value === undefined ? [] : stringsIn(value))];
       try {

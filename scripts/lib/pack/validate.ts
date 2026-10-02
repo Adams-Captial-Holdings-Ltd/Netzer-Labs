@@ -1,7 +1,7 @@
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, sep } from 'node:path';
 import type { z } from 'zod';
-import { inspectDirectory, scanTextValues, stringsIn } from './text-scan.js';
+import { inspectDirectory, redactPath, scanTextValues, stringsIn } from './text-scan.js';
 import {
   agentDefinitionSchema, configSchemaSchema, connectorsSchema, packManifestSchema,
   policiesSchema, uiSchema, type AgentDefinition, type ConfigSchema,
@@ -112,7 +112,7 @@ export function validatePack(dir: string, opts: { denylist?: string[] } = {}): P
   const denylist = opts.denylist ?? [];
   const add: Add = (code, file, message, pointer) => {
     const redact = (value: string) => scanTextValues(file, [value], denylist).length ? '<redacted>' : value;
-    findings.push({ code, file, message: redact(message),
+    findings.push({ code, file: redactPath(file, denylist), message: redact(message),
       ...(pointer === undefined ? {} : { pointer: redact(pointer) }) });
   };
   try { if (!lstatSync(dir).isDirectory()) throw new Error(); }
@@ -131,7 +131,8 @@ export function validatePack(dir: string, opts: { denylist?: string[] } = {}): P
       checkBodies(pack, config, policies, routines, pipelines, pipelinesByKey, add);
     }
   } catch { add('PV-SCHEMA', 'pack.json', 'Internal validator error'); }
-  findings.push(...scans.filter((finding) => !invalid.has(finding.file)));
+  findings.push(...scans.filter((finding) => !invalid.has(finding.file))
+    .map((finding) => ({ ...finding, file: redactPath(finding.file, denylist) })));
   const seen = new Set<string>();
   return findings.filter((finding) => {
     if (finding.code !== 'PV-SECRET' && finding.code !== 'PV-IDENTIFIER') return true;
@@ -167,7 +168,7 @@ function parsePackShapes(dir: string, parsed: Map<string, unknown>, invalid: Set
 function checkSecretDefaults(config: ConfigSchema, file: string, add: Add): void {
   for (const [name, field] of Object.entries(config.properties)) {
     if (field.type === 'string' && field.default !== undefined
-      && /(?:secret|password|token|key)/i.test(name)) {
+      && /(?:^|_)(?:secret|password|token|key)$/i.test(name)) {
       add('PV-SECRET', file, 'Secret-named string fields cannot have a default', name);
     }
   }
@@ -281,22 +282,26 @@ function checkBodies(pack: PackManifest, config: ConfigSchema, policies: Policie
 function checkGateFields(pack: PackManifest, config: ConfigSchema, policies: Policies,
   routines: Map<string, Routine>, pipelinesByKey: Map<string, Pipeline>, add: Add): void {
   const gated = new Set<string>();
+  const routineByKey = new Map(pack.resources.routines.map((r) => [basename(r.path, '.json'), routines.get(r.path)]));
+  const visited = new Set<string>();
+  const follow = (tokens: string[]) => {
+    const pending = [...tokens];
+    while (pending.length) {
+      const token = pending.pop()!;
+      if (token.startsWith('config.')) gated.add(token.slice(7));
+      if (!token.startsWith('routine:')) continue;
+      const key = token.slice(8);
+      if (visited.has(key)) continue;
+      visited.add(key);
+      pending.push(...placeholderTokens(routineByKey.get(key)));
+    }
+  };
   for (const gate of policies.approvalGates) {
     const pipeline = pipelinesByKey.get(gate.pipeline);
     if (!pipeline) continue;
     const stage = pipeline.stages.find((s) => s.key === gate.stage);
     const level = Object.fromEntries(Object.entries(pipeline).filter(([key]) => key !== 'stages'));
-    for (const token of [...placeholderTokens(stage), ...placeholderTokens(level)]) {
-      if (token.startsWith('config.')) gated.add(token.slice(7));
-    }
-    for (const token of placeholderTokens(stage)) {
-      if (token.startsWith('routine:')) {
-        const routine = pack.resources.routines.find((r) => basename(r.path, '.json') === token.slice(8));
-        for (const nested of placeholderTokens(routine && routines.get(routine.path))) {
-          if (nested.startsWith('config.')) gated.add(nested.slice(7));
-        }
-      }
-    }
+    follow([...placeholderTokens(stage), ...placeholderTokens(level)]);
   }
   for (const [name, field] of Object.entries(config.properties)) {
     if (field.customerEditable && (field.controlsApproval || gated.has(name)
