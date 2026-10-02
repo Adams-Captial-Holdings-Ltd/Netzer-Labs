@@ -30,7 +30,10 @@ const configField = z.object({
 export const configSchemaSchema = z.object({
   type: z.literal('object'), properties: z.record(configField), required: strings.default([]),
 }).strict().superRefine((config, ctx) => {
-  for (const name of config.required) if (!(name in config.properties)) {
+  for (const name of Object.keys(config.properties)) if (!/^[a-z][a-z0-9_]*$/.test(name)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['properties', name], message: 'Invalid field name' });
+  }
+  for (const name of config.required) if (!Object.hasOwn(config.properties, name)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['required'], message: 'Unknown required field' });
   }
 });
