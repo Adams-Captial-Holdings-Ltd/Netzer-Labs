@@ -8,7 +8,8 @@
 > and the rules `pack validate` enforces.
 
 A pack is a directory of declarative files. It holds no executable code, no secrets and no customer
-identifiers. Every JSON and YAML file is strict: an unknown key is an error.
+identifiers. Every JSON and YAML file is strict: an unknown key is an error. Every file in the directory is
+UTF-8 text of at most 1 MiB; symlinks and binary files are not allowed.
 
 ## Files
 
@@ -72,6 +73,8 @@ identifiers. Every JSON and YAML file is strict: an unknown key is an error.
 
 - `packFormat` is the only field added to the approved list. It lets a later reader refuse a format it does not know.
 - `id` and each `role`: lowercase letters, digits and dashes. `version`: semver.
+- Names are unique: roles, decision-class ids, pipeline keys, stage keys within a pipeline, routine base names,
+  and every path listed under `resources`. `resources.bundle` is a directory; every other path is a file.
 - `resources.routines[].kind` is `ingest` or `timer`. `resources.studioLayout` and `checksums` are optional.
 - `requires.secrets[].store` is `secrets-manager` or `agentcore-identity`. Names only, never values.
 - `decisionClasses[].impact` is `high` or `standard`; `default` is `human_required` or `automated_allowed`.
@@ -94,7 +97,7 @@ skills:
 
 `id`, `name`, `description`, `model` and `persona` are required. `tools`, `skills` and `knowledgeScope`
 are optional in the format; **inside a pack `tools` is required** (an empty list is allowed). The built-in agent
-templates use the same schema. Anchors, aliases, custom tags and multi-document files are rejected.
+templates use the same schema. Anchors, aliases, explicit tags of any kind and multi-document files are rejected.
 
 ## `config/schema.json`
 
@@ -115,7 +118,8 @@ templates use the same schema. Anchors, aliases, custom tags and multi-document 
 Types: `string`, `number`, `boolean`, `enum`, `secretRef`, `connectorRef`. Per field: `title`, `description`,
 `default`, `customerEditable` (default `false`) and `controlsApproval` (default `false`). A `default` must match the
 field's type. `secretRef` and `connectorRef` fields take no default and can never be `customerEditable`.
-`required` may only name fields that exist.
+`required` may only name fields that exist. A field name is a lowercase letter followed by lowercase letters,
+digits or underscores.
 
 ## `connectors.json`
 
@@ -161,23 +165,25 @@ Any JSON object. The installer never reads it. It is still scanned for secrets a
 ## Placeholders
 
 `${config.<field>}`, `${agent:<role>}` and `${routine:<key>}` (the routine file's base name) may appear in any
-string of a routine or pipeline body. Nothing else with the `${...}` shape is allowed there.
+string of a routine or pipeline body, object keys included. Nothing else with the `${...}` shape is allowed there.
 
 ## What `pack validate` checks
 
 Run `npm run pack -- validate <dir> [--denylist <file>]`. Exit 0 clean, 1 findings (one per line as
-`<code> <file>[:<pointer>] <message>`), 2 usage error. A finding never repeats the secret or identifier it found.
+`<code> <file>[:<pointer>] <message>`), 2 usage error (including a denylist file with no entries). Without
+`--denylist` the command says that no denylist was applied. A finding names the key, path, tool or placeholder that
+is wrong, and never repeats a secret or identifier it found.
 A file that fails `PV-SCHEMA` is not checked further, so one mistake gives one kind of finding.
 
 | Code | Rule |
 |---|---|
 | `PV-SCHEMA` | every file above parses and matches its shape; every path in `pack.json` exists and stays inside the pack |
-| `PV-REF` | cross-references resolve: a role ↔ its agent file's `id`; agent skills ↔ `resources.skills`; agent tools and `toolRisk` tools ↔ connector aliases or that pack's `requires.permissions.tools`; `requires.permissions.tools` roles ↔ declared roles; `requires.connectors` ↔ `connectors.json`; `secretRef`/`connectorRef` ↔ declared secrets and capabilities; `approvalGates` ↔ pipeline and stage keys; `ui.json` ↔ pipeline keys; a routine's `pipeline` ↔ pipeline keys; transitions ↔ stage keys |
+| `PV-REF` | cross-references resolve: a role ↔ its agent file's `id`; agent skills ↔ `resources.skills`; an agent's tools ↔ connector aliases or the tools `requires.permissions.tools` lists for that agent's own role; `toolRisk` tools ↔ connector aliases or any role's permitted tools; `requires.permissions.tools` roles ↔ declared roles; `requires.connectors` ↔ `connectors.json`; `secretRef`/`connectorRef` ↔ declared secrets and capabilities; `approvalGates` ↔ pipeline and stage keys; `ui.json` ↔ pipeline keys; a routine's `pipeline` ↔ pipeline keys; transitions ↔ stage keys |
 | `PV-PLACEHOLDER` | every placeholder resolves to a config field, a role or a routine |
-| `PV-SECRET` | no secret literal in any file of the pack directory (the repository's secret scanner, `scripts/ci/secret-scan.mjs`) |
+| `PV-SECRET` | no secret literal in any file of the pack directory (the repository's secret scanner, `scripts/ci/secret-scan.mjs`). JSON and YAML files are scanned twice, as written and as parsed, so an escape sequence cannot hide a value |
 | `PV-ENQUEUE` | every `ingest` routine has `concurrencyPolicy: "always_enqueue"`; every pipeline has at least one `ingest` routine |
-| `PV-IDENTIFIER` | no customer identifiers in any file of the pack directory: 12-digit AWS account ids, ARNs carrying one, and email addresses and URLs outside the reserved example names (`example.com`, `example.org`, `example.net`, `*.example`, `*.test`, `*.invalid`, `localhost`), plus any `--denylist` entry (case-insensitive) |
-| `PV-GATE` | a gate field is never `customerEditable`. A config field is a gate field when a `${config.<field>}` placeholder names it inside a pipeline stage that `policies.json` lists under `approvalGates`, or when it carries `controlsApproval: true`. `secretRef` and `connectorRef` fields are never `customerEditable` either |
+| `PV-IDENTIFIER` | no customer identifiers in any file of the pack directory: 12-digit AWS account ids, ARNs carrying one, and email addresses and URLs outside the reserved example names (`example.com`, `example.org`, `example.net`, `*.example`, `*.test`, `*.invalid`, `localhost`), plus any `--denylist` entry (case-insensitive). A URL is any `scheme://host`, a scheme-relative `//host.name` or a bare `www.` host; account ids written with dashes or spaces count; file and directory names are checked too; parsed JSON and YAML strings are checked as well as the raw text; zero-width characters are ignored |
+| `PV-GATE` | a gate field is never `customerEditable`. A config field is a gate field when a `${config.<field>}` placeholder names it (in a key or a value) inside a pipeline stage that `policies.json` lists under `approvalGates`, inside a routine that such a stage names with `${routine:<key>}`, or in the pipeline-level fields (everything outside `stages`) of a pipeline that has an approval gate; or when it carries `controlsApproval: true`. `secretRef` and `connectorRef` fields are never `customerEditable` either |
 | `PV-DECISION` | a `high` impact class defaults to `human_required`; every class used by a gate is declared, and every declared class is used |
 
 ## Not in v1 of the validator
