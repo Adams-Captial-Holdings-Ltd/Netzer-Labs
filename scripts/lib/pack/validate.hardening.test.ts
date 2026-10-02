@@ -197,6 +197,60 @@ describe('pack validate hardening: coordinator diff read', () => {
   });
 });
 
+describe('pack validate hardening: first critic', () => {
+  const split = (sep: string) => [ACCOUNT.slice(0, 4), ACCOUNT.slice(4, 8), ACCOUNT.slice(8)].join(sep);
+  it.each([
+    ['a word joiner', '\u2060'], ['an invisible separator', '\u2063'], ['a left-to-right mark', '\u200E'],
+    ['a Mongolian vowel separator', '\u180E'], ['a no-break space', '\u00A0'],
+  ])('rejects an account id split by %s', (_name, sep) => {
+    expect(codes(validatePack(pack(doc(`Account ${split(sep)}`))))).toEqual(['PV-IDENTIFIER']);
+  });
+  it('rejects a denylist word split by a word joiner or written in fullwidth letters', () => {
+    expect(codes(validatePack(pack(doc('For Acme\u2060Corp.')), { denylist: ['acmecorp'] }))).toEqual(['PV-IDENTIFIER']);
+    expect(codes(validatePack(pack(doc('For \uFF21\uFF43\uFF4D\uFF45.')), { denylist: ['acme'] }))).toEqual(['PV-IDENTIFIER']);
+  });
+  it('never repeats an identifier found in a file name', () => {
+    const dir = pack((d) => writeFileSync(join(d, `docs/${ACCOUNT}.md`), 'notes'));
+    const findings = validatePack(dir);
+    expect(codes(findings)).toEqual(['PV-IDENTIFIER']);
+    expect(JSON.stringify(findings)).not.toContain(ACCOUNT);
+    const named = pack((d) => { mkdirSync(join(d, 'docs/acme-clinic')); writeFileSync(join(d, 'docs/acme-clinic/a.md'), 'notes'); });
+    expect(JSON.stringify(validatePack(named, { denylist: ['acme-clinic'] }))).not.toContain('acme-clinic');
+  });
+  it('only scans files that pack.json does not list: their syntax is not judged', () => {
+    const dir = pack((d) => {
+      writeFileSync(join(d, 'paperclip/bundle/company.yaml'), 'base: &b { a: 1 }\ncopy: *b\n');
+      writeFileSync(join(d, 'docs/sample.json'), '// a comment\n{ "a": 1 }\n');
+      mkdirSync(join(d, 'tests'));
+      writeFileSync(join(d, 'tests/two.yaml'), 'a: 1\n---\nb: 2\n');
+    });
+    expect(validatePack(dir)).toEqual([]);
+  });
+  it('still finds an escaped secret in an unlisted file that uses YAML features agents may not', () => {
+    const dir = pack((d) => writeFileSync(join(d, 'paperclip/bundle/company.yaml'),
+      `base: &b { a: 1 }\ncopy: *b\nnote: "\\x41${AWS_KEY.slice(1)}"\n`));
+    expect(codes(validatePack(dir))).toEqual(['PV-SECRET']);
+  });
+  it('follows a chain of routines from an approval-gated stage', () => {
+    const dir = pack((d) => {
+      json('paperclip/pipelines/referral.json', (p) => { p.stages[1].config.onEnter = '${routine:intake}'; })(d);
+      json('paperclip/routines/intake.json', (r) => { r.description = 'Then runs ${routine:sla-check}.'; })(d);
+    });
+    expect(codes(validatePack(dir))).toEqual(['PV-GATE']);
+  });
+  it('a routine chain that loops does not hang', () => {
+    const dir = pack((d) => {
+      json('paperclip/pipelines/referral.json', (p) => { p.stages[1].config.onEnter = '${routine:intake}'; })(d);
+      json('paperclip/routines/intake.json', (r) => { r.description = 'Runs ${routine:intake} again.'; })(d);
+    });
+    expect(validatePack(dir)).toEqual([]);
+  });
+  it('lets a plain field whose name only contains the word key keep its default', () => {
+    const dir = pack(json('config/schema.json', (s) => { s.properties.primary_key_column = { type: 'string', default: 'id' }; s.properties.keyboard = { type: 'string', default: 'us' }; }));
+    expect(validatePack(dir)).toEqual([]);
+  });
+});
+
 describe('pack CLI hardening', () => {
   const run = (argv: string[]) => { const lines: string[] = []; return { code: runPackCli(argv, (l) => lines.push(l)), lines }; };
   it('exits 2 when the denylist file has no entries', () => {
