@@ -251,6 +251,34 @@ describe('pack validate hardening: first critic', () => {
   });
 });
 
+describe('pack validate hardening: second critic', () => {
+  const split = (sep: string) => [ACCOUNT.slice(0, 4), ACCOUNT.slice(4, 8), ACCOUNT.slice(8)].join(sep);
+  it.each([
+    ['a combining mark', 'Acm\u0301eCorp'], ['a variation selector', 'Acme\uFE0FCorp'],
+    ['a combining grapheme joiner', 'Acme\u034FCorp'], ['a Hangul filler', 'Acme\u3164Corp'],
+  ])('rejects a denylist word disguised with %s', (_name, word) => {
+    expect(codes(validatePack(pack(doc(`For ${word}.`)), { denylist: ['acmecorp'] }))).toEqual(['PV-IDENTIFIER']);
+  });
+  it('rejects an account id with a combining mark or a variation selector between digits', () => {
+    expect(codes(validatePack(pack(doc(`Account ${split('\u0301')}`))))).toEqual(['PV-IDENTIFIER']);
+    expect(codes(validatePack(pack(doc(`Account ${split('\uFE0F')}`))))).toEqual(['PV-IDENTIFIER']);
+  });
+  it('finds an escaped secret or identifier in an unlisted file that does not parse', () => {
+    const brokenJson = pack((d) => writeFileSync(join(d, 'docs/x.json'), `{"a":"${escaped(AWS_KEY)}",`));
+    expect(codes(validatePack(brokenJson))).toEqual(['PV-SECRET']);
+    const brokenYaml = pack((d) => writeFileSync(join(d, 'docs/x.yaml'), `a: [\n---\nb: "\\x41${AWS_KEY.slice(1)}"\n`));
+    expect(codes(validatePack(brokenYaml))).toEqual(['PV-SECRET']);
+    const email = pack((d) => writeFileSync(join(d, 'docs/y.json'), `{"a":"${escaped('bob@acme-clinic.com')}",`));
+    expect(codes(validatePack(email))).toEqual(['PV-IDENTIFIER']);
+  });
+  it('never repeats a denylist entry that spans two path segments', () => {
+    const dir = pack((d) => { mkdirSync(join(d, 'docs/acme')); mkdirSync(join(d, 'docs/acme/corp')); writeFileSync(join(d, 'docs/acme/corp/a.md'), 'notes'); });
+    const findings = validatePack(dir, { denylist: ['acme/corp'] });
+    expect(codes(findings)).toEqual(['PV-IDENTIFIER']);
+    expect(JSON.stringify(findings)).not.toContain('acme/corp');
+  });
+});
+
 describe('pack CLI hardening', () => {
   const run = (argv: string[]) => { const lines: string[] = []; return { code: runPackCli(argv, (l) => lines.push(l)), lines }; };
   it('exits 2 when the denylist file has no entries', () => {
