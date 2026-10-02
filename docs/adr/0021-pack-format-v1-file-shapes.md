@@ -31,6 +31,7 @@ Bad:
 - Decision classes are named in two files; the validator keeps them in step.
 - The derived gate rule only sees a field named inside a gated stage. A field that controls a gate some other way needs the `controlsApproval` mark, which an author can forget; step 10 must not treat `customerEditable` as proof on its own.
 - The identifier check is pattern-based (account ids, ARNs, emails, URLs, a denylist). It cannot recognise a customer's name unless the denylist holds it.
+- The secret check is pattern-based too (the repository scanner's patterns); a generic API key shape is not caught, so a secret-named plain string setting may not carry a default.
 
 - **Reversibility:** one-way. Packs written against these shapes, the Studio export and the installer all depend on them. A change is a new `packFormat` number and a new ADR.
 - **Revisit trigger:** the Studio (step 9) cannot round-trip a pack losslessly; the installer (step 8) needs a field these shapes lack; upstream pipeline portability replaces the interim bodies (step 17).

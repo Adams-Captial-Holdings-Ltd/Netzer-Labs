@@ -187,6 +187,8 @@ behavioral-health-referrals/            # dir in private repo `netzer-packs`; re
 - ✚ `supportOwner`;
 - ✚ `checksums` ref.
 
+The exact file shapes and the rules `pack validate` enforces are in [pack format v1](pack-format.md) (frozen 2026-10-02, ADR 0021).
+
 Nothing else is needed for v1.
 
 ## G. Minimum installation process

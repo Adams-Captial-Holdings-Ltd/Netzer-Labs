@@ -515,6 +515,7 @@ step 7. Run the **full** `npm test`, never a scoped run.
 - [Implementation plan](implementation-plan.md) and its [audit](plan-audit.md)
 - [ADR 0010 — Paperclip is the missions work engine](../../adr/0010-paperclip-work-engine.md)
 - [Minimum sellable product](minimum-sellable-product.md) — what the Work Platform ships first, its architecture and the 18 build steps (2026-09-29)
+- [Pack format v1](pack-format.md): the frozen pack file shapes and the rules `pack validate` enforces (2026-10-02)
 - [DO NOT BUILD](do-not-build.md) — the binding prohibitions
 - [Decision log](decision-log.md) — every Work Platform decision and where it is recorded
 - [ADRs 0012–0020](../../adr/README.md) — the Work Platform architecture
