@@ -53,7 +53,14 @@ async function main(): Promise<void> {
   // CCE_PAPERCLIP_ENABLED arms agents and enables the runtime lock. With it off,
   // the lock does not run, the reconciler stays read-only (default shadow mode),
   // and dispatch stays inert; turn it on before arming agents or leaving shadow mode.
-  const lock = await startPaperclipLock({ enabled: paperclipRoutingEnabled(), read: () => readConfiguredLockVerdict({ loadConfig: loadPaperclipConfig, fetchFn: fetch, auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY }) });
+  const lock = await startPaperclipLock({
+    enabled: paperclipRoutingEnabled(),
+    read: () => readConfiguredLockVerdict({
+      loadConfig: loadPaperclipConfig,
+      fetchFn: fetch,
+      auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY,
+    }),
+  });
   logger.info(
     {
       region: env.AWS_REGION,
