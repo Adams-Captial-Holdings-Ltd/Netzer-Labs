@@ -174,6 +174,29 @@ describe('pack validate hardening: findings a pack author can act on', () => {
   });
 });
 
+describe('pack validate hardening: coordinator diff read', () => {
+  it('never repeats a secret or identifier inside another finding', () => {
+    const viaPlaceholder = validatePack(pack(routineDescription('${config.' + AWS_KEY + '}')));
+    expect(codes(viaPlaceholder)).toContain('PV-SECRET');
+    expect(JSON.stringify(viaPlaceholder)).not.toContain(AWS_KEY);
+    const viaTool = validatePack(pack(text('agents/intake.yaml', '  - get_time', '  - bob@acme-clinic.com')));
+    expect(codes(viaTool)).toContain('PV-IDENTIFIER');
+    expect(JSON.stringify(viaTool)).not.toContain('acme-clinic');
+  });
+  it.each(['api_key', 'db_password', 'webhook_secret', 'access_token'])(
+    'rejects a default on the plain config field %s: a secret must be a secretRef', (name) => {
+      const dir = pack(json('config/schema.json', (s) => { s.properties[name] = { type: 'string', default: 'changeme' }; }));
+      const findings = validatePack(dir);
+      expect(codes(findings)).toEqual(['PV-SECRET']);
+      expect(findings[0]).toMatchObject({ file: 'config/schema.json' });
+      expect(JSON.stringify(findings)).not.toContain('changeme');
+    });
+  it('lets a secret-named config field exist without a default, and other fields keep defaults', () => {
+    const dir = pack(json('config/schema.json', (s) => { s.properties.token_ttl_hours = { type: 'number', default: 8 }; s.properties.api_key = { type: 'string' }; }));
+    expect(validatePack(dir)).toEqual([]);
+  });
+});
+
 describe('pack CLI hardening', () => {
   const run = (argv: string[]) => { const lines: string[] = []; return { code: runPackCli(argv, (l) => lines.push(l)), lines }; };
   it('exits 2 when the denylist file has no entries', () => {
