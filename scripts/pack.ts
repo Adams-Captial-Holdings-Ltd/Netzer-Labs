@@ -5,8 +5,11 @@ import { validatePack } from './lib/pack/validate.js';
 import { parseDenylist } from './ci/secret-scan.mjs';
 
 export function runPackCli(argv: string[], out: (line: string) => void): number {
-  if (argv[0] !== 'validate' || !argv[1] || argv.length > 4
-    || (argv.length > 2 && (argv.length !== 4 || argv[2] !== '--denylist' || !argv[3]))) {
+  if (argv[0] !== 'validate' || !argv[1]) {
+    out('Usage: pack validate <dir> [--denylist <file>]');
+    return 2;
+  }
+  if (argv.length > 2 && (argv.length !== 4 || argv[2] !== '--denylist' || !argv[3])) {
     out('Usage: pack validate <dir> [--denylist <file>]');
     return 2;
   }

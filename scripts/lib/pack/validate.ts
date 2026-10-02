@@ -1,5 +1,6 @@
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, sep } from 'node:path';
+import type { z } from 'zod';
 import { inspectDirectory, scanTextValues, stringsIn } from './text-scan.js';
 import {
   agentDefinitionSchema, configSchemaSchema, connectorsSchema, packManifestSchema,
@@ -45,11 +46,7 @@ function checkResourcePaths(dir: string, pack: PackManifest, add: Add): void {
   }
 }
 
-type Shape<T> = { safeParse: (value: unknown) => {
-  success: boolean; data?: T; error?: { issues: Array<{ path: PropertyKey[] }> };
-} };
-
-function parseShape<T>(file: string, schema: Shape<T>,
+function parseShape<T>(file: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   parsed: Map<string, unknown>, add: Add, invalid: Set<string>): T | undefined {
   if (invalid.has(file)) return undefined;
   const result = schema.safeParse(parsed.get(file));
@@ -125,43 +122,46 @@ export function validatePack(dir: string, opts: { denylist?: string[] } = {}): P
   catch { return [...findings, { code: 'PV-SCHEMA', file: 'pack.json', message: 'Pack directory cannot be read' }]; }
   const { parsed, scans, invalid } = inspected;
   try {
-    const pack = parseShape('pack.json', packManifestSchema, parsed, add, invalid);
-    if (pack) {
-      checkResourcePaths(dir, pack, add);
-      const config = parseShape(pack.requires.config, configSchemaSchema, parsed, add, invalid);
-      const connectors = parseShape(pack.resources.connectors, connectorsSchema, parsed, add, invalid);
-      const policies = parseShape(pack.resources.policies, policiesSchema, parsed, add, invalid);
-      const ui = parseShape(pack.resources.ui, uiSchema, parsed, add, invalid);
-      const agents = new Map<string, AgentDefinition>();
-      for (const agent of pack.agents) {
-        const value = parseShape(agent.definition, agentDefinitionSchema, parsed, add, invalid);
-        if (value && value.tools === undefined) {
-          add('PV-SCHEMA', agent.definition, 'Pack agent needs tools');
-          invalid.add(agent.definition);
-        }
-        else if (value) agents.set(agent.role, value);
-      }
-      const { routines, pipelines } = readBodies(pack, parsed, invalid, add);
-      uniqueNames(pack, pipelines, add);
-      if (!findings.some((f) => f.code === 'PV-SCHEMA') && config && connectors && policies && ui) {
-        checkSecretDefaults(config, pack.requires.config, add);
-        checkRefs(pack, config, connectors, policies, ui, agents, pipelines, add);
-        checkBodies(pack, config, policies, routines, pipelines, add);
-      }
+    const shapes = parsePackShapes(dir, parsed, invalid, add);
+    if (shapes && !findings.some((f) => f.code === 'PV-SCHEMA')) {
+      const { pack, config, connectors, policies, ui, agents, routines, pipelines } = shapes;
+      const pipelinesByKey = new Map([...pipelines.values()].map((pipeline) => [pipeline.key, pipeline]));
+      checkSecretDefaults(config, pack.requires.config, add);
+      checkRefs(pack, config, connectors, policies, ui, agents, pipelines, pipelinesByKey, add);
+      checkBodies(pack, config, policies, routines, pipelines, pipelinesByKey, add);
     }
   } catch { add('PV-SCHEMA', 'pack.json', 'Internal validator error'); }
+  findings.push(...scans.filter((finding) => !invalid.has(finding.file)));
   const seen = new Set<string>();
-  for (const finding of scans) {
-    const key = `${finding.code}\0${finding.file}`;
-    if (!invalid.has(finding.file) && !seen.has(key)) { findings.push(finding); seen.add(key); }
-  }
-  const secretFiles = new Set<string>();
   return findings.filter((finding) => {
-    if (finding.code !== 'PV-SECRET') return true;
-    if (secretFiles.has(finding.file)) return false;
-    secretFiles.add(finding.file);
+    if (finding.code !== 'PV-SECRET' && finding.code !== 'PV-IDENTIFIER') return true;
+    const key = `${finding.code}\0${finding.file}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
+}
+
+function parsePackShapes(dir: string, parsed: Map<string, unknown>, invalid: Set<string>, add: Add) {
+  const pack = parseShape('pack.json', packManifestSchema, parsed, add, invalid);
+  if (!pack) return undefined;
+  checkResourcePaths(dir, pack, add);
+  const config = parseShape(pack.requires.config, configSchemaSchema, parsed, add, invalid);
+  const connectors = parseShape(pack.resources.connectors, connectorsSchema, parsed, add, invalid);
+  const policies = parseShape(pack.resources.policies, policiesSchema, parsed, add, invalid);
+  const ui = parseShape(pack.resources.ui, uiSchema, parsed, add, invalid);
+  const agents = new Map<string, AgentDefinition>();
+  for (const agent of pack.agents) {
+    const value = parseShape(agent.definition, agentDefinitionSchema, parsed, add, invalid);
+    if (value && value.tools === undefined) {
+      add('PV-SCHEMA', agent.definition, 'Pack agent needs tools');
+      invalid.add(agent.definition);
+    } else if (value) agents.set(agent.role, value);
+  }
+  const { routines, pipelines } = readBodies(pack, parsed, invalid, add);
+  uniqueNames(pack, pipelines, add);
+  if (!config || !connectors || !policies || !ui) return undefined;
+  return { pack, config, connectors, policies, ui, agents, routines, pipelines };
 }
 
 function checkSecretDefaults(config: ConfigSchema, file: string, add: Add): void {
@@ -191,9 +191,10 @@ function checkAgentRefs(pack: PackManifest, agents: Map<string, AgentDefinition>
 }
 
 function checkRefs(pack: PackManifest, config: ConfigSchema, connectors: Connectors, policies: Policies,
-  ui: PackUi, agents: Map<string, AgentDefinition>, pipelines: Map<string, Pipeline>, add: Add): void {
+  ui: PackUi, agents: Map<string, AgentDefinition>, pipelines: Map<string, Pipeline>,
+  pipelinesByKey: Map<string, Pipeline>, add: Add): void {
   const roles = new Set(pack.agents.map((a) => a.role));
-  const keys = new Set([...pipelines.values()].map((p) => p.key));
+  const keys = new Set(pipelinesByKey.keys());
   const aliases = new Set(Object.values(connectors.capabilities).flatMap((c) => Object.keys(c.aliases)));
   const allowedTools = new Set(Object.values(pack.requires.permissions.tools).flat());
   checkAgentRefs(pack, agents, aliases, add);
@@ -221,8 +222,7 @@ function checkRefs(pack: PackManifest, config: ConfigSchema, connectors: Connect
   }
   for (const gate of policies.approvalGates) {
     if (!keys.has(gate.pipeline)) add('PV-REF', pack.resources.policies, `Unknown gate pipeline ${gate.pipeline}`);
-    else if (![...pipelines.values()].some((p) =>
-      p.key === gate.pipeline && p.stages.some((s) => s.key === gate.stage))) {
+    else if (!pipelinesByKey.get(gate.pipeline)?.stages.some((s) => s.key === gate.stage)) {
       add('PV-REF', pack.resources.policies, `Unknown gate stage ${gate.stage}`);
     }
   }
@@ -250,7 +250,8 @@ function placeholderTokens(body: unknown): string[] {
 }
 
 function checkBodies(pack: PackManifest, config: ConfigSchema, policies: Policies,
-  routines: Map<string, Routine>, pipelines: Map<string, Pipeline>, add: Add): void {
+  routines: Map<string, Routine>, pipelines: Map<string, Pipeline>,
+  pipelinesByKey: Map<string, Pipeline>, add: Add): void {
   const roles = new Set(pack.agents.map((a) => a.role));
   const routineKeys = new Set(pack.resources.routines.map((r) => basename(r.path, '.json')));
   const checkPlaceholders = (file: string, body: unknown) => {
@@ -273,15 +274,15 @@ function checkBodies(pack: PackManifest, config: ConfigSchema, policies: Policie
       add('PV-ENQUEUE', file, `Pipeline ${p.key} needs an ingest routine`);
     }
   }
-  checkGateFields(pack, config, policies, routines, pipelines, add);
+  checkGateFields(pack, config, policies, routines, pipelinesByKey, add);
   checkDecisions(pack, policies, add);
 }
 
 function checkGateFields(pack: PackManifest, config: ConfigSchema, policies: Policies,
-  routines: Map<string, Routine>, pipelines: Map<string, Pipeline>, add: Add): void {
+  routines: Map<string, Routine>, pipelinesByKey: Map<string, Pipeline>, add: Add): void {
   const gated = new Set<string>();
   for (const gate of policies.approvalGates) {
-    const pipeline = [...pipelines.values()].find((p) => p.key === gate.pipeline);
+    const pipeline = pipelinesByKey.get(gate.pipeline);
     if (!pipeline) continue;
     const stage = pipeline.stages.find((s) => s.key === gate.stage);
     const level = Object.fromEntries(Object.entries(pipeline).filter(([key]) => key !== 'stages'));

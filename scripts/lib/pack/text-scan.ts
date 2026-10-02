@@ -42,6 +42,16 @@ const MAX_FILE_BYTES = 1024 * 1024;
 const decoder = new TextDecoder('utf-8', { fatal: true });
 type Add = (code: string, file: string, message: string, pointer?: string) => void;
 
+function readTextFile(path: string): string | undefined {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return undefined;
+    const bytes = readFileSync(path);
+    if (bytes.length > MAX_FILE_BYTES || bytes.includes(0)) return undefined;
+    return decoder.decode(bytes);
+  } catch { return undefined; }
+}
+
 export function stringsIn(value: unknown): string[] {
   if (typeof value === 'string') return [value];
   if (Array.isArray(value)) return value.flatMap(stringsIn);
@@ -92,30 +102,26 @@ export function inspectDirectory(dir: string, add: Add, denylist: string[]) {
       if (hasIdentifier(file, denylist)) {
         scans.push({ code: 'PV-IDENTIFIER', file, message: 'Customer identifier found' });
       }
+      if (entry.isDirectory()) { walk(full); continue; }
+      const text = readTextFile(full);
+      if (text === undefined) {
+        invalid.add(file);
+        add('PV-SCHEMA', file, 'File must be regular UTF-8 text of at most 1 MiB');
+        continue;
+      }
+      let value: unknown;
+      try { value = parseContent(file, text); }
+      catch { invalid.add(file); add('PV-SCHEMA', file, 'Invalid file syntax or forbidden key'); continue; }
+      if (value !== undefined) parsed.set(file, value);
+      const values = [text, ...(value === undefined ? [] : stringsIn(value))];
       try {
-        const stat = lstatSync(full);
-        if (stat.isDirectory()) { walk(full); continue; }
-        if (!stat.isFile() || stat.size > MAX_FILE_BYTES) throw new Error('Invalid pack file');
-        const bytes = readFileSync(full);
-        if (bytes.length > MAX_FILE_BYTES || bytes.includes(0)) throw new Error('Invalid text file');
-        const text = decoder.decode(bytes);
-        let value: unknown;
-        try { value = parseContent(file, text); }
-        catch { invalid.add(file); add('PV-SCHEMA', file, 'Invalid file syntax or forbidden key'); continue; }
-        if (value !== undefined) parsed.set(file, value);
-        const values = [text, ...(value === undefined ? [] : stringsIn(value))];
-        try {
-          for (const code of scanTextValues(file, values, denylist)) {
-            const message = code === 'PV-SECRET' ? 'Secret-like value found' : 'Customer identifier found';
-            scans.push({ code, file, message });
-          }
-        } catch {
-          invalid.add(file);
-          add('PV-SCHEMA', file, 'Internal validator error');
+        for (const code of scanTextValues(file, values, denylist)) {
+          const message = code === 'PV-SECRET' ? 'Secret-like value found' : 'Customer identifier found';
+          scans.push({ code, file, message });
         }
       } catch {
         invalid.add(file);
-        add('PV-SCHEMA', file, 'File must be regular UTF-8 text of at most 1 MiB');
+        add('PV-SCHEMA', file, 'Internal validator error');
       }
     }
   };

@@ -8,6 +8,7 @@
  */
 
 import { pickDefaultModel } from '../bedrock/models.js';
+import type { AgentDefinition } from '../packs/schema.js';
 
 export interface AgentTemplate {
   id: string;
@@ -463,7 +464,7 @@ ${STANDARD_RULES}`,
 const byId = new Map(templates.map((t) => [t.id, t]));
 
 /** Express a built-in template in the pack agent format. */
-export function templateAgentDefinition(t: AgentTemplate): import('../packs/schema.js').AgentDefinition {
+export function templateAgentDefinition(t: AgentTemplate): AgentDefinition {
   return {
     id: t.id,
     name: t.displayName,
