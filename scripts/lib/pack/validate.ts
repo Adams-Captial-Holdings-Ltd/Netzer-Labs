@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, sep } from 'node:path';
-import { inspectDirectory, stringsIn } from './text-scan.js';
+import { inspectDirectory, scanTextValues, stringsIn } from './text-scan.js';
 import {
   agentDefinitionSchema, configSchemaSchema, connectorsSchema, packManifestSchema,
   policiesSchema, uiSchema, type AgentDefinition, type ConfigSchema,
@@ -112,13 +112,16 @@ function readBodies(pack: PackManifest, parsed: Map<string, unknown>, invalid: S
 
 export function validatePack(dir: string, opts: { denylist?: string[] } = {}): PackFinding[] {
   const findings: PackFinding[] = [];
+  const denylist = opts.denylist ?? [];
   const add: Add = (code, file, message, pointer) => {
-    findings.push({ code, file, message, ...(pointer === undefined ? {} : { pointer }) });
+    const redact = (value: string) => scanTextValues(file, [value], denylist).length ? '<redacted>' : value;
+    findings.push({ code, file, message: redact(message),
+      ...(pointer === undefined ? {} : { pointer: redact(pointer) }) });
   };
   try { if (!lstatSync(dir).isDirectory()) throw new Error(); }
   catch { return [{ code: 'PV-SCHEMA', file: 'pack.json', message: 'Pack directory cannot be read' }]; }
   let inspected: ReturnType<typeof inspectDirectory>;
-  try { inspected = inspectDirectory(dir, add, opts.denylist ?? []); }
+  try { inspected = inspectDirectory(dir, add, denylist); }
   catch { return [...findings, { code: 'PV-SCHEMA', file: 'pack.json', message: 'Pack directory cannot be read' }]; }
   const { parsed, scans, invalid } = inspected;
   try {
@@ -141,6 +144,7 @@ export function validatePack(dir: string, opts: { denylist?: string[] } = {}): P
       const { routines, pipelines } = readBodies(pack, parsed, invalid, add);
       uniqueNames(pack, pipelines, add);
       if (!findings.some((f) => f.code === 'PV-SCHEMA') && config && connectors && policies && ui) {
+        checkSecretDefaults(config, pack.requires.config, add);
         checkRefs(pack, config, connectors, policies, ui, agents, pipelines, add);
         checkBodies(pack, config, policies, routines, pipelines, add);
       }
@@ -151,7 +155,22 @@ export function validatePack(dir: string, opts: { denylist?: string[] } = {}): P
     const key = `${finding.code}\0${finding.file}`;
     if (!invalid.has(finding.file) && !seen.has(key)) { findings.push(finding); seen.add(key); }
   }
-  return findings;
+  const secretFiles = new Set<string>();
+  return findings.filter((finding) => {
+    if (finding.code !== 'PV-SECRET') return true;
+    if (secretFiles.has(finding.file)) return false;
+    secretFiles.add(finding.file);
+    return true;
+  });
+}
+
+function checkSecretDefaults(config: ConfigSchema, file: string, add: Add): void {
+  for (const [name, field] of Object.entries(config.properties)) {
+    if (field.type === 'string' && field.default !== undefined
+      && /(?:secret|password|token|key)/i.test(name)) {
+      add('PV-SECRET', file, 'Secret-named string fields cannot have a default', name);
+    }
+  }
 }
 
 function checkAgentRefs(pack: PackManifest, agents: Map<string, AgentDefinition>,
