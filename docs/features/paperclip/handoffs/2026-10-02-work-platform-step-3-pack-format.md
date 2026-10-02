@@ -76,6 +76,9 @@ Commits on `feature/wp-step3-pack-format`, oldest first:
 - [x] `de4aa64` this handoff, decision 37 in the decision log, links to pack format v1.
 - [x] `ffa85f2` twelve red tests from the first independent critic, which returned FAIL on `de4aa64` (an account id split by an invisible character such as U+2060 passed; a file name could repeat an identifier; unlisted files were judged for syntax; routine chains were not followed; `primary_key_column` was refused).
 - [x] `16321b7` the fixes for those (Codex gpt-6-sol).
+- [x] `27af5ab` this handoff updated for the first critic round.
+- [x] `509595a` seven red tests from the second independent critic, which returned FAIL on `27af5ab` with no critical or high finding (a combining mark could disguise a denylist word; an escaped value in an unlisted file that does not parse was missed; a denylist entry spanning two path segments was repeated; the doc claimed more than the code did). The doc now states the limits.
+- [x] `4a9e0a7` the fixes for those (Codex gpt-6-luna, two tries: the first added a trie matcher that was cut).
 - [ ] Push, PR and merge: not done; they wait for the owner's yes (section 6).
 
 ### 4.2 Files modified
@@ -700,7 +703,7 @@ The full validation list on the final commit, the independent critic and the rev
 | `node scripts/ci/feature-knowledge.mjs` | OK on `2a354c4` | recorded in the PR body |
 | `git diff --check` | clean on `2a354c4` | recorded in the PR body |
 
-The frozen gate (outside the repository) passes 26 of 26 at `80fcfa6` and at `16321b7`. The first independent critic returned FAIL on `de4aa64`; its findings are fixed in `16321b7` and a second critic's verdict is recorded in the PR body.
+The frozen gate (outside the repository) passes 26 of 26 at `80fcfa6` and at `16321b7`. The first independent critic returned FAIL on `de4aa64`; its findings are fixed in `16321b7`. The second returned FAIL on `27af5ab` (medium findings only); its findings are fixed in `4a9e0a7`, where the pack tests are 172 of 172. Full run on `27af5ab`: 301 files, 3983 tests in both flag states. The third critic's verdict and the full run on the final commit are recorded in the PR body.
 
 Anything not run, and why: `npm run local:test:integration`, at baseline and at verification, because another project's Floci emulator holds port 4566 and a run would change its data (A129). This is a named blocker in the PR body, not a pass.
 
