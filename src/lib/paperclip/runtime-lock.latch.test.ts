@@ -102,13 +102,32 @@ describe('startPaperclipLock', () => {
   beforeEach(() => { vi.useFakeTimers(); __resetPaperclipLockForTest(); });
   afterEach(() => { vi.useRealTimers(); __resetPaperclipLockForTest(); });
 
-  it('does nothing when disabled', async () => {
+  // Decision 36 (owner-approved change of this test, 2026-10-03): with routing
+  // off the wrapper closes the latch instead of doing nothing. No read, no
+  // watcher, and the start is never blocked.
+  it('closes the latch without a read when disabled', async () => {
     const read = vi.fn(async () => clean);
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
     const lock = await startPaperclipLock({ enabled: false, read });
     expect(read).not.toHaveBeenCalled();
+    expect(getPaperclipLockState()).toEqual({ closed: true, code: 'unknown:paperclip_routing_off' });
+    await vi.advanceTimersByTimeAsync(PAPERCLIP_LOCK_STALE_MS * 2);
+    expect(read).not.toHaveBeenCalled();
+    expect(getPaperclipLockState()).toEqual({ closed: true, code: 'unknown:paperclip_routing_off' });
+    lock.stop();
+    expect(getPaperclipLockState()).toEqual({ closed: true, code: 'unknown:paperclip_routing_off' });
+    expect(info).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    info.mockRestore();
+    warn.mockRestore();
+  });
+
+  it('a later enabled start with a clean verdict reopens a latch closed by routing off', async () => {
+    await startPaperclipLock({ enabled: false, read: vi.fn(async () => clean) });
+    const lock = await startPaperclipLock({ enabled: true, read: vi.fn(async () => clean) });
     expect(getPaperclipLockState()).toEqual({ closed: false, code: null });
     lock.stop();
-    expect(getPaperclipLockState()).toEqual({ closed: false, code: null });
   });
 
   it('starts a watcher after a clean startup and stops it', async () => {
