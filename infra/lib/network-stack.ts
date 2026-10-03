@@ -12,7 +12,7 @@ import {
   GatewayVpcEndpoint,
   GatewayVpcEndpointAwsService,
 } from 'aws-cdk-lib/aws-ec2';
-import { TIERS, TAGS, RESOURCE_NAMES, PAPERCLIP_PORT, DISPATCH_PORT, bucketName } from './constants.js';
+import { TIERS, TAGS, RESOURCE_NAMES, PAPERCLIP_PORT, DISPATCH_PORT, bucketName, paperclipProvisioned } from './constants.js';
 import type { BaseStackProps, NetworkOutputs } from './interfaces.js';
 import { CfnFlowLog } from 'aws-cdk-lib/aws-ec2';
 
@@ -32,6 +32,7 @@ export class NetworkStack extends Stack implements NetworkOutputs {
   public readonly fargateSecurityGroup: SecurityGroup;
   public readonly endpointsSecurityGroup: SecurityGroup;
   public readonly paperclipSecurityGroup: SecurityGroup;
+  public readonly dispatchLoadBalancerSecurityGroup?: SecurityGroup;
   public readonly endpoints: { [name: string]: InterfaceVpcEndpoint | GatewayVpcEndpoint } = {};
 
   constructor(scope: Construct, id: string, props: BaseStackProps) {
@@ -135,6 +136,28 @@ export class NetworkStack extends Stack implements NetworkOutputs {
       Port.tcp(DISPATCH_PORT),
       'Paperclip to orchestrator dispatch',
     );
+    if (paperclipProvisioned(props.tier)) {
+      this.dispatchLoadBalancerSecurityGroup = new SecurityGroup(this, 'DispatchNlbSg', {
+        vpc: this.vpc,
+        description: 'Private dispatch load balancer',
+        allowAllOutbound: false,
+      });
+      this.dispatchLoadBalancerSecurityGroup.addIngressRule(
+        this.paperclipSecurityGroup,
+        Port.tcp(DISPATCH_PORT),
+        'Paperclip to dispatch load balancer',
+      );
+      this.dispatchLoadBalancerSecurityGroup.addEgressRule(
+        this.fargateSecurityGroup,
+        Port.tcp(DISPATCH_PORT),
+        'Dispatch load balancer to orchestrator',
+      );
+      this.fargateSecurityGroup.addIngressRule(
+        this.dispatchLoadBalancerSecurityGroup,
+        Port.tcp(DISPATCH_PORT),
+        'Dispatch load balancer to orchestrator',
+      );
+    }
 
     this.endpointsSecurityGroup = new SecurityGroup(this, 'EndpointsSg', {
       vpc: this.vpc,

@@ -53,6 +53,7 @@ interface SynthOpts {
   bootstrapWithoutTasks?: boolean;
   withListener?: boolean;
   imageDigest?: string;
+  dispatchLoadBalancerOrigin?: string;
 }
 
 /**
@@ -114,6 +115,7 @@ function synth(opts: SynthOpts = {}): {
     vpc: network.vpc,
     paperclipSecurityGroup: network.paperclipSecurityGroup,
     cluster,
+    dispatchLoadBalancerOrigin: opts.dispatchLoadBalancerOrigin,
     fileSystem: filesystem.paperclipFileSystem,
     accessPoint: filesystem.paperclipAccessPoint,
     logGroup: filesystem.paperclipLogGroup,
@@ -296,9 +298,17 @@ describe('private service and container wiring', () => {
 
   it('derives the staging dispatch origin from the staging app name', () => {
     const source = readFileSync(new URL('./paperclip-stack.ts', import.meta.url), 'utf8');
-    expect(source).toContain('PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: RESOURCE_NAMES.dispatchInternalOrigin');
+    expect(source).toContain('PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: [');
     expect(buildResourceNames('staging').dispatchInternalOrigin).toBe(
       'http://orchestrator.claudeclaw-staging-dispatch.internal:3001',
+    );
+  });
+
+  it('dispatch load balancer: Paperclip allowlist lists interim DNS before raw IP origin', () => {
+    const withOrigin = synth({ dispatchLoadBalancerOrigin: 'http://10.42.1.7:3001' }).paperclip;
+    const container = byFamily(withOrigin, 'claudeclaw-paperclip').ContainerDefinitions.find((c) => c.Name === 'paperclip-server')!;
+    expect(envOf(container).PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST).toBe(
+      'http://orchestrator.claudeclaw-dispatch.internal:3001,http://10.42.1.7:3001',
     );
   });
 
@@ -576,6 +586,7 @@ function computeTemplateUnguarded(tier: 0 | 1): Template {
     vpc: net.vpc,
     albSecurityGroup: net.albSecurityGroup,
     fargateSecurityGroup: net.fargateSecurityGroup,
+    dispatchLoadBalancerSecurityGroup: net.dispatchLoadBalancerSecurityGroup,
     taskRole: iam.taskRole,
     secrets: secretsStack,
     logsBucket: storage.logsBucket,
@@ -812,7 +823,7 @@ describe('service boundary', () => {
     )
       .map((r) => r.Properties as { FromPort: number; ToPort: number; IpProtocol: string; GroupId: unknown; SourceSecurityGroupId: unknown })
       .filter((r) => /FargateSg/.test(JSON.stringify(r.GroupId)));
-    expect(fargateRules.map((r) => r.FromPort).sort()).toEqual([3000, 3001]);
+    expect(fargateRules.map((r) => r.FromPort).sort()).toEqual([3000, 3001, 3001]);
     for (const rule of fargateRules) {
       expect(rule.IpProtocol).toBe('tcp');
       expect(rule.FromPort).toBe(rule.ToPort);

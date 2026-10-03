@@ -126,10 +126,11 @@ describe('NetworkStack regression (orchestrator untouched by Paperclip)', () => 
     const fargateRules = ingressRules(network).filter((r) =>
       /FargateSg/.test(JSON.stringify(r.GroupId)),
     );
-    expect(fargateRules).toHaveLength(2);
+    expect(fargateRules).toHaveLength(3);
     expect(fargateRules).toEqual(expect.arrayContaining([
       expect.objectContaining({ FromPort: 3000, ToPort: 3000, Description: 'ALB to Fargate' }),
       expect.objectContaining({ FromPort: 3001, ToPort: 3001, Description: 'Paperclip to orchestrator dispatch' }),
+      expect.objectContaining({ FromPort: 3001, ToPort: 3001, Description: 'Dispatch load balancer to orchestrator' }),
     ]));
     expect(fargateRules.some((r) => r.FromPort === 3100)).toBe(false);
   });

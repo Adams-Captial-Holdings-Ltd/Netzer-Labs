@@ -33,6 +33,8 @@ export interface NetworkOutputs {
   endpointsSecurityGroup: SecurityGroup;
   /** Paperclip server task SG (ADR 0010) — single-node, stateful; port 3100. */
   paperclipSecurityGroup: SecurityGroup;
+  /** Internal dispatch NLB security group, present only with Paperclip. */
+  dispatchLoadBalancerSecurityGroup?: SecurityGroup;
 }
 
 /**
@@ -162,6 +164,7 @@ export interface GuardrailsOutputs {
  */
 export interface ComputeOutputs {
   albDnsName: string;
+  dispatchLoadBalancerOrigin?: string;
 }
 
 /**
