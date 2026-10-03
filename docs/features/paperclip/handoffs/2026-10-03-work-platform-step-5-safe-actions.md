@@ -27,7 +27,7 @@ supersedes: 2026-10-03-work-platform-step-4-execution-contract.md
 
 ## 2. Current state summary
 
-Work Platform step 5 of 18 (safe actions, policy and audit) is built locally on `feature/wp-step5-safe-actions` in four commits on top of `af91a47`: the frozen red tests, then three builder work orders. The code adds the effect ledger (a new DynamoDB table with a frozen key), a deterministic executor and frozen drafts as a library; a tool policy in the agent loop that stops AI steps from writing; a turn ID and one audit row per tool call; and `pack effect list` and `pack effect resolve`. The executor is not wired to the completion write on the dispatch path, because today's dispatch carries no case key and no stage (A140). The review fan-out and the fix round are in progress. The full validation on the final tip has not run yet. Nothing is pushed and nothing is deployed. The staging proofs S5-L1 to S5-L3 are PENDING (section 7). Step 6 (shadow identities and approvals) is next after this PR.
+Work Platform step 5 of 18 (safe actions, policy and audit) is built locally on `feature/wp-step5-safe-actions` in eight commits on top of `af91a47` (section 4.1): the frozen red tests, three builder work orders, the docs, the review-round red tests, the review fixes and a cleanup. The code adds the effect ledger (a new DynamoDB table with a frozen key), a deterministic executor and frozen drafts as a library; a tool policy in the agent loop that stops AI steps from writing; a turn ID and one audit row per tool call; and `pack effect list` and `pack effect resolve`. The executor is not wired to the completion write on the dispatch path, because today's dispatch carries no case key and no stage (A140). The review fan-out ran on `74d9fd8`, and every mapped finding was fixed in `d32f612` (section 4.1). `42c7a04` is the cleanup. The full validation on the final tip, the frozen gate and the independent critic have not run yet. Nothing is pushed and nothing is deployed. The staging proofs S5-L1 to S5-L3 are PENDING (section 7). Step 6 (shadow identities and approvals) is next after this PR.
 
 ## 3. Codebase understanding
 
@@ -35,9 +35,9 @@ Work Platform step 5 of 18 (safe actions, policy and audit) is built locally on 
 
 - Today's dispatch carries `issueId`, `runId` and `retryOfRunId` only. It has no case key and no stage, so the effect ledger key `(caseKey, stage, step, stageEntryNo)` cannot be filled from it. The executor and the ledger are therefore a library in step 5, and the completion write on the dispatch path keeps step 4's attempt row (A140).
 - The ledger is one DynamoDB table, `<app>-effect-ledger`, with `PK = CASE#<caseKey>` and `SK = EFFECT#<stage>#<step>#<stageEntryNo>`. Frozen drafts are rows in the same table under `SK = DRAFT#...`. A sparse index, `gsi1-unknown`, lists rows in the `unknown` state. The key and the table shape were frozen by the owner on 2026-10-03 and are one-way once a live pack runs ([ADR 0013](../../../adr/0013-sync-attach-execution-contract.md)).
-- A row moves between `pending`, `applied`, `retryable` and `unknown`. A write that provably did not leave goes to `retryable`. An ambiguous failure goes to `unknown`, and only `pack effect resolve` clears it. A `pending` row found by a later call is read back (`readBack`) before any write; with no `readBack` it becomes `unknown`.
+- A row moves between `pending`, `applied`, `retryable` and `unknown`. A write that provably did not leave goes to `retryable`. An ambiguous failure goes to `unknown`, and only `pack effect resolve` clears it. A `pending` row found by a later call is left alone while it is younger than 270 s (`PENDING_SETTLE_MS`) and the call ends `effect_retry`. After that it is read back (`readBack`) before any write; with no `readBack` it becomes `unknown`.
 - The executor checks `fence()` before every ledger write and before `apply()`. While the task drains, a call that would write throws `EffectRetryableError` and writes nothing. The same key with a different payload hash throws `EffectConflictError`.
-- The tool policy is default-deny. In an AI step a built-in tool runs only when its handler is marked `readOnly: true` (10 tools are marked), and a remote tool runs only when the role allowlist names it. The role allowlist is the agent's `tools` list in `agent.yaml`. The policy runs when the tool list is built for the model and again at dispatch. A denied call is audited as `tool_invoke` with `result: blocked`.
+- The tool policy is default-deny. In an AI step a built-in tool runs only when its handler is marked `readOnly: true` (10 tools are marked), and a remote tool runs only when the role allowlist names it. The role allowlist is the agent's top-level `tools` key in `agent.yaml`, read with a YAML parse. The policy runs when the tool list is built for the model and again at dispatch. A denied call is audited as `tool_invoke` with `result: blocked`.
 - Every turn has a `turnId`. Every tool call writes one `tool_invoke` audit row with IDs and an argument hash, never the arguments or the result.
 - `paperclip_add_comment` and `paperclip_create_subtask` refuse before any Paperclip call when the turn holds no run (A141).
 - `effect_unknown`, `effect_conflict` and `effect_retry` are new dispatch error codes (409, 409, 503), mapped in `workFailure`.
@@ -76,9 +76,25 @@ Commits on `feature/wp-step5-safe-actions`, oldest first (frozen acceptance test
 - [x] `d85d5ee` W1: the effect ledger, the DynamoDB rows, the executor, the frozen drafts, the table, its IAM grant and the three audit actions. Codex gpt-6-sol.
 - [x] `864257f` W2: the tool policy, the read-only marks, the allowlist loader, the turn ID, one audit row per tool call, and the dispatch worker running every turn as an AI step. Codex gpt-6-sol.
 - [x] `74d9fd8` W3: `pack effect list` and `pack effect resolve`, the three dispatch error codes, and the Paperclip write tools refusing outside a run. Codex gpt-6-sol. The first try stopped before editing (M98); the second ran with the two tests it may rewrite named.
-- [x] Docs: ADR 0013 (as built), `docs/security-model.md`, the feature README and HANDOFF, the diagrams the change touches, and this file.
-- [ ] Review fan-out (five read-only reviewers on `af91a47..74d9fd8`): in progress. Findings so far are in section 6.3.
-- [ ] Fix round, cleanup, final full validation, the independent critic, push, PR and merge: not done. Push, PR and merge wait for the owner's yes (section 6).
+- [x] Review fan-out on `af91a47..74d9fd8`: five read-only reviewers (code-reviewer, security-reviewer, silent-failure-hunter, typescript-reviewer, pr-test-analyzer). Results:
+  - code-reviewer: approve. 0 critical, 0 high, 6 medium, 5 low. It traced every executor path and found no double write and no skipped write.
+  - security-reviewer: block. 0 critical, 1 high (the allowlist reader took a nested or persona `tools:` line as the allowlist, and an inline list meant no allowlist), 3 medium, 8 low.
+  - silent-failure-hunter: 0 critical, 1 high (a storage error dropped the allowlist, and the result was cached for 5 minutes), 6 medium, 6 low.
+  - typescript-reviewer: block. 0 critical, 4 high (the payload hash of `undefined` threw after the write; `pack effect list` had an unhandled rejection; the allowlist parser; a stored row with an unvalidated state was applied blind), 7 medium, 11 low.
+  - pr-test-analyzer: 1 critical (the allowlist loader was untested and failed open), 5 high, 6 medium, 6 low. 13 of 13 mutations survived.
+- [x] `be28237` review-round red tests: `agent-loader.tools.test.ts` and `executor.review.test.ts`. 32 tests failed for the intended reasons.
+- [x] `1f65cfb` docs: ADR 0013 (as built), `docs/security-model.md`, the feature README and HANDOFF, the diagrams the change touches, and this file.
+- [x] `d32f612` review fixes (W4, Codex gpt-6-sol at high). Every mapped finding was fixed:
+  - The allowlist is read with a real YAML parse of the top-level `tools` key. A storage error fails the turn and is not cached.
+  - The payload hash refuses values that do not hash safely; `undefined` hashes like `null`.
+  - A row recorded as `applied` carries `auditPending` until its audit row is written, and a replay repairs a lost audit.
+  - `resolve` writes its audit row first. Its errors are `EffectResolveError` with a code.
+  - A `pending` row younger than `PENDING_SETTLE_MS` (270 s) is left alone. A lost claim before the write is `effect_retry`. A lost record after the write is `effect_unknown`, with an error log line.
+  - A stored row with an unknown state stops as `effect_unknown`.
+  - The unknown index sort key is hashed. A draft is capped at 300 000 bytes.
+  - `pack effect` prints one line on any failure. A tool dispatch failure writes a warning log line.
+- [x] `42c7a04` cleanup (W5, Codex gpt-6-luna at low, `/refactor`): one helper for the stored-row handling, named constants for the known states and the draft cap, one correlation stamp, one conditional-put helper, one lazy-import helper in `pack.ts`. One fix with two tests: an `agent.yaml` that holds only comments means no allowlist (after `d32f612` it read as deny all).
+- [ ] Final full validation, the frozen gate, the independent critic, push, PR and merge: not done. Push, PR and merge wait for the owner's yes (section 6).
 
 ### 4.2 Files modified
 
@@ -87,12 +103,12 @@ Commits on `feature/wp-step5-safe-actions`, oldest first (frozen acceptance test
 | Effect ledger and executor | `src/lib/work/effect-ledger.ts`, `effect-rows-dynamo.ts`, `executor.ts` | New |
 | Table and wiring | `infra/lib/dynamo-stack.ts`, `constants.ts`, `iam-stack.ts`, `compute-stack.ts`, `interfaces.ts`, `infra/bin/app.ts` | The `effect-ledger` table, its name, the task-role grant and the `TABLE_EFFECT_LEDGER` env entry |
 | Tool policy | `src/lib/tools/tool-policy.ts` (new), `registry.ts`, and the read-only marks in `agent-tools.ts`, `builtin-tools.ts`, `dynamodb-tools.ts`, `memory-tools.ts`, `mission-tools.ts`, `salesforce-tools.ts`, `schedule-tools.ts`, `vector-tools.ts` | Default-deny policy; 10 handlers marked read-only |
-| Agent loop and loader | `src/agent/agent-loop.ts`, `src/lib/config/agent-loader.ts` | The turn ID, the policy applied twice, one `tool_invoke` row per call, the `tools` allowlist |
+| Agent loop and loader | `src/agent/agent-loop.ts`, `src/lib/config/agent-loader.ts` | The turn ID, the policy applied twice, one `tool_invoke` row per call, a warning log line when a tool dispatch throws, the `tools` allowlist read with a YAML parse (`AgentConfigUnavailableError` on a storage error) |
 | Dispatch | `src/lib/paperclip/dispatch-worker.ts`, `src/adapters/dashboard/paperclip-dispatch.ts` | AI step policy and correlation; the three error codes; the attempt number passed to the worker |
 | Paperclip write tools | `src/lib/tools/paperclip-tools.ts` | Refuse outside a run |
 | Audit | `src/lib/audit/audit-writer.ts` | Three new always-audited actions |
 | CLI | `scripts/pack.ts` | `pack effect list` and `pack effect resolve` |
-| Tests | the three frozen test files, `src/lib/work/effect-rows-dynamo.test.ts`, `infra/lib/dynamo-stack.effect-ledger.test.ts`, `scripts/pack.test.ts`, `dispatch-worker.test.ts`, `paperclip-tools.test.ts` | New or updated (the two Paperclip tool tests that pinned run-less comments were rewritten, M98) |
+| Tests | the three frozen test files, `src/lib/work/effect-rows-dynamo.test.ts`, `src/lib/work/executor.review.test.ts`, `src/lib/config/agent-loader.tools.test.ts`, `src/lib/config/agent-loader.tools.review.test.ts`, `src/agent/agent-loop.tool-policy.review.test.ts`, `src/lib/tools/read-only-marks.test.ts`, `infra/lib/dynamo-stack.effect-ledger.test.ts`, `scripts/pack.test.ts`, `dispatch-worker.test.ts`, `paperclip-tools.test.ts` | New or updated (the two Paperclip tool tests that pinned run-less comments were rewritten, M98; the builder's step 5 tests were updated for the hashed index key, M99) |
 | `development.md` | the table-count lines only (32 to 33) | Counts, not rule text |
 | Docs | ADR 0013, `docs/security-model.md`, the feature README and HANDOFF, five diagrams, this file | Say what the code does |
 
@@ -106,14 +122,16 @@ Commits on `feature/wp-step5-safe-actions`, oldest first (frozen acceptance test
 - Drafts (Jev unsure, the advisor unsure): the owner chose "same table, own row kind" (2026-10-03). Reversibility: one-way with the table.
 - Freeze the key and the table (owner, "Yes, freeze it", 2026-10-03): `<app>-effect-ledger`, point-in-time recovery, no expiry, `PK = CASE#<caseKey>`, `SK = EFFECT#<stage>#<step>#<stageEntryNo>`, a sparse index for unknown rows. One-way. Revisit trigger: none before a live pack.
 - `development.md` table counts (owner: "ask jev and the advisor"; Jev 0.95, yes): update the counts only, 32 to 33. No rule text touched.
-- Build rung: Jev was unsure (astra 0.56 against sol 0.44), so the written rule held: gpt-6-sol at medium, the build split into three bounded work orders. gpt-6-astra and Fable did not run.
+- Allowlist read failure (review round): a storage error reading `agent.yaml` fails the turn (Jev 0.85, confidence 0.77, just under the bar; the security reviewer's fix and the rule "never silently swallow errors" agree). Reversibility: two-way. Revisit trigger: chat turns failing on S3 blips in staging.
+- Fix-round decisions (coordinator, as spec owner): a settle window of 270 s before a read-back is trusted; the audit repair mark `auditPending`; `resolve` audits first; the payload hash sorts keys by code unit and refuses non-JSON values (one-way, fixed before any live row); the unknown index sort key is hashed; drafts are capped in bytes.
+- Build rung: Jev was unsure (astra 0.56 against sol 0.44), so the written rule held: gpt-6-sol at medium, the build split into three bounded work orders. The fix round (W4) ran gpt-6-sol at high, and the cleanup (W5) ran gpt-6-luna at low. gpt-6-astra and Fable did not run.
 
 ### 4.4 Durable facts promoted out of this log
 
 | Fact learned | Promoted into | Done |
 |---|---|---|
-| The table, the frozen key, the key rules, the four states, read-before-retry, the unknown index, fencing, draining, the payload hash and conflict, the audit rows, the CLI, frozen drafts, the three error codes, and the gap (the completion write is not ledgered) | [ADR 0013](../../../adr/0013-sync-attach-execution-contract.md) | yes (the docs edits in this change) |
-| The tool policy, the role allowlist, the turn ID and the per-call audit rows | [security model](../../../security-model.md#ai-steps-cannot-write-step-5) | yes (same change) |
+| The table, the frozen key, the key rules, the four states, the lost claim and lost record, read-before-retry and the 270 s settle window, the unknown index and its hashed sort key, fencing, draining, the payload hash and conflict, the audit repair mark, `resolve` and its error codes, the CLI failure line, frozen drafts and their byte cap, the three error codes, and the gap (the completion write is not ledgered) | [ADR 0013](../../../adr/0013-sync-attach-execution-contract.md) | yes (the docs edits in this change) |
+| The tool policy, the role allowlist and how it is read, the turn ID, the per-call audit rows and the known limits | [security model](../../../security-model.md#ai-steps-cannot-write-step-5) | yes (same change) |
 | The executor, the tool policy and the turn audit as verified behavior, with their authority files | [feature README](../README.md) | yes (same change) |
 | The data store, the security controls and the turn audit that the five mapped diagrams depict | the diagrams (drift-gate notes at the top of each file) | yes (same change) |
 
@@ -687,7 +705,7 @@ Sections 5.1 to 5.29 above are carried forward byte for byte from [the 2026-10-0
 
 ### 5.31 Added 2026-10-03 (Work Platform step 5)
 
-Sections 5.1 to 5.30 above are carried forward byte for byte from [the 2026-10-03 Work Platform step 4 handoff](2026-10-03-work-platform-step-4-execution-contract.md) (its section 5), the newest session log. The rows below continue that ledger's ID scheme at A140, M98 and P90. The next free IDs are A145, M99 and P91.
+Sections 5.1 to 5.30 above are carried forward byte for byte from [the 2026-10-03 Work Platform step 4 handoff](2026-10-03-work-platform-step-4-execution-contract.md) (its section 5), the newest session log. The rows below continue that ledger's ID scheme at A140, M98 and P90. The next free IDs are A148, M100 and P91.
 
 | ID | Kind | New finding | Required correction or precaution |
 |---|---|---|---|
@@ -698,16 +716,20 @@ Sections 5.1 to 5.30 above are carried forward byte for byte from [the 2026-10-0
 | A144 | Standing blocker | `npm run local:test:integration` was NOT RUN locally in step 5: port 4566 is held by the Netzar Chat stack's emulator. GitHub CI runs it. | Same as steps 3 and 4. |
 | M98 | Mistake (caught by the builder) | Work order W3 required a refusal that two existing tests contradicted (they pinned run-less comments); Codex stopped before editing. | Before a work order that removes a behavior, search the tests that assert the old behavior and name them in the order. |
 | P90 | Precaution | `jg` exits 2 when its output is cut at the byte limit; the ranked list is still usable as leads. | Narrow the question or exclude tests when a full answer is needed. |
+| M99 | Mistake (repeated M98) | Work order W4 changed the unknown-index sort key that a builder test from W1 pinned, and allowed only appended tests; Codex stopped before editing. | A work order that changes behavior names the tests it may update, or allows the builder to update the tests it wrote in this step. |
+| A145 | Finding (fixed in d32f612) | The first allowlist reader was a line scanner: a `tools:` line nested in another block became the allowlist, an inline list or a storage error meant no allowlist. Found by four of five reviewers. | Read security controls with the same parser the validator uses; fail closed; test the loader with the real `loadAgent`. |
+| A146 | Decision | A read-back that says "not applied" is trusted only after 270 s (`PENDING_SETTLE_MS`): an earlier holder's write may still be in flight. | Revisit if the hold cap or the lease changes. |
+| A147 | Recorded, not fixed | The ledger table shares the task role's table grant (Delete and Scan included); `tool_invoke` rows can be dropped by the audit kill switch; MCP name truncation can map two remote tools to one name (pre-existing); `--by` on `pack effect resolve` is self-asserted. | Take them up in step 16 (security + audit depth). |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Finish the fix round on the review findings (section 6.3), then cleanup and the final full validation on the cleaned-up commit, then the independent critic (a fresh subagent, checking only what changed since any earlier FAIL). Then the owner's yes to push and open the PR into `development`. After the PR opens, turn Auto-fix on, and merge by hand (never auto-merge).
+Run the final full validation on the cleaned-up tip `42c7a04` (section 7), then the frozen gate, then the independent critic (a fresh subagent). Then the owner's yes to push and open the PR into `development`. After the PR opens, turn Auto-fix on, and merge by hand (never auto-merge).
 
 ### 6.2 Immediate next steps
 
-1. The fix round, then cleanup and the final validation (section 7), and the critic's verdict.
+1. The final validation (section 7), the frozen gate and the critic's verdict.
 2. Push and open the PR with the owner's yes. The PR body records the validation list on the final commit, the critic's verdict, the tests of earlier steps that this change rewrote (the two `paperclip-tools.test.ts` tests that pinned run-less comments, and the eight others that were given a run id, M98) and the named blocker for `npm run local:test:integration` (A144).
 3. Step 6 (shadow identities and approvals).
 
@@ -715,7 +737,8 @@ Finish the fix round on the review findings (section 6.3), then cleanup and the 
 
 - [ ] Blocker: `npm run local:test:integration` was not run (A144). Needs: a free port 4566, or the CI run on the pull request.
 - [ ] Owner gate: push, PR and merge each need the owner's yes in that session.
-- [ ] Review fan-out: five read-only reviewers on `af91a47..74d9fd8` are in progress, and their findings are not in this file yet. The coordinator's own findings, not fixed as of `74d9fd8`: (1) the agent loader reads only the block-list form of `tools:`, so an inline `tools: [a, b]` reads as no allowlist; (2) a failed S3 read of `agent.yaml` other than "not found" also reads as no allowlist; (3) the new try/catch around tool dispatch swallows a throw without a log line. An AI step stays default-deny in cases 1 and 2, so a missing allowlist does not let an AI step write.
+- [ ] Recorded and not fixed (A147): the ledger table shares the task role's table grant (delete and scan included); `tool_invoke` rows are not always audited, so the audit kill switch can drop them; some handlers write a second `tool_invoke` row; MCP name truncation can map two remote tools to one name (pre-existing); `--by` on `pack effect resolve` is self-asserted; a `CLAUDE.md` read error still falls back to the built-in persona. The low findings of the review that were not mapped to a criterion are also not fixed. These go to step 16 (security and audit depth).
+- [ ] The completion write is not ledgered (A140). It keeps step 4's attempt row until a step puts the case key and the stage on the wire (8 or 13).
 - [ ] The staging trip (Aurora snapshot first; every AWS call needs the owner's yes) proves what the local tests cannot: S5-L1, the `effect-ledger` table exists after deploy with point-in-time recovery and the task role can read and write it; S5-L2, a task restart between `pending` and `applied` ends `unknown`, and `pack effect resolve` clears it against real DynamoDB. S5-L3, the joint restore drill that includes the effect ledger, belongs to step 13. All three are PENDING, not passed.
 
 ### 6.4 Deferred, and why
@@ -727,31 +750,34 @@ Finish the fix round on the review findings (section 6.3), then cleanup and the 
 
 ## 7. Verification actually performed
 
-The final full validation runs after the fix round and cleanup and is recorded in the PR body; this table lists only what was actually run, with its numbers. The run logs are outside the repository, in `~/.claude/plans/netzer-work-platform-logs/`.
+The final full validation runs on the cleaned-up tip (`42c7a04` or later) and is recorded in the PR body; it has not run yet. This table lists only what was actually run, with its numbers. The run logs are outside the repository, in `~/.claude/plans/netzer-work-platform-logs/`.
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
-| `npm run typecheck` | exit 0 on `af91a47` | exit 0 on `74d9fd8` (W3 run) |
+| `npm run typecheck` | exit 0 on `af91a47` | exit 0 on `74d9fd8` (W3 run), on `d32f612` (W4 run) and on `42c7a04` (W5 run) |
 | `npm test` | exit 0 on `af91a47` | not run in full yet. Scoped runs below |
 | `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `af91a47` | not run in full yet. One scoped run below |
 | `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | exit 0 on `af91a47` | not run yet |
 | `npm run local:test:integration` | NOT RUN (A144) | NOT RUN (A144) |
-| `node scripts/ci/docs-links.mjs`, `node scripts/ci/feature-knowledge.mjs` | OK on `af91a47` | OK on the working tree after the docs edits (uncommitted): `docs-links`, `feature-knowledge`, `runnable-blocks`, `docs-assets` and `docs-mermaid` exit 0; `diagrams-drift` exit 0 (path validation only, no `GITHUB_BASE_REF`); a local drift simulation over the changed files found no unnoted diagram |
+| `node scripts/ci/docs-links.mjs`, `node scripts/ci/feature-knowledge.mjs` | OK on `af91a47` | OK on the working tree after the docs update for `d32f612` and `42c7a04` (uncommitted; re-run): `docs-links`, `feature-knowledge`, `runnable-blocks`, `docs-assets` and `docs-mermaid` exit 0; `diagrams-drift` exit 0 (path validation only, no `GITHUB_BASE_REF`); a local drift simulation over the changed files found no unnoted diagram |
 | Frozen gate self-test on `1e55d5f` (the red commit) | n/a | exit 1 with 22 FAIL as expected, the frozen-files check PASS, 3 PENDING (`s5-1e55d5f-gate-red.log`) |
 | `npx vitest run src/lib/work infra/lib src/lib/audit` (after W1, `d85d5ee`) | n/a | exit 0, 17 files, 260 tests (`s5-w1-proof-vitest.log`). Typecheck errors only in the two frozen test files that W2 satisfies (`s5-w1-proof-typecheck.log`) |
 | `npx vitest run` on `src/lib/tools src/agent src/lib/work src/lib/audit src/lib/paperclip src/adapters/dashboard src/lib/config` (after W2, `864257f`) | n/a | exit 0, 121 files, 1637 tests (`s5-w2-proof-vitest.log`) |
 | The same scope with `CCE_PAPERCLIP_ENABLED=1` (after W2) | n/a | exit 0, 117 files, 1572 tests (`s5-w2-proof-flagon.log`). `npm run typecheck` exit 0 |
 | `npx vitest run` on `scripts src/lib/tools src/lib/work src/lib/paperclip src/adapters/dashboard src/agent` (after W3, `74d9fd8`) | n/a | exit 0, 183 files, 2866 tests (`s5-w3-proof-vitest.log`). `npm run typecheck` PASS |
+| `npx vitest run` after the fix round (W4, `d32f612`; the log names no scope, so this is not a full-suite run) | n/a | exit 0, 203 files, 3142 tests (`s5-w4-proof-vitest.log`) |
+| The same run with `CCE_PAPERCLIP_ENABLED=1` after the fix round (W4, `d32f612`) | n/a | exit 0, 124 files, 1688 tests (`s5-w4-proof-flagon.log`) |
+| `npx vitest run` on the work, config, pack, tools and agent tests after the cleanup (W5, `42c7a04`) | n/a | exit 0, 439 tests passed. `npm run typecheck` PASS |
 | Staging proofs S5-L1 (the table and the task role's access), S5-L2 (a restart between `pending` and `applied`), S5-L3 (the joint restore drill, step 13) | n/a | PENDING: need staging and an AWS call, each with the owner's yes. Not passed |
 
-The frozen gate (outside the repository) is run once at the end; its result is recorded in the PR body, not here.
+The frozen gate (outside the repository), the full validation list and the independent critic are still to run on the final tip. Their results are recorded in the PR body, not here. The W4 and W5 runs above are the builder-side proofs the coordinator ran after each work order, not the final validation.
 
-Anything not run, and why: `npm run local:test:integration`, because the Netzar Chat stack's emulator holds port 4566 and a run would change its data (A144); the full `npm test` in both flag states, the builds and the frozen gate on the final tip, which wait for the fix round. No AWS call was made.
+Anything not run, and why: `npm run local:test:integration`, because the Netzar Chat stack's emulator holds port 4566 and a run would change its data (A144); the full `npm test` in both flag states, the builds, the frozen gate and the critic on the final tip, which are the next action (section 6). No AWS call was made.
 
 ## 8. Environment state
 
-- **Tools and services**: the work ran in the worktree `Netzer-Labs/.worktrees/wp-step5-safe-actions`. Codex (gpt-6-sol at medium) built the three work orders on the Build Ladder. The docs were written by a Sonnet subagent. `jg` (jevgrep) was ready; `headroom` was not routed (`headroom doctor` exit 2, desktop app). Another stack's Floci emulator holds port 4566 and was not touched.
-- **Active processes**: none left running by this session. The review fan-out agents write their findings outside the repository.
+- **Tools and services**: the work ran in the worktree `Netzer-Labs/.worktrees/wp-step5-safe-actions`. Codex built the work orders on the Build Ladder: gpt-6-sol at medium for W1 to W3, gpt-6-sol at high for the fix round (W4) and gpt-6-luna at low for the cleanup (W5). The docs were written by a Sonnet subagent and updated by one after the fix round. `jg` (jevgrep) was ready; `headroom` was not routed (`headroom doctor` exit 2, desktop app). Another stack's Floci emulator holds port 4566 and was not touched.
+- **Active processes**: none left running by this session. The review fan-out agents wrote their findings outside the repository, in `~/.claude/plans/netzer-work-platform-reviews/`.
 - **Environment variables**: none recorded for this step. The code adds the name `TABLE_EFFECT_LEDGER` (task env; the code falls back to `claudeclaw-effect-ledger`). Names only, never values.
 - **Uncommitted work left in the tree**: the docs changes that this file belongs to.
 
