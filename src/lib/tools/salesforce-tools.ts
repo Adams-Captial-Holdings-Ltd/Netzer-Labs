@@ -74,6 +74,7 @@ function renderRecords(records: Record<string, unknown>[], cap = 4000): string {
 }
 
 tools.register('salesforce_query', {
+  readOnly: true,
   spec: spec(
     'salesforce_query',
     'Run a read-only SOQL query against the connected Salesforce org. Use for questions about accounts, contacts, opportunities, leads, or any object ("how many open opportunities over $50k?").',

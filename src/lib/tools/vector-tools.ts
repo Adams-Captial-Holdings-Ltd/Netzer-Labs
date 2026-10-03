@@ -36,6 +36,7 @@ function spec(name: string, description: string, schema: unknown): BedrockTool {
 // Replace the stubbed entry with the real implementation. The registry
 // lets us re-register; the most recent call wins.
 tools.register('s3_vectors_search', {
+  readOnly: true,
   spec: spec(
     's3_vectors_search',
     'Semantic search across documents the user has ingested. Returns top-K passages ordered by cosine similarity, each with a citation (doc title, source, chunk index). Use when the user asks about something specific they may have uploaded earlier, or when their question references a previously-shared document.',

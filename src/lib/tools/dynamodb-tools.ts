@@ -142,6 +142,7 @@ function spec(name: string, description: string, schema: unknown): BedrockTool {
 }
 
 tools.register('dynamodb_query', {
+  readOnly: true,
   spec: spec(
     'dynamodb_query',
     `Query one of the orchestrator's DynamoDB tables. Allowed tables: ${Object.entries(

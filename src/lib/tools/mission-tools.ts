@@ -362,6 +362,7 @@ tools.register('create_mission', {
 });
 
 tools.register('list_missions', {
+  readOnly: true,
   spec: spec(
     'list_missions',
     "List missions on any agent's board. Defaults to your own open missions.",

@@ -235,6 +235,31 @@ describe('C-13 / A30: neutralizeForPrompt is actually called on inbound text', (
 });
 
 describe('the held attempt', () => {
+  it('runs the dispatched turn as an AI step', async () => {
+    const runTurn = vi.fn(async () => ({ text: 'done' }));
+    await runDispatchAttempt(ctx(), {
+      engine: { getMission: async () => mission() } as never,
+      getSessionFn: async () => null,
+      appendTurnsFn: async () => {},
+      runTurn: runTurn as never,
+    });
+    expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { aiStep: true } }));
+  });
+
+  it('passes the issue and attempt number as correlation', async () => {
+    const runTurn = vi.fn(async () => ({ text: 'done' }));
+    await runDispatchAttempt(ctx(), {
+      attemptNo: 3,
+      engine: { getMission: async () => mission() } as never,
+      getSessionFn: async () => null,
+      appendTurnsFn: async () => {},
+      runTurn: runTurn as never,
+    });
+    expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({
+      correlation: { issueId: TEST_ISSUE_ID, attemptNo: 3 },
+    }));
+  });
+
   it('passes caller history and the genuine run id to a machine turn, then appends the answer', async () => {
     const runTurn = vi.fn(async () => ({ text: 'done', costUsd: 0, toolCallCount: 0 }));
     const appendTurnsFn = vi.fn(async () => {});

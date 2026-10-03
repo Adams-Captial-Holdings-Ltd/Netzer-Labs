@@ -96,6 +96,7 @@ export interface AgentConfig {
    * config doesn't specify one.
    */
   knowledgeScope?: string;
+  tools?: string[];
 }
 
 /**
@@ -120,6 +121,21 @@ function readYamlScalar(yaml: string, key: string): string | undefined {
     return value || undefined;
   }
   return undefined;
+}
+
+function readYamlTools(yaml: string): string[] | undefined {
+  const lines = yaml.split('\n');
+  if (lines.some((line) => /^tools:\s*\[\s*\]\s*(?:#.*)?$/.test(line.trim()))) return [];
+  const start = lines.findIndex((line) => /^tools:\s*(?:#.*)?$/.test(line.trim()));
+  if (start < 0) return undefined;
+  const names: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    const item = line.match(/^\s+-\s+([^#\s]+)\s*(?:#.*)?$/);
+    if (!item) break;
+    names.push(item[1]);
+  }
+  return names;
 }
 
 interface CacheEntry {
@@ -178,12 +194,13 @@ async function fetchFromS3(agentId: string): Promise<AgentConfig | null> {
     );
     const text = await claudeMd.Body?.transformToString();
     if (!text) return null;
-    const knowledgeScope = await fetchKnowledgeScope(agentId);
+    const yamlConfig = await fetchYamlConfig(agentId);
     return {
       agentId,
       displayName: agentId.charAt(0).toUpperCase() + agentId.slice(1),
       systemPrompt: text,
-      ...(knowledgeScope ? { knowledgeScope } : {}),
+      ...(yamlConfig.knowledgeScope ? { knowledgeScope: yamlConfig.knowledgeScope } : {}),
+      ...(yamlConfig.tools !== undefined ? { tools: yamlConfig.tools } : {}),
     };
   } catch (err) {
     if (err instanceof NoSuchKey) return null;
@@ -203,8 +220,8 @@ async function fetchFromS3(agentId: string): Promise<AgentConfig | null> {
  * fall back to DEFAULT_KNOWLEDGE_SCOPE. A missing yaml is expected (CLAUDE.md-
  * only agents) and returns quietly; only unexpected S3 errors are warn-logged.
  */
-async function fetchKnowledgeScope(agentId: string): Promise<string | undefined> {
-  if (!bucket) return undefined;
+async function fetchYamlConfig(agentId: string): Promise<Pick<AgentConfig, 'knowledgeScope' | 'tools'>> {
+  if (!bucket) return {};
   try {
     const obj = await s3().send(
       new GetObjectCommand({
@@ -213,17 +230,17 @@ async function fetchKnowledgeScope(agentId: string): Promise<string | undefined>
       }),
     );
     const yaml = await obj.Body?.transformToString();
-    if (!yaml) return undefined;
-    return readYamlScalar(yaml, 'knowledgeScope');
+    if (!yaml) return {};
+    return { knowledgeScope: readYamlScalar(yaml, 'knowledgeScope'), tools: readYamlTools(yaml) };
   } catch (err) {
-    if (err instanceof NoSuchKey) return undefined;
+    if (err instanceof NoSuchKey) return {};
     const name = (err as { name?: string }).name ?? '';
-    if (name === 'NoSuchKey' || name === 'NotFound') return undefined;
+    if (name === 'NoSuchKey' || name === 'NotFound') return {};
     logger.warn(
       { agentId, errName: name, err: err instanceof Error ? err.message : String(err) },
       's3 agent.yaml fetch failed; using default knowledge scope',
     );
-    return undefined;
+    return {};
   }
 }
 
@@ -250,12 +267,14 @@ export async function loadAgent(agentId: string): Promise<AgentConfig> {
   // fetchFromS3, so its configured knowledgeScope was silently lost to the
   // builtin fallback. Read it here too, on both paths. Costs one extra GET
   // only for a CLAUDE.md-without-agent.yaml agent, and the result is cached.
-  const knowledgeScope = base.knowledgeScope || (await fetchKnowledgeScope(agentId));
+  const yamlConfig = fromS3 ? {} : await fetchYamlConfig(agentId);
+  const knowledgeScope = base.knowledgeScope || yamlConfig.knowledgeScope;
   // Normalize the knowledge scope so every consumer sees an explicit value.
   const config: AgentConfig = {
     ...base,
     ...(model ? { model } : {}),
     knowledgeScope: knowledgeScope || DEFAULT_KNOWLEDGE_SCOPE,
+    ...(base.tools !== undefined ? { tools: base.tools } : yamlConfig.tools !== undefined ? { tools: yamlConfig.tools } : {}),
   };
   cache.set(agentId, { config, expiresAt: Date.now() + TTL_MS });
   return config;

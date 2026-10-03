@@ -226,6 +226,7 @@ export interface DispatchWorkDeps {
   appendTurnsFn?: typeof appendTurns;
   now?: () => number;
   abortSignal?: AbortSignal;
+  attemptNo?: number;
 }
 
 let cachedEngine: MissionEngine | undefined;
@@ -279,6 +280,8 @@ export async function runDispatchAttempt(ctx: PaperclipDispatchContext, deps: Di
     const result = await runTurn({
       agentId: ctx.netzarAgentId, chatId, userText, history: session?.turns ?? [],
       surface: 'system', runId: ctx.runId, userId: `paperclip:${ctx.netzarAgentId}`,
+      toolPolicy: { aiStep: true },
+      correlation: { issueId: ctx.issueId, attemptNo: deps.attemptNo },
       abortSignal: deps.abortSignal,
       // NO origin: the default is machine. Board-controlled text must not arm the fleet-wide kill phrase.
     });

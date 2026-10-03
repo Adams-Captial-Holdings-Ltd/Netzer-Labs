@@ -97,6 +97,7 @@ tools.register('add_memory', {
 });
 
 tools.register('list_memories', {
+  readOnly: true,
   spec: spec(
     'list_memories',
     'Recall facts you previously saved for this conversation.',
@@ -165,6 +166,7 @@ tools.register('forget_memory', {
 });
 
 tools.register('search_memories', {
+  readOnly: true,
   spec: spec(
     'search_memories',
     'Search your memories by keyword or concept. Returns the most relevant ' +

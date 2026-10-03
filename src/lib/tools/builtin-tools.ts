@@ -11,6 +11,7 @@ import { listKnownAgents } from '../config/agent-loader.js';
 
 // ── get_time ────────────────────────────────────────────────────────
 tools.register('get_time', {
+  readOnly: true,
   spec: {
     toolSpec: {
       name: 'get_time',
@@ -50,6 +51,7 @@ tools.register('get_time', {
 
 // ── list_agents ─────────────────────────────────────────────────────
 tools.register('list_agents', {
+  readOnly: true,
   spec: {
     toolSpec: {
       name: 'list_agents',
