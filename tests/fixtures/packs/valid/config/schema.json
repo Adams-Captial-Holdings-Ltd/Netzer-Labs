@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "escalation_hours": { "type": "number", "default": 24, "title": "Escalate after (hours)", "customerEditable": true },
+    "clinical_review_required": { "type": "boolean", "default": true },
+    "site": { "type": "enum", "enum": ["north", "south"], "default": "north" },
+    "ehr_api_key": { "type": "secretRef", "secret": "EHR_API_KEY" },
+    "ehr": { "type": "connectorRef", "capability": "ehr.client" }
+  },
+  "required": ["ehr_api_key", "ehr"]
+}

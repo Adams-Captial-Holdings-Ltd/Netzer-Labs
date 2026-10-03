@@ -1,0 +1,14 @@
+{
+  "key": "referral",
+  "name": "Referral",
+  "enforceTransitions": true,
+  "stages": [
+    { "key": "intake", "name": "Intake", "kind": "open", "position": 0, "config": { "agent": "${agent:intake}", "slaRoutine": "${routine:sla-check}" } },
+    { "key": "clinical-review", "name": "Clinical review", "kind": "review", "position": 1, "config": { "required": "${config.clinical_review_required}" } },
+    { "key": "done", "name": "Done", "kind": "done", "position": 2 }
+  ],
+  "transitions": [
+    { "fromStageKey": "intake", "toStageKey": "clinical-review" },
+    { "fromStageKey": "clinical-review", "toStageKey": "done" }
+  ]
+}

@@ -2,13 +2,24 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-09-30
-as_of_commit: c9897c5e879155e68cda26ac34621ca756953080
+observed_at: 2026-10-02
+as_of_commit: 2a354c4d39352dc6d14cc793bf51bc9400a3703f
 ---
 
 # Paperclip integration handoff
 
-## Current state (2026-09-30)
+## Current state (2026-10-02)
+
+This section was checked on 2026-10-02 against `origin/development` `2a354c4`. The sections below it are older state and were not re-checked.
+
+- **Branch:** `feature/wp-step3-pack-format` (from `origin/development` `2a354c4`; merge target `development`). **Pushed:** no. **PR:** none.
+- **Step 2 is merged:** PR #199 merged into `development` as `2a354c4`. Nothing was deployed.
+- **Step 3 is built locally:** the pack format v1 file shapes (frozen by decision 37, [ADR 0021](../../adr/0021-pack-format-v1-file-shapes.md), [pack format v1](pack-format.md)), the pack schemas and the offline `pack validate` command, with their tests.
+- **Deployment:** none. `development` deploys nothing. No AWS call was made.
+
+**Next action:** the owner's yes to push and open the PR into `development`. Then step 4 (the execution contract). Session log: [Work Platform step 3](handoffs/2026-10-02-work-platform-step-3-pack-format.md).
+
+## State as of 2026-09-30
 
 This section was checked on 2026-09-30 against `origin/development` `c9897c5`. **Everything below it is prior state as of 2026-09-17 (`4f1a860`) and was not re-checked.**
 
@@ -163,6 +174,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Work Platform step 3: pack format and `pack validate`](handoffs/2026-10-02-work-platform-step-3-pack-format.md) | 2026-10-02 | Built the pack format v1 schemas and the offline `pack validate` command on `feature/wp-step3-pack-format`; froze the file shapes (decision 37, ADR 0021). Three reviews found seven HIGH bypasses that the frozen tests missed, now pinned by hardening tests. Carries the ledger forward and adds A127 to A131, M93 to M95 and P84 to P86. Not pushed; nothing deployed |
 | [Work Platform step 2: re-pin, runtime lock, spikes](handoffs/2026-09-30-work-platform-step-2-repin-runtime-lock.md) | 2026-09-30 | Amended the step-1 record to roadmap v2 (decision 27), then measured what step 2 must build: the runtime lock, private dispatch and outbound allowlist do not exist as code, the contract suite does not exist yet, and both Paperclip digests resolve on ghcr.io. Carries the ledger forward (A76-A103, M82-M83, P67-P71). Spikes (a) and (b) failed as written, so the step stopped at its stop rule: no Paperclip pin holds a six-minute dispatch, and a user cannot be created while sign-up is closed. The council picked a raw private IP for dispatch and a pool of approver accounts; two follow-up runs support both. The owner decided both; the rest of the step then went on as first planned. Specification frozen 2026-09-30: the runtime lock is read live by the orchestrator through a read-only company-member key, the dispatch route moves to a private listener, and the acceptance tests and gate were written before any code. Updated at landing |
 | [Work Platform architecture record](handoffs/2026-09-29-work-platform-architecture-record.md) | 2026-09-29 | Recorded the owner-approved Work Platform plan as ADRs 0012–0020, an ADR 0010 amendment, the ADR 0009 supersession, the DO NOT BUILD list, the decision log and the minimum sellable product; marked the superseded pieces of the missions engine plan. Docs only; nothing built or deployed |
 | [Machine transfer](handoffs/2026-09-17-machine-transfer.md) | 2026-09-17 | Landed the 2026-09-15 drafts byte-exact from a temp scratchpad. Corrected that record: lanes 1.1-1.3 passed, 1.4 failed at export on a full disk, 1.5-1.6 never ran. Recorded the Docker engine damage and the owner-approved backup push, plus a path map and resume prompt for the new machine. Nothing built or deployed |

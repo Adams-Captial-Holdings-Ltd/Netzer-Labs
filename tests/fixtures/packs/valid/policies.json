@@ -1,0 +1,4 @@
+{
+  "toolRisk": { "ehr.client.search": "low" },
+  "approvalGates": [{ "pipeline": "referral", "stage": "clinical-review", "decisionClass": "clinical_disposition" }]
+}

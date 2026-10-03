@@ -7,6 +7,9 @@
  * to S3 as the agent's CLAUDE.md and can be edited afterward.
  */
 
+import { pickDefaultModel } from '../bedrock/models.js';
+import type { AgentDefinition } from '../packs/schema.js';
+
 export interface AgentTemplate {
   id: string;
   displayName: string;
@@ -459,6 +462,18 @@ ${STANDARD_RULES}`,
 /* ------------------------------------------------------------------ */
 
 const byId = new Map(templates.map((t) => [t.id, t]));
+
+/** Express a built-in template in the pack agent format. */
+export function templateAgentDefinition(t: AgentTemplate): AgentDefinition {
+  return {
+    id: t.id,
+    name: t.displayName,
+    description: t.description,
+    model: t.suggestedModel ?? (pickDefaultModel(process.env) || 'us.anthropic.claude-sonnet-4-6'),
+    persona: t.buildClaudeMd(),
+    ...(t.suggestedKnowledgeScope ? { knowledgeScope: t.suggestedKnowledgeScope } : {}),
+  };
+}
 
 /** Return all built-in templates (metadata only, no prompt). */
 export function listTemplates(): AgentTemplate[] {
