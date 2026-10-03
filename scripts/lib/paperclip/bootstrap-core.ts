@@ -677,7 +677,6 @@ export function agentSpecs(opts: {
   }
   const dispatchSlugs = opts.dispatchSlugs ?? ['main'];
   // Netzer answers by 240 s; Paperclip's raw-IP fetch gives up near 300 s.
-  const timeoutMs = 270_000;
   return opts.slugs.map((slug) => ({
     slug,
     name: `Netzar ${slug.charAt(0).toUpperCase()}${slug.slice(1)}`,
@@ -689,12 +688,12 @@ export function agentSpecs(opts: {
           method: 'POST',
           headers: { authorization: `Bearer ${opts.dispatchSecret}` },
           payloadTemplate: { netzarAgentId: slug },
-          timeoutMs,
+          timeoutMs: 270_000,
         }
       : // No `url` and NO SECRET. An un-armed agent's adapter row is not a
         // second copy of the dispatch secret sitting in plaintext jsonb for no
         // reason (C-17 records the copy that has a purpose; this one would not).
-        { method: 'POST', payloadTemplate: { netzarAgentId: slug }, timeoutMs },
+        { method: 'POST', payloadTemplate: { netzarAgentId: slug }, timeoutMs: 270_000 },
   }));
 }
 
