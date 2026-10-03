@@ -49,15 +49,15 @@ export function dynamoAttemptRows(): AttemptRows {
 }
 
 // ponytail: This is a table scan; fine while the lease table is small, move to a GSI if it grows.
-export async function scanRecordedAttempts(): Promise<AttemptRow[]> {
+export async function scanPendingAttempts(): Promise<AttemptRow[]> {
   const rows: AttemptRow[] = [];
   let cursor: Record<string, unknown> | undefined;
   do {
     const result = await ddb().send(new ScanCommand({
       TableName: TABLE,
-      FilterExpression: 'begins_with(PK, :p) AND #s = :recorded',
+      FilterExpression: 'begins_with(PK, :p) AND (#s = :recorded OR #s = :delivering)',
       ExpressionAttributeNames: { '#s': 'state' },
-      ExpressionAttributeValues: { ':p': 'ATTEMPT#', ':recorded': 'recorded' },
+      ExpressionAttributeValues: { ':p': 'ATTEMPT#', ':recorded': 'recorded', ':delivering': 'delivering' },
       ...(cursor ? { ExclusiveStartKey: cursor } : {}),
     }));
     for (const found of result.Items ?? []) {

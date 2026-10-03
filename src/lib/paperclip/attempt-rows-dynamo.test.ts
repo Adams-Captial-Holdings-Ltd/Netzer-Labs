@@ -4,7 +4,7 @@ import { ATTEMPT_ROW_TTL_SECONDS, type AttemptRow } from './attempt-store.js';
 const { send } = vi.hoisted(() => ({ send: vi.fn() }));
 vi.mock('../state/ddb.js', () => ({ ddb: () => ({ send }) }));
 
-import { dynamoAttemptRows, scanRecordedAttempts } from './attempt-rows-dynamo.js';
+import { dynamoAttemptRows, scanPendingAttempts } from './attempt-rows-dynamo.js';
 
 const row: AttemptRow = {
   issueId: 'issue-1', attemptNo: 1, state: 'recorded', leaseToken: 1,
@@ -60,17 +60,17 @@ describe('dynamoAttemptRows', () => {
     await expect(rows.replace('issue-1', 1, row)).rejects.toBe(error);
   });
 
-  it('scans recorded attempt rows through every page', async () => {
+  it('scans pending attempt rows through every page', async () => {
     const cursor = { PK: 'ATTEMPT#issue-1' };
     send.mockResolvedValueOnce({ Items: [{ PK: 'ATTEMPT#issue-1', ...row, ttl: 123 }], LastEvaluatedKey: cursor })
-      .mockResolvedValueOnce({ Items: [{ PK: 'ATTEMPT#issue-2', ...row, issueId: 'issue-2', ttl: 124 }] });
-    expect(await scanRecordedAttempts()).toEqual([row, { ...row, issueId: 'issue-2' }]);
+      .mockResolvedValueOnce({ Items: [{ PK: 'ATTEMPT#issue-2', ...row, issueId: 'issue-2', state: 'delivering', ttl: 124 }] });
+    expect(await scanPendingAttempts()).toEqual([row, { ...row, issueId: 'issue-2', state: 'delivering' }]);
     expect(send).toHaveBeenCalledTimes(2);
     const first = send.mock.calls[0][0].input;
     const second = send.mock.calls[1][0].input;
-    expect(first.FilterExpression).toBe('begins_with(PK, :p) AND #s = :recorded');
+    expect(first.FilterExpression).toBe('begins_with(PK, :p) AND (#s = :recorded OR #s = :delivering)');
     expect(first.ExpressionAttributeNames).toEqual({ '#s': 'state' });
-    expect(first.ExpressionAttributeValues).toEqual({ ':p': 'ATTEMPT#', ':recorded': 'recorded' });
+    expect(first.ExpressionAttributeValues).toEqual({ ':p': 'ATTEMPT#', ':recorded': 'recorded', ':delivering': 'delivering' });
     expect(first.ExclusiveStartKey).toBeUndefined();
     expect(second.ExclusiveStartKey).toEqual(cursor);
   });

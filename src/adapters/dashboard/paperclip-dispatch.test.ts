@@ -15,15 +15,16 @@ function harness() {
   };
   const work = vi.fn(async () => ({ disposition: 'done' as const, comment: 'done' }));
   const deliver = vi.fn(async () => {});
+  const protection = { hold: vi.fn(), refresh: vi.fn(), release: vi.fn() };
   const router = buildPaperclipDispatchRouter({
     secret: () => 'secret', knownAgents: () => ['main', 'sleeping'], enabledAgents: async () => ['main'],
-    attempts: createAttemptStore({ rows, holderId: 'older-test', now: Date.now }), work, deliver, pollMs: 2,
+    attempts: createAttemptStore({ rows, holderId: 'older-test', now: Date.now }), work, deliver, pollMs: 2, protection,
   });
   const send = (body: unknown, authorization = 'Bearer secret') => router.request('/dispatch', {
     method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
   const body = { netzarAgentId: 'main', agentId: 'paperclip-agent', runId: 'run-1', context: { issueId: ISSUE } };
-  return { send, body, work, deliver, map };
+  return { send, body, work, deliver, map, protection };
 }
 beforeEach(() => { __resetPaperclipLockForTest(); __resetDispatchDrainForTest(); });
 
@@ -35,6 +36,9 @@ describe('held dispatch route', () => {
     expect(await res.json()).toMatchObject({ ok: true, issueId: ISSUE, attemptNo: 1 });
     expect(h.work).toHaveBeenCalledTimes(1);
     expect(h.deliver).toHaveBeenCalledTimes(1);
+    expect(h.map.get(ISSUE)?.agentId).toBe('main');
+    expect(h.protection.hold).toHaveBeenCalledTimes(1);
+    expect(h.protection.release).toHaveBeenCalledTimes(1);
   });
   it('authenticates before touching the attempt row', async () => {
     const h = harness();

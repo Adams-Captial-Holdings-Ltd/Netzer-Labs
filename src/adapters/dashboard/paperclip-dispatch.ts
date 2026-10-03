@@ -13,6 +13,7 @@ import { DispatchFailure, deliverOutcome, parseDispatchBody, runDispatchAttempt 
 import { createAttemptStore, FencedOutError, type AttemptHandle, type AttemptOutcome } from '../../lib/paperclip/attempt-store.js';
 import { dynamoAttemptRows } from '../../lib/paperclip/attempt-rows-dynamo.js';
 import { isDispatchDraining } from '../../lib/paperclip/dispatch-drain.js';
+import { taskProtection } from '../../lib/paperclip/task-protection.js';
 import type { PaperclipDispatchContext } from '../../lib/paperclip/types.js';
 
 export const ATTEMPT_HOLD_MS = 240_000;
@@ -50,6 +51,7 @@ export interface PaperclipDispatchDeps {
   holdMs?: number;
   pollMs?: number;
   renewMs?: number;
+  protection?: Pick<typeof taskProtection, 'hold' | 'release' | 'refresh'>;
 }
 
 async function defaultEnabledAgents(): Promise<readonly string[]> {
@@ -69,6 +71,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
   const holdMs = deps.holdMs ?? ATTEMPT_HOLD_MS;
   const pollMs = deps.pollMs ?? 2_000;
   const renewMs = deps.renewMs ?? 10_000;
+  const protection = deps.protection ?? taskProtection;
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   const log = (ctx: PaperclipDispatchContext, attemptNo: number, state: string, code?: string) =>
     logger.info({ issueId: ctx.issueId, agentId: ctx.netzarAgentId, attemptNo, state, ...(code ? { code } : {}) }, `paperclip attempt ${state}`);
@@ -79,7 +82,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
     const timer = setInterval(() => {
       if (busy) return;
       busy = true;
-      void attempts().renew(handle).catch((err: unknown) => {
+      void attempts().renew(handle).then(() => protection.refresh()).catch((err: unknown) => {
         if (err instanceof FencedOutError) renewalError = err;
         else logger.warn({ issueId: handle.issueId, attemptNo: handle.attemptNo, reason: 'renew_failed' }, 'paperclip dispatch lease renewal failed');
       }).finally(() => { busy = false; });
@@ -116,6 +119,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
   }
 
   function launch(ctx: PaperclipDispatchContext, handle: AttemptHandle, onError: (err: unknown) => void, onDone: () => void): void {
+    protection.hold();
     void (async () => {
       try {
         let outcome: AttemptOutcome;
@@ -131,8 +135,8 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
         log(ctx, handle.attemptNo, 'recorded');
         await deliverRecorded(ctx);
       } catch (err) { onError(err); }
-      finally { onDone(); }
-    })().catch((err) => { onError(err); onDone(); });
+      finally { protection.release(); onDone(); }
+    })().catch((err) => { onError(err); });
   }
 
   router.post('/dispatch', async (c) => {
@@ -153,7 +157,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
 
     try {
       // This route uses Paperclip's run id and never mints one.
-      const begun = await attempts().begin({ issueId: ctx.issueId, runId: ctx.runId, retryOfRunId: ctx.retryOfRunId });
+      const begun = await attempts().begin({ issueId: ctx.issueId, runId: ctx.runId, retryOfRunId: ctx.retryOfRunId, agentId: ctx.netzarAgentId });
       const attemptNo = begun.row.attemptNo;
       if (begun.action === 'busy') return c.json({ error: 'attempt_in_progress' }, 409);
       if (begun.action === 'replay') { log(ctx, attemptNo, 'replayed'); return c.json({ ok: true, issueId: ctx.issueId, attemptNo, replayed: true }, 200); }
@@ -167,8 +171,9 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
         log(ctx, attemptNo, 'started');
         launch(ctx, begun.handle, (err) => { taskError = err; }, () => { settled = true; wake(); });
       } else if (begun.action === 'deliver') {
+        protection.hold();
         void deliverClaim(ctx, begun.handle, begun.outcome, ctx.runId)
-          .catch((err) => { taskError = err; }).finally(() => { settled = true; wake(); });
+          .catch((err) => { taskError = err; }).finally(() => { protection.release(); settled = true; wake(); });
       } else log(ctx, attemptNo, 'attached');
       const attached = begun.action === 'attach';
       const end = Date.now() + holdMs;

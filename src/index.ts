@@ -30,6 +30,8 @@ import {
   startPaperclipReconciler,
   stopPaperclipReconciler,
 } from './lib/paperclip/reconciler.js';
+import { startPendingDispatchSweep, stopPendingDispatchSweep } from './lib/paperclip/pending-dispatch-sweep.js';
+import { beginDispatchDrain } from './lib/paperclip/dispatch-drain.js';
 import {
   startInvalidationListener,
   stopInvalidationListener,
@@ -108,6 +110,7 @@ async function main(): Promise<void> {
   // refuses to sweep unless the A1-8 boot probe proves the running Paperclip
   // image honors native updatedSince.
   startPaperclipReconciler();
+  startPendingDispatchSweep();
   // Daily cost evaluator. No-ops until runtime-config cost/watch_enabled='true',
   // so this is inert until explicitly turned on.
   startCostWatch();
@@ -130,6 +133,7 @@ async function main(): Promise<void> {
 
   // Graceful shutdown
   const shutdown = async (signal: string): Promise<void> => {
+    beginDispatchDrain();
     logger.info({ signal }, 'shutdown requested, draining');
     // Hard backstop first so nothing below can prevent exit. Fargate gives 30s
     // between SIGTERM and SIGKILL by default.
@@ -144,6 +148,7 @@ async function main(): Promise<void> {
     stopDriftWatch();
     stopWebhookMonitor();
     stopPaperclipReconciler();
+    stopPendingDispatchSweep();
     lock.stop();
     // Close any live Jarvis voice sessions cleanly before the socket closes.
     await teardownAllJarvisSessions('shutdown').catch(() => {});

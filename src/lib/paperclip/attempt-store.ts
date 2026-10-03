@@ -13,6 +13,7 @@ export interface AttemptRow {
   holderId: string;
   leaseExpiresAt: number;
   runIds: string[];
+  agentId?: string;
   outcome?: AttemptOutcome;
   failure?: AttemptFailure;
   version: number;
@@ -24,7 +25,7 @@ export interface AttemptRows {
   create(row: AttemptRow): Promise<boolean>;
   replace(issueId: string, expectedVersion: number, next: AttemptRow): Promise<boolean>;
 }
-export interface AttemptDispatch { issueId: string; runId: string; retryOfRunId?: string }
+export interface AttemptDispatch { issueId: string; runId: string; retryOfRunId?: string; agentId?: string }
 export interface AttemptHandle { issueId: string; attemptNo: number; leaseToken: number }
 
 export class FencedOutError extends Error {
@@ -82,6 +83,7 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
           issueId: dispatch.issueId, attemptNo: decision.attemptNo, state: 'running',
           leaseToken: decision.leaseToken, holderId, leaseExpiresAt: time + ATTEMPT_LEASE_MS,
           runIds: [dispatch.runId], version: (row?.version ?? 0) + 1,
+          agentId: dispatch.agentId,
           startedAt: time, updatedAt: time,
         };
         const won = row
@@ -151,6 +153,15 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
         leaseExpiresAt: time + ATTEMPT_LEASE_MS, version: row.version + 1, updatedAt: time };
       if (!await rows.replace(issueId, row.version, next)) return undefined;
       return { handle: handleFor(next), outcome: next.outcome!, runId: next.runIds.at(-1)! };
+    },
+    failExpiredDelivery: async (issueId: string): Promise<boolean> => {
+      const row = await rows.get(issueId);
+      const time = now();
+      if (row?.state !== 'delivering' || row.leaseExpiresAt > time) return false;
+      const next: AttemptRow = { ...row, state: 'failed', leaseToken: row.leaseToken + 1,
+        failure: { code: 'delivery_unknown', status: 500, retryable: false },
+        version: row.version + 1, updatedAt: time };
+      return rows.replace(issueId, row.version, next);
     },
     assertFence: async (handle: AttemptHandle): Promise<void> => {
       if (!owns(await rows.get(handle.issueId), handle)) throw new FencedOutError();
