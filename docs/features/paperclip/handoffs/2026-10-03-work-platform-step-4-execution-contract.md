@@ -20,34 +20,38 @@ supersedes: 2026-10-02-work-platform-step-3-pack-format.md
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none: `feature/*` and `development` deploy nothing ([mapping](../../../../development.md#branch-to-environment-mapping)) |
 | Commit at session start | `b5c96d681fdfc3c4e2731d6f3acfc50552d1803d` (`origin/development`; PR #201, step 3, is merged) |
-| Commit at session end | not yet: the session is in progress. Read `git log -1 feature/wp-step4-execution-contract` |
+| Commit at session end | a file cannot name its own commit; read `git log -1 feature/wp-step4-execution-contract` |
 | Pushed | no. Push, PR and merge each wait for the owner's yes |
 | PR | none yet |
 | Deployed | no. `development` deploys nothing. No AWS call was made |
 
 ## 2. Current state summary
 
-Work Platform step 4 of 18 (the execution contract: Paperclip holds its dispatch open until Netzer has written the outcome) is IN PROGRESS on `feature/wp-step4-execution-contract`. The baseline is recorded in section 7. No production code has changed yet. Nothing is pushed and nothing is deployed.
+Work Platform step 4 of 18 (the execution contract: Paperclip holds its dispatch open until Netzer has written the outcome) is built locally on `feature/wp-step4-execution-contract` and waits for the final validation, the independent critic and the owner's yes to push. The held dispatch route, the per-issue attempt row with a fenced lease, the completion writer, the `pending_dispatch` sweep, the SIGTERM drain with ECS scale-in protection, the internal Network Load Balancer address (decision 38) and the closed lock with the flag off (decision 36) are in the code. The Paperclip behavior the design rests on was measured in a sealed local container (spike A120). Nothing is pushed and nothing is deployed; the staging proofs S4-L1 to S4-L3 are PENDING (section 7). Step 5 (safe actions) is next after this PR.
 
 ## 3. Codebase understanding
 
 ### 3.1 Architecture notes discovered this session
 
-- Today the dispatch route answers 202 at once and runs the turn afterwards (`src/adapters/dashboard/paperclip-dispatch.ts`, `src/lib/paperclip/dispatch-worker.ts`). The claim is a one-shot row keyed on `(runId, issueId)` with no holder, no renewal and no fencing token (`src/lib/state/runner-lease.ts`).
-- Paperclip's http adapter never reads the response body: a 2xx marks the run succeeded and any other status marks it failed (read in the upstream source at v2026.916.1, `server/src/adapters/http/execute.ts`).
-- Paperclip gives every retry a NEW run id and adds `retryOfRunId` to the context. A genuine new wake has no `retryOfRunId`. It runs one run per issue at a time.
-- A status change on an in-progress issue needs the run id of a run that is still running, so the outcome must be written before the 2xx, with the run id of the dispatch that is attached at that moment.
+- Before step 4 the dispatch route answered 202 at once and ran the turn afterwards. The claim was a one-shot row keyed on `(runId, issueId)` with no holder, no renewal and no fencing token (`src/lib/state/runner-lease.ts`). Step 4 replaces it: the route holds the request (cap `ATTEMPT_HOLD_MS` 240 s) and the attempt row `PK = ATTEMPT#<issueId>` in the queue-lease table carries `attemptNo`, `state`, a fencing `leaseToken`, the holder, a 30 s lease renewed every 10 s, the run ids and the recorded outcome ([ADR 0013](../../../adr/0013-sync-attach-execution-contract.md)).
+- MEASURED at v2026.916.1 in a sealed local container, 2026-10-03 (spike A120, A134): Paperclip never reads the response body; a retry gets a new run id plus `context.retryOfRunId`; one run per issue; a non-2xx marks the run failed and the issue blocked and is never re-sent (this disproved the source read); a `done` written before the 2xx causes no follow-up run; a comment-only write makes Paperclip run the job a second time; a write with the ended run id is accepted; a bare `blocked` or `in_review` PATCH is rejected 422.
+- So the completion writer is one `PATCH done + comment` call with the newest attached run id, and a guardrail-blocked turn posts its notice as a comment and ends 409 `agent_blocked`.
+- The route order is: bearer secret (401), runtime lock (503 `paperclip_locked`), draining (503 `draining`), body, unknown agent, agent not armed, then the attempt decision. No path answers 202.
+- The fixed dispatch address is an internal Network Load Balancer (decision 38). Its first private IP is looked up at deploy time and added to Paperclip's allowlist next to the interim DNS origin. The 350 s default TCP idle timeout is relied on.
 
 ### 3.2 Critical files
 
 | File | Why it matters |
 |---|---|
-| `src/adapters/dashboard/paperclip-dispatch.ts` | The private dispatch route. |
-| `src/lib/paperclip/dispatch-worker.ts` | Runs the turn and writes the outcome. |
-| `src/lib/state/runner-lease.ts` | Lease and claim rows in the queue-lease table. |
-| `src/lib/paperclip/runtime-lock.ts` | The runtime lock (decision 36 changes its flag-off behavior). |
-| `src/index.ts` | Boot wiring and the SIGTERM drain. |
-| `infra/lib/compute-stack.ts` | The orchestrator service and the private dispatch address. |
+| `src/adapters/dashboard/paperclip-dispatch.ts` | The private dispatch route: the held request, the error codes, the hold cap. |
+| `src/lib/paperclip/attempt-store.ts`, `attempt-rows-dynamo.ts` | The attempt row, the decision table and the fenced lease (`ATTEMPT#<issueId>`). |
+| `src/lib/paperclip/dispatch-worker.ts` | Runs the turn and the completion writer (`deliverOutcome`); it posts nothing by itself. |
+| `src/lib/paperclip/pending-dispatch-sweep.ts` | Every 5 minutes delivers saved outcomes older than 60 s. |
+| `src/lib/paperclip/dispatch-drain.ts`, `task-protection.ts` | The SIGTERM drain and ECS scale-in protection. |
+| `src/lib/paperclip/runtime-lock.ts`, `lock-boot.ts` | The runtime lock (closed with the flag off) and what `main()` passes to it. |
+| `src/index.ts` | Boot wiring, the sweep and the drain. |
+| `infra/lib/compute-stack.ts`, `network-stack.ts`, `iam-stack.ts` | The internal load balancer (`DispatchNlb`, `DispatchNlbSg`) and the task-protection grant (`EcsTaskProtection`). |
+| `scripts/lib/paperclip/bootstrap-core.ts` | `agentSpecs()` writes `timeoutMs: 270_000`. |
 
 ### 3.3 Patterns and conventions to follow
 
@@ -58,23 +62,50 @@ Work Platform step 4 of 18 (the execution contract: Paperclip holds its dispatch
 
 ### 4.1 Tasks finished
 
-- PLANNING: the roadmap row, ADR 0013, the carried criteria and the upstream contract were read; the design forks were put to Jev and the owner (section 4.3).
+Commits on `feature/wp-step4-execution-contract`, oldest first (frozen acceptance tests before the code they pin):
+
+- [x] PLANNING and SPECIFICATION: the roadmap row, ADR 0013, the carried criteria and the upstream contract were read; the design forks went to Jev and the owner (section 4.3); the spike A120 measured the Paperclip behavior (A134).
+- [x] `b13f115` red tests: the lock with routing off (decision 36) and what `main()` passes (A124).
+- [x] `24d6022` the lock closes with `unknown:paperclip_routing_off`; `bootPaperclipLock` in `lock-boot.ts`; the contract script fails fast without its secret (A125). Codex gpt-6-luna.
+- [x] `c21386c` frozen attempt-row tests; `c9f25d7` the attempt row with a fenced, renewable lease. Codex gpt-6-sol.
+- [x] `2817bf8` frozen acceptance tests for the held route, the completion writer and delivery; `6f87e5b` the held route (SYNC_ATTACH). Codex gpt-6-sol.
+- [x] `c670419` red tests from the coordinator's diff review (a finished outcome thrown away on one renewal error; a 2 s sleep after the task settled; the four operator warn lines gone); `4452fc9` the fixes. Codex gpt-6-sol at high.
+- [x] `6e7f3c8` scale-in protection, the `pending_dispatch` sweep and drain-first shutdown. Codex gpt-6-sol.
+- [x] `0e6b72b` red tests (the 15-minute alarm fired for a row the same pass delivered; one bad row ended the whole pass); `921b9fa` the fixes. Codex gpt-6-sol at high.
+- [x] `4df7ca8` infra: the internal load balancer with a fixed private IP, the task-protection grant and the 270 s adapter timeout; `8d77c72` the timeout written as a literal in both agent specs.
+- [x] Docs: ADR 0013, ADR 0014 item 2, `docs/security-model.md`, the decision log (decisions 30 to 36 and 38), the minimum sellable product, the feature README and HANDOFF, and this file (the docs commit that follows `8d77c72`).
+- [ ] Final full validation, the independent critic, push, PR and merge: not done. Validation and the critic run after cleanup; push, PR and merge wait for the owner's yes (section 6).
 
 ### 4.2 Files modified
 
-- This file.
+| Area | Files | Change |
+|---|---|---|
+| Attempt row | `src/lib/paperclip/attempt-store.ts`, `attempt-rows-dynamo.ts` | New: the row, the decision table, fencing |
+| Route and worker | `src/adapters/dashboard/paperclip-dispatch.ts`, `src/lib/paperclip/dispatch-worker.ts`, `types.ts`, `mission-engine.ts`, `paperclip-mission-engine.ts` | Rewritten to hold the request and write the outcome; the 202 and kill-switch replies removed |
+| Sweep, drain, protection | `src/lib/paperclip/pending-dispatch-sweep.ts`, `task-protection.ts`, `dispatch-drain.ts`, `src/index.ts` | New or extended |
+| Lock | `src/lib/paperclip/runtime-lock.ts`, `lock-boot.ts` | The flag-off latch; the boot wiring moved out of `main()` |
+| Infra | `infra/lib/compute-stack.ts`, `network-stack.ts`, `iam-stack.ts`, `paperclip-stack.ts`, `interfaces.ts`, `infra/bin/app.ts` | Internal load balancer, its security group, the task-protection grant, the allowlist |
+| Scripts | `scripts/lib/paperclip/bootstrap-core.ts`, `package.json` | `timeoutMs: 270_000`; the contract script pre-check |
+| Tests | the frozen acceptance tests, the new attempt, sweep, protection and lock-boot tests, and the five older dispatch test files, `client.test.ts`, `paperclip-mission-engine.test.ts`, `infra/lib/*.test.ts`, `bootstrap-core.test.ts` | New or updated (see P88 for the earlier-phase tests the contract changed) |
+| Docs | ADR 0013, ADR 0014, `docs/security-model.md`, the decision log, the minimum sellable product, the README, HANDOFF, this file | Say what the code does |
 
 ### 4.3 Decisions made
 
 - Steady dispatch address: an internal Network Load Balancer with a stable private IP (state-file decision 38; Jev 0.92, owner yes 2026-10-03). Reversibility: two-way. Revisit trigger: the staging 45 s and 250 s hold through the load balancer fails.
-- Attempt identity: one row per issue with the current attempt number; a dispatch carrying `retryOfRunId` attaches to the current attempt or gets its recorded result; a dispatch without it starts the next attempt (Jev 0.92). Reversibility: two-way before the first live pack run. Revisit trigger: Paperclip ever runs two runs for one issue at once.
+- Attempt identity: one row per issue (`ATTEMPT#<issueId>`) with the current attempt number; a dispatch belongs to the attempt when its run id or `retryOfRunId` is on the row (this replaces ADR 0013's earlier `(issueId, wake cause/revision)` wording); any other dispatch starts the next attempt (Jev 0.92). Reversibility: two-way before the first live pack run. Revisit trigger: Paperclip ever runs two runs for one issue at once.
 - Agent writes outside a run (A109, A119): deferred to step 5, which owns the write path (Jev 0.95). Reversibility: two-way. Revisit trigger: step 5 planning.
-- A saved outcome with no live run attached waits for Paperclip's own re-send; Netzer only alerts on a saved outcome older than 15 minutes (Jev 1.0). Reversibility: two-way. Revisit trigger: a live proof shows Paperclip does not re-send.
+- A saved outcome with no live run attached is delivered by the `pending_dispatch` sweep (Jev 1.0, asked again after the spike). This REPLACES the first answer, "wait for Paperclip's own re-send" (Jev 1.0), whose premise the spike disproved: Paperclip never re-sends a failed http run. Reversibility: two-way. Revisit trigger: a digest where a late write with an ended run id is refused.
+- A normal reply ends the attempt as `done` (comment and status in one call; Jev 1.0). A guardrail-blocked turn is delivered as a comment and the request ends 409 `agent_blocked`, so Paperclip marks the run failed and the issue blocked (Jev 0.95). Revisit trigger: step 6 gives Netzer reviewer identities (then `in_review` with a review path), or Paperclip stops blocking the issue after a failed run.
 - The frozen test `runtime-lock.latch.test.ts` "does nothing when disabled" changes to decision 36's closed latch, with the owner's yes (2026-10-03). No other frozen test or gate is touched (A132).
 
 ### 4.4 Durable facts promoted out of this log
 
-- None yet.
+| Fact learned | Promoted into | Done |
+|---|---|---|
+| The attempt row, the error codes, the hold cap, the completion writer, the sweep, the drain, the fixed address and the measured Paperclip behavior | [ADR 0013](../../../adr/0013-sync-attach-execution-contract.md) | yes (the docs commit that follows `8d77c72`) |
+| Decisions 30 to 36 and 38 | [decision log](../decision-log.md) | yes (same commit) |
+| The lock closes with `unknown:paperclip_routing_off` when the flag is off; the load balancer, the auth-before-lock order and the task-protection grant | [ADR 0014](../../../adr/0014-netzer-only-ai-runtime.md) and [security model](../../../security-model.md) | yes (same commit) |
+| The step 4 row, the failure rows and the capability rows | [minimum sellable product](../minimum-sellable-product.md) | yes (same commit) |
 
 ## 5. Carried-forward mistakes, assumptions and precautions
 
@@ -626,48 +657,69 @@ Sections 5.1 to 5.28 above are carried forward byte for byte from [the 2026-09-3
 
 ### 5.30 Added 2026-10-03 (Work Platform step 4)
 
-Sections 5.1 to 5.29 above are carried forward byte for byte from [the 2026-10-02 Work Platform step 3 handoff](2026-10-02-work-platform-step-3-pack-format.md) (its section 5), the newest session log on `development` at `b5c96d6`. The rows below continue that ledger's ID scheme at A132, M96 and P87.
+Sections 5.1 to 5.29 above are carried forward byte for byte from [the 2026-10-02 Work Platform step 3 handoff](2026-10-02-work-platform-step-3-pack-format.md) (its section 5), the newest session log on `development` at `b5c96d6`. The rows below continue that ledger's ID scheme at A132, M96 and P87. The next free IDs are A137, M98 and P89.
 
 | ID | Kind | New finding | Required correction or precaution |
 |---|---|---|---|
 | A132 | Decision (owner, 2026-10-03) | Decision 36 needs the frozen test `src/lib/paperclip/runtime-lock.latch.test.ts` "does nothing when disabled" to expect a closed latch (`unknown:paperclip_routing_off`). The owner said yes to changing that one test. | Change only that test's expectation. Keep the old text in the session log. Touch no other frozen test or gate. |
 | A133 | Assumption (evidence, source read) | At v2026.916.1 Paperclip's http adapter never reads the response body, gives every retry a new run id with `retryOfRunId` in the context, and runs one run per issue at a time. ADR 0013 cited `recovery/service.ts:80-81` and `:857,3544`; at this pin the watchdog thresholds are at `:154-156` and the durable wait path is `recovery/disposition-repair.ts:228-243`. | Error codes in a non-2xx body are for Netzer's logs only. Re-read these three facts at every digest bump. |
+| A134 | Assumption (evidence, measured) | Spike A120 (sealed local container, Paperclip v2026.916.1, 2026-10-03): the response body is never read; a retry gets a new run id plus `context.retryOfRunId`; one run per issue; a non-2xx marks the run failed and the issue blocked and is never re-sent; a `done` written before the 2xx causes no follow-up run; a comment-only write makes Paperclip run the job a second time; a late write with the ended run id is accepted; a bare `blocked` or `in_review` PATCH is rejected 422. This corrects A133's source read (a failed run is not re-sent). | The docs and the design follow the measurement, not the source read. Re-measure at every digest bump. |
+| A135 | Assumption (untested) | Adding the load balancer target to the existing orchestrator ECS service is expected to synthesize as an in-place update with the service's logical id unchanged, but no deploy has proved it. The looked-up IP is the first network interface's, so it sits in one zone. | Prove it on the staging trip (S4-L2): run `cdk diff` first. Owner gate. |
+| A136 | Finding (named blocker, not run) | `npm run local:test:integration` was NOT RUN locally in this session: port 4566 is held by another project's Floci, which must not be touched. CI runs it on the PR. | Never record it as a pass. |
+| M96 | Mistake | A narrow correction work order forbade all test edits while one of the builder's own earlier tests pinned the old behavior, so the builder could not go green. | A correction order names the builder-authored, non-frozen tests it may update. Frozen tests stay untouched. |
+| M97 | Mistake (caught in review before landing) | The first held-route build threw away a finished outcome when one lease renewal hit a store error, and dropped the operator warn lines. Each was fixed red-test-first (`c670419`, `4452fc9`). | Review a rewrite against the logs and failure paths of the code it replaces. |
+| P87 | Precaution | The Codex sandbox cannot bind 127.0.0.1 (EPERM), so `client.mock-server.test.ts` cannot run there. | The coordinator's own run is the proof. |
+| P88 | Precaution | Tests of earlier phases that the approved contract changed must be listed for the owner at the push ask: the five older dispatch test files (`paperclip-dispatch.test.ts`, `.private`, `.defaults`, `dispatch-worker.test.ts`, `dispatch-kill-phrase.test.ts`); `infra/lib/database-stack.test.ts` (Fargate rule count 2 to 3); `infra/lib/iam-stack.p4.test.ts` (the baseline-hash filter now also excludes the new `EcsTaskProtection` Sid); `infra/lib/paperclip-stack.test.ts` (allowlist and rule assertions); `bootstrap-core.test.ts` (timeout). | List them at the push ask. Reviewers check that no security test was weakened. |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Freeze the step's acceptance criteria and gate, then commit the first failing test.
+Run the final full validation on the cleaned-up commit, then the independent critic (a fresh subagent, checking only what changed since any earlier FAIL). Then the owner's yes to push and open the PR into `development`. After the PR opens, turn Auto-fix on, and merge by hand (never auto-merge).
 
 ### 6.2 Immediate next steps
 
-1. SPECIFICATION, IMPLEMENTATION, CLEANUP and VERIFICATION of step 4.
-2. The owner's yes to push and open the PR into `development`.
+1. Final validation (section 7) after cleanup, and the critic's verdict.
+2. Push and open the PR with the owner's yes. The PR body records the validation list on the final commit, the critic's verdict, the earlier-phase tests the contract changed (P88) and the named blocker for `npm run local:test:integration` (A136).
+3. Step 5 (safe actions, the effect ledger). It owns agent writes outside a run (A109, A119) and uses `assertFence(issueId, token)` and `isDispatchDraining()`, which this step exports.
 
 ### 6.3 Blockers and open questions
 
+- [ ] Blocker: `npm run local:test:integration` was not run (A136). Needs: a free port 4566, or the CI run on the pull request.
 - [ ] Owner gate: push, PR and merge each need the owner's yes in that session.
-- [ ] The live proofs that need staging wait for the PENDING staging trip (Aurora snapshot first).
+- [ ] The staging trip (Aurora snapshot first; every AWS call needs the owner's yes) proves what the local tests cannot: S4-L1, a restart or deploy mid-attempt and scale-in protection; S4-L2, a `cdk diff` that shows the load balancer as an in-place update (A135), then the 45 s and 250 s holds through the load balancer; S4-L3, a Paperclip restart mid-attempt. All three are PENDING, not passed.
+- [ ] The monthly cost of the load balancer (about $16 to $20 per deployment) is the owner's, already approved with decision 38.
 
 ### 6.4 Deferred, and why
 
 - Agent writes outside a run (A109, A119): step 5 owns the write path.
+- Shadow users and reviewer identities (`in_review` with a review path): step 6.
 
 ## 7. Verification actually performed
 
-This table lists only what was actually run.
+The final full validation runs after cleanup and is recorded in the PR body; this table lists only what was actually run, with its numbers.
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
-| `npm run typecheck` | exit 0 on `b5c96d6` | not yet run |
-| `npm test` | exit 0 on `b5c96d6`: 301 files, 3990 tests | not yet run |
+| `npm run typecheck` | exit 0 on `b5c96d6` | exit 0 on the commits after each build stage (last recorded after `921b9fa`); the final run is pending |
+| `npm test` | exit 0 on `b5c96d6`: 301 files, 3990 tests | scoped runs only so far; the last broad run on the dispatch, paperclip, tools and missions folders: exit 0, 100 files, 1525 tests. The full run is pending |
+| `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `b5c96d6`: 3990 tests | scoped flag-on run: exit 0, 79 files, 1169 tests. The full run is pending |
+| `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | exit 0 on `b5c96d6` | pending |
+| `npm run local:test:integration` | NOT RUN (A136) | NOT RUN (A136) |
+| `node scripts/ci/docs-links.mjs`, `node scripts/ci/feature-knowledge.mjs` | OK on `b5c96d6` | pending, run on the docs update |
+| Spike A120 (sealed local container, no network) | n/a | measured: the facts in A134 |
+| Staging proofs S4-L1 (restart or deploy mid-attempt, scale-in protection), S4-L2 (45 s and 250 s hold through the load balancer; `cdk diff`), S4-L3 (Paperclip restart mid-attempt) | n/a | PENDING: need staging and an AWS call, each with the owner's yes. Not passed |
+
+The frozen gate (outside the repository) is run once at the end; its result is recorded in the PR body, not here.
+
+Anything not run, and why: `npm run local:test:integration`, because another project's Floci emulator holds port 4566 and a run would change its data (A136). No AWS call was made.
 
 ## 8. Environment state
 
-- **Tools and services**: the work runs in the worktree `Netzer-Labs/.worktrees/wp-step4-exec-contract`.
-- **Active processes**: none left running by this session so far.
+- **Tools and services**: the work ran in the worktree `Netzer-Labs/.worktrees/wp-step4-exec-contract`. Codex built the work orders on the Build Ladder (gpt-6-luna and gpt-6-sol). The Codex sandbox cannot bind 127.0.0.1 (P87). The spike ran in a sealed local container with no network.
+- **Active processes**: none left running by this session. Another project's Floci emulator holds port 4566 and was not touched.
 - **Environment variables**: none recorded for this step. Names only, never values.
-- **Uncommitted work left in the tree**: this file.
+- **Uncommitted work left in the tree**: none beyond the docs changes that this file belongs to.
 
 ## 9. Related documents
 

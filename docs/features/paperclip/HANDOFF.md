@@ -2,15 +2,26 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-10-02
-as_of_commit: 2a354c4d39352dc6d14cc793bf51bc9400a3703f
+observed_at: 2026-10-03
+as_of_commit: b5c96d681fdfc3c4e2731d6f3acfc50552d1803d
 ---
 
 # Paperclip integration handoff
 
-## Current state (2026-10-02)
+## Current state (2026-10-03)
 
-This section was checked on 2026-10-02 against `origin/development` `2a354c4`. The sections below it are older state and were not re-checked.
+This section was checked on 2026-10-03 against `origin/development` `b5c96d6`. The sections below it are older state and were not re-checked.
+
+- **Branch:** `feature/wp-step4-execution-contract` (from `origin/development` `b5c96d6`; merge target `development`). **Pushed:** no. **PR:** none.
+- **Step 3 is merged:** PR #201 merged into `development` as `b5c96d6` (the pack format v1 file shapes, decision 37). Nothing was deployed.
+- **Step 4 is built locally:** the execution contract (SYNC_ATTACH, [ADR 0013](../../adr/0013-sync-attach-execution-contract.md)): the held dispatch route, the per-issue attempt row with a fenced lease, the completion writer, the `pending_dispatch` sweep, the SIGTERM drain with ECS scale-in protection, the internal Network Load Balancer address (decision 38) and the closed lock with the flag off (decision 36), with their tests. The staging proofs are PENDING.
+- **Deployment:** none. `development` deploys nothing. No AWS call was made.
+
+**Next action:** the final validation and the critic, then the owner's yes to push and open the PR into `development`. Then step 5 (safe actions). Session log: [Work Platform step 4](handoffs/2026-10-03-work-platform-step-4-execution-contract.md).
+
+## State as of 2026-10-02
+
+This section was checked on 2026-10-02 against `origin/development` `2a354c4`. **Everything below it is older state and was not re-checked.**
 
 - **Branch:** `feature/wp-step3-pack-format` (from `origin/development` `2a354c4`; merge target `development`). **Pushed:** no. **PR:** none.
 - **Step 2 is merged:** PR #199 merged into `development` as `2a354c4`. Nothing was deployed.
