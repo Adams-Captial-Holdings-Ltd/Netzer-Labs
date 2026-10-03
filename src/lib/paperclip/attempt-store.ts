@@ -91,7 +91,11 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
       } else if (decision.action === 'busy' || decision.action === 'replay') {
         return { action: decision.action, row: row! };
       } else if (decision.action === 'replay_failure') {
-        return { action: 'replay_failure' as const, failure: decision.failure, row: row! };
+        if (row!.runIds.includes(dispatch.runId)) return { action: 'replay_failure' as const, failure: decision.failure, row: row! };
+        const next = { ...row!, runIds: appendRunId(row!.runIds, dispatch.runId), version: row!.version + 1, updatedAt: time };
+        if (await rows.replace(dispatch.issueId, row!.version, next)) {
+          return { action: 'replay_failure' as const, failure: decision.failure, row: next };
+        }
       } else {
         const current = row!;
         if (decision.action === 'attach' && current.runIds.includes(dispatch.runId)) {
@@ -139,6 +143,15 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
   return {
     begin,
     get: (issueId: string) => rows.get(issueId),
+    claimDelivery: async (issueId: string): Promise<{ handle: AttemptHandle; outcome: AttemptOutcome; runId: string } | undefined> => {
+      const row = await rows.get(issueId);
+      if (row?.state !== 'recorded' || !row.outcome) return undefined;
+      const time = now();
+      const next: AttemptRow = { ...row, state: 'delivering', holderId, leaseToken: row.leaseToken + 1,
+        leaseExpiresAt: time + ATTEMPT_LEASE_MS, version: row.version + 1, updatedAt: time };
+      if (!await rows.replace(issueId, row.version, next)) return undefined;
+      return { handle: handleFor(next), outcome: next.outcome!, runId: next.runIds.at(-1)! };
+    },
     assertFence: async (handle: AttemptHandle): Promise<void> => {
       if (!owns(await rows.get(handle.issueId), handle)) throw new FencedOutError();
     },
@@ -149,7 +162,7 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
     fail: (handle: AttemptHandle, failure: AttemptFailure) => transition(handle, ['running', 'delivering'],
       (row) => ({ ...row, state: 'failed', failure })),
     markDelivered: (handle: AttemptHandle) => transition(handle, ['delivering'],
-      (row) => ({ ...row, state: 'delivered' })),
+      (row) => ({ ...row, state: 'delivered', outcome: row.outcome && { ...row.outcome, comment: '' } })),
     releaseDelivery: (handle: AttemptHandle) => transition(handle, ['delivering'],
       (row) => ({ ...row, state: 'recorded' })),
   };

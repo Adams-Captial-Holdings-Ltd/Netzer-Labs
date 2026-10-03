@@ -181,6 +181,10 @@ export function createPaperclipMissionEngine(deps: PaperclipMissionEngineDeps): 
       return project(missionId, opts);
     },
 
+    async completeMission(missionId, comment, opts = {}) {
+      await client.patchIssue(missionId, { status: 'done', comment }, opts);
+    },
+
     async reassign(missionId, ownerAgent, opts = {}) {
       const agents = await agentCache();
       await client.patchIssue(missionId, { assigneeAgentId: toUuidOrThrow(ownerAgent, agents) }, opts);

@@ -92,6 +92,7 @@ export interface MissionEngine {
     status: MissionStatus,
     opts?: MissionEngineOptions,
   ): PaperclipFetch<ProjectedMission>;
+  completeMission(missionId: string, comment: string, opts?: MissionEngineOptions): PaperclipFetch<void>;
   reassign(
     missionId: string,
     ownerAgent: string,

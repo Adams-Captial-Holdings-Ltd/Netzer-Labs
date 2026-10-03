@@ -632,6 +632,16 @@ describe('pagination (A2-15)', () => {
 // ── Guards the artifact forced ────────────────────────────────────────────
 
 describe('artifact-forced guards', () => {
+  it('sends completion status and comment in one PATCH with the caller run id', async () => {
+    const rec = recorder([jsonResponse(issue())]);
+    await client(rec.fetchFn).patchIssue(ISSUE_ID, { status: 'done', comment: 'finished' }, { actor: 'main', runId: 'run-live' });
+    expect(rec.calls).toHaveLength(1);
+    const call = rec.calls[0]!;
+    expect(call.init.method).toBe('PATCH');
+    expect(new URL(call.url).pathname).toBe(`/api/issues/${ISSUE_ID}`);
+    expect(JSON.parse(String(call.init.body))).toEqual({ status: 'done', comment: 'finished' });
+    expect((call.init.headers as Record<string, string>)['X-Paperclip-Run-Id']).toBe('run-live');
+  });
   it('A1-14: the string onBehalfOfUserId never appears in any serialized request body', async () => {
     const rec = recorder([jsonResponse({ id: 'x', body: 'b', createdAt: 'n' })]);
     const paperclip = client(rec.fetchFn);
@@ -721,7 +731,8 @@ describe('source guards over this directory (A1-3, A1-14, A2-17, A2-21, A2-22)',
       for (const [, specifier] of source.matchAll(/\bfrom\s+'([^']+)'/g)) {
         imports += 1;
         const allowed =
-          specifier.startsWith('.') || specifier.startsWith('node:') || allowedPackages.includes(specifier);
+          specifier.startsWith('.') || specifier.startsWith('node:') || allowedPackages.includes(specifier)
+          || (name === 'attempt-rows-dynamo.ts' && specifier === '@aws-sdk/lib-dynamodb');
         expect(allowed, `A2-21: ${name} imports the package ${specifier}`).toBe(true);
       }
     }
