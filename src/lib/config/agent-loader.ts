@@ -13,6 +13,7 @@
  */
 
 import { S3Client, GetObjectCommand, NoSuchKey } from '@aws-sdk/client-s3';
+import { parse } from 'yaml';
 import { logger } from '../../observability/logger.js';
 import { captureAwsClient } from '../observability/xray.js';
 import { listAgents, getAgent } from '../state/agents-repo.js';
@@ -123,19 +124,21 @@ function readYamlScalar(yaml: string, key: string): string | undefined {
   return undefined;
 }
 
-function readYamlTools(yaml: string): string[] | undefined {
-  const lines = yaml.split('\n');
-  if (lines.some((line) => /^tools:\s*\[\s*\]\s*(?:#.*)?$/.test(line.trim()))) return [];
-  const start = lines.findIndex((line) => /^tools:\s*(?:#.*)?$/.test(line.trim()));
-  if (start < 0) return undefined;
-  const names: string[] = [];
-  for (const line of lines.slice(start + 1)) {
-    if (!line.trim() || line.trim().startsWith('#')) continue;
-    const item = line.match(/^\s+-\s+([^#\s]+)\s*(?:#.*)?$/);
-    if (!item) break;
-    names.push(item[1]);
-  }
-  return names;
+function readYamlTools(yaml: string, agentId: string): string[] | undefined {
+  try {
+    const document: unknown = parse(yaml);
+    if (document && typeof document === 'object' && !Array.isArray(document)
+      && !Object.prototype.hasOwnProperty.call(document, 'tools')) return undefined;
+    const tools = document && typeof document === 'object' && !Array.isArray(document)
+      ? (document as Record<string, unknown>).tools : null;
+    if (Array.isArray(tools) && tools.every((name) => typeof name === 'string')) return tools;
+  } catch { /* malformed configuration denies tools */ }
+  logger.warn({ agentId }, 'invalid agent tool allowlist');
+  return [];
+}
+
+export class AgentConfigUnavailableError extends Error {
+  constructor() { super('Agent configuration unavailable'); this.name = 'AgentConfigUnavailableError'; }
 }
 
 interface CacheEntry {
@@ -203,6 +206,7 @@ async function fetchFromS3(agentId: string): Promise<AgentConfig | null> {
       ...(yamlConfig.tools !== undefined ? { tools: yamlConfig.tools } : {}),
     };
   } catch (err) {
+    if (err instanceof AgentConfigUnavailableError) throw err;
     if (err instanceof NoSuchKey) return null;
     const name = (err as { name?: string }).name ?? '';
     if (name === 'NoSuchKey' || name === 'NotFound') return null;
@@ -231,16 +235,13 @@ async function fetchYamlConfig(agentId: string): Promise<Pick<AgentConfig, 'know
     );
     const yaml = await obj.Body?.transformToString();
     if (!yaml) return {};
-    return { knowledgeScope: readYamlScalar(yaml, 'knowledgeScope'), tools: readYamlTools(yaml) };
+    return { knowledgeScope: readYamlScalar(yaml, 'knowledgeScope'), tools: readYamlTools(yaml, agentId) };
   } catch (err) {
     if (err instanceof NoSuchKey) return {};
     const name = (err as { name?: string }).name ?? '';
     if (name === 'NoSuchKey' || name === 'NotFound') return {};
-    logger.warn(
-      { agentId, errName: name, err: err instanceof Error ? err.message : String(err) },
-      's3 agent.yaml fetch failed; using default knowledge scope',
-    );
-    return {};
+    logger.warn({ agentId, errName: name }, 's3 agent.yaml fetch failed');
+    throw new AgentConfigUnavailableError();
   }
 }
 

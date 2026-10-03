@@ -7,11 +7,28 @@ import { InvalidEffectKeyError, validateEffectKey, type EffectKey, type EffectRo
 
 export { InvalidEffectKeyError };
 
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === 'object') return Object.fromEntries(
-    Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)]));
-  return value;
+export class InvalidEffectPayloadError extends Error {
+  constructor() { super('Invalid effect payload'); this.name = 'InvalidEffectPayloadError'; }
+}
+function canonical(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new InvalidEffectPayloadError();
+  if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol') throw new InvalidEffectPayloadError();
+  if (typeof value !== 'object') return value;
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw new InvalidEffectPayloadError();
+    return value.toISOString();
+  }
+  if (seen.has(value)) throw new InvalidEffectPayloadError();
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) throw new InvalidEffectPayloadError();
+  seen.add(value);
+  const output = Array.isArray(value) ? value.map((part) => canonical(part, seen))
+    : Object.fromEntries(Object.entries(value)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([k, part]) => [k, canonical(part, seen)]));
+  seen.delete(value);
+  return output;
 }
 export function payloadHash(payload: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonical(payload))).digest('hex');
@@ -25,6 +42,12 @@ export class EffectConflictError extends Error {
 export class EffectRetryableError extends Error {
   constructor() { super('Effect can be retried'); this.name = 'EffectRetryableError'; }
 }
+export class EffectResolveError extends Error {
+  constructor(public readonly code: 'resolver_required' | 'not_unknown' | 'changed') {
+    super('Effect resolve failed'); this.name = 'EffectResolveError';
+  }
+}
+export const PENDING_SETTLE_MS = 270_000;
 
 interface Correlation { issueId?: string; runId?: string; attemptNo?: number; turnId?: string; agentId?: string }
 interface Request<T> {
@@ -34,36 +57,56 @@ interface Request<T> {
 }
 interface Options {
   rows: EffectRows; isDraining: () => boolean; audit: (event: AuditEvent) => Promise<void>; now: () => number;
+  settleMs?: number;
 }
 
-export function createExecutor({ rows, isDraining, audit, now }: Options) {
+export function createExecutor({ rows, isDraining, audit, now, settleMs = 0 }: Options) {
   const ids = (row: EffectRow) => ({ ...row.key, payloadHash: row.payloadHash,
     issueId: row.issueId, runId: row.runId, attemptNo: row.attemptNo, turnId: row.turnId });
+  const currentCorrelation = (correlation?: Correlation) => ({
+    issueId: correlation?.issueId, runId: correlation?.runId, attemptNo: correlation?.attemptNo,
+    turnId: correlation?.turnId, agentId: correlation?.agentId,
+  });
+
+  async function change(req: Request<unknown>, current: EffectRow, state: EffectRow['state'],
+    extra: Partial<EffectRow> = {}): Promise<EffectRow | undefined> {
+    await req.fence();
+    const next: EffectRow = { ...current, ...extra, state, version: current.version + 1, updatedAt: now() };
+    return await rows.replace(req.key, current.version, next) ? next : undefined;
+  }
+
+  async function auditApplied(req: Request<unknown>, row: EffectRow): Promise<void> {
+    await audit({ action: 'effect_applied', agentId: row.agentId,
+      detail: { ...ids(row), resultHash: payloadHash(row.result) } });
+    try { await change(req, row, 'applied', { auditPending: false }); } catch { /* replay can repair */ }
+  }
+
+  function unknownStop(key: EffectKey, hash: string): never {
+    logger.warn({ ...key, payloadHash: hash, state: 'unknown' }, 'Effect outcome unknown');
+    throw new EffectUnknownError();
+  }
+
+  async function markUnknown(req: Request<unknown>, row: EffectRow, hash: string): Promise<never> {
+    const next = await change(req, row, 'unknown');
+    if (next) {
+      try { await audit({ action: 'effect_unknown', agentId: next.agentId, detail: ids(next) }); }
+      catch { /* best effort */ }
+    }
+    return unknownStop(req.key, hash);
+  }
 
   async function runEffect<T>(req: Request<T>): Promise<T> {
     validateEffectKey(req.key);
     const hash = payloadHash(req.payload);
     let row = await rows.get(req.key);
     if (row && row.payloadHash !== hash) throw new EffectConflictError();
-    if (row?.state === 'applied') return row.result as T;
-    const unknownStop = (): never => {
-      logger.warn({ ...req.key, payloadHash: hash, state: 'unknown' }, 'Effect outcome unknown');
-      throw new EffectUnknownError();
-    };
-    const change = async (current: EffectRow, state: EffectRow['state'], extra: Partial<EffectRow> = {}) => {
-      await req.fence();
-      const next: EffectRow = { ...current, ...extra, state, version: current.version + 1, updatedAt: now() };
-      if (!await rows.replace(req.key, current.version, next)) return undefined;
-      return next;
-    };
-    const markUnknown = async (current: EffectRow): Promise<never> => {
-      const next = await change(current, 'unknown');
-      if (next) {
-        try { await audit({ action: 'effect_unknown', agentId: next.agentId, detail: ids(next) }); } catch { /* best effort */ }
-      }
-      return unknownStop();
-    };
-    if (row?.state === 'unknown') return unknownStop();
+    if (row && !['pending', 'applied', 'retryable', 'unknown'].includes(row.state))
+      return unknownStop(req.key, hash);
+    if (row?.state === 'applied') {
+      if (row.auditPending) await auditApplied(req, row);
+      return row.result as T;
+    }
+    if (row?.state === 'unknown') return unknownStop(req.key, hash);
     if (isDraining()) throw new EffectRetryableError();
     let created = false;
     if (!row) {
@@ -75,59 +118,71 @@ export function createExecutor({ rows, isDraining, audit, now }: Options) {
         row = await rows.get(req.key);
         if (!row) throw new Error('Effect row changed during create');
         if (row.payloadHash !== hash) throw new EffectConflictError();
-        if (row.state === 'applied') return row.result as T;
-        if (row.state === 'unknown') return unknownStop();
+        if (!['pending', 'applied', 'retryable', 'unknown'].includes(row.state)) return unknownStop(req.key, hash);
+        if (row.state === 'applied') {
+          if (row.auditPending) await auditApplied(req, row);
+          return row.result as T;
+        }
+        if (row.state === 'unknown') return unknownStop(req.key, hash);
       } else { row = pending; created = true; }
     }
     // Only this call's successful conditional create, or a claimed retry, can apply.
-    return applyFromRow(row);
+    return applyFromRow(req, row, created, hash);
+  }
 
-    async function applyFromRow(current: EffectRow): Promise<T> {
-      let owned = current;
-      if (current.state === 'pending' && !created) {
-        let observed: Awaited<ReturnType<NonNullable<Request<T>['readBack']>>> = 'unknown';
-        try { if (req.readBack) observed = await req.readBack(); } catch { /* ambiguous */ }
-        if (observed === 'unknown') return markUnknown(current);
-        if (observed.applied) {
-          const applied = await change(current, 'applied', { result: observed.result });
-          if (!applied) return unknownStop();
-          await audit({ action: 'effect_applied', agentId: applied.agentId,
-            detail: { ...ids(applied), resultHash: payloadHash(observed.result) } });
-          return observed.result;
-        }
+  async function applyFromRow<T>(req: Request<T>, current: EffectRow, created: boolean, hash: string): Promise<T> {
+    let owned = current;
+    if (current.state === 'pending' && !created) {
+      if (now() - current.updatedAt < settleMs) throw new EffectRetryableError();
+      let observed: Awaited<ReturnType<NonNullable<Request<T>['readBack']>>> = 'unknown';
+      try { if (req.readBack) observed = await req.readBack(); } catch { /* ambiguous */ }
+      if (observed === 'unknown') return markUnknown(req, current, hash);
+      if (observed.applied) {
+        const applied = await change(req, current, 'applied', { result: observed.result, auditPending: true,
+          ...currentCorrelation(req.correlation) });
+        if (!applied) return unknownStop(req.key, hash);
+        await auditApplied(req, applied);
+        return observed.result;
       }
-      if (current.state !== 'pending' || !created) {
-        const claimed = await change(current, 'pending');
-        if (!claimed) return unknownStop();
-        owned = claimed;
-      }
-      await req.fence();
-      let value: T;
-      try { value = await req.apply(); } catch (error) {
-        if ((error as { notSent?: boolean } | null)?.notSent === true) {
-          if (!await change(owned, 'retryable')) return unknownStop();
-          throw new EffectRetryableError();
-        }
-        return markUnknown(owned);
-      }
-      const applied = await change(owned, 'applied', { result: value });
-      if (!applied) return unknownStop();
-      await audit({ action: 'effect_applied', agentId: applied.agentId,
-        detail: { ...ids(applied), resultHash: payloadHash(value) } });
-      return value;
     }
+    if (current.state !== 'pending' || !created) {
+      const claimed = await change(req, current, 'pending', currentCorrelation(req.correlation));
+      if (!claimed) throw new EffectRetryableError();
+      owned = claimed;
+    }
+    await req.fence();
+    let value: T;
+    try { value = await req.apply(); } catch (error) {
+      if ((error as { notSent?: boolean } | null)?.notSent === true) {
+        if (!await change(req, owned, 'retryable')) return unknownStop(req.key, hash);
+        throw new EffectRetryableError();
+      }
+      return markUnknown(req, owned, hash);
+    }
+    let applied: EffectRow | undefined;
+    try { applied = await change(req, owned, 'applied', { result: value, auditPending: true }); }
+    catch (error) {
+      logger.error({ ...req.key, payloadHash: hash }, 'Effect applied but ledger record failed');
+      throw error;
+    }
+    if (!applied) {
+      logger.error({ ...req.key, payloadHash: hash }, 'Effect applied but ledger record lost');
+      return unknownStop(req.key, hash);
+    }
+    await auditApplied(req, applied);
+    return value;
   }
 
   async function resolve(key: EffectKey, outcome: 'applied' | 'not_applied', by: string, result?: unknown): Promise<void> {
     validateEffectKey(key);
-    if (!by.trim()) throw new Error('Resolver required');
+    if (!by.trim()) throw new EffectResolveError('resolver_required');
     const row = await rows.get(key);
-    if (row?.state !== 'unknown') throw new Error('Effect is not unknown');
+    if (row?.state !== 'unknown') throw new EffectResolveError('not_unknown');
     const next: EffectRow = { ...row, state: outcome === 'applied' ? 'applied' : 'retryable',
       ...(outcome === 'applied' ? { result } : {}), resolvedBy: by, version: row.version + 1, updatedAt: now() };
-    if (!await rows.replace(key, row.version, next)) throw new Error('Effect changed during resolve');
     await audit({ action: 'effect_resolved', userId: by, agentId: next.agentId,
       detail: { ...ids(next), outcome } });
+    if (!await rows.replace(key, row.version, next)) throw new EffectResolveError('changed');
   }
 
   async function saveDraftOnce(req: { key: EffectKey; fence: () => Promise<void>; produce: () => Promise<string> }): Promise<string> {
@@ -135,7 +190,7 @@ export function createExecutor({ rows, isDraining, audit, now }: Options) {
     const found = await rows.getDraft(req.key);
     if (found) return found.text;
     const text = await req.produce();
-    if (text.length > 300_000) throw new Error('Draft too long');
+    if (Buffer.byteLength(text, 'utf8') > 300_000) throw new Error('Draft too long');
     await req.fence();
     if (await rows.createDraft({ kind: 'draft', key: req.key, text, createdAt: now() })) return text;
     const winner = await rows.getDraft(req.key);
@@ -146,5 +201,6 @@ export function createExecutor({ rows, isDraining, audit, now }: Options) {
 }
 
 export function defaultExecutor() {
-  return createExecutor({ rows: dynamoEffectRows(), isDraining: isDispatchDraining, audit: writeAuditOrThrow, now: Date.now });
+  return createExecutor({ rows: dynamoEffectRows(), isDraining: isDispatchDraining, audit: writeAuditOrThrow,
+    now: Date.now, settleMs: PENDING_SETTLE_MS });
 }

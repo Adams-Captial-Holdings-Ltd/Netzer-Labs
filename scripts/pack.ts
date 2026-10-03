@@ -8,22 +8,27 @@ import type { createExecutor } from '../src/lib/work/executor.js';
 const effectUsage = 'Usage: pack effect list | pack effect resolve <caseKey> <stage> <step> <stageEntryNo> (--applied | --not-applied) --by <userId>';
 type EffectExecutor = Pick<ReturnType<typeof createExecutor>, 'listUnknown' | 'resolve'>;
 
-export function runPackCli(argv: ['effect', ...string[]], out: (line: string) => void): number | Promise<number>;
-export function runPackCli(argv: string[], out: (line: string) => void): number;
-export function runPackCli(argv: string[], out: (line: string) => void, deps: { executor?: EffectExecutor }): number | Promise<number>;
+const safe = (value: unknown) => String(value).replace(/[^\x20-\x7e]/g, '?');
+const reason = (error: unknown) => {
+  const name = (error as { name?: unknown } | null)?.name;
+  const code = (error as { code?: unknown } | null)?.code;
+  return safe(typeof name === 'string' && name ? name : 'Error')
+    + (name === 'EffectResolveError' && typeof code === 'string' ? `: ${safe(code)}` : '');
+};
 export function runPackCli(
   argv: string[], out: (line: string) => void, deps?: { executor?: EffectExecutor },
 ): number | Promise<number> {
   if (argv[0] === 'effect') {
     if (argv[1] === 'list' && argv.length === 2) {
-      return (async () => {
+      return (async () => { try {
         const executor = deps?.executor ?? (await import('../src/lib/work/executor.js')).defaultExecutor();
         const rows = await executor.listUnknown();
         if (!rows.length) out('No unknown effects');
         for (const row of rows) {
-          out(`${row.key.caseKey} ${row.key.stage} ${row.key.step} ${row.key.stageEntryNo} ${new Date(row.updatedAt).toISOString()}${row.issueId ? ` ${row.issueId}` : ''}`);
+          out(`${safe(row.key.caseKey)} ${safe(row.key.stage)} ${safe(row.key.step)} ${safe(row.key.stageEntryNo)} ${safe(new Date(row.updatedAt).toISOString())}${row.issueId ? ` ${safe(row.issueId)}` : ''}`);
         }
         return 0;
+      } catch (error) { out(reason(error)); return 1; }
       })();
     }
     if (argv[1] === 'resolve') {
@@ -48,8 +53,7 @@ export function runPackCli(
           out('Effect resolved');
           return 0;
         } catch (error) {
-          const name = (error as { name?: unknown } | null)?.name;
-          out(typeof name === 'string' && name ? name : 'Error');
+          out(reason(error));
           return 1;
         }
       })();
@@ -86,5 +90,7 @@ const entry = process.argv[1] && resolve(process.argv[1]);
 const invoked = entry && (existsSync(entry) ? realpathSync(entry)
   : existsSync(`${entry}.ts`) ? realpathSync(`${entry}.ts`) : undefined);
 if (invoked && invoked === realpathSync(fileURLToPath(import.meta.url))) {
-  void Promise.resolve(runPackCli(process.argv.slice(2), console.log)).then((code) => { process.exitCode = code; });
+  void Promise.resolve(runPackCli(process.argv.slice(2), console.log))
+    .then((code) => { process.exitCode = code; })
+    .catch((error) => { console.log(reason(error)); process.exitCode = 1; });
 }

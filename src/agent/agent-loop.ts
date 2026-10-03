@@ -1529,7 +1529,10 @@ async function runAdmittedTurn(
             : isMcpToolName(name)
               ? await invokeMcpTool(name, args, toolCtx)
               : await tools.invoke(name, args, toolCtx);
-      } catch {
+      } catch (error) {
+        logger.warn({ agentId: req.agentId, chatId: req.chatId, turnId,
+          toolCallId: tu.toolUseId, toolName: name,
+          errName: error instanceof Error ? error.name : 'Error' }, 'tool dispatch failed');
         result = { text: `Tool '${name}' failed.`, isError: true };
       }
       void writeAudit({
@@ -1701,11 +1704,11 @@ async function runAdmittedTurn(
     outputTokens: totalOut,
     costUsd,
     latencyMs,
-      detail: {
-        toolCallCount,
-        cacheReadInputTokens: totalCacheRead,
-        cacheWriteInputTokens: totalCacheWrite,
-        ...auditIds,
+    detail: {
+      toolCallCount,
+      cacheReadInputTokens: totalCacheRead,
+      cacheWriteInputTokens: totalCacheWrite,
+      ...auditIds,
     },
     ...(req.userId ? { userId: req.userId } : {}),
     result: 'ok',
