@@ -9,14 +9,16 @@ export function createTaskProtection(deps: { agentUri?: string; fetchFn?: typeof
   function send(enabled: boolean): void {
     if (!agentUri) return;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2_000);
+    let timedOut!: () => void;
+    const deadline = new Promise<never>((_resolve, reject) => { timedOut = () => reject(new Error('task protection timeout')); });
+    const timeout = setTimeout(() => { controller.abort(); timedOut(); }, 2_000);
     timeout.unref();
-    void Promise.resolve().then(() => fetchFn(`${agentUri}/task-protection/v1/state`, {
+    void Promise.race([deadline, Promise.resolve().then(() => fetchFn(`${agentUri}/task-protection/v1/state`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(enabled ? { ProtectionEnabled: true, ExpiresInMinutes: 10 } : { ProtectionEnabled: false }),
       signal: controller.signal,
-    })).then((response) => {
+    }))]).then((response) => {
       if (!response.ok) logger.warn({ reason: 'task_protection_http', status: response.status }, 'ECS task protection update failed');
     }).catch(() => {
       logger.warn({ reason: 'task_protection_request' }, 'ECS task protection update failed');

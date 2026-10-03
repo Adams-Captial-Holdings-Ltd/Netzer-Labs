@@ -579,6 +579,7 @@ export class PaperclipClient {
     if (lock.closed) {
       throw new PaperclipLockClosedError({
         request,
+        notSent: true,
         body: {
           error: `Paperclip runtime lock closed: ${lock.code}`,
           remediation: 'check the paperclip lock verdict log line',
@@ -593,6 +594,7 @@ export class PaperclipClient {
     if (gate.active) {
       throw new PaperclipDisabledError({
         request,
+        notSent: true,
         body: {
           error: `paperclip_disabled kill switch active: ${gate.reason ?? 'no reason recorded'}`,
           remediation: 'clear paperclip_disabled from the dashboard Kill switches tab',
@@ -604,6 +606,7 @@ export class PaperclipClient {
     if (this.breakerBlocks()) {
       throw new PaperclipUnavailableError({
         request,
+        notSent: true,
         body: {
           error: 'Paperclip circuit breaker is open',
           remediation: `${this.retry.breakerThreshold} consecutive transient failures; it half-opens ${this.retry.breakerCooldownMs} ms after the last one`,

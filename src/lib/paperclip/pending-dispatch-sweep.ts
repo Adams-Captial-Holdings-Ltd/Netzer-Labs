@@ -29,9 +29,13 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
   let oldestAgeMs = 0;
   async function processRow(row: AttemptRow): Promise<void> {
     let age = 0;
+    let alarmAge = 0;
     let undelivered = row.state === 'recorded';
     try {
-      if (row.state === 'recorded') age = now() - row.updatedAt;
+      if (row.state === 'recorded') {
+        age = now() - row.updatedAt;
+        alarmAge = now() - (row.recordedAt ?? row.updatedAt);
+      }
       if (row.state === 'delivering') {
         if (row.leaseExpiresAt <= now() && await attempts.failExpiredDelivery(row.issueId)) expired++;
         return;
@@ -64,9 +68,10 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
         delivered++;
       }
     } catch (error) {
-      if (!(error instanceof FencedOutError)) logger.warn({ reason: 'pending_dispatch_row_failed' }, 'paperclip pending_dispatch row failed');
+      if (!(error instanceof FencedOutError)) logger.warn({ issueId: row.issueId,
+        errName: error instanceof Error ? error.name : 'unknown', reason: 'pending_dispatch_row_failed' }, 'paperclip pending_dispatch row failed');
     } finally {
-      if (undelivered && age >= 15 * 60_000) { stale++; oldestAgeMs = Math.max(oldestAgeMs, age); }
+      if (undelivered && alarmAge >= 15 * 60_000) { stale++; oldestAgeMs = Math.max(oldestAgeMs, alarmAge); }
     }
   }
   try {
@@ -75,7 +80,7 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
     const rows = await (deps.scan ?? scanPendingAttempts)();
     for (const row of rows) await processRow(row);
     if (stale) logger.error({ count: stale, oldestAgeMs }, 'paperclip pending_dispatch outcomes are not delivered');
-    else if (delivered || blocked) logger.info({ delivered, blocked, skipped, expired }, 'paperclip pending_dispatch sweep completed');
+    if (delivered || blocked || skipped || expired) logger.info({ delivered, blocked, skipped, expired }, 'paperclip pending_dispatch sweep completed');
   } catch (error) {
     if (!(error instanceof FencedOutError)) logger.warn({ reason: 'pending_dispatch_sweep_failed' }, 'paperclip pending_dispatch sweep failed');
   }

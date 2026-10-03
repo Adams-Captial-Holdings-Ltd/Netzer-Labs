@@ -19,6 +19,7 @@ export interface AttemptRow {
   version: number;
   startedAt: number;
   updatedAt: number;
+  recordedAt?: number;
 }
 export interface AttemptRows {
   get(issueId: string): Promise<AttemptRow | undefined>;
@@ -56,6 +57,8 @@ export function decideDispatch(row: AttemptRow | undefined, dispatch: AttemptDis
       return belongs ? { action: 'replay' } : start();
     case 'failed':
       return row.failure?.retryable || !belongs ? start() : { action: 'replay_failure', failure: row.failure! };
+    default:
+      return { action: 'unknown' };
   }
 }
 
@@ -89,7 +92,9 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
         const won = row
           ? await rows.replace(dispatch.issueId, row.version, next)
           : await rows.create(next);
-        if (won) return { action: 'start' as const, handle: handleFor(next), row: next };
+        if (won) return { action: 'start' as const, handle: handleFor(next), row: next,
+          superseded: row && (row.state === 'recorded' || (row.state === 'running' && row.leaseExpiresAt <= time))
+            ? { attemptNo: row.attemptNo, state: row.state } : undefined };
       } else if (decision.action === 'busy' || decision.action === 'replay') {
         return { action: decision.action, row: row! };
       } else if (decision.action === 'replay_failure') {
@@ -103,20 +108,12 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
         if (decision.action === 'attach' && current.runIds.includes(dispatch.runId)) {
           return { action: 'attach' as const, row: current };
         }
-        const next: AttemptRow = {
-          ...current, runIds: appendRunId(current.runIds, dispatch.runId),
+        const next: AttemptRow = { ...current, runIds: appendRunId(current.runIds, dispatch.runId),
           version: current.version + 1, updatedAt: time,
-        };
-        if (decision.action === 'deliver') {
-          next.state = 'delivering';
-          next.holderId = holderId;
-          next.leaseToken++;
-          next.leaseExpiresAt = time + ATTEMPT_LEASE_MS;
-        } else if (decision.action === 'unknown') {
-          next.state = 'failed';
-          next.leaseToken++;
-          next.failure = { code: 'delivery_unknown', status: 500, retryable: false };
-        }
+          ...(decision.action === 'deliver' ? { state: 'delivering' as const, holderId,
+            leaseToken: current.leaseToken + 1, leaseExpiresAt: time + ATTEMPT_LEASE_MS } : {}),
+          ...(decision.action === 'unknown' ? { state: 'failed' as const, leaseToken: current.leaseToken + 1,
+            failure: { code: 'delivery_unknown', status: 500, retryable: false } } : {}) };
         if (await rows.replace(dispatch.issueId, current.version, next)) {
           if (decision.action === 'attach') return { action: 'attach' as const, row: next };
           if (decision.action === 'unknown') return { action: 'unknown' as const, row: next };
@@ -169,7 +166,7 @@ export function createAttemptStore({ rows, holderId, now }: { rows: AttemptRows;
     renew: (handle: AttemptHandle) => transition(handle, ['running', 'delivering'],
       (row, time) => ({ ...row, leaseExpiresAt: time + ATTEMPT_LEASE_MS })),
     record: (handle: AttemptHandle, outcome: AttemptOutcome) => transition(handle, ['running'],
-      (row) => ({ ...row, state: 'recorded', outcome })),
+      (row, time) => ({ ...row, state: 'recorded', outcome, recordedAt: time })),
     fail: (handle: AttemptHandle, failure: AttemptFailure) => transition(handle, ['running', 'delivering'],
       (row) => ({ ...row, state: 'failed', failure })),
     markDelivered: (handle: AttemptHandle) => transition(handle, ['delivering'],

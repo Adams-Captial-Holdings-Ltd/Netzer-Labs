@@ -65,4 +65,15 @@ describe('ECS task protection', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toEqual({ reason: 'task_protection_http', status: 500 });
   });
+  it('aborts an unresponsive fetch after two seconds and warns once', async () => {
+    vi.useFakeTimers();
+    try {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+      const fetchFn = vi.fn(() => new Promise<Response>(() => {}));
+      createTaskProtection({ agentUri: 'http://agent', fetchFn: fetchFn as typeof fetch }).hold();
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect((fetchFn.mock.calls[0] as unknown[])[1]).toMatchObject({ signal: expect.objectContaining({ aborted: true }) });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
 });

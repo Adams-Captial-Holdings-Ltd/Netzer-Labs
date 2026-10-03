@@ -31,7 +31,7 @@ import {
   stopPaperclipReconciler,
 } from './lib/paperclip/reconciler.js';
 import { startPendingDispatchSweep, stopPendingDispatchSweep } from './lib/paperclip/pending-dispatch-sweep.js';
-import { beginDispatchDrain } from './lib/paperclip/dispatch-drain.js';
+import { beginDispatchDrain, dispatchesIdle, dispatchesInFlight } from './lib/paperclip/dispatch-drain.js';
 import {
   startInvalidationListener,
   stopInvalidationListener,
@@ -138,6 +138,7 @@ async function main(): Promise<void> {
     // Hard backstop first so nothing below can prevent exit. Fargate gives 30s
     // between SIGTERM and SIGKILL by default.
     setTimeout(() => {
+      if (dispatchesInFlight() > 0) logger.error({ inFlight: dispatchesInFlight() }, 'dispatches still in flight at shutdown backstop');
       logger.warn('graceful drain timed out, forcing exit');
       process.exit(1);
     }, 28_000).unref();
@@ -160,8 +161,12 @@ async function main(): Promise<void> {
       stopInvalidationListener(),
       new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref()),
     ]).catch(() => {});
-    privateServer.close();
-    server.close((err) => {
+    await dispatchesIdle();
+    await Promise.all([
+      new Promise<Error | undefined>((resolve) => privateServer.close(resolve)),
+      new Promise<Error | undefined>((resolve) => server.close(resolve)),
+    ]).then((errors) => {
+      const err = errors.find(Boolean);
       if (err) {
         logger.error({ err: err.message }, 'shutdown error');
         process.exit(1);

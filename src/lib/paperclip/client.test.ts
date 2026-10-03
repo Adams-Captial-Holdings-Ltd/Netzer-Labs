@@ -25,6 +25,7 @@ import {
   TEST_ISSUE_ID as ISSUE_ID,
 } from './test-helpers.js';
 import type { PaperclipIssue } from './types.js';
+import { __resetPaperclipLockForTest, enforceStartupLock } from './runtime-lock.js';
 
 // ── Fakes. No real network call is ever made from this file. ───────────────
 
@@ -63,6 +64,28 @@ function client(fetchFn: typeof fetch, overrides: Partial<PaperclipClientOptions
     ...overrides,
   });
 }
+
+describe('pre-request refusal marker', () => {
+  afterEach(__resetPaperclipLockForTest);
+  it('marks breaker-open but not a failed fetch attempt', async () => {
+    const fetchFn = vi.fn(async () => { throw new Error('offline'); });
+    const paperclip = client(fetchFn as typeof fetch, { retry: { ...PAPERCLIP_NO_RETRY, breakerThreshold: 1 } });
+    const attempted = await expectPaperclipError(() => paperclip.listIssues(), PaperclipUnavailableError, 'Offline');
+    expect(attempted.notSent).not.toBe(true);
+    const refused = await expectPaperclipError(() => paperclip.listIssues(), PaperclipUnavailableError, 'circuit breaker is open');
+    expect(refused.notSent).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+  it('marks the disabled switch and runtime lock', async () => {
+    const fetchFn = vi.fn();
+    const switched = client(fetchFn as typeof fetch, { killSwitch: async () => ({ active: true, reason: 'switched' }) });
+    expect((await expectPaperclipError(() => switched.listIssues(), PaperclipDisabledError, 'switched')).notSent).toBe(true);
+    await enforceStartupLock({ read: async () => ({ verdict: 'unknown', reason: 'paperclip_unreachable' }), attempts: 1 });
+    const locked = client(fetchFn as typeof fetch);
+    expect((await expectPaperclipError(() => locked.listIssues(), PaperclipDisabledError, 'runtime lock closed')).notSent).toBe(true);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
 
 // ── A2-9 ──────────────────────────────────────────────────────────────────
 

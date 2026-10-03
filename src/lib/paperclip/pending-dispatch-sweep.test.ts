@@ -92,6 +92,23 @@ describe('pending dispatch sweep', () => {
     expect(f.deliver).not.toHaveBeenCalled();
     expect(f.data.get('issue-1')?.state).toBe('recorded');
   });
+  it('skips a recorded row without a run id', async () => {
+    const f = fixture({ runIds: [] });
+    await runPendingDispatchSweep(f.deps);
+    expect(f.deliver).not.toHaveBeenCalled();
+    expect(f.data.get('issue-1')?.state).toBe('recorded');
+  });
+
+  it('alarms after 15 minutes from recordedAt, not at 14 minutes', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger);
+    const f = fixture({ agentId: undefined, updatedAt: NOW - 61_000, recordedAt: NOW - 14 * 60_000 });
+    await runPendingDispatchSweep(f.deps);
+    expect(error).not.toHaveBeenCalled();
+    f.data.set('issue-1', { ...f.data.get('issue-1')!, recordedAt: NOW - 15 * 60_000 - 1 });
+    await runPendingDispatchSweep(f.deps);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][0]).toEqual({ count: 1, oldestAgeMs: 15 * 60_000 + 1 });
+  });
 
   it('logs one stale error with count and age for an outcome still undelivered, without comment text', async () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => logger);

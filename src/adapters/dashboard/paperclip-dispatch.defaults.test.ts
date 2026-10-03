@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetPaperclipLockForTest, enforceStartupLock } from '../../lib/paperclip/runtime-lock.js';
 import { __resetDispatchDrainForTest } from '../../lib/paperclip/dispatch-drain.js';
 import type { AttemptRow } from '../../lib/paperclip/attempt-store.js';
+import { ATTEMPT_LEASE_MS } from '../../lib/paperclip/attempt-store.js';
+import { RUNNER_HOLDER_ID } from '../../lib/state/runner-lease.js';
+import { ATTEMPT_RENEW_MS } from './paperclip-dispatch.js';
 
 const { knownAgents, work, deliver, rows } = vi.hoisted(() => ({
   knownAgents: vi.fn(() => ['main']),
@@ -45,6 +48,9 @@ describe('private dispatch defaults', () => {
     expect((await post(token)).status).toBe(200);
     expect(work).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledTimes(1);
+    expect(rows.get('a1b2c3d4-0000-4000-8000-000000000001')?.holderId).toBe(RUNNER_HOLDER_ID);
+    expect(ATTEMPT_RENEW_MS).toBe(10_000);
+    expect(ATTEMPT_RENEW_MS).toBeLessThan(ATTEMPT_LEASE_MS);
     expect((await post('test-other-bearer-value')).status).toBe(401);
     const unknown = await post(token, JSON.stringify({ netzarAgentId: 'missing', issueId: 'other', runId: 'other-run' }));
     expect(unknown.status).toBe(404);

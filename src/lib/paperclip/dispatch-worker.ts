@@ -140,9 +140,9 @@ export function parseDispatchBody(raw: unknown): PaperclipDispatchContext | null
   const rawContext = contextObject(body.context);
   const issueId = nonEmptyString(body.issueId) ?? nonEmptyString(rawContext?.issueId);
   const runId = nonEmptyString(body.runId);
-  if (netzarAgentId === undefined) return null;
-  if (issueId === undefined) return null;
-  if (runId === undefined) return null;
+  if (netzarAgentId === undefined || netzarAgentId.length > 128) return null;
+  if (issueId === undefined || issueId.length > 128) return null;
+  if (runId === undefined || runId.length > 128) return null;
   // The string-only copy is VERBATIM. An `issueId` promoted out of `context`
   // above is NOT written back in, and one that was already there is not
   // removed: the interpolated block shows what the caller actually sent.
@@ -222,6 +222,7 @@ export interface DispatchWorkDeps {
   getSessionFn?: typeof getSession;
   appendTurnsFn?: typeof appendTurns;
   now?: () => number;
+  abortSignal?: AbortSignal;
 }
 
 let cachedEngine: MissionEngine | undefined;
@@ -252,6 +253,7 @@ function deliveryFailure(err: unknown): DispatchFailure {
   if (err instanceof DispatchFailure) return err;
   if (!(err instanceof PaperclipError)) return new DispatchFailure('delivery_unknown', 500, false);
   if (authTypes.has(err.type)) return new DispatchFailure('connector_auth', 502, false);
+  if (err.notSent === true) return new DispatchFailure('delivery_failed', 502, true);
   if (err.type === 'invalid_input' || err.type === 'pagination_truncated') return new DispatchFailure('agent_failed', 500, false);
   if (['conflict', 'ratelimited', 'project_paused', 'disabled'].includes(err.type)
     || (err.type === 'unavailable' && typeof err.status === 'number')) {
@@ -274,8 +276,10 @@ export async function runDispatchAttempt(ctx: PaperclipDispatchContext, deps: Di
     const result = await runTurn({
       agentId: ctx.netzarAgentId, chatId, userText, history: session?.turns ?? [],
       surface: 'system', runId: ctx.runId, userId: `paperclip:${ctx.netzarAgentId}`,
+      abortSignal: deps.abortSignal,
       // NO origin: the default is machine. Board-controlled text must not arm the fleet-wide kill phrase.
     });
+    if (deps.abortSignal?.aborted) throw new DispatchFailure('agent_failed', 500, false);
     if (result.refusal) throw new DispatchFailure('agent_failed', 500, result.refusal.retryable);
     // A blocked notice is not the agent speaking and must never enter assistant history.
     if (!result.blocked) {
@@ -285,15 +289,22 @@ export async function runDispatchAttempt(ctx: PaperclipDispatchContext, deps: Di
         undefined, { surface: 'system', userId: `paperclip:${ctx.netzarAgentId}` });
     }
     return { disposition: result.blocked ? 'blocked' : 'done', comment: result.text };
-  } catch (err) { throw workFailure(err); }
+  } catch (err) {
+    if (deps.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') {
+      throw new DispatchFailure('agent_failed', 500, false);
+    }
+    throw workFailure(err);
+  }
 }
 
 /** One Paperclip write per outcome, with the run id supplied by Paperclip. */
 export async function deliverOutcome(
   ctx: PaperclipDispatchContext, outcome: AttemptOutcome, deps: { engine?: MissionEngine } = {},
 ): Promise<void> {
+  let engine: MissionEngine;
+  try { engine = deps.engine ?? await defaultEngine(); }
+  catch { throw new DispatchFailure('delivery_failed', 502, true); }
   try {
-    const engine = deps.engine ?? await defaultEngine();
     const opts = { actor: ctx.netzarAgentId, runId: ctx.runId };
     if (outcome.disposition === 'done') await engine.completeMission(ctx.issueId, outcome.comment, opts);
     else await engine.comment(ctx.issueId, outcome.comment, opts);

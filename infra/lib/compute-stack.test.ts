@@ -246,6 +246,8 @@ describe('ComputeStack — orchestrator War Room table names', () => {
     const { template } = await dispatch();
     const lookup = resources(template, 'Custom::AWS')[0]?.[1].Properties;
     expect(JSON.stringify(lookup)).toContain('describeNetworkInterfaces');
+    expect(JSON.stringify(lookup)).toContain('NetworkInterfaces.0.PrivateIpAddress');
+    expect(JSON.stringify(lookup.Update)).toContain('"outputPaths\\\":[\\\"NetworkInterfaces.0.PrivateIpAddress\\\"]');
     expect(JSON.stringify(lookup)).toContain('ELB ');
     expect(JSON.stringify(template.toJSON().Outputs?.DispatchLoadBalancerIp)).toContain('PrivateIpAddress');
   }, BUDGET);
@@ -277,6 +279,7 @@ describe('ComputeStack — orchestrator War Room table names', () => {
     const statements = Object.values(iam.toJSON().Resources).flatMap((r: any) => r.Properties?.PolicyDocument?.Statement ?? []);
     const grant = statements.find((s) => s.Sid === 'EcsTaskProtection');
     expect(grant.Action).toEqual(['ecs:UpdateTaskProtection', 'ecs:GetTaskProtection']);
+    expect(grant.Effect).toBe('Allow');
     expect(JSON.stringify(grant.Resource)).toContain('task/claudeclaw-cluster/*');
     expect(grant.Resource).not.toBe('*');
   }, BUDGET);

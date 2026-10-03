@@ -94,6 +94,7 @@ export const PROJECT_PAUSED_MESSAGES: readonly string[] = [
 
 export interface PaperclipErrorInit {
   type?: PaperclipErrorType;
+  notSent?: boolean;
   status?: number;
   body?: PaperclipErrorBody;
   request?: PaperclipRequestContext;
@@ -190,6 +191,7 @@ export class PaperclipError extends Error {
   readonly request?: PaperclipRequestContext;
   readonly issues?: PaperclipValidationIssue[];
   readonly raw?: unknown;
+  readonly notSent?: boolean;
 
   constructor(init: PaperclipErrorInit = {}) {
     const type = init.type ?? 'unknown';
@@ -205,6 +207,7 @@ export class PaperclipError extends Error {
     this.request = init.request;
     this.issues = init.issues ?? toValidationIssues(init.body?.details);
     this.raw = init.raw;
+    this.notSent = init.notSent;
     // `new.target` makes these two lines cover every subclass at once.
     Object.setPrototypeOf(this, new.target.prototype);
     if (typeof Error.captureStackTrace === 'function') Error.captureStackTrace(this, new.target);

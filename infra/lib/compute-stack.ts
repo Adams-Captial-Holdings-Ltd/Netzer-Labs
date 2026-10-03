@@ -1374,6 +1374,7 @@ exports.handler = async () => {
             Filters: [{ Name: 'description', Values: [`ELB ${dispatchLoadBalancer.loadBalancerFullName}`] }],
           },
           physicalResourceId: PhysicalResourceId.of(dispatchLoadBalancer.loadBalancerFullName),
+          outputPaths: ['NetworkInterfaces.0.PrivateIpAddress'],
         },
         policy: AwsCustomResourcePolicy.fromSdkCalls({
           resources: AwsCustomResourcePolicy.ANY_RESOURCE,
