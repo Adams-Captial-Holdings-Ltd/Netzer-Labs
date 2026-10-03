@@ -168,3 +168,46 @@ describe('shutdown order (source guard; the live proof is staging S4-L1)', () =>
     expect(source).toMatch(/await\s+dispatchesIdle\(\)/);
   });
 });
+
+describe('critic finding F2: the sweep', () => {
+  const NOW = 70_000_000;
+  function setup(row: AttemptRow) {
+    const map = new Map([[row.issueId, row]]);
+    const rows: AttemptRows = {
+      get: async (id) => { const found = map.get(id); return found ? structuredClone(found) : undefined; },
+      create: async () => false,
+      replace: async (id, version, next) => { if (map.get(id)?.version !== version) return false; map.set(id, structuredClone(next)); return true; },
+    };
+    const attempts = createAttemptStore({ rows, holderId: 'sweeper', now: () => NOW });
+    const base = { scan: async () => [...map.values()].map((r) => structuredClone(r)), attempts, now: () => NOW,
+      lockState: () => ({ closed: false }) as never, lease: async () => true };
+    return { map, attempts, base };
+  }
+
+  it('ending an expired in-flight write as delivery_unknown is an ERROR line with the issue and the attempt, never the comment', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    const h = setup({ issueId: 'lost', attemptNo: 3, state: 'delivering', leaseToken: 2, holderId: 'dead', leaseExpiresAt: NOW - 1, runIds: ['run-1'],
+      agentId: 'main', outcome: { disposition: 'done', comment: 'private answer' }, version: 4, startedAt: NOW - 60_000, updatedAt: NOW - 60_000 } as AttemptRow);
+    await runPendingDispatchSweep({ ...h.base, deliver: async () => undefined });
+    expect(error.mock.calls.some(([fields]) => (fields as { issueId?: string }).issueId === 'lost'
+      && (fields as { attemptNo?: number }).attemptNo === 3 && (fields as { code?: string }).code === 'delivery_unknown')).toBe(true);
+    expect(JSON.stringify(error.mock.calls)).not.toContain('private answer');
+  });
+
+  it('one store blip while handing a provably unsent outcome back does not turn it into a terminal loss', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const h = setup({ issueId: 'kept', attemptNo: 1, state: 'recorded', leaseToken: 1, holderId: 'gone', leaseExpiresAt: 0, runIds: ['run-1'],
+      agentId: 'main', outcome: { disposition: 'done', comment: 'c' }, version: 2, startedAt: NOW - 300_000, updatedAt: NOW - 300_000,
+      recordedAt: NOW - 300_000 } as AttemptRow);
+    let blips = 1;
+    const releaseDelivery = vi.fn(async (handle: Parameters<typeof h.attempts.releaseDelivery>[0]) => {
+      if (blips-- > 0) throw new Error('dynamo blip');
+      return h.attempts.releaseDelivery(handle);
+    });
+    await runPendingDispatchSweep({ ...h.base, attempts: { ...h.attempts, releaseDelivery }, storeRetryMs: 1,
+      deliver: async () => { throw new DispatchFailure('delivery_failed', 502, true); } } as never);
+    expect(releaseDelivery).toHaveBeenCalledTimes(2);
+    expect(h.map.get('kept')?.state).toBe('recorded');
+  });
+});

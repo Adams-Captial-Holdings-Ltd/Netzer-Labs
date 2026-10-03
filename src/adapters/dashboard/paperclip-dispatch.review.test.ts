@@ -314,3 +314,29 @@ describe('adversarial case 6: a delivery that throws without a typed refusal is 
     expect(h.work).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('critic findings (F1, F2)', () => {
+  it('F1: a request attached to attempt N answers 409 lease_lost when attempt N+1 is the one that was delivered', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const h = harness({ holdMs: 600 }, [seeded({})]);
+    const waiting = h.dispatch('run-2', { retryOfRunId: 'run-1' });
+    await sleep(40);
+    const row = h.map.get('issue-1')!;
+    h.map.set('issue-1', { ...row, attemptNo: 2, state: 'delivered', leaseToken: row.leaseToken + 1, holderId: 'task-c',
+      runIds: ['run-7'], version: row.version + 1 });
+    const res = await waiting;
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'lease_lost' });
+    expect(h.work).not.toHaveBeenCalled();
+  });
+
+  it('F2: an in-flight write that ends unknown through lease expiry is an ERROR line with the issue and the attempt', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const h = harness({}, [seeded({ state: 'delivering', outcome: { disposition: 'done', comment: 'private answer' }, leaseExpiresAt: Date.now() - 1 })]);
+    const res = await h.dispatch('run-2', { retryOfRunId: 'run-1' });
+    expect(res.status).toBe(500);
+    expect(error.mock.calls.some(([fields]) => (fields as { issueId?: string; attemptNo?: number; code?: string }).issueId === 'issue-1'
+      && (fields as { attemptNo?: number }).attemptNo === 1 && (fields as { code?: string }).code === 'delivery_unknown')).toBe(true);
+    expect(JSON.stringify(error.mock.calls)).not.toContain('private answer');
+  });
+});
