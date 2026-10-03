@@ -48,6 +48,8 @@ export class EffectResolveError extends Error {
   }
 }
 export const PENDING_SETTLE_MS = 270_000;
+const KNOWN_EFFECT_STATES = new Set<EffectRow['state']>(['pending', 'applied', 'retryable', 'unknown']);
+const DRAFT_MAX_BYTES = 300_000;
 
 interface Correlation { issueId?: string; runId?: string; attemptNo?: number; turnId?: string; agentId?: string }
 interface Request<T> {
@@ -95,35 +97,38 @@ export function createExecutor({ rows, isDraining, audit, now, settleMs = 0 }: O
     return unknownStop(req.key, hash);
   }
 
+  async function handleStoredRow<T>(req: Request<T>, row: EffectRow, hash: string): Promise<{ handled: true; value: T } | { handled: false }> {
+    if (!KNOWN_EFFECT_STATES.has(row.state)) return unknownStop(req.key, hash);
+    if (row.state === 'applied') {
+      if (row.auditPending) await auditApplied(req, row);
+      return { handled: true, value: row.result as T };
+    }
+    if (row.state === 'unknown') return unknownStop(req.key, hash);
+    return { handled: false };
+  }
+
   async function runEffect<T>(req: Request<T>): Promise<T> {
     validateEffectKey(req.key);
     const hash = payloadHash(req.payload);
     let row = await rows.get(req.key);
     if (row && row.payloadHash !== hash) throw new EffectConflictError();
-    if (row && !['pending', 'applied', 'retryable', 'unknown'].includes(row.state))
-      return unknownStop(req.key, hash);
-    if (row?.state === 'applied') {
-      if (row.auditPending) await auditApplied(req, row);
-      return row.result as T;
+    if (row) {
+      const stored = await handleStoredRow(req, row, hash);
+      if (stored.handled) return stored.value;
     }
-    if (row?.state === 'unknown') return unknownStop(req.key, hash);
     if (isDraining()) throw new EffectRetryableError();
     let created = false;
     if (!row) {
       const time = now();
       const pending: EffectRow = { kind: 'effect', key: req.key, state: 'pending', payloadHash: hash,
-        ...req.correlation, version: 1, createdAt: time, updatedAt: time };
+        ...currentCorrelation(req.correlation), version: 1, createdAt: time, updatedAt: time };
       await req.fence();
       if (!await rows.create(pending)) {
         row = await rows.get(req.key);
         if (!row) throw new Error('Effect row changed during create');
         if (row.payloadHash !== hash) throw new EffectConflictError();
-        if (!['pending', 'applied', 'retryable', 'unknown'].includes(row.state)) return unknownStop(req.key, hash);
-        if (row.state === 'applied') {
-          if (row.auditPending) await auditApplied(req, row);
-          return row.result as T;
-        }
-        if (row.state === 'unknown') return unknownStop(req.key, hash);
+        const stored = await handleStoredRow(req, row, hash);
+        if (stored.handled) return stored.value;
       } else { row = pending; created = true; }
     }
     // Only this call's successful conditional create, or a claimed retry, can apply.
@@ -190,7 +195,7 @@ export function createExecutor({ rows, isDraining, audit, now, settleMs = 0 }: O
     const found = await rows.getDraft(req.key);
     if (found) return found.text;
     const text = await req.produce();
-    if (Buffer.byteLength(text, 'utf8') > 300_000) throw new Error('Draft too long');
+    if (Buffer.byteLength(text, 'utf8') > DRAFT_MAX_BYTES) throw new Error('Draft too long');
     await req.fence();
     if (await rows.createDraft({ kind: 'draft', key: req.key, text, createdAt: now() })) return text;
     const winner = await rows.getDraft(req.key);

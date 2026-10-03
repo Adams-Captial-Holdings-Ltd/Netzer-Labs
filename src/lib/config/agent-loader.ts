@@ -127,10 +127,10 @@ function readYamlScalar(yaml: string, key: string): string | undefined {
 function readYamlTools(yaml: string, agentId: string): string[] | undefined {
   try {
     const document: unknown = parse(yaml);
-    if (document && typeof document === 'object' && !Array.isArray(document)
-      && !Object.prototype.hasOwnProperty.call(document, 'tools')) return undefined;
-    const tools = document && typeof document === 'object' && !Array.isArray(document)
-      ? (document as Record<string, unknown>).tools : null;
+    if (document === null || document === undefined) return undefined;
+    const isPlainObject = typeof document === 'object' && !Array.isArray(document);
+    if (isPlainObject && !Object.prototype.hasOwnProperty.call(document, 'tools')) return undefined;
+    const tools = isPlainObject ? (document as Record<string, unknown>).tools : null;
     if (Array.isArray(tools) && tools.every((name) => typeof name === 'string')) return tools;
   } catch { /* malformed configuration denies tools */ }
   logger.warn({ agentId }, 'invalid agent tool allowlist');

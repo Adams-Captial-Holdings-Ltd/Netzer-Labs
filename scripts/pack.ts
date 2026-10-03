@@ -7,6 +7,9 @@ import type { createExecutor } from '../src/lib/work/executor.js';
 
 const effectUsage = 'Usage: pack effect list | pack effect resolve <caseKey> <stage> <step> <stageEntryNo> (--applied | --not-applied) --by <userId>';
 type EffectExecutor = Pick<ReturnType<typeof createExecutor>, 'listUnknown' | 'resolve'>;
+async function defaultEffectExecutor(): Promise<EffectExecutor> {
+  return (await import('../src/lib/work/executor.js')).defaultExecutor();
+}
 
 const safe = (value: unknown) => String(value).replace(/[^\x20-\x7e]/g, '?');
 const reason = (error: unknown) => {
@@ -20,15 +23,19 @@ export function runPackCli(
 ): number | Promise<number> {
   if (argv[0] === 'effect') {
     if (argv[1] === 'list' && argv.length === 2) {
-      return (async () => { try {
-        const executor = deps?.executor ?? (await import('../src/lib/work/executor.js')).defaultExecutor();
-        const rows = await executor.listUnknown();
-        if (!rows.length) out('No unknown effects');
-        for (const row of rows) {
-          out(`${safe(row.key.caseKey)} ${safe(row.key.stage)} ${safe(row.key.step)} ${safe(row.key.stageEntryNo)} ${safe(new Date(row.updatedAt).toISOString())}${row.issueId ? ` ${safe(row.issueId)}` : ''}`);
+      return (async () => {
+        try {
+          const executor = deps?.executor ?? await defaultEffectExecutor();
+          const rows = await executor.listUnknown();
+          if (!rows.length) out('No unknown effects');
+          for (const row of rows) {
+            out(`${safe(row.key.caseKey)} ${safe(row.key.stage)} ${safe(row.key.step)} ${safe(row.key.stageEntryNo)} ${safe(new Date(row.updatedAt).toISOString())}${row.issueId ? ` ${safe(row.issueId)}` : ''}`);
+          }
+          return 0;
+        } catch (error) {
+          out(reason(error));
+          return 1;
         }
-        return 0;
-      } catch (error) { out(reason(error)); return 1; }
       })();
     }
     if (argv[1] === 'resolve') {
@@ -47,7 +54,7 @@ export function runPackCli(
       }
       return (async () => {
         try {
-          const executor = deps?.executor ?? (await import('../src/lib/work/executor.js')).defaultExecutor();
+          const executor = deps?.executor ?? await defaultEffectExecutor();
           await executor.resolve({ caseKey: argv[2], stage: argv[3], step: argv[4], stageEntryNo: Number(entry) },
             applied ? 'applied' : 'not_applied', flags[by + 1]);
           out('Effect resolved');

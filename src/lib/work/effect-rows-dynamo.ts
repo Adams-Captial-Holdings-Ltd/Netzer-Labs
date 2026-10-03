@@ -25,6 +25,16 @@ function unpack<T>(found: Record<string, unknown> | undefined, kind: 'effect' | 
     || typeof row.version !== 'number') throw new EffectRowCorruptError();
   return row as T;
 }
+async function createIfAbsent(row: EffectRow | DraftRow): Promise<boolean> {
+  try {
+    await ddb().send(new PutCommand({ TableName: TABLE, Item: item(row),
+      ConditionExpression: 'attribute_not_exists(PK)' }));
+    return true;
+  } catch (error) {
+    if (conditionalFailure(error)) return false;
+    throw error;
+  }
+}
 
 export function dynamoEffectRows(): EffectRows {
   return {
@@ -33,16 +43,7 @@ export function dynamoEffectRows(): EffectRows {
         Key: { PK: effectPartitionKey(effectKey), SK: effectSortKey(effectKey) }, ConsistentRead: true }));
       return unpack<EffectRow>(result.Item, 'effect');
     },
-    async create(row) {
-      try {
-        await ddb().send(new PutCommand({ TableName: TABLE, Item: item(row),
-          ConditionExpression: 'attribute_not_exists(PK)' }));
-        return true;
-      } catch (error) {
-        if (conditionalFailure(error)) return false;
-        throw error;
-      }
-    },
+    async create(row) { return createIfAbsent(row); },
     async replace(effectKey, expectedVersion, next) {
       try {
         await ddb().send(new PutCommand({ TableName: TABLE, Item: { ...item(next),
@@ -72,15 +73,6 @@ export function dynamoEffectRows(): EffectRows {
         Key: { PK: effectPartitionKey(effectKey), SK: draftSortKey(effectKey) }, ConsistentRead: true }));
       return unpack<DraftRow>(result.Item, 'draft');
     },
-    async createDraft(row) {
-      try {
-        await ddb().send(new PutCommand({ TableName: TABLE, Item: item(row),
-          ConditionExpression: 'attribute_not_exists(PK)' }));
-        return true;
-      } catch (error) {
-        if (conditionalFailure(error)) return false;
-        throw error;
-      }
-    },
+    async createDraft(row) { return createIfAbsent(row); },
   };
 }
