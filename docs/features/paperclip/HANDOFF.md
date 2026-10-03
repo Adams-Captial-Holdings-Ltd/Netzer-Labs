@@ -17,7 +17,7 @@ This section was checked on 2026-10-03 against `origin/development` `b5c96d6`. T
 - **Step 4 is built locally:** the execution contract (SYNC_ATTACH, [ADR 0013](../../adr/0013-sync-attach-execution-contract.md)): the held dispatch route, the per-issue attempt row with a fenced lease, the completion writer, the `pending_dispatch` sweep, the SIGTERM drain with ECS scale-in protection, the internal Network Load Balancer address (decision 38) and the closed lock with the flag off (decision 36), with their tests. The staging proofs are PENDING.
 - **Deployment:** none. `development` deploys nothing. No AWS call was made.
 
-**Next action:** the final validation and the critic, then the owner's yes to push and open the PR into `development`. Then step 5 (safe actions). Session log: [Work Platform step 4](handoffs/2026-10-03-work-platform-step-4-execution-contract.md).
+**Next action:** the owner's yes to push and open the PR into `development` (the full validation and the frozen gate passed on `15d7f16`; the critic's re-check of the commits after it comes first). Then step 5 (safe actions). Session log: [Work Platform step 4](handoffs/2026-10-03-work-platform-step-4-execution-contract.md).
 
 ## State as of 2026-10-02
 

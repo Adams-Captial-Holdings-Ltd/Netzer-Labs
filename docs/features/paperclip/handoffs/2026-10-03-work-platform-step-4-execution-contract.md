@@ -27,7 +27,7 @@ supersedes: 2026-10-02-work-platform-step-3-pack-format.md
 
 ## 2. Current state summary
 
-Work Platform step 4 of 18 (the execution contract: Paperclip holds its dispatch open until Netzer has written the outcome) is built locally on `feature/wp-step4-execution-contract` and waits for the final validation, the independent critic and the owner's yes to push. The held dispatch route, the per-issue attempt row with a fenced lease, the completion writer, the `pending_dispatch` sweep, the SIGTERM drain with ECS scale-in protection, the internal Network Load Balancer address (decision 38) and the closed lock with the flag off (decision 36) are in the code. The Paperclip behavior the design rests on was measured in a sealed local container (spike A120). Nothing is pushed and nothing is deployed; the staging proofs S4-L1 to S4-L3 are PENDING (section 7). Step 5 (safe actions) is next after this PR.
+Work Platform step 4 of 18 (the execution contract: Paperclip holds its dispatch open until Netzer has written the outcome) is built locally on `feature/wp-step4-execution-contract`; the full validation and the frozen gate passed on `15d7f16`. It waits for the independent critic's re-check and the owner's yes to push. The held dispatch route, the per-issue attempt row with a fenced lease, the completion writer, the `pending_dispatch` sweep, the SIGTERM drain with ECS scale-in protection, the internal Network Load Balancer address (decision 38) and the closed lock with the flag off (decision 36) are in the code. The Paperclip behavior the design rests on was measured in a sealed local container (spike A120). Nothing is pushed and nothing is deployed; the staging proofs S4-L1 to S4-L3 are PENDING (section 7). Step 5 (safe actions) is next after this PR.
 
 ## 3. Codebase understanding
 
@@ -705,18 +705,20 @@ The final full validation runs after cleanup and is recorded in the PR body; thi
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
-| `npm run typecheck` | exit 0 on `b5c96d6` | exit 0 on the commits after each build stage (last recorded after `921b9fa`); the final run is pending |
-| `npm test` | exit 0 on `b5c96d6`: 301 files, 3990 tests | scoped runs only so far; the last broad run on the dispatch, paperclip, tools and missions folders: exit 0, 100 files, 1525 tests. The full run is pending |
-| `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `b5c96d6`: 3990 tests | scoped flag-on run: exit 0, 79 files, 1169 tests. The full run is pending |
-| `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | exit 0 on `b5c96d6` | pending |
+| `npm run typecheck` | exit 0 on `b5c96d6` | exit 0 on `15d7f16` (the full validation run) |
+| `npm test` | exit 0 on `b5c96d6`: 301 files, 3990 tests | exit 0 on `15d7f16`: 319 files, 4191 tests |
+| `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `b5c96d6`: 3990 tests | exit 0 on `15d7f16`: 319 files, 4191 tests |
+| `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | exit 0 on `b5c96d6` | exit 0 on `15d7f16` |
 | `npm run local:test:integration` | NOT RUN (A136) | NOT RUN (A136) |
-| `node scripts/ci/docs-links.mjs`, `node scripts/ci/feature-knowledge.mjs` | OK on `b5c96d6` | pending, run on the docs update |
+| `node scripts/ci/docs-links.mjs`, `node scripts/ci/feature-knowledge.mjs` | OK on `b5c96d6` | OK on `15d7f16`; `runnable-blocks`, `docs-assets`, `docs-mermaid` and the `diagrams.map` drift gate also exit 0 |
 | Spike A120 (sealed local container, no network) | n/a | measured: the facts in A134 |
 | Staging proofs S4-L1 (restart or deploy mid-attempt, scale-in protection), S4-L2 (45 s and 250 s hold through the load balancer; `cdk diff`), S4-L3 (Paperclip restart mid-attempt) | n/a | PENDING: need staging and an AWS call, each with the owner's yes. Not passed |
 
 The frozen gate (outside the repository) is run once at the end; its result is recorded in the PR body, not here.
 
 Anything not run, and why: `npm run local:test:integration`, because another project's Floci emulator holds port 4566 and a run would change its data (A136). No AWS call was made.
+
+The table's right-hand column is the full run on `15d7f16`. The commits after it change two source files (a log line and a retry in the sweep, for the critic's finding F2), their tests and docs; the same list and the frozen gate were run again on the branch tip before the push was asked for, and those results are in the session log outside the repository, not in this file. The frozen gate (`s4-proof.mjs`) passed every local criterion on `15d7f16`; a fresh critic re-ran it and judged the diff: gate, diff, review follow-through and docs passed, the verdict was FAIL on the evidence index naming two files before they existed, and its advisory findings F1 (an untested guard) and F2 were then closed with tests.
 
 ## 8. Environment state
 
