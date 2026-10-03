@@ -35,9 +35,7 @@ import {
   stopInvalidationListener,
 } from './lib/config/invalidation-listener.js';
 import { initXray } from './lib/observability/xray.js';
-import { paperclipRoutingEnabled } from './lib/missions/mission-acl.js';
-import { loadPaperclipConfig } from './lib/paperclip/config.js';
-import { readConfiguredLockVerdict, startPaperclipLock } from './lib/paperclip/runtime-lock.js';
+import { bootPaperclipLock } from './lib/paperclip/lock-boot.js';
 import { attachJarvisWebSocket } from './adapters/dashboard/jarvis.js';
 import { teardownAllJarvisSessions } from './lib/voice/session-registry.js';
 import type { Server as HttpServer } from 'node:http';
@@ -50,17 +48,11 @@ async function main(): Promise<void> {
   // Init X-Ray before any AWS SDK client is created; the SDK wrappers
   // are no-ops when CCE_XRAY_ENABLED is unset.
   initXray();
-  // CCE_PAPERCLIP_ENABLED arms agents and enables the runtime lock. With it off,
-  // the lock does not run, the reconciler stays read-only (default shadow mode),
-  // and dispatch stays inert; turn it on before arming agents or leaving shadow mode.
-  const lock = await startPaperclipLock({
-    enabled: paperclipRoutingEnabled(),
-    read: () => readConfiguredLockVerdict({
-      loadConfig: loadPaperclipConfig,
-      fetchFn: fetch,
-      auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY,
-    }),
-  });
+  // CCE_PAPERCLIP_ENABLED switches Paperclip routing; it does not arm agents.
+  // Off closes the Paperclip surface (unknown:paperclip_routing_off): the client,
+  // reconciler and private dispatch route refuse; no live read runs and startup
+  // is never blocked. On, the live lock check runs at start and every 60 s.
+  const lock = await bootPaperclipLock();
   logger.info(
     {
       region: env.AWS_REGION,
