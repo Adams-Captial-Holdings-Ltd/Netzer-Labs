@@ -1820,5 +1820,13 @@ export class IamStack extends Stack implements IamOutputs {
         }),
       );
     }
+    this.taskRole.addToPolicy(new PolicyStatement({
+      sid: 'EcsTaskProtection',
+      effect: Effect.ALLOW,
+      actions: ['ecs:UpdateTaskProtection', 'ecs:GetTaskProtection'],
+      resources: [
+        `arn:${this.partition}:ecs:${this.region}:${this.account}:task/${RESOURCE_NAMES.ecsCluster}/*`,
+      ],
+    }));
   }
 }

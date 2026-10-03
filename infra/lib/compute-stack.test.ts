@@ -118,6 +118,7 @@ describe('ComputeStack — orchestrator War Room table names', () => {
       vpc: net.vpc,
       albSecurityGroup: net.albSecurityGroup,
       fargateSecurityGroup: net.fargateSecurityGroup,
+      dispatchLoadBalancerSecurityGroup: net.dispatchLoadBalancerSecurityGroup,
       taskRole: iam.taskRole,
       secrets,
       logsBucket: storage.logsBucket,
@@ -140,6 +141,8 @@ describe('ComputeStack — orchestrator War Room table names', () => {
 
     return {
       template,
+      network: Template.fromStack(net),
+      iam: Template.fromStack(iam),
       orchestrator,
       env: Object.fromEntries((orchestrator.Environment ?? []).map((e) => [e.Name, e.Value])),
     };
@@ -177,9 +180,9 @@ describe('ComputeStack — orchestrator War Room table names', () => {
         'Fn::Join': ['', expect.arrayContaining([':lock_auditor_key::'])],
       }),
     }));
-    template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 2);
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', { Port: 3000 });
-    expect(service.LoadBalancers.map((lb: { ContainerPort: number }) => lb.ContainerPort)).toEqual([3000]);
+    expect(service.LoadBalancers.map((lb: { ContainerPort: number }) => lb.ContainerPort)).toEqual([3000, 3001]);
   }, BUDGET);
 
   it('omits dispatch resources and wiring without Paperclip', async () => {
@@ -192,6 +195,93 @@ describe('ComputeStack — orchestrator War Room table names', () => {
     expect(
       Object.values(template.findResources('AWS::ECS::Service'))[0].Properties.ServiceRegistries,
     ).toBeUndefined();
+  }, BUDGET);
+
+  let dispatchSynth: ReturnType<typeof synthCompute> | undefined;
+  const dispatch = () => (dispatchSynth ??= synthCompute(''));
+  const resources = (template: Template, type: string) => Object.entries(template.findResources(type));
+
+  it('dispatch load balancer: is internal network with one TCP listener on 3001', async () => {
+    const { template } = await dispatch();
+    const lbs = resources(template, 'AWS::ElasticLoadBalancingV2::LoadBalancer');
+    const nlb = lbs.find(([, r]) => r.Properties.Type === 'network');
+    expect(nlb?.[1].Properties).toEqual(expect.objectContaining({ Scheme: 'internal', Type: 'network' }));
+    expect(nlb?.[1].Properties.Subnets).toHaveLength(2);
+    expect(nlb?.[1].Properties.LoadBalancerAttributes).toContainEqual({ Key: 'load_balancing.cross_zone.enabled', Value: 'true' });
+    const listeners = resources(template, 'AWS::ElasticLoadBalancingV2::Listener')
+      .filter(([, r]) => JSON.stringify(r.Properties.LoadBalancerArn).includes(nlb![0]));
+    expect(listeners).toHaveLength(1);
+    expect(listeners[0][1].Properties).toEqual(expect.objectContaining({ Port: 3001, Protocol: 'TCP' }));
+  }, BUDGET);
+
+  it('dispatch load balancer: has IP TCP target group and 300 second drain', async () => {
+    const { template } = await dispatch();
+    const groups = resources(template, 'AWS::ElasticLoadBalancingV2::TargetGroup');
+    const group = groups.find(([, r]) => r.Properties.Port === 3001)?.[1].Properties;
+    expect(group).toEqual(expect.objectContaining({ TargetType: 'ip', Protocol: 'TCP', HealthCheckProtocol: 'TCP', HealthCheckPort: 'traffic-port' }));
+    expect(group.TargetGroupAttributes).toContainEqual({ Key: 'deregistration_delay.timeout_seconds', Value: '300' });
+  }, BUDGET);
+
+  it('dispatch load balancer: is wholly absent without Paperclip', async () => {
+    const { template, network } = await synthCompute('', 0);
+    expect(resources(template, 'AWS::ElasticLoadBalancingV2::LoadBalancer').filter(([, r]) => r.Properties.Type === 'network')).toHaveLength(0);
+    expect(resources(template, 'Custom::AWS')).toHaveLength(0);
+    expect(template.toJSON().Outputs?.DispatchLoadBalancerIp).toBeUndefined();
+    expect(JSON.stringify(network.toJSON())).not.toContain('DispatchNlbSg');
+  }, BUDGET);
+
+  it('dispatch load balancer: admits only Paperclip to NLB and NLB to Fargate on 3001', async () => {
+    const { network } = await dispatch();
+    const rules = resources(network, 'AWS::EC2::SecurityGroupIngress').map(([, r]) => r.Properties)
+      .filter((r) => r.FromPort === 3001);
+    expect(rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ GroupId: expect.objectContaining({ 'Fn::GetAtt': [expect.stringMatching(/DispatchNlbSg/), 'GroupId'] }), SourceSecurityGroupId: expect.objectContaining({ 'Fn::GetAtt': [expect.stringMatching(/PaperclipSg/), 'GroupId'] }) }),
+      expect.objectContaining({ GroupId: expect.objectContaining({ 'Fn::GetAtt': [expect.stringMatching(/FargateSg/), 'GroupId'] }), SourceSecurityGroupId: expect.objectContaining({ 'Fn::GetAtt': [expect.stringMatching(/DispatchNlbSg/), 'GroupId'] }) }),
+    ]));
+    expect(rules.filter((r) => JSON.stringify(r.GroupId).includes('DispatchNlbSg'))).toHaveLength(1);
+    expect(rules.every((r) => !r.CidrIp && !r.CidrIpv6)).toBe(true);
+  }, BUDGET);
+
+  it('dispatch load balancer: looks up the first NLB interface private IP', async () => {
+    const { template } = await dispatch();
+    const lookup = resources(template, 'Custom::AWS')[0]?.[1].Properties;
+    expect(JSON.stringify(lookup)).toContain('describeNetworkInterfaces');
+    expect(JSON.stringify(lookup)).toContain('NetworkInterfaces.0.PrivateIpAddress');
+    expect(JSON.stringify(lookup.Update)).toContain('"outputPaths\\\":[\\\"NetworkInterfaces.0.PrivateIpAddress\\\"]');
+    expect(JSON.stringify(lookup)).toContain('ELB ');
+    expect(JSON.stringify(template.toJSON().Outputs?.DispatchLoadBalancerIp)).toContain('PrivateIpAddress');
+  }, BUDGET);
+
+  it('dispatch load balancer: lookup policy grants only DescribeNetworkInterfaces', async () => {
+    const { template } = await dispatch();
+    const policies = resources(template, 'AWS::IAM::Policy').map(([, r]) => r.Properties.PolicyDocument.Statement).flat();
+    const lookup = policies.filter((s) => JSON.stringify(s.Action).includes('ec2:DescribeNetworkInterfaces'));
+    expect(lookup).toHaveLength(1);
+    expect(lookup[0].Action).toBe('ec2:DescribeNetworkInterfaces');
+  }, BUDGET);
+
+  it('dispatch load balancer: listener leaves TCP idle timeout at its default', async () => {
+    const { template } = await dispatch();
+    const listener = resources(template, 'AWS::ElasticLoadBalancingV2::Listener').find(([, r]) => r.Properties.Port === 3001)?.[1].Properties;
+    expect(listener?.ListenerAttributes).toBeUndefined();
+  }, BUDGET);
+
+  it('dispatch load balancer: keeps Service logical id and ALB target beside dispatch target', async () => {
+    const { template } = await dispatch();
+    const service = resources(template, 'AWS::ECS::Service').find(([id]) => id === 'ServiceD69D759B');
+    expect(service).toBeDefined();
+    expect(service![1].Properties.LoadBalancers.map((lb: { ContainerPort: number }) => lb.ContainerPort)).toEqual([3000, 3001]);
+    expect(resources(template, 'AWS::ElasticLoadBalancingV2::TargetGroup').some(([, r]) => r.Properties.Port === 3000)).toBe(true);
+  }, BUDGET);
+
+  it('task protection grant names both ECS actions for this cluster only', async () => {
+    const { iam } = await dispatch();
+    const statements = Object.values(iam.toJSON().Resources).flatMap((r: any) => r.Properties?.PolicyDocument?.Statement ?? []);
+    const grant = statements.find((s) => s.Sid === 'EcsTaskProtection');
+    expect(grant.Action).toEqual(['ecs:UpdateTaskProtection', 'ecs:GetTaskProtection']);
+    expect(grant.Effect).toBe('Allow');
+    expect(JSON.stringify(grant.Resource)).toContain('task/claudeclaw-cluster/*');
+    expect(grant.Resource).not.toBe('*');
   }, BUDGET);
 
   it(

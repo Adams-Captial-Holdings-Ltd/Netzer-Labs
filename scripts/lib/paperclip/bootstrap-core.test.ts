@@ -620,6 +620,7 @@ describe('Phase 6: exactly one agent is pointed at the dispatch route', () => {
     const research = SPECS.find((s) => s.slug === 'research')!;
     expect(research.adapterConfig.url).toBeUndefined();
     expect(research.adapterConfig.headers).toBeUndefined();
+    expect(SPECS.every((spec) => spec.adapterConfig.timeoutMs === 270_000)).toBe(true);
     expect(JSON.stringify(research)).not.toContain('dispatch-secret-value');
   });
 

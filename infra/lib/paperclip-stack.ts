@@ -97,6 +97,8 @@ export interface PaperclipStackProps extends BaseStackProps {
   paperclipSecurityGroup: SecurityGroup;
   /** Reused from compute-stack; a second cluster would buy nothing. */
   cluster: ICluster;
+  /** Raw private IP origin from Compute; absent in standalone synths. */
+  dispatchLoadBalancerOrigin?: string;
   /**
    * EFS + access point (posix 1000:1000, path /paperclip) + log group.
    * All three are UNDEFINED at Tier 0, where FilesystemStack creates nothing
@@ -480,7 +482,10 @@ export class PaperclipStack extends Stack {
         PAPERCLIP_TELEMETRY_DISABLED: '1',
         DO_NOT_TRACK: '1',
         PAPERCLIP_ANNOUNCEMENTS_ENABLED: 'false',
-        PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: RESOURCE_NAMES.dispatchInternalOrigin,
+        PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: [
+          RESOURCE_NAMES.dispatchInternalOrigin,
+          props.dispatchLoadBalancerOrigin,
+        ].filter(Boolean).join(','),
         PAPERCLIP_MIGRATION_PROMPT: 'never',
         // PAPERCLIP_MIGRATION_AUTO_APPLY is deliberately ABSENT here. See the
         // class doc; paperclip-stack.test.ts asserts the absence.

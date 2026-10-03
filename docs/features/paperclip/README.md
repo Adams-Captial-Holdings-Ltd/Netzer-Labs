@@ -14,6 +14,12 @@ implemented_by:
   - src/lib/paperclip/reconciler.ts
   - src/lib/paperclip/watermark.ts
   - src/lib/paperclip/dispatch-worker.ts
+  - src/lib/paperclip/attempt-store.ts
+  - src/lib/paperclip/attempt-rows-dynamo.ts
+  - src/lib/paperclip/pending-dispatch-sweep.ts
+  - src/lib/paperclip/task-protection.ts
+  - src/lib/paperclip/dispatch-drain.ts
+  - src/lib/paperclip/lock-boot.ts
   - src/lib/missions/mission-acl.ts
   - src/lib/missions/format.ts
   - src/lib/state/mission-tasks-repo.ts
@@ -54,6 +60,8 @@ tested_by:
   - src/lib/paperclip/client.paperclip.integration.test.ts
   - src/lib/paperclip/reconciler.test.ts
   - src/lib/paperclip/dispatch-worker.test.ts
+  - src/lib/paperclip/attempt-store.test.ts
+  - src/adapters/dashboard/paperclip-dispatch.sync-attach.test.ts
   - src/adapters/dashboard/missions.test.ts
   - src/adapters/dashboard/paperclip-dispatch.test.ts
   - src/lib/tools/mission-tools.test.ts
@@ -147,9 +155,10 @@ Paperclip is live in staging as the missions system of record; the 2026-09-06 li
   boundary.
 - **Durable observation plus low-latency dispatch.** The reconciler polls the
   patched `updatedSince` feed with overlap-and-dedupe and ships in observing
-  mode. The inbound dispatch route acknowledges with 202, durably claims a
-  `(runId, issueId)` pair, and hands the genuine Paperclip run id to the worker;
-  it never fabricates one.
+  mode. The inbound dispatch route (step 4, built on a branch, not merged) holds
+  the request open, keeps one attempt row per issue, runs the turn, writes the
+  outcome to Paperclip with the genuine run id and only then answers 2xx; it
+  never answers 202 and never fabricates a run id ([ADR 0013](../../adr/0013-sync-attach-execution-contract.md)).
 - **The Missions anti-corruption layer.** The existing four
   `/api/missions*` contracts and capability gates are served through a
   `MissionEngine`, with the legacy handlers retained as one whole router-level
@@ -242,7 +251,7 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Projection and public domain | `src/lib/paperclip/mission-projection.ts`, `src/lib/state/mission-tasks-repo.ts` | Seven Paperclip states project into six ordered Mission states (only `backlog`/`todo` collapse to `open`); priority is the four-band enum end to end; unassigned issues reject with a typed error; Paperclip text is neutralized before prompting; public `dueAt` is gone |
 | Client and engine | `src/lib/paperclip/client.ts`, `config.ts`, `agent-map.ts`, `mission-engine.ts`, `paperclip-mission-engine.ts` | Authenticated API boundary with pagination, timeout/rate-limit errors, retry-safe writes, circuit breaking, actor-key selection and no synthesized run ids |
 | Reconciler | `src/lib/paperclip/reconciler.ts`, `watermark.ts` | Observing poller over the patched feed; overlaps the stored max timestamp, dedupes `(id, updatedAt)`, refuses corrupt or unfiltered feeds, and advances the watermark conditionally |
-| Inbound dispatch | `src/adapters/dashboard/paperclip-dispatch.ts`, `src/lib/paperclip/dispatch-worker.ts` | Constant-time shared-secret check, fast 202 acknowledgement, durable one-shot claim, genuine run-id propagation, refusal-aware retry/recovery |
+| Inbound dispatch | `src/adapters/dashboard/paperclip-dispatch.ts`, `src/lib/paperclip/dispatch-worker.ts` | Constant-time shared-secret check, held request (cap 240 s), per-issue attempt row with a fenced lease (`attempt-store.ts`), completion writer, `pending_dispatch` sweep, drain and scale-in protection (step 4, on a branch); genuine run-id propagation |
 | Missions ACL and privacy | `src/lib/missions/mission-acl.ts` (`canReadBoard`, `canMutateMission`), `src/adapters/dashboard/missions.ts`, `src/lib/tools/privacy-tools.ts` | Preserves the four `/api/missions*` envelopes/capability gates, resolves the public 8-character reference without silent ambiguity, and joins Netzar-side provenance into privacy exports |
 | Mission surfaces and tools | `src/lib/missions/format.ts`, `src/lib/tools/mission-tools.ts`, `src/lib/tools/paperclip-tools.ts` | One status/priority vocabulary across chat surfaces; assignment notification parity; exact approved Paperclip verbs; one audit record per successful mutation |
 | Dashboard and CLI | `web/src/pages/Missions.tsx`, `web/src/lib/glossary.ts`, `scripts/mission.ts` | Six ordered kanban lanes, four priority labels and no due-date rendering; CLI list uses `owner`, create sends the actual route body, and show scans bounded real owner boards because no detail route exists |
@@ -375,7 +384,7 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
   Dashboard routes keep their capability gates.
 - Flipping `CCE_PAPERCLIP_ENABLED` hides legacy DynamoDB missions from the board
   (DL-7, no migration); staging had 2, both cancelled, before the flip.
-- Paperclip 2026.722.0 does not dedupe wakeups by `idempotencyKey`; the orchestrator's `(runId, issueId)` claim is the only guard.
+- Paperclip 2026.722.0 does not dedupe wakeups by `idempotencyKey`; the orchestrator's guard was the `(runId, issueId)` claim; step 4 replaces it with the per-issue attempt row (`ATTEMPT#<issueId>`; a retry belongs to it by `retryOfRunId`).
 - `tool_invoke` audit rows are written only by tools that call `writeAudit` (`paperclip_add_comment`, `paperclip_create_subtask`); mission tools do not.
 
 ### Paperclip task-definition variables the probe made necessary

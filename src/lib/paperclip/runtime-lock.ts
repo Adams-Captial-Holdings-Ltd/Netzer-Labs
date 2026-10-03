@@ -261,7 +261,16 @@ export function startPaperclipLockWatcher({ read }: { read: () => Promise<LockVe
 export async function startPaperclipLock({ enabled, read }: {
   enabled: boolean; read: () => Promise<LockVerdict>;
 }): Promise<{ stop: () => void }> {
-  if (!enabled) return { stop: () => {} };
+  if (!enabled) {
+    state = { closed: true, code: 'unknown:paperclip_routing_off' };
+    try {
+      if (previous !== 'paperclip_routing_off') {
+        logger.info({ reason: 'paperclip_routing_off' }, 'paperclip lock verdict');
+        previous = 'paperclip_routing_off';
+      }
+    } catch { /* logging must not block startup */ }
+    return { stop: () => {} };
+  }
   await enforceStartupLock({ read });
   return startPaperclipLockWatcher({ read });
 }

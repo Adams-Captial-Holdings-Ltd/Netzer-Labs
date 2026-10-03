@@ -11,6 +11,7 @@ import { IamStack } from './iam-stack.js';
 
 type Statement = { Sid?: string; Action?: string | string[]; Resource?: unknown; Condition?: unknown; Effect?: string };
 const NEW_SIDS = ['S3ArtifactVersionDelete', 'S3ArtifactVersionList'];
+const TASK_PROTECTION_SID = 'EcsTaskProtection';
 const BASELINE_HASH = '836b06f8841beb6cd15bec365e8e425146dae5cb18e8ba89abe7fd054555e21b';
 
 function statements(): Statement[] {
@@ -48,7 +49,7 @@ it('P4 IAM leaves all existing role permissions and resources unchanged', () => 
   const rows = statements();
   expect(rows.filter((row) => NEW_SIDS.includes(row.Sid ?? '')).map((row) => row.Sid).sort(),
     'version erasure must add exactly two separate grants').toEqual(NEW_SIDS);
-  const old = rows.filter((row) => !NEW_SIDS.includes(row.Sid ?? ''));
+  const old = rows.filter((row) => !NEW_SIDS.includes(row.Sid ?? '') && row.Sid !== TASK_PROTECTION_SID);
   const hash = createHash('sha256').update(JSON.stringify(old.map((row) => JSON.stringify(row)).sort())).digest('hex');
   expect(hash, 'the 36 original statements must remain byte-identical in the synthesized policy')
     .toBe(BASELINE_HASH);

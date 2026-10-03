@@ -21,7 +21,7 @@
     "test:paperclip:up": "docker compose -f docker-compose.paperclip.yml up -d --wait --build",
     "test:paperclip:down": "docker compose -f docker-compose.paperclip.yml down -v",
     "test:paperclip:all": "npm run test:paperclip:up && npm run test:integration && npm run test:paperclip:down",
-    "test:paperclip:contract": "vitest run --config vitest.integration.config.ts tests/contract/paperclip",
+    "test:paperclip:contract": "node -e \"if (!process.env.PAPERCLIP_TEST_AUTH_SECRET) { console.error('PAPERCLIP_TEST_AUTH_SECRET is required'); process.exit(1) }\" && vitest run --config vitest.integration.config.ts tests/contract/paperclip",
     "e2e:chat": "playwright test --config tests/e2e/chat/playwright.config.ts",
     "local": "node scripts/local/dev.mjs",
     "local:up": "docker compose -f docker-compose.local.yml up -d --wait",

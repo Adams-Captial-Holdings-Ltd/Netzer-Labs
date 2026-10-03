@@ -25,6 +25,7 @@ import {
   TEST_ISSUE_ID as ISSUE_ID,
 } from './test-helpers.js';
 import type { PaperclipIssue } from './types.js';
+import { __resetPaperclipLockForTest, enforceStartupLock } from './runtime-lock.js';
 
 // ── Fakes. No real network call is ever made from this file. ───────────────
 
@@ -63,6 +64,28 @@ function client(fetchFn: typeof fetch, overrides: Partial<PaperclipClientOptions
     ...overrides,
   });
 }
+
+describe('pre-request refusal marker', () => {
+  afterEach(__resetPaperclipLockForTest);
+  it('marks breaker-open but not a failed fetch attempt', async () => {
+    const fetchFn = vi.fn(async () => { throw new Error('offline'); });
+    const paperclip = client(fetchFn as typeof fetch, { retry: { ...PAPERCLIP_NO_RETRY, breakerThreshold: 1 } });
+    const attempted = await expectPaperclipError(() => paperclip.listIssues(), PaperclipUnavailableError, 'Offline');
+    expect(attempted.notSent).not.toBe(true);
+    const refused = await expectPaperclipError(() => paperclip.listIssues(), PaperclipUnavailableError, 'circuit breaker is open');
+    expect(refused.notSent).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+  it('marks the disabled switch and runtime lock', async () => {
+    const fetchFn = vi.fn();
+    const switched = client(fetchFn as typeof fetch, { killSwitch: async () => ({ active: true, reason: 'switched' }) });
+    expect((await expectPaperclipError(() => switched.listIssues(), PaperclipDisabledError, 'switched')).notSent).toBe(true);
+    await enforceStartupLock({ read: async () => ({ verdict: 'unknown', reason: 'paperclip_unreachable' }), attempts: 1 });
+    const locked = client(fetchFn as typeof fetch);
+    expect((await expectPaperclipError(() => locked.listIssues(), PaperclipDisabledError, 'runtime lock closed')).notSent).toBe(true);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
 
 // ── A2-9 ──────────────────────────────────────────────────────────────────
 
@@ -632,6 +655,16 @@ describe('pagination (A2-15)', () => {
 // ── Guards the artifact forced ────────────────────────────────────────────
 
 describe('artifact-forced guards', () => {
+  it('sends completion status and comment in one PATCH with the caller run id', async () => {
+    const rec = recorder([jsonResponse(issue())]);
+    await client(rec.fetchFn).patchIssue(ISSUE_ID, { status: 'done', comment: 'finished' }, { actor: 'main', runId: 'run-live' });
+    expect(rec.calls).toHaveLength(1);
+    const call = rec.calls[0]!;
+    expect(call.init.method).toBe('PATCH');
+    expect(new URL(call.url).pathname).toBe(`/api/issues/${ISSUE_ID}`);
+    expect(JSON.parse(String(call.init.body))).toEqual({ status: 'done', comment: 'finished' });
+    expect((call.init.headers as Record<string, string>)['X-Paperclip-Run-Id']).toBe('run-live');
+  });
   it('A1-14: the string onBehalfOfUserId never appears in any serialized request body', async () => {
     const rec = recorder([jsonResponse({ id: 'x', body: 'b', createdAt: 'n' })]);
     const paperclip = client(rec.fetchFn);
@@ -721,7 +754,8 @@ describe('source guards over this directory (A1-3, A1-14, A2-17, A2-21, A2-22)',
       for (const [, specifier] of source.matchAll(/\bfrom\s+'([^']+)'/g)) {
         imports += 1;
         const allowed =
-          specifier.startsWith('.') || specifier.startsWith('node:') || allowedPackages.includes(specifier);
+          specifier.startsWith('.') || specifier.startsWith('node:') || allowedPackages.includes(specifier)
+          || (name === 'attempt-rows-dynamo.ts' && specifier === '@aws-sdk/lib-dynamodb');
         expect(allowed, `A2-21: ${name} imports the package ${specifier}`).toBe(true);
       }
     }

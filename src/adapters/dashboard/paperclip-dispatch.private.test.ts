@@ -53,6 +53,7 @@ vi.mock('../../lib/state/kill-switches-repo.js', async (importActual) => {
 });
 
 import { buildApp, buildPrivateDispatchApp } from '../../server.js';
+import { createAttemptStore, type AttemptRow, type AttemptRows } from '../../lib/paperclip/attempt-store.js';
 import {
   __resetPaperclipLockForTest,
   enforceStartupLock,
@@ -124,24 +125,32 @@ describe('the PUBLIC app denies the dispatch route by absence', () => {
 });
 
 describe('the PRIVATE app serves the dispatch route and nothing else', () => {
-  const makeDeps = () => ({
-    secret: () => SECRET,
-    killSwitch: (async () => ({ active: false })) as never,
-    knownAgents: () => ['main'],
-    enabledAgents: async () => ['main'],
-    claim: vi.fn(async () => true),
-    work: vi.fn(async () => {}),
-  });
+  const makeDeps = () => {
+    const map = new Map<string, AttemptRow>();
+    const rows: AttemptRows = {
+      get: async (id) => { const row = map.get(id); return row && structuredClone(row); },
+      create: async (row) => { if (map.has(row.issueId)) return false; map.set(row.issueId, structuredClone(row)); return true; },
+      replace: async (id, version, row) => { if (map.get(id)?.version !== version) return false; map.set(id, structuredClone(row)); return true; },
+    };
+    return {
+      secret: () => SECRET,
+      knownAgents: () => ['main'], enabledAgents: async () => ['main'],
+      attempts: createAttemptStore({ rows, holderId: 'private-test', now: Date.now }),
+      work: vi.fn(async () => ({ disposition: 'done' as const, comment: 'done' })),
+      deliver: vi.fn(async () => {}), pollMs: 2,
+    };
+  };
 
-  it('a valid dispatch is accepted with 202 and the work is enqueued once', async () => {
+  it('a valid dispatch is held until delivered and answers 200', async () => {
     const deps = makeDeps();
     const res = await buildPrivateDispatchApp(deps).request(PATH, {
       method: 'POST',
       headers: asJson({ authorization: `Bearer ${SECRET}` }),
       body: dispatchBody,
     });
-    expect(res.status).toBe(202);
-    expect(await res.json()).toEqual({ ok: true, accepted: true, issueId: body.issueId });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, issueId: body.issueId });
+    expect(deps.deliver).toHaveBeenCalledTimes(1);
     expect(deps.work).toHaveBeenCalledTimes(1);
   });
 
@@ -153,7 +162,6 @@ describe('the PRIVATE app serves the dispatch route and nothing else', () => {
       body: dispatchBody,
     });
     expect(res.status).toBe(401);
-    expect(deps.claim).not.toHaveBeenCalled();
     expect(deps.work).not.toHaveBeenCalled();
   });
 
@@ -196,7 +204,6 @@ describe('the PRIVATE app serves the dispatch route and nothing else', () => {
     });
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'paperclip_locked', code: 'unknown:paperclip_unreachable' });
-    expect(deps.claim).not.toHaveBeenCalled();
     expect(deps.work).not.toHaveBeenCalled();
   });
 

@@ -413,6 +413,7 @@ export interface PaperclipUpdateIssueBody {
   title?: string;
   description?: string;
   status?: PaperclipIssueStatus;
+  comment?: string;
   /** A uuid, or `null` to unassign. */
   assigneeAgentId?: string | null;
   priority?: PriorityBand;
@@ -1056,6 +1057,7 @@ export interface PaperclipDispatchContext {
   netzarAgentId: string;
   issueId: string;
   runId: string;
+  retryOfRunId?: string;
   /** `${runId}#${issueId}`, the pair the duplicate claim is keyed on. */
   dedupeKey: string;
   /** Raw, unescaped. The prompt boundary escapes it; storage does not. */

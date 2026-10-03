@@ -103,6 +103,11 @@ const PATCH_ROUTE = `PATCH /api/issues/${ISSUE_ID}`;
 const COMMENT_ROUTE = `POST /api/issues/${ISSUE_ID}/comments`;
 
 describe('createPaperclipMissionEngine', () => {
+  it('completes with one patch carrying status and comment', async () => {
+    const routes = routed({ [PATCH_ROUTE]: () => issue() });
+    await engineOver(routes).completeMission(ISSUE_ID, 'finished', { actor: 'main', runId: 'run-live' });
+    expect(routes.calls).toEqual([{ method: 'PATCH', path: `/api/issues/${ISSUE_ID}`, body: { status: 'done', comment: 'finished' } }]);
+  });
   it('A2-19: the whole engine is built from a one-line fetch resolver - no network, no DI container, no mocking library', async () => {
     const routes = routed({ [AGENTS_ROUTE]: () => AGENTS, [ISSUES_ROUTE]: (n) => (n === 0 ? [issue()] : []) });
     const missions = await engineOver(routes).listMissions();

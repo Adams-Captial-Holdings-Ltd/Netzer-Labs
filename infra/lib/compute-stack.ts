@@ -30,11 +30,15 @@ import {
   PropagatedTagSource,
 } from 'aws-cdk-lib/aws-ecs';
 import { SubnetType, type IVpc, type SecurityGroup } from 'aws-cdk-lib/aws-ec2';
+import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import {
   ApplicationLoadBalancer,
   ApplicationProtocol,
   ApplicationTargetGroup,
+  NetworkLoadBalancer,
+  NetworkTargetGroup,
+  Protocol,
   TargetType,
   ListenerAction,
   ListenerCertificate,
@@ -82,6 +86,7 @@ export interface ComputeStackProps extends BaseStackProps {
   vpc: IVpc;
   albSecurityGroup: SecurityGroup;
   fargateSecurityGroup: SecurityGroup;
+  dispatchLoadBalancerSecurityGroup?: SecurityGroup;
   taskRole: IRole;
   secrets: SecretsOutputs;
   logsBucket: IBucket;
@@ -109,6 +114,7 @@ export class ComputeStack extends Stack implements ComputeOutputs {
   public readonly cluster: Cluster;
   public readonly service: FargateService;
   public readonly loadBalancer: ApplicationLoadBalancer;
+  public readonly dispatchLoadBalancerOrigin?: string;
   /**
    * HTTPS:443 listener, so another stack can attach a rule (Paperclip, ADR
    * 0010 Phase 2). Undefined when DOMAIN_NAME is unset: no cert, no listener.
@@ -1330,6 +1336,60 @@ exports.handler = async () => {
       healthCheckGracePeriod: Duration.seconds(90),
     });
     this.service.attachToApplicationTargetGroup(targetGroup);
+
+    if (paperclipProvisioned(props.tier)) {
+      if (!props.dispatchLoadBalancerSecurityGroup) {
+        throw new Error('ComputeStack requires the dispatch load balancer security group with Paperclip');
+      }
+      const dispatchLoadBalancer = new NetworkLoadBalancer(this, 'DispatchNlb', {
+        vpc: props.vpc,
+        internetFacing: false,
+        vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
+        crossZoneEnabled: true,
+        securityGroups: [props.dispatchLoadBalancerSecurityGroup],
+      });
+      const dispatchTargetGroup = new NetworkTargetGroup(this, 'DispatchTargetGroup', {
+        vpc: props.vpc,
+        port: DISPATCH_PORT,
+        protocol: Protocol.TCP,
+        targetType: TargetType.IP,
+        healthCheck: { protocol: Protocol.TCP, port: 'traffic-port' },
+        deregistrationDelay: Duration.seconds(300),
+      });
+      dispatchTargetGroup.addTarget(this.service.loadBalancerTarget({
+        containerName: 'orchestrator',
+        containerPort: DISPATCH_PORT,
+      }));
+      // Keep the NLB listener's default 350 s TCP idle timeout for the 240 s dispatch hold.
+      dispatchLoadBalancer.addListener('DispatchListener', {
+        port: DISPATCH_PORT,
+        protocol: Protocol.TCP,
+        defaultTargetGroups: [dispatchTargetGroup],
+      });
+      const dispatchInterface = new AwsCustomResource(this, 'DispatchNlbIpLookup', {
+        onUpdate: {
+          service: 'EC2',
+          action: 'describeNetworkInterfaces',
+          parameters: {
+            Filters: [{ Name: 'description', Values: [`ELB ${dispatchLoadBalancer.loadBalancerFullName}`] }],
+          },
+          physicalResourceId: PhysicalResourceId.of(dispatchLoadBalancer.loadBalancerFullName),
+          outputPaths: ['NetworkInterfaces.0.PrivateIpAddress'],
+        },
+        policy: AwsCustomResourcePolicy.fromSdkCalls({
+          resources: AwsCustomResourcePolicy.ANY_RESOURCE,
+        }),
+        installLatestAwsSdk: false,
+      });
+      // Stable for this load balancer's life; cross-zone lets one node reach all zones.
+      // If its zone fails, dispatch waits for the operator to re-point the accepted fixed IP.
+      const ip = dispatchInterface.getResponseField('NetworkInterfaces.0.PrivateIpAddress');
+      this.dispatchLoadBalancerOrigin = `http://${ip}:${DISPATCH_PORT}`;
+      new CfnOutput(this, 'DispatchLoadBalancerIp', {
+        value: ip,
+        description: 'Pass http://<ip>:3001/api/paperclip/dispatch as PAPERCLIP_DISPATCH_URL to the bootstrap script',
+      });
+    }
 
     // Auto-scaling: scale on CPU and RequestCountPerTarget
     const scaling = this.service.autoScaleTaskCount({
