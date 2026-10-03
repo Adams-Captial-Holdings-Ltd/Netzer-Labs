@@ -1,5 +1,5 @@
 /** Frozen acceptance tests for the `pack` CLI (Work Platform step 3, gate s3-proof). */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -54,5 +54,64 @@ describe('pack CLI', () => {
   it('S3-C12 is wired as `npm run pack`', () => {
     const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8'));
     expect(pkg.scripts.pack).toBe('tsx scripts/pack.ts');
+  });
+});
+
+describe('pack effect', () => {
+  const key = { caseKey: 'case-1', stage: 'intake', step: 'write', stageEntryNo: 2 };
+  const row = { kind: 'effect' as const, key, state: 'unknown' as const, payloadHash: 'secret-hash',
+    result: 'secret-result', issueId: 'issue-1', version: 1, createdAt: 0, updatedAt: 1_750_000_000_000 };
+  function fake() {
+    return { listUnknown: vi.fn(async () => [row]), resolve: vi.fn(async () => {}) };
+  }
+  async function runEffect(argv: string[], executor: ReturnType<typeof fake>) {
+    const lines: string[] = [];
+    const code = await runPackCli(argv, (line) => lines.push(line), { executor });
+    return { code, lines };
+  }
+
+  it('effect list prints IDs only and no result text', async () => {
+    const executor = fake();
+    const output = await runEffect(['effect', 'list'], executor);
+    expect(output.code).toBe(0);
+    expect(output.lines).toEqual([`case-1 intake write 2 ${new Date(row.updatedAt).toISOString()} issue-1`]);
+    expect(output.lines.join(' ')).not.toContain('secret');
+    executor.listUnknown.mockResolvedValueOnce([]);
+    expect((await runEffect(['effect', 'list'], executor)).lines).toEqual(['No unknown effects']);
+  });
+
+  it('effect resolve applied calls the executor with parsed key and user', async () => {
+    const executor = fake();
+    const output = await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '2', '--applied', '--by', 'user-1'], executor);
+    expect(output.code).toBe(0);
+    expect(output.lines).toHaveLength(1);
+    expect(executor.resolve).toHaveBeenCalledWith(key, 'applied', 'user-1');
+  });
+
+  it('effect resolve not applied passes the other outcome', async () => {
+    const executor = fake();
+    expect((await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '2', '--not-applied', '--by', 'user-1'], executor)).code).toBe(0);
+    expect(executor.resolve).toHaveBeenCalledWith(key, 'not_applied', 'user-1');
+  });
+
+  it('effect resolve executor error exits 1 without leaking its message', async () => {
+    const executor = fake();
+    executor.resolve.mockRejectedValueOnce(Object.assign(new Error('private details'), { name: 'EffectUnknownError' }));
+    expect(await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '2', '--applied', '--by', 'user-1'], executor))
+      .toEqual({ code: 1, lines: ['EffectUnknownError'] });
+  });
+
+  it('effect resolve bad arguments exit 2 and never call resolve', async () => {
+    const executor = fake();
+    const args = ['effect', 'resolve', 'case-1', 'intake', 'write', '2'];
+    for (const suffix of [[], ['--applied'], ['--applied', '--not-applied', '--by', 'user-1'],
+      ['--applied', '--by'], ['--applied', '--by', 'user-1', 'extra']]) {
+      const output = await runEffect([...args, ...suffix], executor);
+      expect(output.code).toBe(2);
+      expect(output.lines).toHaveLength(1);
+      expect(output.lines[0]).toMatch(/^Usage:/);
+    }
+    expect((await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '0', '--applied', '--by', 'user-1'], executor)).code).toBe(2);
+    expect(executor.resolve).not.toHaveBeenCalled();
   });
 });

@@ -61,12 +61,13 @@ type CreateSubtaskSpy = (
   opts?: Record<string, unknown>,
 ) => Promise<ProjectedMission>;
 const createSubtask = vi.fn<CreateSubtaskSpy>(() => Promise.resolve(projected(SIBLING_ID)));
+const listMissions = vi.fn((rows: ProjectedMission[]) => Promise.resolve(rows));
 function injectEngine(
   rows: ProjectedMission[],
   comment = vi.fn<CommentSpy>(() => Promise.resolve()),
 ) {
   __setMissionEngineForTest({
-    listMissions: vi.fn(() => Promise.resolve(rows)),
+    listMissions: vi.fn(() => listMissions(rows)),
     getMission: vi.fn(),
     createMission: vi.fn(),
     createSubtask,
@@ -117,7 +118,7 @@ describe('paperclip_add_comment refuses at invoke', () => {
     const out = await tools.invoke(
       'paperclip_add_comment',
       { mission_id: 'abc12345', body: 'progress' },
-      ctx,
+      { ...ctx, runId: RUN_ID },
     );
     expect(out.isError).toBe(true);
     expect(out.text).toContain('not the active mission substrate');
@@ -140,7 +141,7 @@ describe('paperclip_add_comment refuses at invoke', () => {
     const out = await tools.invoke(
       'paperclip_add_comment',
       { mission_id: MISSION_ID, body: 'progress' },
-      ctx,
+      { ...ctx, runId: RUN_ID },
     );
     expect(out.isError).toBe(true);
     expect(out.text).toContain('paperclip_disabled');
@@ -150,7 +151,7 @@ describe('paperclip_add_comment refuses at invoke', () => {
   it('explains a closed runtime lock without calling it the kill switch', async () => {
     const comment = vi.fn(() => { throw new PaperclipLockClosedError({ message: 'closed' }, 'unknown:auditor'); });
     injectEngine([projected(MISSION_ID)], comment);
-    const out = await tools.invoke('paperclip_add_comment', { mission_id: MISSION_ID, body: 'progress' }, ctx);
+    const out = await tools.invoke('paperclip_add_comment', { mission_id: MISSION_ID, body: 'progress' }, { ...ctx, runId: RUN_ID });
     expect(out.text).toContain('runtime lock is closed');
     expect(out.text).toContain('unknown:auditor');
     expect(out.text).not.toContain('kill switch: paperclip_disabled');
@@ -161,7 +162,7 @@ describe('paperclip_add_comment refuses at invoke', () => {
     const out = await tools.invoke(
       'paperclip_add_comment',
       { mission_id: 'abc12345', body: 'progress' },
-      ctx,
+      { ...ctx, runId: RUN_ID },
     );
     expect(out.isError).toBe(true);
     expect(out.text).toContain('pass one of these full ids');
@@ -177,7 +178,7 @@ describe('paperclip_add_comment refuses at invoke', () => {
     const out = await tools.invoke(
       'paperclip_add_comment',
       { mission_id: 'deadbeef', body: 'progress' },
-      ctx,
+      { ...ctx, runId: RUN_ID },
     );
     expect(out.isError).toBe(true);
     expect(out.text).toContain('No mission matches');
@@ -185,24 +186,24 @@ describe('paperclip_add_comment refuses at invoke', () => {
   });
 });
 
-describe('run provenance', () => {
-  it('never sends a runId — a chat turn holds none and one is never synthesized', async () => {
-    // acquireRunId's contract: the only legitimate source of a run id is
-    // inbound dispatch. This ordinary chat context carries no run id, so an
-    // `opts` that grew one here would be a synthesized run id on the wire.
+describe('paperclip_add_comment run provenance', () => {
+  it('refuses outside a Paperclip run before any Paperclip call', async () => {
     const comment = injectEngine([projected(MISSION_ID)]);
     const out = await tools.invoke(
       'paperclip_add_comment',
       { mission_id: 'abc12345', body: 'watermark overlap landed' },
       ctx,
     );
-    expect(out.isError).toBeUndefined();
-    expect(comment).toHaveBeenCalledWith(MISSION_ID, 'watermark overlap landed', {
-      actor: 'research',
-    });
-    const opts = comment.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(Object.keys(opts)).toEqual(['actor']);
-    expect(opts).not.toHaveProperty('runId');
+    expect(out).toEqual({ text: 'This action needs a Paperclip run. Use the work screens to comment or create tasks.', isError: true });
+    expect(comment).not.toHaveBeenCalled();
+    expect(createSubtask).not.toHaveBeenCalled();
+    expect(listMissions).not.toHaveBeenCalled();
+  });
+
+  it('forwards only the genuine run id on a comment', async () => {
+    const comment = injectEngine([projected(MISSION_ID)]);
+    await tools.invoke('paperclip_add_comment', { mission_id: MISSION_ID, body: 'progress' }, { ...ctx, runId: RUN_ID });
+    expect(comment).toHaveBeenCalledWith(MISSION_ID, 'progress', { actor: 'research', runId: RUN_ID });
   });
 
   it('ships no verb that would 401 without a run id', async () => {
@@ -222,6 +223,15 @@ describe('run provenance', () => {
 });
 
 describe('paperclip_create_subtask', () => {
+  it('refuses outside a Paperclip run before any Paperclip call', async () => {
+    const comment = injectEngine([projected(MISSION_ID)]);
+    const out = await tools.invoke('paperclip_create_subtask',
+      { mission_id: MISSION_ID, title: 'Child', body: 'Do it.', owner: 'analyst' }, ctx);
+    expect(out).toEqual({ text: 'This action needs a Paperclip run. Use the work screens to comment or create tasks.', isError: true });
+    expect(comment).not.toHaveBeenCalled();
+    expect(createSubtask).not.toHaveBeenCalled();
+    expect(listMissions).not.toHaveBeenCalled();
+  });
   it('creates one assigned child through the engine and forwards a genuine dispatch run id', async () => {
     injectEngine([projected(MISSION_ID)]);
     const out = await tools.invoke(
@@ -259,7 +269,7 @@ describe('paperclip_create_subtask', () => {
     const out = await tools.invoke(
       'paperclip_create_subtask',
       { mission_id: MISSION_ID, title: 'Loop', body: 'Do not recurse.', owner: 'analyst' },
-      { ...ctx, delegationDepth: 1 },
+      { ...ctx, delegationDepth: 1, runId: RUN_ID },
     );
     expect(out.isError).toBe(true);
     expect(out.text).toContain('Delegation depth limit reached');
@@ -269,12 +279,12 @@ describe('paperclip_create_subtask', () => {
 });
 
 describe('successful Paperclip mutations are audited exactly once', () => {
-  it('records comment actor, action, issue, chat, and run-less provenance', async () => {
+  it('records comment actor, action, issue, chat, and run provenance', async () => {
     injectEngine([projected(MISSION_ID)]);
     await tools.invoke(
       'paperclip_add_comment',
       { mission_id: MISSION_ID, body: 'progress' },
-      { ...ctx, surface: 'slack' },
+      { ...ctx, surface: 'slack', runId: RUN_ID },
     );
     expect(writeAudit).toHaveBeenCalledTimes(1);
     expect(writeAudit).toHaveBeenCalledWith({
@@ -283,7 +293,7 @@ describe('successful Paperclip mutations are audited exactly once', () => {
       chatId: 'owner:emmanuel',
       surface: 'slack',
       toolName: 'paperclip_add_comment',
-      detail: { action: 'add_comment', issueId: MISSION_ID, runId: null },
+      detail: { action: 'add_comment', issueId: MISSION_ID, runId: RUN_ID },
       result: 'ok',
     });
   });
@@ -323,7 +333,7 @@ describe('ToolResult.text', () => {
     const out = await tools.invoke(
       'paperclip_add_comment',
       { mission_id: 'abc12345', body: 'progress' },
-      ctx,
+      { ...ctx, runId: RUN_ID },
     );
     expect(out.text).toBe('Comment posted on mission abc12345.');
     expect(out.text).not.toMatch(/https?:\/\//);

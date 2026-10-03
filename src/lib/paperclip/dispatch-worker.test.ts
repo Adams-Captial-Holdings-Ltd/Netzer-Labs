@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { TEST_ISSUE_ID } from './test-helpers.js';
 import type { ProjectedMission } from './mission-projection.js';
 import type { PaperclipDispatchContext } from './types.js';
+import { EffectUnknownError, EffectConflictError, EffectRetryableError } from '../work/executor.js';
 import {
   DISPATCH_CONTEXT_MAX_CHARS,
   DISPATCH_CONTEXT_MAX_ENTRIES,
@@ -175,6 +176,8 @@ describe('parseDispatchBody (pure; the route turns null into a 400)', () => {
     expect(parsed?.context).toEqual({ issueId: OTHER_ISSUE_ID, wakeReason: 'assignment' });
   });
 });
+
+
 
 describe('the measured Paperclip push, pinned as a fixture', () => {
   // A CHARACTERIZATION of the vendor's wire shape, in the spirit of
@@ -405,4 +408,20 @@ describe('source guards on the dispatch path', () => {
       /deps\.runTurn \?\? runAgentTurn/,
     );
   });
+});
+
+describe('executor errors on the dispatch path', () => {
+  for (const [error, code, status, retryable] of [
+    [new EffectUnknownError(), 'effect_unknown', 409, false],
+    [new EffectConflictError(), 'effect_conflict', 409, false],
+    [new EffectRetryableError(), 'effect_retry', 503, true],
+  ] as const) {
+    it(`maps ${code} from a failed turn`, async () => {
+      await expect(runDispatchAttempt(ctx(), {
+        engine: { getMission: async () => mission() } as never,
+        getSessionFn: async () => null,
+        runTurn: (async () => { throw error; }) as never,
+      })).rejects.toMatchObject({ code, status, retryable });
+    });
+  }
 });

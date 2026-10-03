@@ -51,6 +51,7 @@ import { neutralizeForPrompt, type ProjectedMission } from './mission-projection
 import { createPaperclipMissionEngine } from './paperclip-mission-engine.js';
 import type { AttemptOutcome } from './attempt-store.js';
 import type { PaperclipDispatchBody, PaperclipDispatchContext } from './types.js';
+import { EffectUnknownError, EffectConflictError, EffectRetryableError } from '../work/executor.js';
 
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_RETRY_OF_RUN_ID_LENGTH = 200;
@@ -246,6 +247,9 @@ function workFailure(err: unknown): DispatchFailure {
     if (inputTypes.has(err.type)) return new DispatchFailure('agent_failed', 500, false);
   }
   const name = (err as { name?: string })?.name;
+  if (name === EffectUnknownError.name) return new DispatchFailure('effect_unknown', 409, false);
+  if (name === EffectConflictError.name) return new DispatchFailure('effect_conflict', 409, false);
+  if (name === EffectRetryableError.name) return new DispatchFailure('effect_retry', 503, true);
   if (name === 'CostCapExceededError') return new DispatchFailure('cost_cap', 402, true);
   if (name === 'KillSwitchActiveError' || classifyTurnError(err).code === 'model_error') {
     return new DispatchFailure('model_access', 503, true);
