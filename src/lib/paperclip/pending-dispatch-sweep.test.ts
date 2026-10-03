@@ -93,9 +93,10 @@ describe('pending dispatch sweep', () => {
     expect(f.data.get('issue-1')?.state).toBe('recorded');
   });
 
-  it('logs one stale error with count and age, without comment text', async () => {
+  it('logs one stale error with count and age for an outcome still undelivered, without comment text', async () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => logger);
     const f = fixture({ updatedAt: NOW - 901_000 });
+    f.deliver.mockRejectedValue(new DispatchFailure('delivery_failed', 502, true)); // still undelivered after the pass
     await runPendingDispatchSweep(f.deps);
     expect(error).toHaveBeenCalledTimes(1);
     expect(error.mock.calls[0][0]).toEqual({ count: 1, oldestAgeMs: 901_000 });

@@ -27,42 +27,53 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
   let expired = 0;
   let stale = 0;
   let oldestAgeMs = 0;
-  try {
-    if ((deps.lockState ?? getPaperclipLockState)().closed) return;
-    if (!await (deps.lease ?? (() => tryAcquireRunnerLease({ name: 'paperclip-pending-dispatch', ttlMs: 10 * 60_000 })))()) return;
-    const rows = await (deps.scan ?? scanPendingAttempts)();
-    for (const row of rows) {
+  async function processRow(row: AttemptRow): Promise<void> {
+    let age = 0;
+    let undelivered = row.state === 'recorded';
+    try {
+      if (row.state === 'recorded') age = now() - row.updatedAt;
       if (row.state === 'delivering') {
         if (row.leaseExpiresAt <= now() && await attempts.failExpiredDelivery(row.issueId)) expired++;
-        continue;
+        return;
       }
-      if (row.state !== 'recorded') continue;
-      const age = now() - row.updatedAt;
-      if (age >= 15 * 60_000) { stale++; oldestAgeMs = Math.max(oldestAgeMs, age); }
-      if (!row.agentId || row.runIds.length === 0) { skipped++; continue; }
-      if (age < 60_000) continue;
+      if (row.state !== 'recorded') return;
+      if (!row.agentId || row.runIds.length === 0) { skipped++; return; }
+      if (age < 60_000) return;
       const claim = await attempts.claimDelivery(row.issueId);
-      if (!claim) continue;
+      if (!claim) return;
       try {
         await deliver({ netzarAgentId: row.agentId, issueId: row.issueId, runId: claim.runId,
           dedupeKey: `${claim.runId}#${row.issueId}`, context: {} }, claim.outcome);
       } catch (error) {
-        if (error instanceof FencedOutError) continue;
+        if (error instanceof FencedOutError) return;
         if (error instanceof DispatchFailure && error.retryable) await attempts.releaseDelivery(claim.handle);
         else {
           const failure = error instanceof DispatchFailure ? error : new DispatchFailure('delivery_unknown', 500, false);
           await attempts.fail(claim.handle, { code: failure.code, status: failure.status, retryable: false });
+          undelivered = false;
         }
-        continue;
+        return;
       }
       if (claim.outcome.disposition === 'blocked') {
         await attempts.fail(claim.handle, { code: 'agent_blocked', status: 409, retryable: false });
+        undelivered = false;
         blocked++;
       } else {
         await attempts.markDelivered(claim.handle);
+        undelivered = false;
         delivered++;
       }
+    } catch (error) {
+      if (!(error instanceof FencedOutError)) logger.warn({ reason: 'pending_dispatch_row_failed' }, 'paperclip pending_dispatch row failed');
+    } finally {
+      if (undelivered && age >= 15 * 60_000) { stale++; oldestAgeMs = Math.max(oldestAgeMs, age); }
     }
+  }
+  try {
+    if ((deps.lockState ?? getPaperclipLockState)().closed) return;
+    if (!await (deps.lease ?? (() => tryAcquireRunnerLease({ name: 'paperclip-pending-dispatch', ttlMs: 10 * 60_000 })))()) return;
+    const rows = await (deps.scan ?? scanPendingAttempts)();
+    for (const row of rows) await processRow(row);
     if (stale) logger.error({ count: stale, oldestAgeMs }, 'paperclip pending_dispatch outcomes are not delivered');
     else if (delivered || blocked) logger.info({ delivered, blocked, skipped, expired }, 'paperclip pending_dispatch sweep completed');
   } catch (error) {
