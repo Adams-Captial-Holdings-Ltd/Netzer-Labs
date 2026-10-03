@@ -1,7 +1,7 @@
-/** Paperclip's held dispatch. The turn returns an outcome; a separate writer delivers it before a 2xx reply.
- * The measured push shape and run-id rules below remain the parser's contract.
- */
 /**
+ * Paperclip's held dispatch. The turn returns an outcome; a separate writer delivers it before a 2xx reply.
+ * The measured push shape and run-id rules below remain the parser's contract.
+ *
  * THE PUSH SHAPE IS NOW MEASURED, and this paragraph replaces the UNVERIFIED
  * one that guessed it. On 2026-09-06, against staging dd16ca4 running Paperclip
  * v2026.722.0, EVERY push to `POST /api/paperclip/dispatch` was answered 400
@@ -17,7 +17,7 @@
  * `scripts/lib/paperclip/bootstrap-core.ts:661-667` writes each agent's
  * `adapter_config` as `{ url, method: 'POST', headers: { authorization:
  * 'Bearer <secret>' }, payloadTemplate: { netzarAgentId: <slug> }, timeoutMs:
- * 10_000 }` — and `context` is the run's contextSnapshot, onto which
+ * 270_000 }` — and `context` is the run's contextSnapshot, onto which
  * `heartbeat.ts:7045` at v2026.916.1 writes `contextSnapshot.issueId = issueIdFromPayload`
  * alongside wakeReason, taskId, taskKey, wakeSource and wakeTriggerDetail. So
  * the wire JSON is
@@ -51,6 +51,9 @@ import { neutralizeForPrompt, type ProjectedMission } from './mission-projection
 import { createPaperclipMissionEngine } from './paperclip-mission-engine.js';
 import type { AttemptOutcome } from './attempt-store.js';
 import type { PaperclipDispatchBody, PaperclipDispatchContext } from './types.js';
+
+const MAX_IDENTIFIER_LENGTH = 128;
+const MAX_RETRY_OF_RUN_ID_LENGTH = 200;
 
 /**
  * One session per issue, namespaced so a dispatched thread can never collide
@@ -140,9 +143,9 @@ export function parseDispatchBody(raw: unknown): PaperclipDispatchContext | null
   const rawContext = contextObject(body.context);
   const issueId = nonEmptyString(body.issueId) ?? nonEmptyString(rawContext?.issueId);
   const runId = nonEmptyString(body.runId);
-  if (netzarAgentId === undefined || netzarAgentId.length > 128) return null;
-  if (issueId === undefined || issueId.length > 128) return null;
-  if (runId === undefined || runId.length > 128) return null;
+  if (netzarAgentId === undefined || netzarAgentId.length > MAX_IDENTIFIER_LENGTH) return null;
+  if (issueId === undefined || issueId.length > MAX_IDENTIFIER_LENGTH) return null;
+  if (runId === undefined || runId.length > MAX_IDENTIFIER_LENGTH) return null;
   // The string-only copy is VERBATIM. An `issueId` promoted out of `context`
   // above is NOT written back in, and one that was already there is not
   // removed: the interpolated block shows what the caller actually sent.
@@ -162,7 +165,7 @@ export function parseDispatchBody(raw: unknown): PaperclipDispatchContext | null
     runId,
     dedupeKey: dispatchDedupeKey(runId, issueId),
     context,
-    retryOfRunId: (() => { const value = nonEmptyString(rawContext?.retryOfRunId); return value && value.length <= 200 ? value : undefined; })(),
+    retryOfRunId: (() => { const value = nonEmptyString(rawContext?.retryOfRunId); return value && value.length <= MAX_RETRY_OF_RUN_ID_LENGTH ? value : undefined; })(),
   };
 }
 

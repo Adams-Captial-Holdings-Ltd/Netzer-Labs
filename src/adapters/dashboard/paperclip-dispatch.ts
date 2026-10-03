@@ -18,6 +18,11 @@ import type { PaperclipDispatchContext } from '../../lib/paperclip/types.js';
 
 export const ATTEMPT_HOLD_MS = 240_000;
 export const ATTEMPT_RENEW_MS = 10_000;
+const BODY_LIMIT_BYTES = 64 * 1024;
+const DEFAULT_POLL_INTERVAL_MS = 2_000;
+const RENEW_GRACE_MS = 25_000;
+const STORE_RETRY_PAUSE_MS = 200;
+const STORE_RETRY_TRIES = 3;
 
 /**
  * Timing-safe, length-guarded, and a named function rather than an inline
@@ -43,7 +48,7 @@ export function verifyDispatchSecret(
 }
 
 async function boundedJson(request: Request): Promise<{ tooLarge: boolean; value: unknown }> {
-  const limit = 64 * 1024;
+  const limit = BODY_LIMIT_BYTES;
   if (Number(request.headers.get('content-length')) > limit) return { tooLarge: true, value: null };
   const reader = request.body?.getReader();
   if (!reader) return { tooLarge: false, value: null };
@@ -90,10 +95,10 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
   let cachedAttempts = deps.attempts;
   const attempts = () => cachedAttempts ??= createAttemptStore({ rows: dynamoAttemptRows(), holderId: RUNNER_HOLDER_ID, now: Date.now });
   const holdMs = deps.holdMs ?? ATTEMPT_HOLD_MS;
-  const pollMs = deps.pollMs ?? 2_000;
+  const pollMs = deps.pollMs ?? DEFAULT_POLL_INTERVAL_MS;
   const renewMs = deps.renewMs ?? ATTEMPT_RENEW_MS;
-  const renewGraceMs = deps.renewGraceMs ?? 25_000;
-  const storeRetryMs = deps.storeRetryMs ?? 200;
+  const renewGraceMs = deps.renewGraceMs ?? RENEW_GRACE_MS;
+  const storeRetryMs = deps.storeRetryMs ?? STORE_RETRY_PAUSE_MS;
   const protection = deps.protection ?? taskProtection;
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   const errName = (err: unknown) => err instanceof Error ? err.name : 'unknown';
@@ -108,7 +113,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
     for (let attempt = 1; ; attempt++) {
       try { return await write(); }
       catch (err) {
-        if (err instanceof FencedOutError || attempt >= 3) throw err;
+        if (err instanceof FencedOutError || attempt >= STORE_RETRY_TRIES) throw err;
         await sleep(storeRetryMs);
       }
     }
@@ -199,9 +204,15 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
   router.post('/dispatch', async (c) => {
     // Authentication always runs before lock and drain checks, so callers cannot learn their state.
     const expected = readSecret();
-    if (!expected) { logger.warn({ reason: 'no_secret' }, 'paperclip dispatch secret is not configured'); return c.json({ error: 'unauthorized', reason: 'no_secret' }, 401); }
+    if (!expected) {
+      logger.warn({ reason: 'no_secret' }, 'paperclip dispatch secret is not configured');
+      return c.json({ error: 'unauthorized', reason: 'no_secret' }, 401);
+    }
     const provided = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
-    if (!verifyDispatchSecret(provided, expected)) { logger.warn({ reason: 'bad_secret' }, 'paperclip dispatch secret mismatch'); return c.json({ error: 'unauthorized' }, 401); }
+    if (!verifyDispatchSecret(provided, expected)) {
+      logger.warn({ reason: 'bad_secret' }, 'paperclip dispatch secret mismatch');
+      return c.json({ error: 'unauthorized' }, 401);
+    }
     const lock = getPaperclipLockState();
     if (lock.closed) return c.json({ error: 'paperclip_locked', code: lock.code }, 503);
     if (isDispatchDraining()) return c.json({ error: 'draining' }, 503);
@@ -210,7 +221,10 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
     const raw = body.value;
     if (raw === null) return c.json({ error: 'invalid_json' }, 400);
     const parsedCtx = parseDispatchBody(raw);
-    if (!parsedCtx) { logger.warn({ reason: 'invalid_body' }, 'paperclip dispatch body rejected'); return c.json({ error: 'invalid_body', required: ['netzarAgentId', 'runId', 'issueId (top-level or context.issueId)'] }, 400); }
+    if (!parsedCtx) {
+      logger.warn({ reason: 'invalid_body' }, 'paperclip dispatch body rejected');
+      return c.json({ error: 'invalid_body', required: ['netzarAgentId', 'runId', 'issueId (top-level or context.issueId)'] }, 400);
+    }
     const ctx: PaperclipDispatchContext = parsedCtx;
     let attemptNo = 0;
     let attached = false;
@@ -276,7 +290,10 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
       }
     }
     try {
-      if (!knownAgents().includes(ctx.netzarAgentId)) { logger.warn({ agentId: ctx.netzarAgentId }, 'paperclip dispatch for an unknown agent'); return c.json({ error: 'unknown_agent', netzarAgentId: ctx.netzarAgentId }, 404); }
+      if (!knownAgents().includes(ctx.netzarAgentId)) {
+        logger.warn({ agentId: ctx.netzarAgentId }, 'paperclip dispatch for an unknown agent');
+        return c.json({ error: 'unknown_agent', netzarAgentId: ctx.netzarAgentId }, 404);
+      }
       if (!(await enabledAgents()).includes(ctx.netzarAgentId)) return c.json({ error: 'agent_not_enabled' }, 409);
       const answer = actOnBegin(await attempts().begin(dispatch));
       return answer ?? await pollLoop();

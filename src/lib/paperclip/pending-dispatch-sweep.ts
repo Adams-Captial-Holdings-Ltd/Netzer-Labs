@@ -5,6 +5,11 @@ import { dynamoAttemptRows, scanPendingAttempts } from './attempt-rows-dynamo.js
 import { DispatchFailure, deliverOutcome } from './dispatch-worker.js';
 import { getPaperclipLockState } from './runtime-lock.js';
 
+const MINIMUM_DISPATCH_AGE_MS = 60_000;
+const DISPATCH_ALARM_AGE_MS = 15 * 60_000;
+const RUNNER_LEASE_TTL_MS = 10 * 60_000;
+const SWEEP_INTERVAL_MS = 5 * 60_000;
+
 type Attempts = ReturnType<typeof createAttemptStore>;
 type Deliver = typeof deliverOutcome;
 export interface PendingDispatchSweepDeps {
@@ -42,7 +47,7 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
       }
       if (row.state !== 'recorded') return;
       if (!row.agentId || row.runIds.length === 0) { skipped++; return; }
-      if (age < 60_000) return;
+      if (age < MINIMUM_DISPATCH_AGE_MS) return;
       const claim = await attempts.claimDelivery(row.issueId);
       if (!claim) return;
       try {
@@ -71,12 +76,12 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
       if (!(error instanceof FencedOutError)) logger.warn({ issueId: row.issueId,
         errName: error instanceof Error ? error.name : 'unknown', reason: 'pending_dispatch_row_failed' }, 'paperclip pending_dispatch row failed');
     } finally {
-      if (undelivered && alarmAge >= 15 * 60_000) { stale++; oldestAgeMs = Math.max(oldestAgeMs, alarmAge); }
+      if (undelivered && alarmAge >= DISPATCH_ALARM_AGE_MS) { stale++; oldestAgeMs = Math.max(oldestAgeMs, alarmAge); }
     }
   }
   try {
     if ((deps.lockState ?? getPaperclipLockState)().closed) return;
-    if (!await (deps.lease ?? (() => tryAcquireRunnerLease({ name: 'paperclip-pending-dispatch', ttlMs: 10 * 60_000 })))()) return;
+    if (!await (deps.lease ?? (() => tryAcquireRunnerLease({ name: 'paperclip-pending-dispatch', ttlMs: RUNNER_LEASE_TTL_MS })))()) return;
     const rows = await (deps.scan ?? scanPendingAttempts)();
     for (const row of rows) await processRow(row);
     if (stale) logger.error({ count: stale, oldestAgeMs }, 'paperclip pending_dispatch outcomes are not delivered');
@@ -95,7 +100,7 @@ export function startPendingDispatchSweep(): void {
     if (running) return;
     running = true;
     void runPendingDispatchSweep().finally(() => { running = false; });
-  }, 5 * 60_000);
+  }, SWEEP_INTERVAL_MS);
   timer.unref();
 }
 
