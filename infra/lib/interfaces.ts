@@ -116,6 +116,7 @@ export interface DynamoOutputs {
   interAgentTasksTable: ITable;
   compactionEventsTable: ITable;
   queueLeaseTable: ITable;
+  effectLedgerTable: ITable;
   /** C4: cross-surface identity mapping. */
   identitiesTable: ITable;
   /** Per-operator dashboard tokens (read at auth time, root-token seed write). */
