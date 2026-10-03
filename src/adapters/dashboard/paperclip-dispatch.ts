@@ -79,7 +79,10 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
     const timer = setInterval(() => {
       if (busy) return;
       busy = true;
-      void attempts().renew(handle).catch((err: unknown) => { renewalError = err; }).finally(() => { busy = false; });
+      void attempts().renew(handle).catch((err: unknown) => {
+        if (err instanceof FencedOutError) renewalError = err;
+        else logger.warn({ issueId: handle.issueId, attemptNo: handle.attemptNo, reason: 'renew_failed' }, 'paperclip dispatch lease renewal failed');
+      }).finally(() => { busy = false; });
     }, renewMs);
     try {
       const result = await fn();
@@ -133,21 +136,23 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
   }
 
   router.post('/dispatch', async (c) => {
+    // Authentication always runs before lock and drain checks, so callers cannot learn their state.
     const expected = readSecret();
-    if (!expected) return c.json({ error: 'unauthorized', reason: 'no_secret' }, 401);
+    if (!expected) { logger.warn({ reason: 'no_secret' }, 'paperclip dispatch secret is not configured'); return c.json({ error: 'unauthorized', reason: 'no_secret' }, 401); }
     const provided = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
-    if (!verifyDispatchSecret(provided, expected)) return c.json({ error: 'unauthorized' }, 401);
+    if (!verifyDispatchSecret(provided, expected)) { logger.warn({ reason: 'bad_secret' }, 'paperclip dispatch secret mismatch'); return c.json({ error: 'unauthorized' }, 401); }
     const lock = getPaperclipLockState();
     if (lock.closed) return c.json({ error: 'paperclip_locked', code: lock.code }, 503);
     if (isDispatchDraining()) return c.json({ error: 'draining' }, 503);
     const raw = await c.req.json<unknown>().catch(() => null);
     if (raw === null) return c.json({ error: 'invalid_json' }, 400);
     const ctx = parseDispatchBody(raw);
-    if (!ctx) return c.json({ error: 'invalid_body', required: ['netzarAgentId', 'runId', 'issueId (top-level or context.issueId)'] }, 400);
-    if (!knownAgents().includes(ctx.netzarAgentId)) return c.json({ error: 'unknown_agent', netzarAgentId: ctx.netzarAgentId }, 404);
+    if (!ctx) { logger.warn({ reason: 'invalid_body' }, 'paperclip dispatch body rejected'); return c.json({ error: 'invalid_body', required: ['netzarAgentId', 'runId', 'issueId (top-level or context.issueId)'] }, 400); }
+    if (!knownAgents().includes(ctx.netzarAgentId)) { logger.warn({ agentId: ctx.netzarAgentId }, 'paperclip dispatch for an unknown agent'); return c.json({ error: 'unknown_agent', netzarAgentId: ctx.netzarAgentId }, 404); }
     if (!(await enabledAgents()).includes(ctx.netzarAgentId)) return c.json({ error: 'agent_not_enabled' }, 409);
 
     try {
+      // This route uses Paperclip's run id and never mints one.
       const begun = await attempts().begin({ issueId: ctx.issueId, runId: ctx.runId, retryOfRunId: ctx.retryOfRunId });
       const attemptNo = begun.row.attemptNo;
       if (begun.action === 'busy') return c.json({ error: 'attempt_in_progress' }, 409);
@@ -156,12 +161,14 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
       if (begun.action === 'unknown') return c.json({ error: 'delivery_unknown', attemptNo }, 500);
       let taskError: unknown;
       let settled = begun.action === 'attach';
+      let wake: () => void;
+      const taskDone = new Promise<void>((resolve) => { wake = resolve; });
       if (begun.action === 'start') {
         log(ctx, attemptNo, 'started');
-        launch(ctx, begun.handle, (err) => { taskError = err; }, () => { settled = true; });
+        launch(ctx, begun.handle, (err) => { taskError = err; }, () => { settled = true; wake(); });
       } else if (begun.action === 'deliver') {
         void deliverClaim(ctx, begun.handle, begun.outcome, ctx.runId)
-          .catch((err) => { taskError = err; }).finally(() => { settled = true; });
+          .catch((err) => { taskError = err; }).finally(() => { settled = true; wake(); });
       } else log(ctx, attemptNo, 'attached');
       const attached = begun.action === 'attach';
       const end = Date.now() + holdMs;
@@ -179,7 +186,8 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
           recordedSeen = true;
         } else recordedSeen = false;
         if (Date.now() >= end) return c.json({ error: 'attempt_timeout', attemptNo }, 504);
-        await sleep(Math.min(pollMs, Math.max(1, end - Date.now())));
+        const pause = sleep(Math.min(pollMs, Math.max(1, end - Date.now())));
+        await (attached ? pause : Promise.race([pause, taskDone]));
       }
     } catch (err) {
       if (err instanceof FencedOutError) return c.json({ error: 'lease_lost' }, 409);
