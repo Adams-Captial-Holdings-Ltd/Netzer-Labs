@@ -243,7 +243,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
       if (begun.action === 'busy') return c.json({ error: 'attempt_in_progress' }, 409);
       if (begun.action === 'replay') { log(ctx, attemptNo, 'replayed'); return c.json({ ok: true, issueId: ctx.issueId, attemptNo, replayed: true }, 200); }
       if (begun.action === 'replay_failure') return c.json({ error: begun.failure.code, attemptNo }, storedStatus(begun.failure.status));
-      if (begun.action === 'unknown') return c.json({ error: 'delivery_unknown', attemptNo }, 500);
+      if (begun.action === 'unknown') { log(ctx, attemptNo, 'failed', 'delivery_unknown'); return c.json({ error: 'delivery_unknown', attemptNo }, 500); }
       attached = begun.action === 'attach';
       settled = attached;
       taskError = undefined;

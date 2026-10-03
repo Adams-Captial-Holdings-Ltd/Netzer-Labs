@@ -9,6 +9,8 @@ const MINIMUM_DISPATCH_AGE_MS = 60_000;
 const DISPATCH_ALARM_AGE_MS = 15 * 60_000;
 const RUNNER_LEASE_TTL_MS = 10 * 60_000;
 const SWEEP_INTERVAL_MS = 5 * 60_000;
+const STORE_RETRY_PAUSE_MS = 200;
+const STORE_RETRY_TRIES = 3;
 
 type Attempts = ReturnType<typeof createAttemptStore>;
 type Deliver = typeof deliverOutcome;
@@ -19,6 +21,7 @@ export interface PendingDispatchSweepDeps {
   now?: () => number;
   lockState?: typeof getPaperclipLockState;
   lease?: () => Promise<boolean>;
+  storeRetryMs?: number;
 }
 
 /** Retry only recorded outcomes. An expired in-flight write is ambiguous and fails closed. */
@@ -26,6 +29,7 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
   const now = deps.now ?? Date.now;
   const attempts = deps.attempts ?? createAttemptStore({ rows: dynamoAttemptRows(), holderId: RUNNER_HOLDER_ID, now });
   const deliver = deps.deliver ?? deliverOutcome;
+  const storeRetryMs = deps.storeRetryMs ?? STORE_RETRY_PAUSE_MS;
   let delivered = 0;
   let blocked = 0;
   let skipped = 0;
@@ -42,7 +46,10 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
         alarmAge = now() - (row.recordedAt ?? row.updatedAt);
       }
       if (row.state === 'delivering') {
-        if (row.leaseExpiresAt <= now() && await attempts.failExpiredDelivery(row.issueId)) expired++;
+        if (row.leaseExpiresAt <= now() && await attempts.failExpiredDelivery(row.issueId)) {
+          expired++;
+          logger.error({ issueId: row.issueId, attemptNo: row.attemptNo, code: 'delivery_unknown' }, 'paperclip pending_dispatch delivery ended unknown');
+        }
         return;
       }
       if (row.state !== 'recorded') return;
@@ -55,7 +62,15 @@ export async function runPendingDispatchSweep(deps: PendingDispatchSweepDeps = {
           dedupeKey: `${claim.runId}#${row.issueId}`, context: {} }, claim.outcome);
       } catch (error) {
         if (error instanceof FencedOutError) return;
-        if (error instanceof DispatchFailure && error.retryable) await attempts.releaseDelivery(claim.handle);
+        if (error instanceof DispatchFailure && error.retryable) {
+          for (let attempt = 1; ; attempt++) {
+            try { await attempts.releaseDelivery(claim.handle); break; }
+            catch (err) {
+              if (err instanceof FencedOutError || attempt >= STORE_RETRY_TRIES) throw err;
+              await new Promise<void>((resolve) => setTimeout(resolve, storeRetryMs));
+            }
+          }
+        }
         else {
           const failure = error instanceof DispatchFailure ? error : new DispatchFailure('delivery_unknown', 500, false);
           await attempts.fail(claim.handle, { code: failure.code, status: failure.status, retryable: false });
