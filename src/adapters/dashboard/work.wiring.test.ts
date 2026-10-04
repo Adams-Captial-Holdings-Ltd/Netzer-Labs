@@ -16,7 +16,7 @@ vi.mock('../../lib/missions/mission-acl.js', async (importActual) => ({ ...await
 vi.mock('../../lib/state/kill-switches-repo.js', async (importActual) => ({ ...await importActual<typeof import('../../lib/state/kill-switches-repo.js')>(),
   isKillSwitchActive: async (name: string) => { state.switches.push(name); return { active: name === 'dashboard_read_disabled' && state.dashboardReadDisabled }; } }));
 vi.mock('../../lib/paperclip/shadow-rows-dynamo.js', () => ({ dynamoShadowRows: () => ({
-  getByNetzerUser: async () => ({ netzerUserId: 'user-alice', paperclipUserId: 'pc-user-01', slot: '01', decisionClasses: ['clinical_disposition'], status: 'active', assignedAt: 1 }),
+  getByNetzerUser: async () => ({ netzerUserId: 'user-alice', paperclipUserId: 'pc-user-01', slot: '01', decisionClasses: ['payment_release'], status: 'active', assignedAt: 1 }),
   getByPaperclipUser: async () => undefined,
 }) }));
 vi.mock('../../lib/paperclip/shadow-keys.js', () => ({ defaultShadowKeyStore: () => ({ boardKeyFor: async () => 'board-key' }) }));
@@ -48,7 +48,7 @@ function call(path: string, body?: unknown, token = 'good') {
 }
 beforeEach(() => {
   state.enabled = true; state.canRead = true; state.dashboardReadDisabled = false; state.userId = 'user-alice'; state.audits.length = 0; state.switches.length = 0;
-  state.approval = { id: 'a1', type: APPROVAL_TYPE, status: 'pending', payload: approvalPayload(key, payload, 'clinical_disposition'), createdAt: '2026-10-04T10:00:00Z' };
+  state.approval = { id: 'a1', type: APPROVAL_TYPE, status: 'pending', payload: approvalPayload(key, payload, 'payment_release'), createdAt: '2026-10-04T10:00:00Z' };
   state.payloadRow = { kind: 'payload', key, json: payloadJson(payload), payloadSha256: hash, createdAt: 1, version: 1 };
 });
 

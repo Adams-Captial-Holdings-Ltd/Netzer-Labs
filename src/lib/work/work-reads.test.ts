@@ -7,7 +7,7 @@ import { paperclipWorkReads, WorkReadError } from './work-reads.js';
 const pipeline = { id: 'p1', name: 'Intake', stages: [{ id: 's1', key: 'review', name: 'Review', kind: 'review' }] };
 const item = { case: { id: 'c1', caseKey: 'k1', title: 'Private case title', updatedAt: '2026-10-04T10:00:00Z', leaseUserId: 'pc-user', terminalKind: null }, stage: pipeline.stages[0], activeWork: null };
 const approval = { id: 'a1', type: APPROVAL_TYPE, status: 'pending', createdAt: '2026-10-04T10:00:00Z',
-  payload: approvalPayload({ caseKey: 'k1', stage: 'review', step: 'send', stageEntryNo: 1 }, { secret: 'PATIENT-JANE' }, 'clinical_disposition') };
+  payload: approvalPayload({ caseKey: 'k1', stage: 'review', step: 'send', stageEntryNo: 1 }, { secret: 'VENDOR-SECRET-1' }, 'payment_release') };
 function harness(responses: Record<string, unknown> = {}) {
   const calls: string[] = []; const logs: { code: string; count: number }[] = [];
   const request = vi.fn(async (_method: string, path: string) => {
@@ -35,7 +35,7 @@ describe('Paperclip Work reads', () => {
     expect(h.logs).toEqual([{ code: 'malformed_record', count: 1 }]);
   });
   it('a malformed response is logged once', async () => {
-    const h = harness({ [pipelinesPath]: { secret: 'PATIENT-JANE' } });
+    const h = harness({ [pipelinesPath]: { secret: 'VENDOR-SECRET-1' } });
     await expect(h.reads.listPipelines()).rejects.toMatchObject({ code: 'paperclip_unavailable' });
     expect(h.logs).toEqual([{ code: 'malformed_response', count: 1 }]);
   });
@@ -111,7 +111,7 @@ describe('Paperclip Work reads', () => {
     await expect(h.reads.listPipelines()).rejects.toBeInstanceOf(WorkReadError);
   });
   it('logs codes and counts only', async () => {
-    const h = harness({ [pipelinesPath]: [{ ...pipeline, id: undefined, title: 'PATIENT-JANE' }] });
+    const h = harness({ [pipelinesPath]: [{ ...pipeline, id: undefined, title: 'VENDOR-SECRET-1' }] });
     await h.reads.listPipelines();
     expect(JSON.stringify(h.logs)).toBe('[{"code":"malformed_record","count":1}]');
   });
