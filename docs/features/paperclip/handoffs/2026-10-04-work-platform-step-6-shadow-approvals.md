@@ -3,7 +3,7 @@ feature: paperclip
 document_role: session-handoff
 status: current
 observed_at: 2026-10-04
-as_of_commit: 79b06d06778e8ea426cdaa3eb8f52b1fb5e81229
+as_of_commit: d7c599f30934fc5cb1077f8a22781ececc8a4a47
 session_slug: work-platform-step-6-shadow-approvals
 supersedes: 2026-10-03-work-platform-step-5-safe-actions.md
 ---
@@ -27,9 +27,9 @@ supersedes: 2026-10-03-work-platform-step-5-safe-actions.md
 
 ## 2. Current state summary
 
-Work Platform step 6 of 18 (shadow identities and approvals) is built locally on `feature/wp-step6-shadow-approvals` in six commits on top of `768ecf6` (section 4.1): the frozen red tests, four builder work orders and the review-round red tests. The code adds a hash-bound approvals library (`requestApproval`, `decide`, `verifyApproval`, `runApprovedEffect`), a Paperclip port that sends a decision with the approver's own board key, a board-key store over a new Secrets Manager secret, shadow registry rows in the users table, an operator command line (`npm run paperclip:shadow`: pool, assign, rotate, retire, check, probe, list), sign-up closed by default in the Paperclip task, and a sign-up probe composed into the runtime lock. The approval record and the secret layout are one-way, frozen by the owner on 2026-10-04. The library is not on the dispatch path (A140), and the dashboard route that calls `decide` is step 7.
+Work Platform step 6 of 18 (shadow identities and approvals) is built locally on `feature/wp-step6-shadow-approvals` in nine commits on top of `768ecf6` (section 4.1): the frozen red tests, four builder work orders, the review-round red tests, the step 6 records and the two commits of the review fix round. The code adds a hash-bound approvals library (`requestApproval`, `decide`, `verifyApproval`, `runApprovedEffect`), a Paperclip port that sends a decision with the approver's own board key, a board-key store over a Secrets Manager secret (a second secret, read by no service, holds the slot logins), shadow registry rows in the users table, an operator command line (`npm run paperclip:shadow`: pool, assign, rotate, retire, check, probe, list), sign-up closed by default in the Paperclip task, and a sign-up probe composed into the runtime lock. The approval record and the secret layout are one-way, frozen by the owner on 2026-10-04. The library is not on the dispatch path (A140), and the dashboard route that calls `decide` is step 7.
 
-A five-reviewer code and security review ran on `79b06d0`. Its result changed four decisions on 2026-10-04 (section 4.3): the secret is split in two, the post-deploy sign-up check is the orchestrator's start-time lock, and a set of review fixes is decided. The review fix round that builds them follows `79b06d0`, and the docs below say so wherever the code at `79b06d0` still differs. The full validation, the frozen gate, the review-round fixes and the fresh critic had not run when this file was written. Nothing is pushed and nothing is deployed. The live proofs S6-L1 to S6-L5 are PENDING (section 6). Step 7 (the first Work UI) is next after this PR.
+A five-reviewer code and security review ran on `79b06d0`. Its result changed four decisions on 2026-10-04 (section 4.3): the secret is split in two, the post-deploy sign-up check is the orchestrator's start-time lock, and a set of review fixes is decided. The review fix round built them in two commits, `fe2e891` and `d7c599f` (section 4.1), and the docs now describe the code after them. The final full validation, the frozen gate and the fresh critic have not run on the tip. Nothing ran against a real Paperclip or a real AWS account. Nothing is pushed and nothing is deployed. The live proofs S6-L1 to S6-L5 are PENDING (section 6). Step 7 (the first Work UI) is next after this PR.
 
 ## 3. Codebase understanding
 
@@ -37,9 +37,9 @@ A five-reviewer code and security review ran on `79b06d0`. Its result changed fo
 
 - An approval is a Paperclip classic approval of `type: 'request_board_approval'` whose payload is exactly `{ netzerApproval: 1, payloadSha256, caseKey, stage, step, stageEntryNo, decisionClass }`. `payloadSha256` is the effect ledger's payload hash. A record with any other shape is not a Netzer approval. This shape is one-way ([ADR 0016](../../../adr/0016-human-decisions-via-shadow-users.md)).
 - Paperclip enforces neither the hash nor a comment. Netzer enforces both: `decide` refuses a missing comment on Reject and Request Changes, and `verifyApproval` re-hashes the payload.
-- A decision is sent with approve, reject or request-revision and the approver's own board key. The returned record must name the shadow user as `decidedByUserId`. The executor-side check reads the record live from Paperclip on every call and refuses when the decider has no registry row (an operator, the instance admin, the lock auditor or an unassigned slot).
+- A decision is sent with approve, reject or request-revision and the approver's own board key. The returned record must name the shadow user as `decidedByUserId`. If it does not, `decide` audits `approval_refused` with result `error` and code `attribution_mismatch` and throws; it is never audited as `approval_decided`. The executor-side check reads the record live from Paperclip on every call and refuses when the decider has no registry row (an operator, the instance admin, the lock auditor or an unassigned slot).
 - The registry is three kinds of row in the existing users table: `SHADOWSLOT#<slot>`/`SLOT`, `USER#<netzerUserId>`/`SHADOW` and `PCUSER#<paperclipUserId>`/`SHADOW`. Assign and retire are single conditional transactions. A slot never returns to free, and slot `00` is refused.
-- At `79b06d0` the board keys and the slot logins sit in one secret, `/<app>/shadow-approvers`, which the task role can read. The decided layout is two secrets: `/<app>/shadow-approvers` with only `{"v":1,"slots":{"<slot>":{"boardKey":string|null}}}` (the only one the task role may read), and `/<app>/shadow-approvers-setup` with the logins, readable only with the operator's credentials. The split is one-way and is built in the review fix round.
+- There are two secrets. `/<app>/shadow-approvers` holds only `{"v":1,"slots":{"<slot>":{"boardKey":string|null}}}` and is the only one the task role may read. `/<app>/shadow-approvers-setup` holds `{"v":1,"slots":{"<slot>":{"email":string,"password":string}}}`; no service has a grant on it, and only the operator's own credentials read and write it. The split is one-way. A registry row that does not validate counts as absent, so verification fails closed.
 - The lock boot now composes the existing runtime read with the sign-up probe. `runtime-lock.ts` and the frozen step 2 tests are untouched. The probe sends a sign-up for the lock auditor's email (the field `signup_probe_email` in the Paperclip secret). Paperclip answers 400 `EMAIL_PASSWORD_SIGN_UP_DISABLED` when sign-up is closed and 422 `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` when it is open (measured in step 2, A91).
 - A new field in the Paperclip secret touches four places: the `deploy-phases.ts` defaults, the deploy workflow's populate step, the compute stack's ECS secret and the bootstrap merge (M101).
 - A source guard forbids importing `zod` under `src/lib/paperclip`, so `shadow-keys.ts` validates the secret by hand (A151).
@@ -57,7 +57,7 @@ A five-reviewer code and security review ran on `79b06d0`. Its result changed fo
 | `scripts/lib/lifecycle/sign-up-deploy-probe.ts`, `scripts/deploy.ts`, `deploy-phases.ts` | The deploy-side probe, the window switch passed to CDK, and the `signup_probe_email` default. |
 | `scripts/lib/paperclip/bootstrap-core.ts`, `bootstrap-secret.ts`, `scripts/paperclip-bootstrap.ts` | The bootstrap records the lock auditor's email as `signup_probe_email`. |
 | `infra/lib/secrets-stack.ts`, `iam-stack.ts`, `compute-stack.ts`, `paperclip-stack.ts`, `constants.ts`, `interfaces.ts`, `infra/bin/app.ts`, `.github/workflows/deploy.yml` | The secret, the task-role read grant, the env entries, `PAPERCLIP_AUTH_DISABLE_SIGN_UP`, the window switch and the workflow's populate step. |
-| `src/lib/audit/audit-writer.ts`, `src/config/env.ts` | Six new always-audited actions; two new optional env values. |
+| `src/lib/audit/audit-writer.ts`, `src/config/env.ts` | Six new always-audited actions; three new optional env values. |
 
 ### 3.3 Patterns and conventions to follow
 
@@ -66,6 +66,8 @@ A five-reviewer code and security review ran on `79b06d0`. Its result changed fo
 - A refusal happens before any Paperclip write.
 - A new Paperclip secret field touches four places (M101). Name all four in the work order.
 - Never add `zod` under `src/lib/paperclip` (A151).
+- Registry rows and Paperclip records are shape-checked. A row that does not validate counts as absent.
+- An operator command must be resumable: run it again after a crash and it continues.
 
 ## 4. Work completed
 
@@ -81,7 +83,14 @@ Commits on `feature/wp-step6-shadow-approvals`, oldest first (frozen acceptance 
 - [x] `79b06d0` W4: the operator command line and its core. Codex gpt-6-sol at high.
 - [x] Review fan-out on `79b06d0`: five read-only reviewers (code, security, silent-failure, TypeScript and test analysis); their reports are outside the repository, in `~/.claude/plans/netzer-work-platform-reviews/wi-s6-*.md`.
 - [x] `dab3954` review-round red tests: `src/lib/work/approvals.review.test.ts` (its commit message says 21 of 22 fail on `79b06d0`).
-- [ ] The review fix round, the final full validation, the frozen gate, the independent critic, push, PR and merge: not done. Push, PR and merge wait for the owner's yes (section 6).
+- [x] `12aef9d` the step 6 records (ADR 0016, ADR 0014, the security model, the feature README, HANDOFF, the decision log and this file), written when the review fix round was decided and not yet built.
+- [x] `fe2e891` review fix round, part one (source and infrastructure, work order W5a).
+- [x] `d7c599f` review fix round, part two (scripts, work order W5b).
+- [ ] The final full validation, the frozen gate, the independent critic, push, PR and merge: not done. Push, PR and merge wait for the owner's yes (section 6).
+
+The review fix round, in plain sentences. `fe2e891` makes the library and the infrastructure fail closed. A registry row that does not validate counts as absent. The Paperclip port checks the shape of every record it gets back and refuses to create an approval when no company id is configured. Every refusal leaves an `approval_refused` audit row. A decider other than the shadow user leaves `approval_refused` with result `error` and code `attribution_mismatch`, and the call throws; it is not audited as `approval_decided`. `decide` refuses with `paperclip_unavailable` when the read fails and with `key_unavailable` when the board key cannot be read, and a Paperclip rejection is audited with the audit-only code `paperclip_rejected`. The comment hash is now the sha256 of the approval id, a newline and the comment. The key store reads board keys only. The secrets stack creates the second secret, `/<app>/shadow-approvers-setup`, and no role is granted on it. The task-role read grant moved into its own policy, the duplicate users-table grant is gone and the IAM baseline hash in `iam-stack.p4.test.ts` matches. `SHADOW_APPROVERS_SECRET_ID` is a declared env value.
+
+`d7c599f` makes the scripts honest and resumable. `pool`, `assign`, `rotate` and `retire` continue after a crash when run again: `pool` writes the login to the setup secret before it signs up, `assign` reuses a stored key that is valid, and `retire` can be re-run. The setup logins live only in the operator-only secret. The command line resolves the users and audit tables from the environment suffix, names the failed command in its error, says when an action finished but its audit row was not written, and no longer runs when imported. The deploy host probes sign-up only when `PAPERCLIP_BASE_URL` is set; otherwise it prints that it cannot reach Paperclip and that the orchestrator proves sign-up closed at start. The bootstrap reuses a valid lock auditor key, and `--new-auditor` forces a new one. The three new env names are registered in `docs/deprecations.json`.
 
 ### 4.2 Files modified
 
@@ -92,8 +101,8 @@ Commits on `feature/wp-step6-shadow-approvals`, oldest first (frozen acceptance 
 | Sign-up probe and lock | `src/lib/paperclip/sign-up-probe.ts` (new), `lock-boot.ts` | The probe composed into the lock boot |
 | Operator command line | `scripts/paperclip-shadow.ts`, `scripts/lib/paperclip/shadow-core.ts`, `package.json` (one `scripts` line) | New |
 | Deploy and bootstrap | `scripts/deploy.ts`, `scripts/lib/lifecycle/deploy-phases.ts`, `sign-up-deploy-probe.ts` (new), `scripts/lib/paperclip/bootstrap-core.ts`, `bootstrap-secret.ts`, `scripts/paperclip-bootstrap.ts`, `.github/workflows/deploy.yml` | The window switch, the deploy probe, the `signup_probe_email` field |
-| Infra | `infra/lib/constants.ts`, `secrets-stack.ts`, `iam-stack.ts`, `interfaces.ts`, `compute-stack.ts`, `paperclip-stack.ts`, `infra/bin/app.ts` | The secret, the read grant, the env entries, sign-up closed by default |
-| Audit and env | `src/lib/audit/audit-writer.ts`, `src/config/env.ts` | Six actions; `PAPERCLIP_SIGNUP_PROBE_EMAIL` and `PAPERCLIP_SIGNUP_WINDOW` |
+| Infra | `infra/lib/constants.ts`, `secrets-stack.ts`, `iam-stack.ts`, `interfaces.ts`, `compute-stack.ts`, `paperclip-stack.ts`, `infra/bin/app.ts` | The two secrets, the read grant on the key secret, the env entries, sign-up closed by default |
+| Audit and env | `src/lib/audit/audit-writer.ts`, `src/config/env.ts`, `docs/deprecations.json` | Six actions; `PAPERCLIP_SIGNUP_PROBE_EMAIL`, `PAPERCLIP_SIGNUP_WINDOW` and `SHADOW_APPROVERS_SECRET_ID` (registered in `d7c599f`) |
 | Tests | the three frozen test files, `approvals-paperclip.test.ts`, `shadow-rows-dynamo.test.ts`, `lock-boot.sign-up.test.ts`, `shadow-core.test.ts`, `sign-up-deploy-probe.test.ts`, `secrets-stack.shadow-approvers.test.ts`, `paperclip-stack.sign-up.test.ts`, `approvals.review.test.ts` (new); `iam-stack.p4.test.ts`, `paperclip-stack.test.ts`, `deploy-phases.test.ts`, `bootstrap-core.test.ts`, `bootstrap-secret.test.ts` (updated as the work order allowed) | New or updated |
 | Docs | ADR 0016 and 0014, `docs/security-model.md`, the feature README, HANDOFF and decision log, the minimum sellable product, the diagram notes, this file | Say what the code does |
 
@@ -103,14 +112,14 @@ Decisions 39 to 51 in the [decision log](../decision-log.md) carry the full list
 
 - Approval record (owner "Yes, freeze it", 2026-10-04; Jev 0.92 for the classic approval): ONE-WAY. Revisit trigger: step 8 installs pipelines, or Paperclip changes the approval payload contract at a digest that must be taken.
 - The executor reads the approval live (Jev 0.99), slots are assigned by the operator command line (Jev 0.90), and a library now with the HTTP route in step 7 (Jev 0.96). All two-way.
-- Secrets (Jev unsure 0.68; the Opus advisor was sure; owner "One new secret" in the morning, then owner "Yes, split them" after the security review): two secrets, one for board keys the task role may read and one for slot logins no service can read. ONE-WAY (the names and shapes). Revisit trigger: per-slot isolation is required. Decided 2026-10-04; the code change is the review fix round that follows `79b06d0`.
+- Secrets (Jev unsure 0.68; the Opus advisor was sure; owner "One new secret" in the morning, then owner "Yes, split them" after the security review): two secrets, one for board keys the task role may read and one for slot logins no service can read. ONE-WAY (the names and shapes). Revisit trigger: per-slot isolation is required. Decided 2026-10-04; built in `fe2e891` and `d7c599f`.
 - Registry in the users table (Jev 0.75, unsure; the advisor sure), entitlement as a class list on the shadow row (Jev 0.78, unsure; the advisor sure). Two-way. Revisit trigger for entitlement: step 11 SSO role mapping.
 - The probe runs after deploys and in the 60 s lock (Jev 0.75 for deploy-only, unsure; the Opus advisor sure for both). Two-way.
-- Post-deploy check (Jev 0.92): the orchestrator's own start-time lock, because the deploy host cannot reach Paperclip's private address. The deploy script probes only when `PAPERCLIP_BASE_URL` (the tunnel) is set and otherwise reports that it could not look. Decided 2026-10-04; the code change follows `79b06d0`.
+- Post-deploy check (Jev 0.92): the orchestrator's own start-time lock, because the deploy host cannot reach Paperclip's private address. The deploy script probes only when `PAPERCLIP_BASE_URL` (the tunnel) is set and otherwise prints that it cannot reach Paperclip and that the orchestrator proves sign-up closed at start. Decided 2026-10-04; built in `d7c599f`.
 - No network block of sign-up in this step (owner "Not now"; Jev unsure 0.39; the advisor leaned no). Revisit trigger: approver churn, open sign-up, or a rogue account.
 - Approve comment optional (owner "Optional on Approve"; Jev unsure 0.25). Closes A74. Two-way.
 - The reconcile job is the operator `check` command (Jev unsure 0.54; the Sonnet advisor sure). Two-way. Revisit trigger: approver count or change frequency grows.
-- Review fixes, decided 2026-10-04 and built after `79b06d0`: registry rows that do not validate are treated as absent; an attribution mismatch is audited; `decide` refuses with `paperclip_unavailable` or `key_unavailable` before any write; `commentSha256` is the sha256 of `<approvalId>` and a newline and the trimmed comment; the operator commands become resumable after a crash; the command line resolves the users and audit table names from the environment suffix.
+- Review fixes, decided 2026-10-04 and built in `fe2e891` and `d7c599f`: registry rows that do not validate are treated as absent; an attribution mismatch is audited as `approval_refused` with result `error` and code `attribution_mismatch`; `decide` refuses with `paperclip_unavailable` or `key_unavailable` before any write; `commentSha256` is the sha256 of `<approvalId>` and a newline and the trimmed comment; the operator commands are resumable after a crash; the command line resolves the users and audit table names from the environment suffix.
 - Gate amendment (owner "Yes, amend it", 2026-10-04): the frozen gate's allowed-file list gained `.github/workflows/deploy.yml` (gate v2; v1 kept). The five workflow lines, a copy of the `lock_auditor_key` block, were written by the coordinator because the change was smaller than a dispatch (M101).
 - Build rung: Jev picked sol at xhigh for W1 (0.82), the Sonnet advisor picked luna at medium for W2 (Jev 0.49), and sol at high for W3 and W4. gpt-6-astra and Fable did not run.
 
@@ -715,7 +724,7 @@ Sections 5.1 to 5.30 above are carried forward byte for byte from [the 2026-10-0
 
 ### 5.32 Added 2026-10-04 (Work Platform step 6)
 
-Sections 5.1 to 5.31 above are carried forward byte for byte from [the 2026-10-03 Work Platform step 5 handoff](2026-10-03-work-platform-step-5-safe-actions.md) (its section 5), the newest session log. The rows below continue that ledger's ID scheme at A148 and M100 (both reserved by step 5's landing). The next free IDs are A154, M102 and P92. A74 (the approval comment) is closed by the owner's answer of 2026-10-04 (optional on Approve); its row above is carried unchanged.
+Sections 5.1 to 5.31 above are carried forward byte for byte from [the 2026-10-03 Work Platform step 5 handoff](2026-10-03-work-platform-step-5-safe-actions.md) (its section 5), the newest session log. The rows below continue that ledger's ID scheme at A148 and M100 (both reserved by step 5's landing). The next free IDs are A154, M103 and P93. A150 is carried unchanged; after the review fix round the bootstrap reuses a valid lock auditor key, and `--new-auditor` forces a new one, which needs the sign-up window. A74 (the approval comment) is closed by the owner's answer of 2026-10-04 (optional on Approve); its row above is carried unchanged.
 
 | ID | Kind | New finding | Required correction or precaution |
 |---|---|---|---|
@@ -728,19 +737,20 @@ Sections 5.1 to 5.31 above are carried forward byte for byte from [the 2026-10-0
 | A153 | Finding (security review, carried) | `decide()` trusts the `netzerUserId` its caller passes; the task role can write the users table that holds the registry rows. | Step 7's HTTP route must bind `netzerUserId` to the authenticated session and never take it from the request body; registry-row write access is taken up in step 16. |
 | M101 | Mistake (mine) | The step 6 spec and the gate's allowed-file list missed `.github/workflows/deploy.yml`, although an existing test demands the workflow seeds every Paperclip secret default; the builder stopped correctly. The owner approved a one-path gate amendment (v2). | A new field in the Paperclip secret always touches four places: `deploy-phases.ts` defaults, the workflow's populate step, the compute stack's ECS secret, the bootstrap merge. Name all four in the work order. |
 | P91 | Precaution | The Codex sandbox cannot run `src/lib/paperclip/client.mock-server.test.ts` (it binds 127.0.0.1). | Tell the builder to exclude it in its proof; the coordinator runs it. |
+| M102 | Mistake (mine) | Two work-order faults by the coordinator in the fix round: a review test asked for an `approval_decided` error row that the frozen acceptance test forbids, and the work order asked for a static `@aws-sdk/lib-dynamodb` import that the source guard A2-21 forbids. The builder stopped correctly both times. | Before a work order names an audit action or an import style, check it against the frozen tests and the folder's source guards. |
+| P92 | Precaution | A scoped test run missed `scripts/release/sync-deprecations.test.ts`: a new environment variable in `src/config/env.ts` must be added to `docs/deprecations.json` in the same commit. | Run `npx vitest run scripts` after any change to env.ts. |
 
 ## 6. Pending work
 
 ### 6.1 Smallest next action
 
-Build the review fix round (section 4.3, decisions 43, 50 and 51) on top of `dab3954`, then run the final full validation (section 7), the frozen gate and the independent critic (a fresh subagent). Then the owner's yes to push and open the PR into `development`. After the PR opens, turn Auto-fix on, and merge by hand (never auto-merge).
+Run the final full validation (section 7), the frozen gate and the independent critic (a fresh subagent) on the tip. Then the owner's yes to push and open the PR into `development`. After the PR opens, turn Auto-fix on, and merge by hand (never auto-merge).
 
 ### 6.2 Immediate next steps
 
-1. The review fix round: split the secret into `/<app>/shadow-approvers` (keys) and `/<app>/shadow-approvers-setup` (logins); make the post-deploy sign-up check the start-time lock and make the deploy script probe only with `PAPERCLIP_BASE_URL` set; treat registry rows that do not validate as absent; audit an attribution mismatch; refuse in `decide` with `paperclip_unavailable` or `key_unavailable` before any write; hash the comment with the approval id; make the operator commands resumable; resolve the table names from the environment suffix. Then update the docs that say "the code at `79b06d0` still differs".
-2. The final validation, the frozen gate and the critic's verdict.
-3. Push and open the PR with the owner's yes. The PR body records the validation list on the final commit, the critic's verdict, the five existing tests this step updated (`iam-stack.p4.test.ts`, `paperclip-stack.test.ts`, `deploy-phases.test.ts`, `bootstrap-core.test.ts`, `bootstrap-secret.test.ts`) and the named blocker for `npm run local:test:integration` (A144).
-4. Step 7 (the first Work UI), which adds the HTTP route that calls `decide` and must bind `netzerUserId` to the session (A153).
+1. The final validation, the frozen gate and the critic's verdict, on the tip.
+2. Push and open the PR with the owner's yes. The PR body records the validation list on the final commit, the critic's verdict, the five existing tests this step updated (`iam-stack.p4.test.ts`, `paperclip-stack.test.ts`, `deploy-phases.test.ts`, `bootstrap-core.test.ts`, `bootstrap-secret.test.ts`) and the named blocker for `npm run local:test:integration` (A144).
+3. Step 7 (the first Work UI), which adds the HTTP route that calls `decide` and must bind `netzerUserId` to the session (A153).
 
 ### 6.3 Blockers and open questions
 
@@ -749,11 +759,11 @@ Build the review fix round (section 4.3, decisions 43, 50 and 51) on top of `dab
 - [ ] Not built (A140): the executor is not on the dispatch path, because the dispatch carries no case key or stage.
 - [ ] Known limit (A153): `decide()` trusts the `netzerUserId` its caller passes, and the task role can write the users table that holds the registry rows. Step 7 binds the user to the session; registry write access goes to step 16.
 - [ ] No password-change route is proven at the pinned Paperclip (A149).
-- [ ] Review items carried to the fix round and not yet fixed in the code: `iam-stack.ts` adds a second grant on the users table (it is already granted by name); the approvals port `create` sends an empty company id when none is configured; one mis-indented line in `shadow-rows-dynamo.ts`; very long lines and non-null assertions in `shadow-core.ts`; `assign` stores the key before the rows transaction.
+- [ ] Review items carried to the fix round: the second users-table grant is gone (`iam-stack.ts`), the approvals port `create` refuses when no company id is configured, and the very long lines and non-null assertions are gone from `shadow-core.ts`. `assign` still stores the key before the rows transaction, but it is resumable, so a re-run reuses the stored key. The mis-indented line in `shadow-rows-dynamo.ts` was not re-checked.
 - [ ] The live proofs, PENDING and never passed here (they need the staging trip: Aurora snapshot first, and every AWS call needs the owner's yes):
   - S6-L1: a real sign-up window. The pool is created, sign-up is closed, and the probe answers 400, on staging or the sealed-container rig.
   - S6-L2: assign a slot and approve with its key against a real Paperclip. `decidedByUserId` is the slot's user, `verifyApproval` passes, the operator's own approval is refused, and `rotate`'s key list works (A152).
-  - S6-L3: the task role reads the board-key secret after a deploy; the deploy role cannot read it, and (after the split) no service role can read the setup secret.
+  - S6-L3: the task role reads the board-key secret after a deploy; the deploy role cannot read it, and no service role can read the setup secret.
   - S6-L4: a password-rotation route at the pin (A149).
   - S6-L5: an ECS rollback to a revision with sign-up open closes the latch within one recheck.
 - The step is not pushed.
@@ -769,7 +779,9 @@ Build the review fix round (section 4.3, decisions 43, 50 and 51) on top of `dab
 
 ## 7. Verification actually performed
 
-The full validation, the frozen gate, the review fix round and the fresh critic had not yet run when this was written; the coordinator adds them. This table lists only what the session log records as run, with its numbers. The run logs are outside the repository, in `~/.claude/plans/netzer-work-platform-logs/`.
+This table lists only what the session log records as run, with its numbers. Rows that name a commit describe that commit, not the tip. The run logs are outside the repository, in `~/.claude/plans/netzer-work-platform-logs/`. No result for the review fix round (`fe2e891`, `d7c599f`) is recorded in this file.
+
+VERIFICATION RESULTS: filled by the coordinator after the final run
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
@@ -785,10 +797,10 @@ The full validation, the frozen gate, the review fix round and the fresh critic 
 | `npx vitest run` on `shadow-keys`, `sign-up-probe` and `lock-boot.sign-up` (W2, `13b046c`) | n/a | 59 of 59 passed. `src/lib/paperclip src/config` with the flag off and on: 38 files, 641 tests each. `client.mock-server.test.ts` was run by the coordinator, not the sandbox (P91) |
 | `npx vitest run infra/lib src/lib/paperclip src/lib/work scripts/lib/lifecycle scripts/lib/paperclip` (W3, `3fafb9a`) | n/a | flag off and on: 74 files, 1328 tests each |
 | `npx vitest run scripts/lib/paperclip` (W4, `79b06d0`) | n/a | 3 files, 81 tests passed |
-| `node scripts/ci/docs-links.mjs`, `feature-knowledge.mjs`, `runnable-blocks.mjs`, `docs-assets.mjs`, `docs-mermaid.mjs` (docs pass, uncommitted tree) | OK on `768ecf6` for the first two | all five OK on the working tree after the step 6 docs edits; a local drift simulation over the changed files found no unnoted diagram; `git diff --check` clean |
+| `node scripts/ci/docs-links.mjs`, `feature-knowledge.mjs`, `runnable-blocks.mjs`, `docs-assets.mjs`, `docs-mermaid.mjs` (docs pass, uncommitted tree) | OK on `768ecf6` for the first two | not recorded for the fix-round docs edits; see VERIFICATION RESULTS above |
 | Live proofs S6-L1 to S6-L5 | n/a | PENDING: need staging and an AWS call, each with the owner's yes. Not passed |
 
-Anything not run, and why: `npm run local:test:integration` (A144); the full `npm test` in both flag states, the web checks, the frozen gate, the review fix round and the critic on the final tip, which are the next action (section 6). No AWS call was made.
+Anything not run, and why: `npm run local:test:integration` (A144). The full `npm test` in both flag states, the web checks, the frozen gate and the critic on the final tip are the next action (section 6). No AWS call was made and nothing ran against a real Paperclip.
 
 ## 8. Environment state
 
