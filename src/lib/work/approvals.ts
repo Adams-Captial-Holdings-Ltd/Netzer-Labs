@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { AuditEvent } from '../audit/audit-writer.js';
 import { validShadowUser, type ShadowRows } from '../paperclip/shadow-users.js';
 import { payloadHash } from './executor.js';
+import { savePayloadOnce, type PayloadRows } from './approval-payloads.js';
 import type { createExecutor } from './executor.js';
 import { validateEffectKey, type EffectKey } from './effect-ledger.js';
 
@@ -23,9 +24,10 @@ export interface ApprovalsPort {
     decisionNote: string | null, boardKey: string): Promise<ApprovalRecord>;
 }
 export type ApprovalRefusedCode = 'comment_required' | 'comment_too_long' | 'not_an_approver' | 'paperclip_unavailable'
-  | 'not_found' | 'not_a_netzer_approval' | 'not_pending' | 'class_not_entitled' | 'key_unavailable';
+  | 'not_found' | 'not_a_netzer_approval' | 'not_pending' | 'class_not_entitled' | 'key_unavailable' | 'approver_inactive';
 export type ApprovalInvalidCode = 'paperclip_unavailable' | 'not_found' | 'not_a_netzer_approval' | 'not_approved'
-  | 'hash_mismatch' | 'key_mismatch' | 'class_mismatch' | 'not_a_shadow_user' | 'approver_retired' | 'class_not_entitled';
+  | 'hash_mismatch' | 'key_mismatch' | 'class_mismatch' | 'not_a_shadow_user' | 'approver_retired' | 'class_not_entitled'
+  | 'decided_before_assignment';
 export class ApprovalRefusedError extends Error {
   constructor(public readonly code: ApprovalRefusedCode) { super('Approval refused'); this.name = 'ApprovalRefusedError'; }
 }
@@ -69,6 +71,7 @@ type Options = {
   port: ApprovalsPort; shadows: Pick<ShadowRows, 'getByNetzerUser' | 'getByPaperclipUser'>;
   keys: { boardKeyFor(slot: string): Promise<string> };
   audit: (event: AuditEvent) => Promise<void>; now: () => number;
+  payloads?: PayloadRows; users?: { isActive(netzerUserId: string): Promise<boolean> };
 };
 type VerifyRequest = { approvalId: string; key: EffectKey; payload: unknown; decisionClass: string };
 
@@ -94,6 +97,7 @@ async function readVerifiedApproval(port: ApprovalsPort, shadows: Options['shado
   if (shadow.status === 'retired' && (!Number.isFinite(decidedAt)
     || typeof shadow.retiredAt !== 'number' || !Number.isFinite(shadow.retiredAt)
     || decidedAt > shadow.retiredAt)) throw new ApprovalInvalidError('approver_retired');
+  if (!Number.isFinite(decidedAt) || decidedAt < shadow.assignedAt) throw new ApprovalInvalidError('decided_before_assignment');
   if (!shadow.decisionClasses.includes(body.decisionClass)) throw new ApprovalInvalidError('class_not_entitled');
   return { approvalId: req.approvalId, netzerUserId: shadow.netzerUserId,
     shadowUserId: shadow.paperclipUserId, decidedAt: record.decidedAt };
@@ -107,7 +111,7 @@ async function executeApprovedEffect<T>(verify: (req: VerifyRequest) => Promise<
   return executor.runEffect(effect);
 }
 
-export function createApprovals({ port, shadows, keys, audit }: Options) {
+export function createApprovals({ port, shadows, keys, audit, now, payloads, users }: Options) {
   async function refuse(code: ApprovalRefusedCode, netzerUserId: string, approvalId: string): Promise<ApprovalRefusedError> {
     try { await audit({ action: 'approval_refused', userId: netzerUserId, result: 'blocked', detail: { approvalId, code } }); }
     catch { /* A refusal must survive an audit outage. */ }
@@ -118,6 +122,7 @@ export function createApprovals({ port, shadows, keys, audit }: Options) {
     validateEffectKey(req.key);
     if (!CLASS_ID.test(req.decisionClass)) throw new Error('Invalid decision class');
     const body = approvalPayload(req.key, req.payload, req.decisionClass);
+    if (payloads) await savePayloadOnce(payloads, req.key, req.payload, now());
     const record = await port.create({ type: APPROVAL_TYPE, payload: body });
     if (typeof record?.id !== 'string' || !record.id.trim()) throw new Error('Invalid approval id');
     await audit({ action: 'approval_requested', result: 'ok', detail: {
@@ -134,6 +139,12 @@ export function createApprovals({ port, shadows, keys, audit }: Options) {
     const shadow = await shadows.getByNetzerUser(req.netzerUserId);
     if (!shadow || !validShadowUser(shadow) || shadow.status !== 'active')
       throw await refuse('not_an_approver', req.netzerUserId, req.approvalId);
+    let active = true;
+    if (users) {
+      try { active = await users.isActive(req.netzerUserId); }
+      catch { active = false; }
+    }
+    if (!active) throw await refuse('approver_inactive', req.netzerUserId, req.approvalId);
     let record: ApprovalRecord | undefined;
     try { record = await port.get(req.approvalId); }
     catch { throw await refuse('paperclip_unavailable', req.netzerUserId, req.approvalId); }

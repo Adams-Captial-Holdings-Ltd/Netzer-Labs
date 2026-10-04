@@ -1,12 +1,52 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PaperclipDisabledError, PaperclipError, PaperclipLockClosedError } from '../paperclip/error.js';
-import { paperclipApprovalsPort, PaperclipApprovalHttpError } from './approvals-paperclip.js';
+import { defaultApprovals, paperclipApprovalsPort, PaperclipApprovalHttpError } from './approvals-paperclip.js';
+import { createApprovals } from './approvals.js';
+import { dynamoPayloadRows } from './approval-payloads.js';
+import { getUser } from '../state/users-repo.js';
+
+vi.mock('./approvals.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./approvals.js')>();
+  return { ...actual, createApprovals: vi.fn(actual.createApprovals) };
+});
+vi.mock('./approval-payloads.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./approval-payloads.js')>();
+  return { ...actual, dynamoPayloadRows: vi.fn(actual.dynamoPayloadRows) };
+});
+vi.mock('../state/users-repo.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../state/users-repo.js')>();
+  return { ...actual, getUser: vi.fn() };
+});
 
 const config = async () => ({ baseUrl: 'http://paperclip.claudeclaw.internal:3100', companyId: 'company-1' });
 const unlocked = () => ({ closed: false, code: null });
 const enabled = async () => ({ active: false });
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const decided = { id: 'ap-1', type: 'request_board_approval', status: 'approved', payload: {}, decidedByUserId: 'pc-1' };
+
+describe('default approvals wiring', () => {
+  it('wires the payload rows and active-user check', async () => {
+    vi.mocked(createApprovals).mockClear();
+    vi.mocked(dynamoPayloadRows).mockClear();
+    defaultApprovals();
+    expect(dynamoPayloadRows).toHaveBeenCalledOnce();
+    const options = vi.mocked(createApprovals).mock.lastCall?.[0];
+    expect(options?.payloads).toBe(vi.mocked(dynamoPayloadRows).mock.results[0]?.value);
+    expect(options?.users?.isActive).toBeTypeOf('function');
+    vi.mocked(getUser).mockResolvedValueOnce({ status: 'active' } as Awaited<ReturnType<typeof getUser>>);
+    expect(await options?.users?.isActive('user-alice')).toBe(true);
+    expect(getUser).toHaveBeenCalledWith('user-alice');
+  });
+
+  it('a disabled user is not active', async () => {
+    vi.mocked(createApprovals).mockClear();
+    defaultApprovals();
+    const options = vi.mocked(createApprovals).mock.lastCall?.[0];
+    vi.mocked(getUser).mockResolvedValueOnce({ status: 'disabled' } as Awaited<ReturnType<typeof getUser>>);
+    expect(await options?.users?.isActive('user-disabled')).toBe(false);
+    expect(getUser).toHaveBeenCalledWith('user-disabled');
+  });
+});
 
 describe('Paperclip approvals port', () => {
   it("sends the decision with the shadow user's board key", async () => {

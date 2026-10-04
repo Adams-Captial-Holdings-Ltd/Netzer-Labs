@@ -30,8 +30,11 @@ function canonical(value: unknown, seen = new WeakSet<object>()): unknown {
   seen.delete(value);
   return output;
 }
+export function canonicalJson(payload: unknown): string {
+  return JSON.stringify(canonical(payload));
+}
 export function payloadHash(payload: unknown): string {
-  return createHash('sha256').update(JSON.stringify(canonical(payload))).digest('hex');
+  return createHash('sha256').update(canonicalJson(payload)).digest('hex');
 }
 export class EffectUnknownError extends Error {
   constructor() { super('Effect outcome needs verification'); this.name = 'EffectUnknownError'; }
