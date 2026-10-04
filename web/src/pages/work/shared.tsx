@@ -115,9 +115,9 @@ export function HeaderStatus({ status }: { status: string }) {
   return <Badge variant={s.badge}>{s.name}</Badge>;
 }
 
-/** The one link style on the Work screens: the brand colour (text-primary alone is the ink colour). */
+/** The one link style on the Work screens: ink and underlined (the stock indigo fails 4.5:1 as text). */
 export const linkClass =
-  'inline-flex items-center min-h-11 md:min-h-6 text-body-sm text-primary-a hover:underline';
+  'inline-flex items-center min-h-11 md:min-h-6 text-body-sm text-primary underline underline-offset-2 hover:no-underline';
 
 export function PageTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
