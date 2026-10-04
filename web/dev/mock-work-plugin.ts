@@ -144,7 +144,11 @@ export function mockWorkPlugin(): Plugin {
           const a = approvals.find((x) => x.id === decideId);
           if (!a) return send(404, { error: 'not_found' });
           let raw = '';
-          for await (const chunk of req) raw += chunk;
+          try {
+            for await (const chunk of req) raw += chunk;
+          } catch {
+            return; // the browser went away mid-request; nothing to answer, and the dev server must not crash
+          }
           let body: { decision?: string; comment?: string; payloadSha256?: string };
           try {
             body = JSON.parse(raw);
