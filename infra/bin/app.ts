@@ -47,6 +47,7 @@ if (!Number.isInteger(powerReservedConcurrency) || powerReservedConcurrency < 0)
 }
 
 const baseProps = { env, tier };
+const paperclipSignupWindow = process.env.CCE_PAPERCLIP_SIGNUP_WINDOW === 'open';
 
 // Foundation: no inter-stack dependencies
 const network = new NetworkStack(app, `${stackPrefix}-Network`, baseProps);
@@ -160,6 +161,7 @@ const iam = new IamStack(app, `${stackPrefix}-Iam`, {
 // Compute consumes network (VPC + SGs), iam (task role), secrets (for env injection)
 const compute = new ComputeStack(app, `${stackPrefix}-Compute`, {
   ...baseProps,
+  paperclipSignupWindow,
   vpc: network.vpc,
   albSecurityGroup: network.albSecurityGroup,
   fargateSecurityGroup: network.fargateSecurityGroup,
@@ -172,8 +174,8 @@ const compute = new ComputeStack(app, `${stackPrefix}-Compute`, {
 
 // Paperclip work engine service (ADR 0010 Phase 2 / bar-and-phases Phase 4 +
 // 4.5). Instantiated AFTER Compute because it reuses Compute's ECS cluster.
-// The operator console is deliberately SSM-tunnel-only while upstream email
-// self-registration remains open; it never attaches to Compute's public ALB.
+// The operator console remains SSM-tunnel-only. Sign-up is closed by default
+// and verified by the runtime and deploy probes.
 //
 // On the SAME tier gate as the substrate above, and constructed the same way:
 // always declared, creating nothing at Tier 0. The three Filesystem outputs
@@ -181,6 +183,7 @@ const compute = new ComputeStack(app, `${stackPrefix}-Compute`, {
 // reads them.
 const paperclip = new PaperclipStack(app, `${stackPrefix}-Paperclip`, {
   ...baseProps,
+  paperclipSignupWindow,
   vpc: network.vpc,
   paperclipSecurityGroup: network.paperclipSecurityGroup,
   cluster: compute.cluster,

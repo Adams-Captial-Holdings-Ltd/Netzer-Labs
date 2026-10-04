@@ -80,6 +80,7 @@ interface MergeBootstrapSecretFieldsOptions {
   storedAgentKeys: Record<string, string>;
   outcomes: KeyOutcome[];
   lockAuditorKey?: string;
+  signupProbeEmail?: string;
 }
 
 /** Merge only the bootstrap-owned fields while preserving every other field. */
@@ -95,5 +96,6 @@ export function mergeBootstrapSecretFields(
   next.agent_keys = JSON.stringify(options.storedAgentKeys);
   next.company_id = options.companyId;
   if (options.lockAuditorKey !== undefined) next[LOCK_AUDITOR_KEY_FIELD] = options.lockAuditorKey;
+  if (options.signupProbeEmail !== undefined) next.signup_probe_email = options.signupProbeEmail;
   return next;
 }

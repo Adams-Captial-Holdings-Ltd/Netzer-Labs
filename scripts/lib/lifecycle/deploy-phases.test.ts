@@ -190,7 +190,7 @@ describe('planSecretWrites', () => {
       (p) => p.leaf === 'paperclip',
     )!;
     expect(JSON.parse(withoutAuth.value)).toEqual({});
-    expect(JSON.parse(withoutAuth.defaults!)).toEqual({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME' });
+    expect(JSON.parse(withoutAuth.defaults!)).toEqual({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME', signup_probe_email: 'REPLACE_ME' });
   });
 
   it('paperclip owns only better_auth_secret and defaults company_id without replacing it', () => {
@@ -200,7 +200,7 @@ describe('planSecretWrites', () => {
     // The SHIPPED field spelling (infra/lib/secrets-stack.ts), NOT the plan's
     // agent_keys_json / dispatch_token variant. plan-audit P1-C4, code wins.
     expect(JSON.parse(plan.value)).toEqual({ better_auth_secret: 's3cret' });
-    expect(JSON.parse(plan.defaults!)).toEqual({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME' });
+    expect(JSON.parse(plan.defaults!)).toEqual({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME', signup_probe_email: 'REPLACE_ME' });
     // Merge, or the next deploy wipes reconciler_key / agent_keys /
     // dispatch_secret, which are minted against the RUNNING instance.
     expect(plan.mergeExisting).toBe(true);
@@ -328,6 +328,7 @@ describe('populateSecretsV2', () => {
       dispatch_secret: 'minted-3',
       company_id: 'company-live',
       lock_auditor_key: 'REPLACE_ME',
+      signup_probe_email: 'REPLACE_ME',
     });
   });
 
@@ -355,6 +356,7 @@ describe('populateSecretsV2', () => {
       dispatch_secret: 'minted-3',
       company_id: 'company-live',
       lock_auditor_key: 'REPLACE_ME',
+      signup_probe_email: 'REPLACE_ME',
     });
   });
 

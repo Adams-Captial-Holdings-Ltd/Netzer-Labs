@@ -331,6 +331,7 @@ async function main(): Promise<void> {
   console.log(ok(`native runner off (${runner === 'already-off' ? 'already off' : 'turned off'})`));
   const auditor = await ensureLockAuditor({
     request, companyId: company.id, baseUrl, storedKey: fields.lock_auditor_key,
+    storedEmail: fields.signup_probe_email, requireProbeEmail: true,
   });
   // eslint-disable-next-line no-console
   console.log(ok(`lock auditor (${auditor.action})`));
@@ -419,6 +420,7 @@ async function main(): Promise<void> {
     storedAgentKeys,
     outcomes,
     lockAuditorKey: auditor.action === 'created' ? auditor.key : undefined,
+    signupProbeEmail: auditor.email,
   });
   // C-19: the SHIPPED spellings win — `agent_keys` (a JSON STRING, because an
   // ECS secret injects one field as one env var: PAPERCLIP_AGENT_KEYS_JSON)

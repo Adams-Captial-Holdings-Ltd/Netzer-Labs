@@ -136,7 +136,7 @@ describe('runtime lock bootstrap', () => {
     const { calls, opts } = auditor(stored);
     vi.stubGlobal('fetch', () => { throw new Error('global fetch called'); });
     try {
-      expect(await ensureLockAuditor(opts)).toEqual({ action: 'created', key: 'fake-minted-key' });
+      expect(await ensureLockAuditor(opts)).toMatchObject({ action: 'created', key: 'fake-minted-key' });
       expect(calls.map((call) => `${call.method} ${call.pathname}`)).toContain('POST /api/auth/sign-up/email');
     } finally { vi.unstubAllGlobals(); }
   });
@@ -150,7 +150,7 @@ describe('runtime lock bootstrap', () => {
     const { opts } = auditor({ status: 401 });
     vi.stubGlobal('fetch', () => { throw new Error('global fetch called'); });
     try {
-      expect(await ensureLockAuditor(opts)).toEqual({ action: 'created', key: 'fake-minted-key' });
+      expect(await ensureLockAuditor(opts)).toMatchObject({ action: 'created', key: 'fake-minted-key' });
     } finally { vi.unstubAllGlobals(); }
   });
 
@@ -214,7 +214,7 @@ describe('runtime lock bootstrap', () => {
         if (path.endsWith('/members')) return json({ members: [{ id: 'member-1', principalId: 'auditor-user' }] });
         return json(path.endsWith('/member-1') ? { membershipRole: 'viewer' } : {});
       };
-      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey: 'fake-stale-key', fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toEqual({ action: 'created', key });
+      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey: 'fake-stale-key', fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toMatchObject({ action: 'created', key, email: expect.stringMatching(/^lock-auditor-[0-9a-f]+@netzer\.invalid$/) });
       expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('POST /api/auth/sign-up/email');
       expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('PATCH /api/auth/profile');
       expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('POST /api/board-api-keys');
@@ -253,7 +253,7 @@ describe('runtime lock bootstrap', () => {
       const request: PaperclipRequest = async (path) => path.endsWith('/members')
         ? json({ members: [{ id: 'member-1', principalId: 'auditor-user' }] })
         : json({ membershipRole: 'viewer' });
-      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey, fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toEqual({ action: 'created', key: 'fake-minted-key' });
+      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey, fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toMatchObject({ action: 'created', key: 'fake-minted-key' });
       expect(calls[0]).toBe('POST /api/auth/sign-up/email');
       expect(calls.filter((call) => call === 'GET /api/cli-auth/me')).toHaveLength(2);
     } finally { vi.unstubAllGlobals(); }

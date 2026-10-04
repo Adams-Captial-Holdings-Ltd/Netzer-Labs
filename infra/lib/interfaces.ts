@@ -72,6 +72,7 @@ export interface SecretsOutputs {
   vendorKeysSecret: ISecret;
   /** Paperclip work engine (ADR 0010): operator-populated integration keys. */
   paperclipSecret: ISecret;
+  shadowApproversSecret: ISecret;
 }
 
 /**
@@ -102,6 +103,7 @@ export interface FilesystemOutputs {
  * DynamoStack exports. 23 tables (15 pre-v5.6 + 8 v5.6).
  */
 export interface DynamoOutputs {
+  usersTable: ITable;
   sessionsTable: ITable;
   hiveMindTable: ITable;
   auditLogTable: ITable;

@@ -21,6 +21,8 @@ import type {
   MessagingOutputs,
 } from './interfaces.js';
 
+const SHADOW_APPROVERS_READ_SID = 'ShadowApproversRead';
+
 export interface IamStackProps extends BaseStackProps {
   storage: StorageOutputs;
   secrets: SecretsOutputs;
@@ -107,6 +109,7 @@ export class IamStack extends Stack implements IamOutputs {
       // C2-full: the atomic spend ledger. Conditional single-item writes +
       // TransactWriteItems only; covered by the shared DdbRW action set.
       props.dynamo.spendLedgerTable.tableArn,
+      props.dynamo.usersTable.tableArn,
     ];
     const tableArnsWithIndexes = tableArns.flatMap((arn) => [arn, `${arn}/index/*`]);
     const bucketArns = [
@@ -130,6 +133,12 @@ export class IamStack extends Stack implements IamOutputs {
       assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com'),
       description: 'Application runtime role for ClaudeClaw orchestrator',
     });
+    this.taskRole.addToPolicy(new PolicyStatement({
+      sid: SHADOW_APPROVERS_READ_SID,
+      effect: Effect.ALLOW,
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [props.secrets.shadowApproversSecret.secretArn],
+    }));
 
     // Keep artifact version erasure outside the full default inline policy.
     // This remains attached to the existing task role and is scoped to

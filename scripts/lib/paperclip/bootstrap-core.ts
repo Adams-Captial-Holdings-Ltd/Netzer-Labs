@@ -91,7 +91,7 @@ async function reusableAuditorKey(response: Response, companyId: string): Promis
 const auditorWhoami = (fetchFn: typeof fetch, baseUrl: string, key: string) =>
   fetchFn(`${baseUrl}/api/cli-auth/me`, { headers: { authorization: `Bearer ${key}` } });
 
-async function createLockAuditor(baseUrl: string, fetchFn: typeof fetch, random: typeof randomBytes): Promise<{ key: string; userId: string }> {
+async function createLockAuditor(baseUrl: string, fetchFn: typeof fetch, random: typeof randomBytes): Promise<{ key: string; userId: string; email: string }> {
   const user = {
     email: `lock-auditor-${random(16).toString('hex')}@netzer.invalid`,
     password: random(32).toString('hex'),
@@ -110,7 +110,7 @@ async function createLockAuditor(baseUrl: string, fetchFn: typeof fetch, random:
   const key = mintedRecord.token;
   const meBefore = await auditorIdentity(await auditorWhoami(fetchFn, baseUrl, key));
   if (!meBefore.userId || meBefore.isInstanceAdmin === true) throw new Error('Paperclip lock auditor identity is invalid');
-  return { key, userId: meBefore.userId };
+  return { key, userId: meBefore.userId, email: user.email };
 }
 
 async function grantLockAuditorViewer(request: PaperclipRequest, companyId: string, userId: string): Promise<void> {
@@ -134,13 +134,18 @@ export async function ensureLockAuditor(opts: {
   companyId: string;
   baseUrl: string;
   storedKey?: string | undefined;
+  storedEmail?: string | undefined;
+  requireProbeEmail?: boolean;
   fetchFn?: typeof fetch;
   randomBytesFn?: typeof randomBytes;
-}): Promise<{ action: 'reused' } | { action: 'created'; key: string }> {
+}): Promise<{ action: 'reused'; email?: string } | { action: 'created'; key: string; email: string }> {
   const fetchFn = opts.fetchFn ?? fetch;
   const whoami = (key: string) => auditorWhoami(fetchFn, opts.baseUrl, key);
   const stored = opts.storedKey && opts.storedKey !== 'REPLACE_ME' ? opts.storedKey : undefined;
-  if (stored && await reusableAuditorKey(await whoami(stored), opts.companyId)) return { action: 'reused' };
+  if (stored && (!opts.requireProbeEmail || (opts.storedEmail && opts.storedEmail !== 'REPLACE_ME')) &&
+    await reusableAuditorKey(await whoami(stored), opts.companyId)) {
+    return { action: 'reused', ...(opts.storedEmail ? { email: opts.storedEmail } : {}) };
+  }
 
   const created = await createLockAuditor(opts.baseUrl, fetchFn, opts.randomBytesFn ?? randomBytes);
   const key = created.key;
@@ -149,7 +154,7 @@ export async function ensureLockAuditor(opts: {
   if (meAfter.isInstanceAdmin !== false || !Array.isArray(meAfter.companyIds) || !meAfter.companyIds.includes(opts.companyId)) {
     throw new Error('Paperclip lock auditor key cannot read the company or has administrator access');
   }
-  return { action: 'created', key };
+  return { action: 'created', key, email: created.email };
 }
 
 export function lockVerdictProblem(verdict: LockVerdict): string | undefined {

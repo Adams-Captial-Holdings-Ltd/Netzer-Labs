@@ -109,6 +109,7 @@ import {
 import { SEED_DEFAULTS, applyEnvOverrides, runSeed } from './lib/seed-defaults.js';
 import { validateConfiguredSurfaces, type SurfaceCheck } from './lib/surface-validate.js';
 import { buildApp, buildResourceNames, paperclipProvisioned } from '../infra/lib/constants.js';
+import { checkPostDeploySignUp } from './lib/lifecycle/sign-up-deploy-probe.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = dirname(dirname(__filename));
@@ -736,6 +737,23 @@ async function main(): Promise<void> {
     // restarts onto the phase-(b) secret versions, then wait for stability.
     await rollFargateService(env);
     await waitForServiceStable(env);
+    if (paperclipEnabled === true) {
+      let probeEmail: string | undefined;
+      try {
+        const secret = await secretsClient.send(new GetSecretValueCommand({ SecretId: `${secretBase}/paperclip` }));
+        const fields: unknown = JSON.parse(secret.SecretString ?? '{}');
+        if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
+          const value = (fields as Record<string, unknown>).signup_probe_email;
+          if (typeof value === 'string' && value !== 'REPLACE_ME') probeEmail = value;
+        }
+      } catch { /* An unreadable probe address is an unknown verdict. */ }
+      const probe = await checkPostDeploySignUp({ fetchFn: fetch,
+        baseUrl: buildResourceNames(nameSuffix).paperclipInternalUrl,
+        probeEmail, windowOpen: env.CCE_PAPERCLIP_SIGNUP_WINDOW === 'open' });
+      if (probe.status === 'fail') throw new DeployAbort('sign_up_open: Paperclip sign-up is open after deploy');
+      if (probe.status === 'warn') console.warn(warn(`Paperclip sign-up probe inconclusive (${probe.code})`));
+      else console.log(ok('Paperclip sign-up is closed'));
+    }
     await postDeployInstructions(env, outputs);
     await waitForAlbHealthy(outputs);
     await journal('compute-complete', { imageTag, imageDigest });
@@ -1502,6 +1520,7 @@ function cdkEnvBag(env: EnvBag, imageTag: string): NodeJS.ProcessEnv {
     // and `cdk deploy` drops unmatched names silently when other names match,
     // so the deploy reported green having created no Aurora and no EFS.
     CCE_PAPERCLIP_ENABLED: env.CCE_PAPERCLIP_ENABLED === '1' ? '1' : '',
+    CCE_PAPERCLIP_SIGNUP_WINDOW: env.CCE_PAPERCLIP_SIGNUP_WINDOW === 'open' ? 'open' : '',
     // Set by phase a (the resolved image digest), never by the operator's env
     // file. It changes what synth PRODUCES — app.ts passes it to
     // paperclip-stack.ts, which pins both task definitions to it — so a

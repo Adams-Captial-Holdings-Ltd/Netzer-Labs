@@ -1,3 +1,5 @@
+type SecretsManagerClient = import('@aws-sdk/client-secrets-manager').SecretsManagerClient;
+
 export class ShadowKeyUnavailableError extends Error {
   constructor(slot: string) {
     super(`Shadow key unavailable for slot ${slot}`);
@@ -55,4 +57,20 @@ export function createShadowKeyStore({ getSecretString, now, ttlMs = 60_000 }: {
       return key;
     },
   };
+}
+
+let secretsClient: SecretsManagerClient | undefined;
+export function defaultShadowKeyStore(): ReturnType<typeof createShadowKeyStore> {
+  return createShadowKeyStore({
+    now: Date.now,
+    getSecretString: async () => {
+      const secretId = process.env.SHADOW_APPROVERS_SECRET_ID;
+      if (!secretId) throw new ShadowKeyUnavailableError('unknown');
+      const { GetSecretValueCommand, SecretsManagerClient } = await import('@aws-sdk/client-secrets-manager');
+      secretsClient ??= new SecretsManagerClient({ region: process.env.AWS_REGION ?? 'us-east-1' });
+      const result = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretId }));
+      if (!result.SecretString) throw new ShadowKeyUnavailableError('unknown');
+      return result.SecretString;
+    },
+  });
 }

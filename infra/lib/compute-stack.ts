@@ -83,6 +83,7 @@ import type {
 } from './interfaces.js';
 
 export interface ComputeStackProps extends BaseStackProps {
+  paperclipSignupWindow?: boolean;
   vpc: IVpc;
   albSecurityGroup: SecurityGroup;
   fargateSecurityGroup: SecurityGroup;
@@ -533,6 +534,8 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         // later, as its own reviewed change. Unset (or anything but '1'/true)
         // leaves the legacy stack serving, which stays the safe default.
         CCE_PAPERCLIP_ENABLED: process.env.CCE_PAPERCLIP_ENABLED ?? '',
+        SHADOW_APPROVERS_SECRET_ID: RESOURCE_NAMES.secrets.shadowApprovers,
+        ...(props.paperclipSignupWindow ? { PAPERCLIP_SIGNUP_WINDOW: 'open' } : {}),
         // WHERE the engine is, which is a different question from whether the
         // router is on above. This did not exist anywhere under infra/ before:
         // PAPERCLIP_BASE_URL was read by src/lib/paperclip/config.ts and set by
@@ -608,7 +611,8 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         ),
         // Referenced only when Paperclip is provisioned: an ECS secret naming a
         // field the stored secret lacks fails the task at start. Deploy phase b
-        // merge-adds REPLACE_ME defaults for company_id and lock_auditor_key;
+        // merge-adds REPLACE_ME defaults for company_id, lock_auditor_key and
+        // signup_probe_email;
         // bootstrap writes their real values later. env.ts treats REPLACE_ME
         // as unset, so the lock reports unknown/lock_auditor_key_missing
         // (fail closed) until then.
@@ -621,6 +625,10 @@ export class ComputeStack extends Stack implements ComputeOutputs {
               PAPERCLIP_LOCK_AUDITOR_KEY: EcsSecret.fromSecretsManager(
                 paperclipSecret,
                 'lock_auditor_key',
+              ),
+              PAPERCLIP_SIGNUP_PROBE_EMAIL: EcsSecret.fromSecretsManager(
+                paperclipSecret,
+                'signup_probe_email',
               ),
             }
           : {}),
