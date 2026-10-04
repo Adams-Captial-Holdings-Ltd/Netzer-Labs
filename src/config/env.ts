@@ -311,6 +311,11 @@ const envSchema = z.object({
   PAPERCLIP_RECONCILER_KEY: optionalNonPlaceholder(),
   /** Secret field `lock_auditor_key`; read-only company-member board key for runtime-lock facts, never an agent key. */
   PAPERCLIP_LOCK_AUDITOR_KEY: optionalNonPlaceholder(),
+  /** Existing account used to prove that Paperclip sign-up is closed. */
+  PAPERCLIP_SIGNUP_PROBE_EMAIL: optionalNonPlaceholder(),
+  /** Sign-up setup window; only the exact value `open` enables it. */
+  PAPERCLIP_SIGNUP_WINDOW: z.string().optional(),
+  SHADOW_APPROVERS_SECRET_ID: z.string().optional(),
   /** Secret field `dispatch_secret`; the shared secret C-17 settled on for the dispatch route. */
   PAPERCLIP_DISPATCH_SECRET: optionalNonPlaceholder(),
   /** Port of the private dispatch listener; defaults to 3001. */

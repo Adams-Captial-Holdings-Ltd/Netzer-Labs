@@ -543,6 +543,11 @@ jobs:
             mv next.json current.json
             echo "added lock_auditor_key placeholder without replacing live fields"
           fi
+          if [ "$(jq 'has("signup_probe_email")' current.json)" != "true" ]; then
+            jq '.signup_probe_email = "REPLACE_ME"' current.json > next.json
+            mv next.json current.json
+            echo "added signup_probe_email placeholder without replacing live fields"
+          fi
 
           # better_auth_secret has exactly ONE owner: this installation's
           # Secrets Manager field. PAPERCLIP_BETTER_AUTH_SECRET and the value

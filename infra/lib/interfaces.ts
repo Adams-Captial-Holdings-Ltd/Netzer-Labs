@@ -72,6 +72,7 @@ export interface SecretsOutputs {
   vendorKeysSecret: ISecret;
   /** Paperclip work engine (ADR 0010): operator-populated integration keys. */
   paperclipSecret: ISecret;
+  shadowApproversSecret: ISecret;
 }
 
 /**

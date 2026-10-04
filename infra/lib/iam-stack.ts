@@ -21,6 +21,8 @@ import type {
   MessagingOutputs,
 } from './interfaces.js';
 
+const SHADOW_APPROVERS_READ_SID = 'ShadowApproversRead';
+
 export interface IamStackProps extends BaseStackProps {
   storage: StorageOutputs;
   secrets: SecretsOutputs;
@@ -130,6 +132,12 @@ export class IamStack extends Stack implements IamOutputs {
       assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com'),
       description: 'Application runtime role for ClaudeClaw orchestrator',
     });
+    new Policy(this, 'ShadowApproversReadPolicy', { statements: [new PolicyStatement({
+      sid: SHADOW_APPROVERS_READ_SID,
+      effect: Effect.ALLOW,
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [props.secrets.shadowApproversSecret.secretArn],
+    })] }).attachToRole(this.taskRole);
 
     // Keep artifact version erasure outside the full default inline policy.
     // This remains attached to the existing task role and is scoped to

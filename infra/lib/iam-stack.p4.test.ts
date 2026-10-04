@@ -49,7 +49,8 @@ it('P4 IAM leaves all existing role permissions and resources unchanged', () => 
   const rows = statements();
   expect(rows.filter((row) => NEW_SIDS.includes(row.Sid ?? '')).map((row) => row.Sid).sort(),
     'version erasure must add exactly two separate grants').toEqual(NEW_SIDS);
-  const old = rows.filter((row) => !NEW_SIDS.includes(row.Sid ?? '') && row.Sid !== TASK_PROTECTION_SID);
+  const old = rows.filter((row) => !NEW_SIDS.includes(row.Sid ?? '') && row.Sid !== TASK_PROTECTION_SID
+    && row.Sid !== 'ShadowApproversRead');
   const hash = createHash('sha256').update(JSON.stringify(old.map((row) => JSON.stringify(row)).sort())).digest('hex');
   expect(hash, 'the 36 original statements must remain byte-identical in the synthesized policy')
     .toBe(BASELINE_HASH);

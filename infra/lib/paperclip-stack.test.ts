@@ -633,7 +633,7 @@ describe('orchestrator to Paperclip reachability', () => {
       new URL('../../scripts/lib/lifecycle/deploy-phases.ts', import.meta.url),
       'utf8',
     );
-    expect(deployPhases).toContain("defaults: JSON.stringify({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME' })");
+    expect(deployPhases).toContain("defaults: JSON.stringify({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME', signup_probe_email: 'REPLACE_ME' })");
   });
 
   it('does not reference the additive company-id field at Tier 0', () => {

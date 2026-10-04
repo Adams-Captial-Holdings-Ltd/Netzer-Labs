@@ -197,7 +197,13 @@ export interface AuditEvent {
     | 'power_pause'
     | 'effect_applied'
     | 'effect_unknown'
-    | 'effect_resolved';
+    | 'effect_resolved'
+    | 'approval_requested'
+    | 'approval_decided'
+    | 'approval_refused'
+    | 'shadow_assigned'
+    | 'shadow_rotated'
+    | 'shadow_retired';
   agentId?: string;
   chatId?: string;
   /** Speaker id when known (Slack user, Telegram chat numeric, dashboard operator). */
@@ -229,6 +235,12 @@ const ALWAYS_AUDITED_ACTIONS: ReadonlySet<AuditEvent['action']> = new Set([
   'effect_applied',
   'effect_unknown',
   'effect_resolved',
+  'approval_requested',
+  'approval_decided',
+  'approval_refused',
+  'shadow_assigned',
+  'shadow_rotated',
+  'shadow_retired',
   'panic_triggered',
   'panic_restored',
   'panic_repaired',

@@ -159,6 +159,8 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
       // company_id).
       // The Aurora-generated DB credentials live in their own secret below.
       paperclip: `/${app}/paperclip`,
+      shadowApprovers: `/${app}/shadow-approvers`,
+      shadowApproversSetup: `/${app}/shadow-approvers-setup`,
       paperclipDb: `/${app}/paperclip-db`,
     },
 

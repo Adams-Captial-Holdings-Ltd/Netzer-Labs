@@ -2,13 +2,25 @@
 feature: paperclip
 document_role: handoff
 status: current
-observed_at: 2026-10-03
-as_of_commit: af91a47f3a36ab8aad1349c6878185f7bedf7c32
+observed_at: 2026-10-04
+as_of_commit: 768ecf64633af4fb4c109eca6ea511afee2d39be
 ---
 
 # Paperclip integration handoff
 
-## Current state (2026-10-03, step 5)
+## Current state (2026-10-04, step 6)
+
+This section was checked on 2026-10-04 against `origin/development` `768ecf6`. The sections below it are older state and were not re-checked.
+
+- **Branch:** `feature/wp-step6-shadow-approvals` (from `origin/development` `768ecf6`; merge target `development`). Commits on it: `fc51ef6`, `f65e1c8`, `13b046c`, `3fafb9a`, `79b06d0`, the review-round red tests `dab3954`, the step 6 records `12aef9d`, and the review fix round `fe2e891` (source and infrastructure) and `d7c599f` (scripts). **Pushed:** no. **PR:** none.
+- **Step 5 is merged:** PR #204 merged into `development` as `768ecf6` (the effect ledger, the executor and the tool policy, [ADR 0013](../../adr/0013-sync-attach-execution-contract.md)). Nothing was deployed.
+- **Step 6 is built locally:** the hash-bound approvals library, the Paperclip approvals port, the board-key store and its Secrets Manager secret, the shadow registry rows, the operator command line `npm run paperclip:shadow`, sign-up closed by default and the sign-up probe in the runtime lock ([ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md), [ADR 0014](../../adr/0014-netzer-only-ai-runtime.md)). The library is not on the dispatch path (A140). The live proofs S6-L1 to S6-L5 are PENDING; none of it has run against a real Paperclip or a real AWS account.
+- **The review fix round is built** (`fe2e891` and `d7c599f`; decisions 43, 50 and 51 in the [decision log](decision-log.md)): the secret is split in two (`/<app>/shadow-approvers` for board keys, readable by the task role; `/<app>/shadow-approvers-setup` for slot logins, with no service grant), the post-deploy sign-up check is the orchestrator's start-time lock, registry rows that do not validate count as absent, every refusal and an attribution mismatch leave an audit row, and the operator commands `pool`, `assign`, `rotate` and `retire` are resumable. The final full validation, the frozen gate and the fresh critic have not run on the tip.
+- **Deployment:** none. `feature/*` and `development` deploy nothing. No AWS call was made.
+
+**Next action:** run the final validation, the frozen gate and the critic on the tip, then the owner's yes to push and open the PR into `development`. Then step 7 (the first Work UI). Session log: [Work Platform step 6](handoffs/2026-10-04-work-platform-step-6-shadow-approvals.md).
+
+## State as of 2026-10-03 (step 5)
 
 This section was checked on 2026-10-03 against `origin/development` `af91a47`. The sections below it are older state and were not re-checked.
 
@@ -197,6 +209,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Work Platform step 6: shadow identities and approvals](handoffs/2026-10-04-work-platform-step-6-shadow-approvals.md) | 2026-10-04 | Built the hash-bound approvals library, the shadow-user pool with its operator command line, the board-key secret and closed sign-up with a probe in the runtime lock on `feature/wp-step6-shadow-approvals` (ADR 0016, ADR 0014). Carries the ledger forward and adds A148 to A153, M100, M101 and P91. Review fixes decided, not yet built; live proofs PENDING. Not pushed or deployed |
 | [Work Platform step 5: safe actions](handoffs/2026-10-03-work-platform-step-5-safe-actions.md) | 2026-10-03 | Built the effect ledger (a new table with a frozen key), the deterministic executor and frozen drafts as a library, the AI-step tool policy, the turn ID with one audit row per tool call, and `pack effect list` and `pack effect resolve` on `feature/wp-step5-safe-actions`. The completion write is not ledgered yet (A140). Carries the ledger forward and adds A140 to A147, M98, M99 and P90. The review fan-out and the fix round are done (`d32f612`, `42c7a04`); the final validation is not. Not pushed; nothing deployed |
 | [Work Platform step 4: the execution contract](handoffs/2026-10-03-work-platform-step-4-execution-contract.md) | 2026-10-03 | Built the held dispatch route, the attempt row with a fenced lease, the completion writer, the sweep, the drain and the load balancer address on `feature/wp-step4-execution-contract` (ADR 0013). Carries the ledger forward and adds A132 to A139, M96, M97, P87 to P89. Merged as PR #203 (`af91a47`); nothing deployed |
 | [Work Platform step 3: pack format and `pack validate`](handoffs/2026-10-02-work-platform-step-3-pack-format.md) | 2026-10-02 | Built the pack format v1 schemas and the offline `pack validate` command on `feature/wp-step3-pack-format`; froze the file shapes (decision 37, ADR 0021). Three reviews found seven HIGH bypasses that the frozen tests missed, now pinned by hardening tests. Carries the ledger forward and adds A127 to A131, M93 to M95 and P84 to P86. Not pushed; nothing deployed |

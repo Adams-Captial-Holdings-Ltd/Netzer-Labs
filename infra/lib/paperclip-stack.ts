@@ -92,6 +92,7 @@ const PAPERCLIP_MIGRATE_COMMAND = [
 ];
 
 export interface PaperclipStackProps extends BaseStackProps {
+  paperclipSignupWindow?: boolean;
   vpc: IVpc;
   /** Task SG from network-stack: orchestrator -> 3100 ingress, NAT egress. */
   paperclipSecurityGroup: SecurityGroup;
@@ -453,18 +454,11 @@ export class PaperclipStack extends Stack {
         // /app/ui/dist; the server tries ../ui-dist, then ../../ui/dist, so
         // the Dockerfile adds no bridge.
         //
-        // LEDGER A38, and it is the reason no browser listener is emitted:
-        // serving the board also serves `POST /api/auth/sign-up/email`, which
-        // the probed artifact answers 200 to WITH NO CREDENTIAL, even under
-        // PAPERCLIP_DEPLOYMENT_MODE=authenticated below. Open self-
-        // registration is therefore contained by NETWORK POSTURE ONLY: the
-        // console is reachable only through the AWS-authenticated SSM tunnel.
-        // Anyone who reaches the board can create themselves an account.
-        // Whoever wires that rule must put an authorizer in front of it or
-        // close sign-up upstream FIRST — this flag is not a control.
+        // LEDGER A38: sign-up is closed by the flag below and checked by the
+        // post-deploy and runtime probes. The board remains private.
         SERVE_UI: 'true',
-        // NEVER local_trusted (Phase 4.5 acceptance 1). Note this does not
-        // gate sign-up; see the A38 note above.
+        ...(props.paperclipSignupWindow ? {} : { PAPERCLIP_AUTH_DISABLE_SIGN_UP: 'true' }),
+        // NEVER local_trusted (Phase 4.5 acceptance 1).
         PAPERCLIP_DEPLOYMENT_MODE: 'authenticated',
         PAPERCLIP_DEPLOYMENT_EXPOSURE: 'private',
         // The private-hostname guard answers 403 to every request whose Host is

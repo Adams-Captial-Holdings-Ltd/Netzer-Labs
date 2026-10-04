@@ -12,6 +12,12 @@ describe('Paperclip bootstrap secret safety', () => {
     expect(mergeBootstrapSecretFields({ ...options, lockAuditorKey: 'fake-new-key' })).toMatchObject({ lock_auditor_key: 'fake-new-key', future_field: 'kept' });
     expect(mergeBootstrapSecretFields(options)).toMatchObject(current);
   });
+  it('writes the known lock auditor email for the sign-up probe', () => {
+    const next = mergeBootstrapSecretFields({ current: { signup_probe_email: 'REPLACE_ME' },
+      companyId: 'company-uuid', storedAgentKeys: {}, outcomes: [],
+      signupProbeEmail: 'auditor@netzer.invalid' });
+    expect(next.signup_probe_email).toBe('auditor@netzer.invalid');
+  });
   it.each([
     ['an unreadable secret', async () => Promise.reject(new Error('access denied'))],
     ['invalid JSON', async () => '{"agent_keys":"pcp_live"'],

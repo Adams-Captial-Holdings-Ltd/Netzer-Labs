@@ -28,6 +28,8 @@ export class SecretsStack extends Stack implements SecretsOutputs {
   public readonly bedrockGuardrailsSecret: Secret;
   public readonly vendorKeysSecret: Secret;
   public readonly paperclipSecret: Secret;
+  public readonly shadowApproversSecret: Secret;
+  public readonly shadowApproversSetupSecret: Secret;
 
   constructor(scope: Construct, id: string, props: SecretsStackProps) {
     super(scope, id, props);
@@ -40,13 +42,16 @@ export class SecretsStack extends Stack implements SecretsOutputs {
       secretName: string,
       description: string,
       fields: string[],
+      initialValue?: string,
     ): Secret =>
       new Secret(this, logicalId, {
         secretName,
         description,
         encryptionKey: props.dataKey,
         removalPolicy: RemovalPolicy.RETAIN,
-        secretObjectValue: Object.fromEntries(fields.map((f) => [f, placeholder])),
+        ...(initialValue === undefined
+          ? { secretObjectValue: Object.fromEntries(fields.map((f) => [f, placeholder])) }
+          : { secretStringValue: SecretValue.unsafePlainText(initialValue) }),
       });
 
     this.slackSecret = makeSecret(
@@ -115,6 +120,20 @@ export class SecretsStack extends Stack implements SecretsOutputs {
       RESOURCE_NAMES.secrets.paperclip,
       'Paperclip work engine: auth secret + bridge API keys',
       ['better_auth_secret', 'reconciler_key', 'agent_keys', 'dispatch_secret'],
+    );
+    this.shadowApproversSecret = makeSecret(
+      'SecretShadowApprovers',
+      RESOURCE_NAMES.secrets.shadowApprovers,
+      'Paperclip shadow approver credentials',
+      [],
+      '{"v":1,"slots":{}}',
+    );
+    this.shadowApproversSetupSecret = makeSecret(
+      'SecretShadowApproversSetup',
+      RESOURCE_NAMES.secrets.shadowApproversSetup,
+      'Paperclip shadow approver setup credentials',
+      [],
+      '{"v":1,"slots":{}}',
     );
   }
 }

@@ -23,11 +23,20 @@ implemented_by:
   - src/lib/work/effect-ledger.ts
   - src/lib/work/effect-rows-dynamo.ts
   - src/lib/work/executor.ts
+  - src/lib/work/approvals.ts
+  - src/lib/work/approvals-paperclip.ts
+  - src/lib/paperclip/shadow-users.ts
+  - src/lib/paperclip/shadow-rows-dynamo.ts
+  - src/lib/paperclip/shadow-keys.ts
+  - src/lib/paperclip/sign-up-probe.ts
   - src/lib/tools/tool-policy.ts
   - src/agent/agent-loop.ts
   - src/lib/config/agent-loader.ts
   - src/lib/audit/audit-writer.ts
   - scripts/pack.ts
+  - scripts/paperclip-shadow.ts
+  - scripts/lib/paperclip/shadow-core.ts
+  - scripts/lib/lifecycle/sign-up-deploy-probe.ts
   - src/lib/missions/mission-acl.ts
   - src/lib/missions/format.ts
   - src/lib/state/mission-tasks-repo.ts
@@ -73,9 +82,19 @@ tested_by:
   - src/lib/paperclip/attempt-store.test.ts
   - src/lib/work/executor.test.ts
   - src/lib/work/effect-rows-dynamo.test.ts
+  - src/lib/work/approvals.test.ts
+  - src/lib/work/approvals-paperclip.test.ts
+  - src/lib/paperclip/shadow-keys.test.ts
+  - src/lib/paperclip/shadow-rows-dynamo.test.ts
+  - src/lib/paperclip/sign-up-probe.test.ts
+  - src/lib/paperclip/lock-boot.sign-up.test.ts
   - src/lib/tools/tool-policy.test.ts
   - src/agent/agent-loop.tool-policy.test.ts
   - infra/lib/dynamo-stack.effect-ledger.test.ts
+  - infra/lib/secrets-stack.shadow-approvers.test.ts
+  - infra/lib/paperclip-stack.sign-up.test.ts
+  - scripts/lib/paperclip/shadow-core.test.ts
+  - scripts/lib/lifecycle/sign-up-deploy-probe.test.ts
   - scripts/pack.test.ts
   - src/adapters/dashboard/paperclip-dispatch.sync-attach.test.ts
   - src/adapters/dashboard/missions.test.ts
@@ -187,6 +206,7 @@ Paperclip is live in staging as the missions system of record; the 2026-09-06 li
   has a `turnId`, and every tool call writes one `tool_invoke` audit row with
   IDs and an argument hash ([ADR 0013](../../adr/0013-sync-attach-execution-contract.md),
   [security model](../../security-model.md#ai-steps-cannot-write-step-5)).
+- **Approvals and shadow users (step 6, built on a branch, not merged, not run against a real Paperclip or AWS).** A person's decision is recorded in Paperclip as that person. Each approver has a headless Paperclip user (a slot from a pool made in one private sign-up window) with its own board key. An approval is a Paperclip classic approval whose payload holds the sha256 of the exact payload, the case, stage, step, round and decision class. `decide` sends Approve, Reject or Request Changes with the approver's own key and checks that Paperclip names that user as the decider. `verifyApproval` and `runApprovedEffect` read the approval live and refuse a changed payload, another case or class, an operator, the instance admin, the lock auditor, an unassigned slot or a retired approver, so no approval means no write. A comment is required for Reject and Request Changes and optional for Approve; Netzer enforces it. Paperclip sign-up is closed by default and proved closed by a probe in the runtime lock. An operator command line (`npm run paperclip:shadow`) manages the pool ([ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md), [ADR 0014](../../adr/0014-netzer-only-ai-runtime.md), [security model](../../security-model.md#human-approvals-step-6)). The library is not on the dispatch path (A140), and the dashboard route that calls `decide` is step 7.
 - **The Missions anti-corruption layer.** The existing four
   `/api/missions*` contracts and capability gates are served through a
   `MissionEngine`, with the legacy handlers retained as one whole router-level
@@ -219,9 +239,11 @@ Paperclip is live in staging as the missions system of record; the 2026-09-06 li
 - **An internal Paperclip operator console.** The shipped React board is served
   in authenticated mode, but it is not attached to Netzar's ALB and is never
   linked from the Netzar SPA. Operators reach port 3100 only through an
-  AWS-authenticated ECS Exec/SSM tunnel. This network boundary contains the
-  pinned artifact's open email-signup route until upstream provides a safe
-  signup control or a separately reviewed access-controlled listener exists. The plan replaces SSM-only access with a host-based bridge on missions.staging.pgnos.ai (plan B-1..B-6) once Phase 1 and 8.5 land. That bridge is superseded (2026-09-29) and will not be built: see [do-not-build.md](do-not-build.md).
+  AWS-authenticated ECS Exec/SSM tunnel. Since step 6 (on a
+  branch) the task runs with `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true` unless a deploy
+  opens the sign-up window, and a probe in the runtime lock checks it; before that,
+  this network boundary alone contained the pinned artifact's open email-signup
+  route. The plan replaces SSM-only access with a host-based bridge on missions.staging.pgnos.ai (plan B-1..B-6) once Phase 1 and 8.5 land. That bridge is superseded (2026-09-29) and will not be built: see [do-not-build.md](do-not-build.md).
 
 The behavior above is present in source and deployed to staging: the Paperclip
 base went green in run `33067242593` on `ac70509`, and the staging contract
@@ -248,6 +270,8 @@ Required execution order from here: Phase 0 (P0-0 done/deployed; P0-1 live PASS 
 owner delegation) → Phase 8.5 → the same-origin UI/session bridge → Phases
 10–12 → the final legacy retirement. The volatile pass/fail counts and exact
 next action belong in [HANDOFF.md](HANDOFF.md), not this index.
+
+**Added 2026-10-04 (step 6).** The step 6 claims in this README (approvals, shadow users, the two approver secrets, the registry rows, the operator command line, closed sign-up and its probe) were read against the code on `feature/wp-step6-shadow-approvals` after the review fix round (`fe2e891` for source and infrastructure, `d7c599f` for scripts). The branch is not merged or deployed, and nothing has run against a real Paperclip or a real AWS account. The first build was `79b06d0`; the four decisions of 2026-10-04 (the secret split, the post-deploy check and the review fixes in decisions 50 and 51) are in the code now. The rest of this README is as before.
 
 **Added 2026-10-03 (step 5).** The step 5 claims in this README (the effect ledger, the executor, the tool policy, the turn audit and `pack effect`) were checked on 2026-10-03 against the code on `feature/wp-step5-safe-actions` at `42c7a04` (after the review fixes and the cleanup), which is not merged or deployed. The rest of this README is still as of `f0c26fb` and the step 4 claims were added without re-checking the older ones.
 
@@ -285,6 +309,10 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Effect ledger and executor | `src/lib/work/effect-ledger.ts`, `effect-rows-dynamo.ts`, `executor.ts`, `infra/lib/dynamo-stack.ts` (step 5, on a branch) | `<app>-effect-ledger` table (`PK = CASE#<caseKey>`, `SK = EFFECT#<stage>#<step>#<stageEntryNo>`, drafts under `DRAFT#`, point-in-time recovery, no expiry, sparse `gsi1-unknown` index). Rows are `pending`, `applied`, `retryable` or `unknown`. `runEffect` fences before every write, leaves a `pending` row younger than 270 s alone (`effect_retry`), reads back an older `pending` row before any retry, refuses a changed payload (`EffectConflictError`) and stops an unknown outcome or an unknown stored state (`EffectUnknownError`). An `applied` row keeps `auditPending` until its audit row is written, and a replay repairs a lost audit. `resolve` writes its audit row first. `saveDraftOnce` saves a draft once (at most 300 000 bytes). A library: not wired to the dispatch completion write |
 | Tool policy and turn audit | `src/lib/tools/tool-policy.ts`, `src/lib/tools/registry.ts`, `src/agent/agent-loop.ts`, `src/lib/config/agent-loader.ts`, `src/lib/audit/audit-writer.ts` (step 5, on a branch) | `toolDecision` is default-deny in an AI step (a built-in tool must be `readOnly: true`; a remote tool must be in the role allowlist from `agent.yaml`, read with a YAML parse; a storage error reading the file fails the turn). The loop applies it to the offered tool list and again at dispatch. A denied call is audited `blocked`. Each turn has a `turnId`; each tool call writes one `tool_invoke` row (IDs and an argument hash). `effect_applied`, `effect_unknown` and `effect_resolved` are always audited |
 | `pack effect` | `scripts/pack.ts` (step 5, on a branch) | `pack effect list` prints the unknown rows (IDs only). `pack effect resolve <caseKey> <stage> <step> <stageEntryNo> (--applied \| --not-applied) --by <userId>` clears one. On any failure each prints one line, the error's name (plus the code for `EffectResolveError`), and exits 1 |
+| Approvals (step 6, on a branch) | `src/lib/work/approvals.ts`, `approvals-paperclip.ts` | `requestApproval` creates a classic approval (`request_board_approval`) with the seven-field payload and audits `approval_requested`. `decide` runs the comment, approver, status and class checks before any write, sends approve, reject or request-revision with the approver's own board key, checks `decidedByUserId`, and audits `approval_decided`. Every refusal audits `approval_refused`; a mismatch between the decider Paperclip names and the shadow user audits `approval_refused` with result `error` and code `attribution_mismatch`, throws, and is never audited as `approval_decided`. `verifyApproval` reads the record live and refuses with a code; `runApprovedEffect` verifies, then runs the effect. `requiresHumanApproval` and `gateFor` read the pack's decision classes and gates. The Paperclip port sends the decision with the shadow key only after the runtime lock and the kill switch pass, with a 20 s timeout and `redirect: 'error'`, and it shape-checks every record it gets back. A library: not on the dispatch path |
+| Shadow users (step 6, on a branch) | `src/lib/paperclip/shadow-users.ts`, `shadow-rows-dynamo.ts`, `shadow-keys.ts`, `infra/lib/secrets-stack.ts`, `infra/lib/iam-stack.ts` | Registry rows in the users table (`SHADOWSLOT#<slot>`, `USER#<id>`, `PCUSER#<id>`); assign and retire are one conditional transaction; a slot never returns to free; slot `00` is refused. A row that does not validate is treated as absent, so verification fails closed. Board keys only are in the secret `/<app>/shadow-approvers`, read by the task role (`GetSecretValue`, that ARN only), cached 60 s. The slot logins are in `/<app>/shadow-approvers-setup`, which no service can read; only the operator's own credentials do |
+| Operator command line (step 6, on a branch) | `scripts/paperclip-shadow.ts`, `scripts/lib/paperclip/shadow-core.ts` | `npm run paperclip:shadow -- [--env=<name>] pool, assign, rotate, retire, check, probe, list`. The suffix `CCE_NAME_SUFFIX` picks the users table, the audit table and the secrets. `pool`, `assign`, `rotate` and `retire` are resumable: run the same command again after a crash. An error names the failed command; a failed audit write prints that the action is done but the audit row was not written. Exit 0 on success, 1 on failure, 2 on a usage error. No command prints a key, a password or an email |
+| Closed sign-up and its probe (step 6, on a branch) | `src/lib/paperclip/sign-up-probe.ts`, `lock-boot.ts`, `infra/lib/paperclip-stack.ts`, `infra/lib/compute-stack.ts`, `infra/bin/app.ts`, `scripts/deploy.ts`, `scripts/lib/lifecycle/sign-up-deploy-probe.ts`, `scripts/lib/lifecycle/deploy-phases.ts` | `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true` on the Paperclip task unless `CCE_PAPERCLIP_SIGNUP_WINDOW=open`; with the window open the orchestrator gets `PAPERCLIP_SIGNUP_WINDOW=open`. The lock boot combines the probe with the runtime verdict at start and every 60 s: `sign_up_open` is a violation, a window or an unprovable probe is `unknown`. The deploy script probes only when `PAPERCLIP_BASE_URL` is set; otherwise it prints that it cannot reach Paperclip and that the orchestrator proves sign-up closed at start |
 | Missions ACL and privacy | `src/lib/missions/mission-acl.ts` (`canReadBoard`, `canMutateMission`), `src/adapters/dashboard/missions.ts`, `src/lib/tools/privacy-tools.ts` | Preserves the four `/api/missions*` envelopes/capability gates, resolves the public 8-character reference without silent ambiguity, and joins Netzar-side provenance into privacy exports |
 | Mission surfaces and tools | `src/lib/missions/format.ts`, `src/lib/tools/mission-tools.ts`, `src/lib/tools/paperclip-tools.ts` | One status/priority vocabulary across chat surfaces; assignment notification parity; exact approved Paperclip verbs; one audit record per successful mutation |
 | Dashboard and CLI | `web/src/pages/Missions.tsx`, `web/src/lib/glossary.ts`, `scripts/mission.ts` | Six ordered kanban lanes, four priority labels and no due-date rendering; CLI list uses `owner`, create sends the actual route body, and show scans bounded real owner boards because no detail route exists |
@@ -422,6 +450,29 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
 - Every Paperclip-dispatched turn is an AI step (`toolPolicy: { aiStep: true }`). In an AI step a built-in tool runs only when its handler is marked `readOnly: true` (10 tools are), and a remote tool runs only when the role allowlist names it. The allowlist (the top-level `tools` key in `agent.yaml`) applies in every turn; an agent with no `tools` key, or no `agent.yaml`, has no allowlist, and any other shape of the value denies every tool. `paperclip_add_comment` and `paperclip_create_subtask` refuse when the turn holds no run.
 - The effect ledger key `(caseKey, stage, step, stageEntryNo)` and the table shape are frozen (one-way, owner decision 2026-10-03). A `pending` row is never retried blind (a row younger than 270 s is not touched at all), an `unknown` row stops every call until `pack effect resolve`, and the same key with a different payload hash is `effect_conflict`. The dispatch error codes are `effect_unknown` (409), `effect_conflict` (409) and `effect_retry` (503, retryable).
 
+- **Approvals (step 6).** The record is a Paperclip classic approval of type `request_board_approval` with the payload `{ netzerApproval: 1, payloadSha256, caseKey, stage, step, stageEntryNo, decisionClass }` and nothing else (one-way, owner 2026-10-04). Only a Netzer user with an active shadow user that holds the approval's decision class can decide. A comment is required for Reject and Request Changes (non-empty after trimming, at most 4 000 characters) and optional for Approve. `decide`'s refusal codes are `comment_required`, `comment_too_long`, `not_an_approver`, `paperclip_unavailable`, `not_found`, `not_a_netzer_approval`, `not_pending`, `class_not_entitled` and `key_unavailable`; the audit also holds `paperclip_rejected` (Paperclip answered with an HTTP 4xx), `decision_outcome_unknown` (a timeout, a network error or a 5xx, result `error`; Paperclip may have applied the decision) and `attribution_mismatch` (result `error`). `verifyApproval`'s codes are `paperclip_unavailable`, `not_found`, `not_a_netzer_approval`, `not_approved`, `hash_mismatch`, `key_mismatch`, `class_mismatch`, `not_a_shadow_user`, `approver_retired` and `class_not_entitled`. A registry row that does not validate counts as absent. A comment appears in the audit only as the sha256 of `<approvalId>`, a newline and the trimmed comment. Audit rows hold IDs and hashes only.
+- **Shadow users (step 6).** A slot is two digits, `01` to `99`; a slot never returns to free and is never reused. Assignment gives the slot user the company role `operator`, the lowest role that can decide (a `viewer` is read-only upstream). A slot's password cannot be rotated at the pinned Paperclip (A149); the board key can. The reconcile job of ADR 0016 is the operator `check` command, run before onboarding and after any rotation or role change.
+- **Closed sign-up (step 6).** Until a deployment's Paperclip secret holds `signup_probe_email` (the bootstrap writes it), the probe cannot run and the lock reads `unknown` (`sign_up_probe_email_missing`), so the Paperclip surface stays closed. During a sign-up window the lock also reads `unknown`. Outside a window an open sign-up is a violation, and the new task refuses to start. That start-time lock is the post-deploy check. The deploy script probes only when `PAPERCLIP_BASE_URL` (the tunnel) is set, since the deploy host cannot reach Paperclip's private address; with it set, an open sign-up aborts the deploy. The bootstrap reuses a valid lock auditor key; `--new-auditor` forces a new one.
+- **Known limit (A153).** `decide()` trusts the `netzerUserId` its caller passes, and the task role can write the users table that holds the registry rows. Step 7's route must bind the user to the authenticated session.
+
+### Operator runbook: the approver pool (step 6)
+
+None of this has run against a real Paperclip or a real AWS account (the live proofs S6-L1 to S6-L5 are PENDING). The operator's own AWS credentials read and write both approver secrets. The command line uses the same environment as the bootstrap: `PAPERCLIP_BASE_URL` (through the SSM port-forward to the private instance), `CCE_PAPERCLIP_ADMIN_EMAIL`, `PAPERCLIP_ADMIN_PASSWORD`, and `--env=<name>` to pick the env file. The instance-admin session stays with the operator.
+
+1. Deploy with the sign-up window open: set `CCE_PAPERCLIP_SIGNUP_WINDOW=open` for a local `npm run deploy`. While it is open the lock reads `unknown` and the Paperclip surface stays closed.
+2. `npm run paperclip:bootstrap`. It also records the lock auditor's email as `signup_probe_email` in the Paperclip secret.
+3. `npm run paperclip:shadow -- pool` (default 25 slots; `--size <n>` up to 99). Creating a new Paperclip user works only inside the window; an existing slot is left alone, and a run that crashed is repaired by running it again.
+4. Redeploy with the window closed (the switch unset).
+5. `npm run paperclip:shadow -- probe`. Exit 0 only when sign-up is closed.
+6. `npm run paperclip:shadow -- assign --user <netzerUserId> --name <display name> --classes <a,b>` for each approver. The Netzer user must be active. A run that crashed is repaired by running the same command again.
+
+Afterwards: `npm run paperclip:shadow -- rotate --user <netzerUserId>` mints a new board key and deletes the old one (it finds the old key by listing keys, which is unproven live, A152; a repeat run rotates again); `retire --user <netzerUserId>` removes the slot user's company access and never reuses the slot; `check` verifies every assigned slot and exits 1 on a mismatch (it also exits 1 when the users table holds no slot rows, which usually means the wrong environment), so run it before onboarding and after any rotation or role change; `list` prints slot, state, Netzer user id and classes.
+
+Two known limits:
+
+- On a deployment whose Paperclip secret has no `signup_probe_email` yet, the bootstrap reuses a valid lock auditor key and prints that the probe address is unknown. Run it with `--new-auditor` inside the window to create a new auditor and write the address (A150).
+- The automatic staging deploy workflow has no window input. The window needs a local deploy or a workflow variable (not built).
+
 ### Paperclip task-definition variables the probe made necessary
 
 - `PAPERCLIP_ALLOWED_HOSTNAMES` = the Cloud Map hostname the orchestrator dials (`paperclip.<app>.internal`). In `authenticated`/`private` mode the pinned image's private-hostname guard answers 403 to every request, `/api/health` included, whose Host is neither loopback nor on this list; the list replaces `config.json`'s `server.allowedHostnames`. Found by run 33733071639.
@@ -496,6 +547,9 @@ Measured by the Phase 0 live critic (P1-1) creating a small parent/child/blocked
 | The vendored `updatedSince` patch can diverge from upstream | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Re-evaluate every artifact re-pin and drop the patch when an upstream release implements the proven contract |
 | Node-vs-Postgres clock skew beyond the configured overlap can still lose a row | `src/lib/paperclip/watermark.ts` documents the exact limit; overlap fixes truncation, not unbounded clock skew | Monitor watermark lag and keep `paperclip/poll_overlap_ms` sized from observed clocks |
 | The completion write is not ledgered (step 5) | `src/lib/work/executor.ts` is not called by `dispatch-worker.ts`; the dispatch carries `issueId`, `runId` and `retryOfRunId` only, with no case key or stage | Wire it in the step that puts the case key and the stage on the wire (step 8 or 13); do not invent a stand-in key (the key is frozen) |
+| Step 6 runs against no real Paperclip | Pool creation, assign, a real approve with a slot key, the secret grants, a password-rotation route and a rollback to an open-sign-up revision are all untested live (S6-L1 to S6-L5) | Run at the staging trip (owner gate, Aurora snapshot first) |
+| A slot password cannot be rotated; `rotate`'s key list is unproven | No password-change route in `server/src` at the pin (A149); `GET /api/board-api-keys` was not exercised by the step 2 spikes (A152) | Prove at the live rig (S6-L4, S6-L2) |
+| `decide()` trusts the user id its caller passes | The task role can write the users table that holds the registry rows (A153) | Step 7's route binds the user to the session; registry write access is taken up in step 16 |
 | Step 5 staging proofs are not run | The `effect-ledger` table, a restart between `pending` and `applied`, and the restore drill need staging ([ADR 0013](../../adr/0013-sync-attach-execution-contract.md)) | Run at the staging trip (owner gate); the restore drill is step 13 |
 | Legacy retirement is not yet allowed | [bar-and-phases.md](bar-and-phases.md) Phase 9 requires two clean production weeks and a separately reviewed final commit | Keep the router switch, legacy handlers and `paperclip_disabled`; delete only after the production evidence gate |
 | Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order: Phase 0 (P0-2 live re-check and P0-3's update case after this branch's deploy and the bootstrap repair) → Phase 1 (including P1-3 parent-owner delegation) → 8.5 from the observed shapes in section 6 → the UI/session bridge → 10–12 |
@@ -533,6 +587,12 @@ Step 5 (safe actions) focused tests:
 
 ```powershell
 npx vitest run src/lib/work src/lib/config/agent-loader.tools.test.ts src/lib/config/agent-loader.tools.review.test.ts src/lib/tools/tool-policy.test.ts src/agent/agent-loop.tool-policy.test.ts src/agent/agent-loop.tool-policy.review.test.ts src/lib/tools/paperclip-tools.test.ts src/lib/paperclip/dispatch-worker.test.ts scripts/pack.test.ts infra/lib/dynamo-stack.effect-ledger.test.ts
+```
+
+Step 6 (approvals and shadow users) focused tests:
+
+```powershell
+npx vitest run src/lib/work/approvals.test.ts src/lib/work/approvals-paperclip.test.ts src/lib/paperclip/shadow-keys.test.ts src/lib/paperclip/shadow-rows-dynamo.test.ts src/lib/paperclip/sign-up-probe.test.ts src/lib/paperclip/lock-boot.sign-up.test.ts scripts/lib/paperclip/shadow-core.test.ts scripts/lib/lifecycle/sign-up-deploy-probe.test.ts infra/lib/secrets-stack.shadow-approvers.test.ts infra/lib/paperclip-stack.sign-up.test.ts
 ```
 
 Docs gates, required before any push that touches this folder:

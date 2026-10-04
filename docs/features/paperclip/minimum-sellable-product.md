@@ -80,7 +80,7 @@ Blockers before the first paid customer. Each one fails the owner's risk filter.
 **B5 details: approvals** ([ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md)).
 
 - **Shadow users.** Each approver gets a headless Paperclip shadow user (creation, membership and board key proven by the step-2 spike).
-- **Decisions.** Approve, Reject and Request Changes each carry a comment, case, stage, timestamp and a Netzer audit row.
+- **Decisions.** Approve, Reject and Request Changes each carry a case, stage, timestamp and a Netzer audit row, and a comment (required for Reject and Request Changes, optional for Approve; owner, 2026-10-04, closes A74).
 - **Frozen payload.** AI output is persisted once per `(case, stage, round)` and never regenerated after approval is requested.
 - **Hash-bound approval.** The approval carries the sha256 of the exact L1 payload. The executor checks that hash and that `decidedByUserId` is a shadow user entitled to the decision class, so operator accounts never count.
 - **Human-only by default.** High-impact decision classes are human-only.
@@ -228,7 +228,7 @@ Netzer-native, on Paperclip's API through a Netzer BFF; RBAC `work:read`, `work:
    - agent activity (turns and tool calls from the Netzer audit);
    - blockers;
    - approvals.
-4. **Approvals:** a queue plus Approve / Reject / Request Changes with a required comment.
+4. **Approvals:** a queue plus Approve / Reject / Request Changes, with a comment required for Reject and Request Changes and optional for Approve (owner, 2026-10-04).
 
 `/missions` redirects to Work Inbox. These four screens are step 7.
 
@@ -438,7 +438,7 @@ The UI performs the approval. The Netzer BFF writes to Paperclip **as the approv
 
 - approver (real person via shadow user);
 - timestamp;
-- comment (required for reject and request changes);
+- comment (required for reject and request changes, optional for approve; owner, 2026-10-04, closes A74; Netzer enforces it because Paperclip enforces none);
 - case and stage.
 
 A Netzer WORM audit row carries the Netzer user ID, shadow ID, decision class and correlation IDs. There is no delegation engine in v1.

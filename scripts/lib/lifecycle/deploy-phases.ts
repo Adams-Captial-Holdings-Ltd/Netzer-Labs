@@ -277,7 +277,8 @@ export function planSecretWrites(
   // Paperclip work engine (ADR 0010). CloudFormation keeps its original
   // four-field seed forever: changing SecretString on an upgrade would publish
   // a placeholder-only AWSCURRENT version and wipe every live credential.
-  // Phase b therefore merge-adds company_id and lock_auditor_key after Secrets
+  // Phase b therefore merge-adds company_id, lock_auditor_key and
+  // signup_probe_email after Secrets
   // exists. Real values written by bootstrap win over defaults forever.
   //
   // `better_auth_secret` is the SHIPPED field spelling. The plan's
@@ -297,7 +298,7 @@ export function planSecretWrites(
         ? { better_auth_secret: env.PAPERCLIP_BETTER_AUTH_SECRET }
         : {}),
     }),
-    defaults: JSON.stringify({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME' }),
+    defaults: JSON.stringify({ company_id: 'REPLACE_ME', lock_auditor_key: 'REPLACE_ME', signup_probe_email: 'REPLACE_ME' }),
     mergeExisting: true,
     writeIfAbsent: ['better_auth_secret'],
     // Not a configured surface until the Paperclip service exists: a
@@ -310,6 +311,7 @@ export function planSecretWrites(
       dispatch_secret: 'REPLACE_ME',
       company_id: 'REPLACE_ME',
       lock_auditor_key: 'REPLACE_ME',
+      signup_probe_email: 'REPLACE_ME',
     }),
   });
 
