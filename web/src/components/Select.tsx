@@ -76,7 +76,7 @@ export function Select({
         disabled={disabled}
         onClick={toggleOpen}
         class={`flex items-center gap-2 bg-surface border border-border rounded-lg ${pad} text-body-sm
-          focus:ring-2 focus:ring-primary/50 outline-none hover:border-border-strong transition-colors
+          outline-none focus-visible:ring-2 focus-visible:ring-primary hover:border-border-strong transition-colors
           disabled:cursor-not-allowed disabled:opacity-60
           ${disabled ? 'text-secondary' : !selected ? 'text-muted' : 'text-primary'} ${triggerClass}`}
         aria-haspopup="listbox"
@@ -103,7 +103,7 @@ export function Select({
               aria-selected={opt.value === value}
               data-active={opt.value === value}
               onClick={() => { onChange(opt.value); setOpen(false); }}
-              class={`w-full text-left px-3 py-2 text-body-sm transition-colors
+              class={`w-full text-left px-3 py-2 max-md:py-3 text-body-sm transition-colors
                 ${opt.value === value
                   ? 'bg-primary/10 text-primary font-medium'
                   : 'text-secondary hover:bg-surface-hover hover:text-primary'}`}

@@ -27,12 +27,15 @@ interface ButtonProps extends PassThrough {
   onClick?: (e: Event) => void;
 }
 
+// Hover styles are skipped while aria-disabled, so an inactive button does not look like it answers.
+// The classes are written out in full: Tailwind cannot see a class built from parts.
 const variantStyles: Record<Variant, string> = {
-  primary: 'bg-primary text-inverse hover:bg-primary-hover shadow-sm',
-  secondary: 'bg-surface border border-border text-primary hover:bg-surface-hover',
-  ghost: 'text-secondary hover:bg-surface-hover hover:text-primary',
-  danger: 'bg-danger text-white hover:opacity-90 shadow-sm',
-  'danger-outline': 'border border-danger text-danger-text hover:bg-danger-dim',
+  primary: 'bg-primary text-inverse [&:not([aria-disabled=true]):hover]:bg-primary-hover shadow-sm',
+  secondary: 'bg-surface border border-border text-primary [&:not([aria-disabled=true]):hover]:bg-surface-hover',
+  ghost: `text-secondary [&:not([aria-disabled=true]):hover]:bg-surface-hover
+    [&:not([aria-disabled=true]):hover]:text-primary`,
+  danger: 'bg-danger text-white [&:not([aria-disabled=true]):hover]:opacity-90 shadow-sm',
+  'danger-outline': 'border border-danger text-danger-text [&:not([aria-disabled=true]):hover]:bg-danger-dim',
 };
 
 const sizeStyles: Record<Size, string> = {
@@ -59,28 +62,29 @@ export function Button({
   const ariaDisabled = rest['aria-disabled'] === true || rest['aria-disabled'] === 'true';
   return (
     <button
-      // Spread FIRST so the explicit props below always win a name collision;
-      // a caller cannot accidentally re-enable a disabled button.
+      // Spread FIRST so the explicit props below always win a name collision. A caller that passes
+      // aria-disabled gets that form (still focusable) instead of native disabled.
       {...rest}
       type={type}
       disabled={(disabled || loading) && !ariaDisabled}
       onClick={onClick}
-      class={`inline-flex items-center justify-center font-medium rounded-lg transition-colors duration-normal
+      class={`${size === 'lg' ? 'relative ' : ''}inline-flex items-center justify-center font-medium rounded-lg transition-colors duration-normal
         ${variantStyles[variant]} ${sizeStyles[size]}
         disabled:opacity-50 disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:cursor-not-allowed
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
         focus-visible:ring-offset-bg
         ${className}`}
     >
-      {loading ? <Spinner /> : icon}
+      {loading ? <Spinner overlay={size === 'lg'} /> : icon}
       {children}
     </button>
   );
 }
 
-function Spinner() {
+// At lg the spinner sits in the button's left padding, so showing it never changes the button's width.
+function Spinner({ overlay }: { overlay: boolean }) {
   return (
-    <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+    <svg class={`animate-spin h-4 w-4 ${overlay ? 'absolute left-2 top-1/2 -mt-2' : ''}`} viewBox="0 0 24 24" fill="none">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>

@@ -1,13 +1,13 @@
-import { Link, useRoute } from 'wouter-preact';
+import { useRoute } from 'wouter-preact';
 import {
   ApprovalRow,
+  BackLink,
   HeaderStatus,
   PageTitle,
   RelativeTime,
   WorkError,
   WorkList,
   WorkLoading,
-  linkClass,
   words,
   type CaseDetail as CaseData,
   useWork,
@@ -44,9 +44,7 @@ export function CaseDetail() {
   ];
   return (
     <div class="min-w-0">
-      <Link href="/work/cases" class={linkClass}>
-        {copy.detail.backCases}
-      </Link>
+      <BackLink href="/work/cases" label={copy.detail.backCases} />
       <header class="mt-4 mb-8">
         <h1 class="text-display-sm text-primary font-bold break-words">{c.title}</h1>
         <div class="flex flex-wrap items-center gap-3 mt-2">

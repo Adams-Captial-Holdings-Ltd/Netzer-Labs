@@ -105,7 +105,7 @@ export function ConfirmDialog({
     <div
       ref={overlayRef}
       class={`fixed inset-0 z-50 flex items-center justify-center p-4
-        ${simple ? 'bg-scrim' : 'bg-black/50 backdrop-blur-sm'}`}
+        ${simple ? 'overflow-y-auto bg-scrim' : 'bg-black/50 backdrop-blur-sm'}`}
       onClick={(e) => {
         if (e.target === overlayRef.current) onCancel();
       }}
@@ -114,7 +114,11 @@ export function ConfirmDialog({
       aria-label={title}
       aria-describedby={descId}
     >
-      <div class="bg-surface border border-border rounded-xl shadow-xl w-full max-w-md page-enter">
+      {/* Simple form: my-auto centres the panel and lets the overlay scroll when the screen is shorter than
+          the panel (400% zoom), so both buttons stay reachable. It is opaque from the first frame. */}
+      <div
+        class={`bg-surface border border-border rounded-xl shadow-xl w-full max-w-md ${simple ? 'my-auto' : 'page-enter'}`}
+      >
         <div class={`px-6 py-4 border-b ${danger ? 'border-danger/30' : 'border-border'}`}>
           <h2 class={`text-heading-sm font-semibold break-words ${danger ? 'text-danger' : 'text-primary'}`}>{title}</h2>
         </div>

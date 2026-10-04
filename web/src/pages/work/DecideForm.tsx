@@ -1,10 +1,47 @@
+import type { ComponentChildren, RefObject } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { CircleAlert, Info } from 'lucide-preact';
 import { Button } from '../../components/Button';
 import { copy, workMessage } from './messages';
 import { MAX_COMMENT, type Decision } from './useApprovalDecision';
 import type { ApprovalDetail as ApprovalData } from './shared';
 
 const COUNTER_FROM = 3500;
+export const DECIDE_FORM_ID = 'decide-form';
+
+/** What the last decide attempt came to. An error is one alert row; plain information is the same row, calm. */
+export function DecideNotice({
+  text,
+  isError,
+  noticeRef,
+  onCheckAgain,
+}: {
+  text: string;
+  isError: boolean;
+  noticeRef: RefObject<HTMLElement> | null;
+  onCheckAgain?: () => void;
+}) {
+  const Icon = isError ? CircleAlert : Info;
+  return (
+    <section
+      ref={noticeRef}
+      tabIndex={-1}
+      role={isError ? 'alert' : undefined}
+      class={`mb-3 flex items-start gap-3 rounded-lg p-3 text-body-sm
+        ${isError ? 'bg-danger-dim text-danger-text' : 'bg-bg-sunken text-primary'}`}
+    >
+      <Icon size={16} aria-hidden="true" class="mt-1 shrink-0" />
+      <div class="min-w-0">
+        <p class="break-words">{text}</p>
+        {onCheckAgain && (
+          <Button size="lg" variant="secondary" onClick={onCheckAgain} class="mt-3">
+            {copy.result.checkAgain}
+          </Button>
+        )}
+      </div>
+    </section>
+  );
+}
 
 export function DecideForm({
   approval: a,
@@ -12,6 +49,8 @@ export function DecideForm({
   setComment,
   sending,
   locked,
+  notice,
+  noteRef,
   onApprove,
   onDecide,
 }: {
@@ -20,6 +59,9 @@ export function DecideForm({
   setComment: (value: string) => void;
   sending: Decision | null;
   locked: boolean;
+  /** The notice for the last attempt, shown directly above the buttons. */
+  notice: ComponentChildren;
+  noteRef: RefObject<HTMLParagraphElement>;
   onApprove: () => void;
   onDecide: (decision: Decision) => void;
 }) {
@@ -30,7 +72,8 @@ export function DecideForm({
   const commentRef = useRef<HTMLTextAreaElement>(null);
   // Set when Reject or Request changes is used with no comment; cleared as soon as the person types.
   const [asked, setAsked] = useState(false);
-  const invalid = tooLong || (asked && !hasComment);
+  const missingComment = asked && !hasComment;
+  const invalid = tooLong || missingComment;
   const counterBand = tooLong ? 2 : comment.length >= COUNTER_FROM ? 1 : 0;
   const previousBand = useRef(0);
   const [counterAnnouncement, setCounterAnnouncement] = useState('');
@@ -52,6 +95,7 @@ export function DecideForm({
   };
   return (
     <form
+      id={DECIDE_FORM_ID}
       onSubmit={(e) => {
         e.preventDefault();
         if (!busy && !tooLong) onApprove();
@@ -78,7 +122,8 @@ export function DecideForm({
       {/* The height is reserved, so the buttons never move when the helper changes. */}
       <div class="flex justify-between gap-4 min-h-10 mt-1">
         <p id="comment-hint" class={`text-caption ${invalid ? 'text-danger-text' : 'text-secondary'}`}>
-          {tooLong ? workMessage('comment_too_long') : copy.decide.helper}
+          {tooLong ? workMessage('comment_too_long')
+            : missingComment ? workMessage('comment_required') : copy.decide.helper}
         </p>
         {comment.length >= COUNTER_FROM && (
           <p class="text-caption text-secondary tabular-nums shrink-0" aria-hidden="true">
@@ -87,10 +132,11 @@ export function DecideForm({
         )}
       </div>
       <span role="status" class="sr-only">{counterAnnouncement}</span>
-      <p class="text-body-sm text-secondary mt-2">
+      <p class="text-body-sm text-primary mt-2">
         {copy.decide.deciding(a.decisionLabel, a.caseTitle ?? a.caseKey)}
       </p>
       <p class="text-body-sm text-secondary mt-1 mb-4">{copy.decide.consequences}</p>
+      {notice}
       <div class="flex flex-col md:flex-row gap-6">
         <Button
           size="lg"
@@ -106,7 +152,7 @@ export function DecideForm({
           size="lg"
           variant="secondary"
           loading={sending === 'request_changes'}
-          aria-disabled={busy || !ready}
+          aria-disabled={busy || tooLong}
           aria-describedby={reason}
           onClick={() => decideWithComment('request_changes')}
           class="w-full md:w-auto"
@@ -117,7 +163,7 @@ export function DecideForm({
           size="lg"
           variant="danger-outline"
           loading={sending === 'reject'}
-          aria-disabled={busy || !ready}
+          aria-disabled={busy || tooLong}
           aria-describedby={reason}
           onClick={() => decideWithComment('reject')}
           class="w-full md:w-auto"
@@ -125,7 +171,7 @@ export function DecideForm({
           {copy.decide.reject}
         </Button>
       </div>
-      <p id="decide-note" class="text-caption text-secondary mt-3 min-h-6">
+      <p id="decide-note" ref={noteRef} tabIndex={-1} class="text-caption text-secondary mt-3 min-h-6">
         {sending ? copy.decide.sendingNote : locked ? copy.decide.lockedNote : ''}
       </p>
     </form>

@@ -2,7 +2,8 @@ import type { ApprovalDetail, CaseDetail, PipelineSummary } from '../src/pages/w
 // Made-up people and cases only. Mutable copies are created by the plugin per Vite run.
 const requestedAt = '2026-10-01T12:00:00.000Z';
 const updatedAt = '2026-10-02T12:00:00.000Z';
-const hash = 'a'.repeat(64);
+// A made-up SHA-256 digest (hex), so the fingerprint line looks like a real one.
+const hash = 'dfe1316e53b6926f400263bf5dbe82db04010f0c3499457c0e8edc0b6a3ce261';
 export const pipeline = {
   id: 'pipeline-vendor-invoices',
   name: 'Vendor invoices',
@@ -81,7 +82,7 @@ const seededApprovals = Array.from({ length: 16 }, (_, i): ApprovalDetail => ({
   decisionComment: [3, 13, 14, 15].includes(i) ? 'Sample decision recorded.' : null,
 })) satisfies ApprovalDetail[];
 // approval-17: waiting, but no reason is given for why this person cannot decide it.
-// approval-18: a flat payload of 40 invoice lines, taller than the 480 px payload cap.
+// approval-18: a flat payload of 40 invoice lines, taller than a laptop screen.
 const lineItems = Object.fromEntries(
   Array.from({ length: 40 }, (_, i) => [`line_${i + 1}`, `Sample line ${i + 1}: 25.00 USD`]),
 );

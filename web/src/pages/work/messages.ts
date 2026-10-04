@@ -18,7 +18,8 @@ const sentences = new Map<string, string>(Object.entries({
   comment_required: 'Add a comment to reject or request changes.',
   comment_too_long: 'The comment is too long (4 000 characters at most).',
   paperclip_rejected: 'The decision was not accepted. Reload and check the approval.',
-  decision_outcome_unknown: 'We could not confirm the decision was recorded. Reload to check.',
+  cannot_decide: 'You cannot decide this one. Ask an admin.',
+  decision_outcome_unknown: 'We could not confirm the decision was recorded. Check again to see.',
   attribution_mismatch: 'Your decision may have been recorded, but we could not confirm it under your name. Do not decide again. Contact your admin.',
 }));
 export const fallbackMessage =
@@ -26,6 +27,10 @@ export const fallbackMessage =
 export function workMessage(error: unknown): string {
   const code = error instanceof Error ? error.message.split(':').at(0) : String(error);
   return sentences.get(code ?? '') ?? fallbackMessage;
+}
+/** The sentence for a reason the person cannot decide: an unknown reason still says that, not "went wrong". */
+export function cannotDecideMessage(reason: string | null): string {
+  return sentences.get(reason ?? 'not_an_approver') ?? sentences.get('cannot_decide') ?? fallbackMessage;
 }
 export function canRetry(error: unknown): boolean {
   const code = error instanceof Error ? error.message : String(error);
@@ -37,11 +42,12 @@ export const copy = {
   loading: 'Loading',
   inbox: {
     title: 'Work Inbox',
-    subtitle: 'What is waiting for you.',
+    subtitle: 'What is waiting for you. A case is one piece of work an agent is handling, such as an invoice.',
     waiting: 'Waiting for your decision',
     blocked: 'Blocked cases',
     mine: 'Cases assigned to you',
     nothing: 'Nothing needs you',
+    nothingHint: 'New approvals and blocked cases will appear here.',
     notSetUp: 'You are not set up to approve. Ask an admin.',
     noneWaiting: 'Nothing waiting for your decision.',
     noneBlocked: 'No blocked cases.',
@@ -96,7 +102,7 @@ export const copy = {
     rejected: 'Rejected',
     blocked: 'Blocked',
     done: 'Done',
-    active: 'Active',
+    active: 'Open',
     cancelled: 'Cancelled',
   },
   row: {
@@ -104,10 +110,12 @@ export const copy = {
     blockedAt: (stage: string) => `Blocked at ${stage}`,
     waitingFor: (span: string) => `Waiting ${span}`,
     requested: (span: string) => `Requested ${span}`,
-    waitingOnOthers: 'Waiting on someone else',
+    waitingViewOnly: 'Waiting · view only',
+    openToSee: 'Open to see why',
   },
   payload: {
-    region: 'Approval content',
+    goToDecision: 'Go to decision',
+    itemCount: (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`,
     ifApproved: 'If you approve, this will be done',
     wasApproved: 'What was approved',
     wasProposed: 'What was proposed',
@@ -149,17 +157,14 @@ export const copy = {
     changesBy: (who: string) => `${who} asked for changes. It goes back to be revised.`,
     recordedNoRead: 'The decision was recorded. Reload to see the latest approval.',
     checkAgain: 'Check again',
-    checkedPending: 'Checked. Nothing was recorded and this is still waiting for a decision.',
+    checkedPending: 'It was not recorded. You can decide again.',
     checkFailed: 'We could not check just now. Try again.',
-    approvedToast: 'Approved',
-    rejectedToast: 'Rejected',
-    changesToast: 'Changes requested',
   },
   announce: {
     sending: 'Sending',
     recorded: 'Decision recorded',
-    problem: 'There is a problem with the decision',
     checked: 'Checked',
   },
   requested: 'Requested',
+  error: { noAccess: 'You do not have access' },
 };

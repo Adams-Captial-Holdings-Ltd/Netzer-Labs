@@ -1,3 +1,4 @@
+import { Inbox as InboxIcon } from 'lucide-preact';
 import { EmptyState } from '../../components/EmptyState';
 import {
   ApprovalRow,
@@ -39,7 +40,11 @@ export function Inbox() {
     return (
       <div class="min-w-0">
         {title}
-        <EmptyState title={data.approverSetUp ? copy.inbox.nothing : copy.inbox.notSetUp} />
+        <EmptyState
+          icon={<InboxIcon size={48} strokeWidth={1.5} class="text-muted" aria-hidden="true" />}
+          title={data.approverSetUp ? copy.inbox.nothing : copy.inbox.notSetUp}
+          description={data.approverSetUp ? copy.inbox.nothingHint : undefined}
+        />
       </div>
     );
   return (

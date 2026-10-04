@@ -54,7 +54,7 @@ export function ToastContainer() {
   if (items.length === 0) return null;
   return (
     <div
-      class="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-sm w-full pointer-events-auto"
+      class="fixed bottom-4 left-4 right-4 sm:left-auto z-[60] flex flex-col gap-2 max-w-sm sm:w-full pointer-events-auto"
       aria-live="polite"
     >
       {items.map((t) => <ToastItem key={t.id} t={t} />)}

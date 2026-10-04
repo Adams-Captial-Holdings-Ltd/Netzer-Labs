@@ -1,7 +1,7 @@
 import { ComponentChildren } from 'preact';
 
 export type BadgeVariant = 'default' | 'success' | 'danger' | 'warning' | 'info' | 'muted'
-  | 'success-dim' | 'danger-dim' | 'warning-dim';
+  | 'success-dim' | 'danger-dim' | 'warning-dim' | 'neutral-dim';
 
 const styles: Record<BadgeVariant, string> = {
   default: 'text-overline bg-surface-elevated text-secondary border border-border',
@@ -14,6 +14,7 @@ const styles: Record<BadgeVariant, string> = {
   'success-dim': 'text-caption bg-success-dim text-primary',
   'danger-dim': 'text-caption bg-danger-dim text-danger-text',
   'warning-dim': 'text-caption bg-warning-dim text-primary',
+  'neutral-dim': 'text-caption bg-surface-elevated text-secondary border border-border',
 };
 
 interface BadgeProps {

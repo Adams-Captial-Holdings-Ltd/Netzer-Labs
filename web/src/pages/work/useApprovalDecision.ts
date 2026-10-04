@@ -15,8 +15,8 @@ const refusedBeforeDecision = new Set([
   'paperclip_unavailable', 'key_unavailable', 'paperclip_rejected',
 ]);
 const isOpen = (a: ApprovalData) => a.status === 'pending' && a.canDecide && a.payload.state === 'verified';
-const toastFor = (d: Decision) =>
-  d === 'approve' ? copy.result.approvedToast : d === 'reject' ? copy.result.rejectedToast : copy.result.changesToast;
+// The approval is no longer waiting, so what it now is has to be read again and shown.
+const noLongerWaiting = new Set(['not_pending', 'paperclip_rejected']);
 
 export function useApprovalDecision(
   a: ApprovalData | undefined,
@@ -28,20 +28,22 @@ export function useApprovalDecision(
   const [sending, setSending] = useState<Decision | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [notice, setNotice] = useState('');
+  // A notice is an error (decide failed, outcome unknown) or plain information.
+  const [noticeIsError, setNoticeIsError] = useState(false);
   const [unknownOutcome, setUnknownOutcome] = useState(false);
   const [mine, setMine] = useState<Decision | null>(null);
   const [locked, setLocked] = useState(false);
-  // Text for the two persistent live regions. They carry the announcement only.
+  // Text for the persistent status region. It carries the announcement only; an error notice is its own alert.
   const [statusText, setStatusText] = useState('');
-  const [alertText, setAlertText] = useState('');
   const active = useRef(true);
   useEffect(() => () => { active.current = false; }, []);
   const resultRef = useRef<HTMLElement>(null);
-  const statusRef = useRef<HTMLParagraphElement>(null);
+  // The visible "Sending" line. Focus goes there after the confirm closes, so it does not vanish.
+  const sendingRef = useRef<HTMLParagraphElement>(null);
   const fromConfirm = useRef(false);
   useEffect(() => {
-    if (sending && fromConfirm.current) statusRef.current?.focus();
-  }, [sending, statusRef]);
+    if (sending && fromConfirm.current) sendingRef.current?.focus();
+  }, [sending, sendingRef]);
   useEffect(() => {
     if (notice || mine) resultRef.current?.focus();
   }, [notice, mine, a]);
@@ -67,9 +69,9 @@ export function useApprovalDecision(
     fromConfirm.current = decision === 'approve';
     setConfirm(false);
     setSending(decision);
-    setStatusText(copy.announce.sending);
+    // From the confirm, focus lands on the visible "Sending" line, which says it; otherwise announce it.
+    setStatusText(fromConfirm.current ? '' : copy.announce.sending);
     setNotice('');
-    setAlertText('');
     setUnknownOutcome(false);
     try {
       await api.post(`/work${path}/decision`, {
@@ -81,23 +83,46 @@ export function useApprovalDecision(
       // A confirmed POST is a decision even if the follow-up read is down.
       setMine(decision);
       setStatusText(copy.announce.recorded);
-      toast(toastFor(decision), 'success');
       const fresh = await reread();
       if (!active.current) return;
-      if (!fresh) setNotice(copy.result.recordedNoRead);
+      if (!fresh) {
+        setNoticeIsError(false);
+        setNotice(copy.result.recordedNoRead);
+      }
     } catch (e) {
       if (!active.current) return;
       const code = e instanceof Error ? (e.message.split(':').at(0) ?? '') : String(e);
-      const unknown = !refusedBeforeDecision.has(code);
       const mismatch = code === 'attribution_mismatch';
-      setNotice(mismatch ? workMessage(e) : unknown ? workMessage('decision_outcome_unknown') : workMessage(e));
-      setUnknownOutcome(unknown && !mismatch);
+      const unknown = !refusedBeforeDecision.has(code) && !mismatch;
+      const gone = noLongerWaiting.has(code);
+      setNoticeIsError(true);
+      setNotice(unknown ? workMessage('decision_outcome_unknown') : workMessage(e));
+      setUnknownOutcome(unknown);
       setStatusText('');
-      setAlertText(copy.announce.problem);
-      if (unknown || code === 'stale_payload') {
-        setLocked(true);
-        const fresh = await reread();
-        if (fresh && !mismatch && isOpen(fresh)) setLocked(false);
+      if (!(unknown || mismatch || gone || code === 'stale_payload')) return;
+      setLocked(true);
+      const fresh = await reread();
+      if (!active.current || mismatch) return;
+      if (!fresh) {
+        // The refusal says it is no longer waiting, but that could not be confirmed: say so and offer a check.
+        if (gone) {
+          setNotice(workMessage('decision_outcome_unknown'));
+          setUnknownOutcome(true);
+        }
+        return;
+      }
+      if (fresh.status !== 'pending') {
+        // It was decided. The page now shows the result; only a refusal keeps its sentence above it.
+        if (!gone) setNotice('');
+        setUnknownOutcome(false);
+        return;
+      }
+      if (!isOpen(fresh)) return;
+      setLocked(false);
+      if (unknown) {
+        setNoticeIsError(false);
+        setNotice(copy.result.checkedPending);
+        setUnknownOutcome(false);
       }
     } finally {
       if (active.current) setSending(null);
@@ -113,14 +138,14 @@ export function useApprovalDecision(
       return;
     }
     setUnknownOutcome(false);
-    setAlertText('');
     setStatusText(copy.announce.checked);
+    setNoticeIsError(false);
     setNotice(fresh.status === 'pending' ? copy.result.checkedPending : '');
     if (fresh.status === 'pending') setLocked(!isOpen(fresh));
   }
 
   return {
-    comment, setComment, sending, locked, confirm, setConfirm, notice, unknownOutcome, mine,
-    resultRef, statusRef, statusText, alertText, decide, checkAgain,
+    comment, setComment, sending, locked, confirm, setConfirm, notice, noticeIsError, unknownOutcome, mine,
+    resultRef, sendingRef, statusText, decide, checkAgain,
   };
 }

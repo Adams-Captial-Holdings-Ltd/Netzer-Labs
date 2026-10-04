@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
 const CAPS = ['overview:read', 'work:read', 'work:approve', 'missions:read'];
 const COMMENT = 'Comment';
@@ -14,6 +14,17 @@ test.beforeEach(async ({ page }) => {
     localStorage.setItem('cce_capabilities', JSON.stringify(caps));
   }, CAPS);
 });
+// Reads of an approval after its first one fail until healed, so an outcome stays unknown on purpose.
+async function failRereads(page: Page, id: string) {
+  let reads = 0;
+  let healed = false;
+  await page.route(`**/api/work/approvals/${id}?**`, async route => {
+    reads++;
+    if (reads > 1 && !healed) return route.abort();
+    await route.continue();
+  });
+  return { reads: () => reads, heal: () => { healed = true; } };
+}
 async function detail(page: Page, id = 'approval-1') {
   await page.goto(`/dashboard/work/approvals/${id}`);
   await expect(page.getByRole('heading', { name: /Payment release for/ })).toBeVisible();
@@ -71,7 +82,7 @@ test('reject needs a comment and records it', async ({ page }) => {
   });
   await detail(page, 'approval-8');
   const reject = page.getByRole('button', { name: 'Reject' });
-  await expect(reject).toHaveAttribute('aria-disabled', 'true');
+  await expect(reject).not.toHaveAttribute('aria-disabled', 'true');
   await expect(page.getByText('Optional to approve. Needed to reject or request changes.')).toBeVisible();
   await reject.focus();
   await page.keyboard.press('Enter');
@@ -92,17 +103,19 @@ test('not-set-up Inbox explains approval access', async ({ page }) => {
   await expect(page.getByText('You are not set up to approve. Ask an admin.')).toBeVisible();
 });
 
-test('pending approval without access says it waits on someone else', async ({ page }) => {
+test('a pending approval the person cannot decide says Waiting · view only', async ({ page }) => {
   await page.goto('/dashboard/work/approvals');
   const row = page.getByRole('link', { name: /Payment release for Invoice INV-1005 from Sample Vendor E/ });
-  await expect(row).toContainText('Waiting on someone else');
-  await expect(row).not.toContainText('View only');
+  await expect(row).toContainText('Waiting · view only');
+  await expect(row).not.toContainText('someone else');
 });
 
 test('empty Inbox says only Nothing needs you', async ({ page }) => {
   await page.route('**/api/work/inbox?**', (route) => route.continue({ url: withMock(route.request().url(), 'empty') }));
   await page.goto('/dashboard/work');
   await expect(page.getByText('Nothing needs you')).toBeVisible();
+  await expect(page.getByText('New approvals and blocked cases will appear here.')).toBeVisible();
+  await expect(page.getByRole('main').locator('svg.lucide-inbox')).toBeVisible();
   await expect(page.getByText('You are not set up to approve. Ask an admin.')).toHaveCount(0);
   await expect(page.getByText('Nothing waiting for your decision.')).toHaveCount(0);
   await expect(page.getByText('No blocked cases.')).toHaveCount(0);
@@ -217,15 +230,15 @@ test('overflow is absent at 375, 768 and 1280', async ({ page }) => {
   }
 });
 
-test('toast and document title omit case title', async ({ page }) => {
+test('a decision shows its result in the page, with no toast, and the title omits the case title', async ({ page }) => {
   await detail(page, 'approval-7');
   const caseTitle = 'Invoice INV-1007 from Sample Vendor G';
   await page.getByRole('textbox', { name: COMMENT }).fill('Sample reason');
   await page.getByRole('button', { name: 'Reject' }).click();
   await expect(page.getByRole('region', { name: 'Decision' })).toContainText('You rejected this');
-  await expect(page.locator('[aria-live="polite"]').getByText('Rejected', { exact: true })).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(page.locator('[aria-live="polite"]')).toHaveCount(0);
   expect(await page.title()).not.toContain(caseTitle);
-  expect(await page.locator('[aria-live="polite"]').first().innerText()).not.toContain(caseTitle);
 });
 
 test('403 permission error shows a sentence', async ({ page }) => {
@@ -327,24 +340,37 @@ for (const failure of [
   });
 }
 
+const UNKNOWN = 'We could not confirm the decision was recorded. Check again to see.';
 for (const failure of ['gateway', 'abort']) {
   test(`decision ${failure} has an unknown outcome`, async ({ page }) => {
-    let reads = 0;
-    await page.route('**/api/work/approvals/approval-8?**', async route => { reads++; await route.continue(); });
+    const rereads = await failRereads(page, 'approval-8');
     await page.route('**/api/work/approvals/approval-8/decision', route =>
       failure === 'abort' ? route.abort() : route.fulfill({ status: 504, body: 'Gateway timeout' }));
     await detail(page, 'approval-8');
     await page.getByRole('textbox', { name: COMMENT }).fill('Keep this comment');
     await page.getByRole('button', { name: 'Reject' }).click();
-    await expect(page.getByText('We could not confirm the decision was recorded. Reload to check.')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Check again' })).toBeVisible();
-    await expect.poll(() => reads).toBeGreaterThan(1);
+    const notice = page.getByRole('alert').filter({ hasText: UNKNOWN });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByRole('button', { name: 'Check again' })).toBeVisible();
+    await expect.poll(() => rereads.reads()).toBeGreaterThan(1);
     await expect(page.getByRole('textbox', { name: COMMENT })).toHaveValue('Keep this comment');
     await expect(page.getByText('Nothing was decided by you here')).toHaveCount(0);
   });
 }
 
-test('empty decision comment focuses the box, turns the helper red and moves nothing', async ({ page }) => {
+test('an unknown outcome that the re-read shows was not recorded says so and lets the person decide again', async ({ page }) => {
+  await page.route('**/api/work/approvals/approval-8/decision', route => route.fulfill({ status: 504, body: 'Gateway timeout' }));
+  await detail(page, 'approval-8');
+  await page.getByRole('textbox', { name: COMMENT }).fill('Keep this comment');
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await expect(page.getByText('It was not recorded. You can decide again.')).toBeVisible();
+  await expect(page.getByText(UNKNOWN)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Check again' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reject' })).toHaveAttribute('aria-disabled', 'false');
+  await expect(page.getByRole('textbox', { name: COMMENT })).toHaveValue('Keep this comment');
+});
+
+test('empty decision comment focuses the box, says what is missing in red and moves nothing', async ({ page }) => {
   let posts = 0;
   page.on('request', request => {
     if (request.method() === 'POST' && request.url().includes('/decision')) posts++;
@@ -362,7 +388,7 @@ test('empty decision comment focuses the box, turns the helper red and moves not
   await expect(comment).toHaveAttribute('aria-describedby', 'comment-hint');
   await expect(comment).toHaveAttribute('aria-invalid', 'true');
   await expect(hint).toHaveClass(/text-danger-text/);
-  await expect(hint).toHaveText('Optional to approve. Needed to reject or request changes.');
+  await expect(hint).toHaveText('Add a comment to reject or request changes.');
   expect(await requestChanges.boundingBox()).toEqual(before);
   await comment.fill('A reason');
   await expect(comment).not.toHaveAttribute('aria-invalid', 'true');
@@ -426,8 +452,7 @@ test('the decide form explains each decision and the payload heading follows the
 });
 
 test('Check again reads the approval again and keeps the typed comment', async ({ page }) => {
-  let reads = 0;
-  await page.route('**/api/work/approvals/approval-8?**', async route => { reads++; await route.continue(); });
+  const rereads = await failRereads(page, 'approval-8');
   await page.route('**/api/work/approvals/approval-8/decision', route =>
     route.continue({ url: withMock(route.request().url(), 'decide:decision_outcome_unknown') }));
   await detail(page, 'approval-8');
@@ -435,13 +460,15 @@ test('Check again reads the approval again and keeps the typed comment', async (
   await page.getByRole('button', { name: 'Reject' }).click();
   const check = page.getByRole('button', { name: 'Check again' });
   await expect(check).toBeVisible();
-  await expect.poll(() => reads).toBeGreaterThan(1);
-  await expect(page.getByRole('button', { name: 'Reject' })).toHaveAttribute('aria-disabled', 'false');
-  const before = reads;
+  await expect.poll(() => rereads.reads()).toBeGreaterThan(1);
+  await expect(page.getByRole('button', { name: 'Reject' })).toHaveAttribute('aria-disabled', 'true');
+  rereads.heal();
+  const before = rereads.reads();
   await check.click();
-  await expect.poll(() => reads).toBeGreaterThan(before);
-  await expect(page.getByText('Checked. Nothing was recorded and this is still waiting for a decision.')).toBeVisible();
+  await expect.poll(() => rereads.reads()).toBeGreaterThan(before);
+  await expect(page.getByText('It was not recorded. You can decide again.')).toBeVisible();
   await expect(check).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reject' })).toHaveAttribute('aria-disabled', 'false');
   await expect(page.getByRole('textbox', { name: COMMENT })).toHaveValue('Keep this comment');
 });
 
@@ -471,33 +498,62 @@ test('the confirm buttons are 44 px tall and 24 px apart at 375', async ({ page 
   expect(await dialog.getByText('INV-1001').evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/mono/i);
 });
 
-test('the payload is a keyboard region at 1280 and uncapped at 375', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
+test('a long payload shows in full at 1280 with no inner scroll box, and Go to decision moves focus into the form', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
   await detail(page, 'approval-18');
-  const region = page.getByRole('region', { name: 'Approval content' });
-  await region.focus();
-  await expect(region).toBeFocused();
-  const capped = await region.evaluate((e) => ({ box: e.clientHeight, content: e.scrollHeight }));
-  expect(capped.box).toBeLessThanOrEqual(480);
-  expect(capped.content).toBeGreaterThan(capped.box);
-  await page.setViewportSize({ width: 375, height: 800 });
-  const open = await region.evaluate((e) => ({ box: e.clientHeight, content: e.scrollHeight }));
-  expect(open.box).toBeGreaterThan(480);
-  expect(open.content).toBeLessThanOrEqual(open.box);
+  await expect(page.getByText('Sample line 40: 25.00 USD')).toBeVisible();
+  const block = page.locator('dl').first().locator('xpath=..');
+  const size = await block.evaluate((e) => ({ box: e.clientHeight, content: e.scrollHeight, overflow: getComputedStyle(e).overflowY }));
+  expect(size.box).toBeGreaterThan(720);
+  expect(size.content).toBeLessThanOrEqual(size.box);
+  expect(size.overflow).toBe('visible');
+  await expect(page.getByRole('region', { name: 'Approval content' })).toHaveCount(0);
+  await expect(block).not.toHaveAttribute('tabindex', /.*/);
+  await expect(page.getByRole('heading', { name: 'If you approve, this will be done' })).toBeVisible();
+  await expect(page.getByText('40 items')).toBeVisible();
+  const go = page.getByRole('link', { name: 'Go to decision' });
+  await expect(go).toHaveCount(1);
+  await go.click();
+  await expect(page.getByRole('textbox', { name: COMMENT })).toBeFocused();
+  const form = await page.locator('form').boundingBox();
+  expect(form!.y).toBeLessThan(720);
+  await detail(page, 'approval-1');
+  await expect(page.getByRole('link', { name: 'Go to decision' })).toHaveCount(0);
 });
 
-test('a title is never truncated while its metadata is whole at 768', async ({ page }) => {
-  await page.setViewportSize({ width: 768, height: 900 });
-  for (const path of ['/work/cases', '/work/approvals']) {
+test('a title is never truncated while its metadata is whole at 375 and 768', async ({ page }) => {
+  for (const width of [375, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of ['/work/cases', '/work/approvals', '/work']) {
+      await page.goto(`/dashboard${path}`);
+      const rows = page.getByRole('main').getByRole('listitem');
+      await expect(rows.first()).toBeVisible();
+      for (const row of await rows.all()) {
+        const title = await row.locator('[data-work="title"]').evaluate((e) => e.scrollHeight <= e.clientHeight + 1);
+        const meta = await row.locator('[data-work="meta"]').evaluate((e) => e.scrollWidth <= e.clientWidth + 1);
+        expect(title && meta, `${path} row at ${width}`).toBe(true);
+      }
+    }
+  }
+});
+
+test('at 1280 no row title is cut off while there is room, and the Inbox sections share their columns', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  for (const path of ['/work/cases', '/work', '/work/approvals']) {
     await page.goto(`/dashboard${path}`);
     const rows = page.getByRole('main').getByRole('listitem');
     await expect(rows.first()).toBeVisible();
-    for (const row of await rows.all()) {
-      const title = await row.locator('[data-work="title"]').evaluate((e) => e.scrollHeight <= e.clientHeight + 1);
-      const meta = await row.locator('[data-work="meta"]').evaluate((e) => e.scrollWidth <= e.clientWidth + 1);
-      expect(title && meta, `${path} row`).toBe(true);
-    }
+    const cut = await page.locator('[data-work="title"]').evaluateAll((titles) =>
+      titles.filter((t) => t.scrollWidth > t.clientWidth).map((t) => t.textContent));
+    expect(cut, `${path} truncated titles`).toEqual([]);
   }
+  await page.goto('/dashboard/work');
+  await expect(page.getByRole('heading', { name: 'Cases assigned to you' })).toBeVisible();
+  // The stage cell starts at the same x in all three sections, so their columns line up.
+  const lefts = await page.locator('[data-work="meta"] > span:first-child').evaluateAll((cells) =>
+    cells.map((c) => Math.round(c.getBoundingClientRect().left)));
+  expect(lefts.length).toBeGreaterThan(5);
+  expect(new Set(lefts).size).toBe(1);
 });
 
 test('the Cases list shows 10 rows at 1280 by 720 and aligns its columns', async ({ page }) => {
@@ -548,14 +604,15 @@ test('the sending state shows on the one button, announces and keeps the Tab ord
   await expect(page.getByRole('region', { name: 'Decision' })).toContainText('You rejected this', { timeout: 15_000 });
 });
 
-test('Approve through the confirm moves focus to the status region while sending', async ({ page }) => {
+test('Approve through the confirm moves focus to the visible Sending line', async ({ page }) => {
   await page.route('**/api/work/approvals/approval-8/decision', route =>
     route.continue({ url: withMock(route.request().url(), 'slow') }));
   await detail(page, 'approval-8');
   await page.locator('form').getByRole('button', { name: 'Approve' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Approve' }).click();
-  const status = page.getByRole('status').filter({ hasText: 'Sending' });
-  await expect(status).toBeFocused();
+  const sending = page.getByText('Sending your decision.');
+  await expect(sending).toBeFocused();
+  await expect(sending).toBeVisible();
   await expect(page.locator('form').getByRole('button', { name: 'Approve' }).locator('svg.animate-spin')).toHaveCount(1);
   await expect(page.getByRole('region', { name: 'Decision' })).toContainText('You approved this', { timeout: 15_000 });
 });
@@ -596,12 +653,13 @@ test('Inbox rows say how long and do not repeat the section status', async ({ pa
   await expect(page.getByRole('heading', { name: 'Blocked cases' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Cases assigned to you' })).toBeVisible();
   await expect(page.getByText('Blocked at Coding').or(page.getByText('Blocked at Payment approval'))).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open to see why/ })).toBeVisible();
 });
 
 test('the page titles explain themselves and the breadcrumb never shows a raw id', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   for (const [path, title, subtitle] of [
-    ['/work', 'Work Inbox', 'What is waiting for you.'],
+    ['/work', 'Work Inbox', 'What is waiting for you. A case is one piece of work an agent is handling, such as an invoice.'],
     ['/work/cases', 'Cases', 'Each case is one piece of work an agent is handling, such as an invoice.'],
     ['/work/approvals', 'Approvals', "Actions an agent has prepared that need a person's yes or no before they happen."],
   ]) {
@@ -625,4 +683,237 @@ test('the Work navigation uses the same icon size as the other items and the bra
     svgs.map((s) => Math.round(s.getBoundingClientRect().width)),
   );
   expect(new Set(sizes).size).toBe(1);
+});
+
+// Contrast of an element's text against the first solid background behind it, as WCAG 2 defines it.
+async function labelContrast(button: Locator): Promise<number> {
+  return button.evaluate((el) => {
+    const channels = (c: string) => (c.match(/[\d.]+/g) ?? []).map(Number);
+    const light = ([r, g, b]: number[]) => {
+      const f = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    let behind: Element | null = el;
+    while (behind) {
+      const c = channels(getComputedStyle(behind).backgroundColor);
+      if (c.length === 3 || (c[3] ?? 0) === 1) break;
+      behind = behind.parentElement;
+    }
+    const fore = light(channels(getComputedStyle(el).color));
+    const back = light(channels(behind ? getComputedStyle(behind).backgroundColor : 'rgb(255,255,255)'));
+    return (Math.max(fore, back) + 0.05) / (Math.min(fore, back) + 0.05);
+  });
+}
+
+test('Reject and Request changes are at full contrast at rest, light and dark, and press with no comment says what is missing', async ({ page }) => {
+  await detail(page, 'approval-8');
+  for (const scheme of ['light', 'dark']) {
+    await page.evaluate((dark) => document.documentElement.classList.toggle('dark', dark === 'dark'), scheme);
+    await page.waitForTimeout(400);
+    for (const name of ['Request changes', 'Reject']) {
+      const button = page.getByRole('button', { name, exact: true });
+      await expect(button).not.toHaveAttribute('aria-disabled', 'true');
+      expect(await button.evaluate((e) => getComputedStyle(e).opacity), `${name} opacity`).toBe('1');
+      expect(await labelContrast(button), `${name} in ${scheme}`).toBeGreaterThanOrEqual(4.5);
+    }
+  }
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: COMMENT })).toBeFocused();
+  await expect(page.getByText('Add a comment to reject or request changes.')).toHaveClass(/text-danger-text/);
+});
+
+test('a refused decision that finds the approval already decided shows the decision, not live buttons', async ({ page }) => {
+  await page.route('**/api/work/approvals/approval-8/decision', route =>
+    route.continue({ url: withMock(route.request().url(), 'decide:not_pending') }));
+  await detail(page, 'approval-8');
+  await page.getByRole('textbox', { name: COMMENT }).fill('Sample reason');
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  const result = page.getByRole('region', { name: 'Decision' });
+  await expect(result).toContainText('approver.a@example.test approved this');
+  const refusal = page.getByRole('alert').filter({ hasText: 'This has already been decided.' });
+  await expect(refusal).toBeVisible();
+  expect((await refusal.boundingBox())!.y).toBeLessThan((await result.boundingBox())!.y);
+  for (const name of ['Approve', 'Request changes', 'Reject']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  await expect(page.getByText('Waiting', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('main').getByText('Approved', { exact: true })).toBeVisible();
+});
+
+test('a refusal whose re-read fails shows the unknown-outcome notice with Check again', async ({ page }) => {
+  await failRereads(page, 'approval-8');
+  await page.route('**/api/work/approvals/approval-8/decision', route =>
+    route.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"not_pending"}' }));
+  await detail(page, 'approval-8');
+  await page.getByRole('textbox', { name: COMMENT }).fill('Sample reason');
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  const notice = page.getByRole('alert').filter({ hasText: UNKNOWN });
+  await expect(notice.getByRole('button', { name: 'Check again' })).toBeVisible();
+});
+
+test('a decide failure is one alert row with an icon, directly above the buttons', async ({ page }) => {
+  await page.route('**/api/work/approvals/approval-8/decision', route =>
+    route.fulfill({ status: 403, contentType: 'application/json', body: '{"error":"no_user_session"}' }));
+  await detail(page, 'approval-8');
+  await page.getByRole('textbox', { name: COMMENT }).fill('Sample reason');
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  const alert = page.getByRole('alert');
+  await expect(alert).toHaveCount(1);
+  await expect(alert).toContainText('Sign in with your own account to decide.');
+  await expect(alert.locator('svg')).toHaveCount(1);
+  expect(await alert.evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  const above = await alert.boundingBox();
+  const approve = await page.getByRole('button', { name: 'Approve', exact: true }).boundingBox();
+  expect(approve!.y - (above!.y + above!.height)).toBeLessThan(24);
+  expect(approve!.y).toBeGreaterThan(above!.y + above!.height - 1);
+});
+
+test('on the Waiting tab the approvals the person can decide come first and view-only ones read quieter', async ({ page }) => {
+  await page.goto('/dashboard/work/approvals');
+  const rows = page.getByRole('main').getByRole('listitem');
+  await expect(rows.first()).toBeVisible();
+  const viewOnly = await rows.evaluateAll((items) => items.map((li) => (li.textContent ?? '').includes('view only')));
+  const firstQuiet = viewOnly.indexOf(true);
+  expect(firstQuiet).toBeGreaterThan(0);
+  expect(viewOnly.slice(firstQuiet).every(Boolean)).toBe(true);
+  const colours = await rows.evaluateAll((items) =>
+    items.map((li) => getComputedStyle(li.querySelector('[data-work="title"]')!).color));
+  expect(colours[firstQuiet]).not.toBe(colours[0]);
+});
+
+test('the approve confirm stays reachable at 320 by 256 (400% zoom)', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 256 });
+  await detail(page, 'approval-8');
+  await page.locator('form').getByRole('button', { name: 'Approve' }).click();
+  const dialog = page.getByRole('dialog');
+  const overlay = await dialog.evaluate((e) => ({ scrolls: e.scrollHeight > e.clientHeight, y: getComputedStyle(e).overflowY }));
+  expect(overlay).toEqual({ scrolls: true, y: 'auto' });
+  const approve = dialog.getByRole('button', { name: 'Approve' });
+  await approve.scrollIntoViewIfNeeded();
+  await expect(approve).toBeInViewport({ ratio: 1 });
+  await approve.click();
+  await expect(page.getByText('You approved this. It will go ahead.')).toBeVisible();
+});
+
+test('the confirm panel is opaque with no blur from its first frame', async ({ page }) => {
+  await detail(page, 'approval-8');
+  await page.locator('form').getByRole('button', { name: 'Approve' }).click();
+  const dialog = page.getByRole('dialog');
+  const panel = dialog.locator('> div');
+  const style = await panel.evaluate((e) => ({ bg: getComputedStyle(e).backgroundColor, anim: getComputedStyle(e).animationName }));
+  expect(style.bg).toMatch(/^rgb\(/);
+  expect(style.anim).toBe('none');
+  expect(await dialog.evaluate((e) => getComputedStyle(e).backdropFilter)).toBe('none');
+});
+
+test('a row link reads its parts with separators below lg', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  await page.goto('/dashboard/work/cases');
+  await expect(page.getByRole('link', { name: /Invoice INV-1001/ })).toHaveAccessibleName(/Coding\s*,\s*Sample Worker A\s*,\s*\d+ days? ago/);
+});
+
+test('the sending spinner does not change a button width and the textarea shares the payload edge', async ({ page }) => {
+  await page.route('**/api/work/approvals/approval-8/decision', route =>
+    route.continue({ url: withMock(route.request().url(), 'slow') }));
+  await detail(page, 'approval-8');
+  const reject = page.getByRole('button', { name: 'Reject', exact: true });
+  const before = (await reject.boundingBox())!.width;
+  const edge = async (locator: Locator) => { const b = (await locator.boundingBox())!; return Math.round(b.x + b.width); };
+  expect(await edge(page.getByRole('textbox', { name: COMMENT }))).toBe(await edge(page.locator('dl').locator('xpath=..')));
+  await page.getByRole('textbox', { name: COMMENT }).fill('Sample reason');
+  await reject.click();
+  await expect(reject.locator('svg.animate-spin')).toHaveCount(1);
+  expect((await reject.boundingBox())!.width).toBe(before);
+  await expect(page.getByRole('region', { name: 'Decision' })).toBeVisible({ timeout: 15_000 });
+});
+
+test('the decide form text, the title and the fingerprint follow the type and content rules', async ({ page }) => {
+  await detail(page, 'approval-8');
+  const title = page.getByRole('heading', { level: 1 });
+  expect(await title.evaluate((e) => getComputedStyle(e).textWrapStyle)).toBe('balance');
+  const warning = page.getByText(/You are deciding .* This cannot be undone\./);
+  expect(await warning.evaluate((e) => getComputedStyle(e).color)).toBe(await title.evaluate((e) => getComputedStyle(e).color));
+  const fingerprint = (await page.locator('p.font-mono').first().textContent()) ?? '';
+  expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  expect(new Set(fingerprint).size).toBeGreaterThan(8);
+});
+
+test('back links start with an arrow and a case header badge has one size for every status', async ({ page }) => {
+  await page.goto('/dashboard/work/cases/case-1');
+  await expect(page.getByRole('link', { name: 'Back to Cases' })).toHaveText(/^\s*←/);
+  const sizes: string[] = [];
+  for (const id of ['case-1', 'case-6', 'case-13']) {
+    await page.goto(`/dashboard/work/cases/${id}`);
+    sizes.push(await page.getByRole('main').locator('header span.rounded-full').evaluate((e) => getComputedStyle(e).fontSize));
+  }
+  expect(new Set(sizes).size).toBe(1);
+  await page.goto('/dashboard/work/approvals/approval-1');
+  await expect(page.getByRole('link', { name: 'Back to Approvals' })).toHaveText(/^\s*←/);
+});
+
+test('the Cases Open filter lists rows whose status word is Open', async ({ page }) => {
+  await page.goto('/dashboard/work/cases');
+  const rows = page.getByRole('main').getByRole('listitem');
+  await expect(rows.first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Status', exact: true })).toContainText('Open');
+  const words = await rows.evaluateAll((items) => items.map((li) => li.textContent ?? ''));
+  expect(words.some((t) => t.includes('Active'))).toBe(false);
+  expect(words.every((t) => t.includes('Open') || t.includes('Blocked'))).toBe(true);
+});
+
+test('an unrecognised reason for not being able to decide says so plainly', async ({ page }) => {
+  await page.route('**/api/work/approvals/approval-17?**', async route => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.approval.cannotDecideReason = 'some_new_reason';
+    await route.fulfill({ response, json });
+  });
+  await detail(page, 'approval-17');
+  await expect(page.getByText('You cannot decide this one. Ask an admin.')).toBeVisible();
+});
+
+test('the error panel has its ground, its title stays and Try again is a bordered button', async ({ page }) => {
+  await page.route('**/api/work/approvals?**', (route) =>
+    route.continue({ url: `${route.request().url()}&mock=error:paperclip_unavailable` }));
+  await page.goto('/dashboard/work/approvals');
+  const panel = page.getByRole('alert');
+  await expect(panel).toBeVisible();
+  expect(await panel.evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  expect(await panel.evaluate((e) => getComputedStyle(e).borderTopWidth)).toBe('1px');
+  await expect(page.getByRole('heading', { level: 1, name: 'Approvals' })).toBeVisible();
+  expect(await page.getByRole('button', { name: 'Try again' }).evaluate((e) => getComputedStyle(e).borderTopWidth)).toBe('1px');
+});
+
+test('a forbidden Work page keeps its title and says You do not have access', async ({ page }) => {
+  await page.route('**/api/work/cases?**', (route) =>
+    route.continue({ url: `${route.request().url()}&mock=forbidden` }));
+  await page.goto('/dashboard/work/cases');
+  await expect(page.getByRole('heading', { level: 1, name: 'Cases' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'You do not have access' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+});
+
+test('a toast fits inside a 375 px screen', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  const rereads = await failRereads(page, 'approval-8');
+  await page.route('**/api/work/approvals/approval-8/decision', route => route.fulfill({ status: 504, body: 'Gateway timeout' }));
+  await detail(page, 'approval-8');
+  await page.getByRole('textbox', { name: COMMENT }).fill('Sample reason');
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  await page.getByRole('button', { name: 'Check again' }).click();
+  expect(rereads.reads()).toBeGreaterThan(1);
+  const toast = page.locator('[aria-live="polite"]');
+  await expect(toast).toContainText('We could not check just now. Try again.');
+  const box = (await toast.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(375);
+});
+
+test('the Cases filter shows a visible focus ring', async ({ page }) => {
+  await page.goto('/dashboard/work/cases');
+  const pipeline = page.getByRole('button', { name: 'Pipeline', exact: true });
+  await expect(pipeline).toBeVisible();
+  await page.keyboard.press('Tab');
+  await pipeline.focus();
+  expect(await pipeline.evaluate((e) => getComputedStyle(e).boxShadow)).not.toBe('none');
 });

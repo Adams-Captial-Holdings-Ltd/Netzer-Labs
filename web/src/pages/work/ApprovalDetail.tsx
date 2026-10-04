@@ -1,7 +1,8 @@
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Link, useRoute } from 'wouter-preact';
-import { Button } from '../../components/Button';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import {
+  BackLink,
   HeaderStatus,
   PageTitle,
   RelativeTime,
@@ -12,8 +13,8 @@ import {
   type ApprovalDetail as ApprovalData,
   useWork,
 } from './shared';
-import { copy, workMessage } from './messages';
-import { DecideForm } from './DecideForm';
+import { cannotDecideMessage, copy } from './messages';
+import { DECIDE_FORM_ID, DecideForm, DecideNotice } from './DecideForm';
 import { useApprovalDecision, type Decision } from './useApprovalDecision';
 
 function isFlat(value: unknown): value is Record<string, string | number | boolean | null> {
@@ -24,16 +25,10 @@ function isFlat(value: unknown): value is Record<string, string | number | boole
     Object.values(value).every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v))
   );
 }
-// Below md the page scrolls, so the person passes all of it. From md up the box scrolls (cap in
-// tailwind.config.ts) and is a keyboard stop, so a keyboard user can scroll it too.
+// The whole payload shows at every size and the page scrolls: a person never approves what they could not see.
 export function PayloadBlock({ value }: { value: unknown }) {
   return (
-    <div
-      role="region"
-      aria-label={copy.payload.region}
-      tabIndex={0}
-      class="overflow-auto md:max-h-payload rounded-lg border border-border bg-bg-sunken"
-    >
+    <div class="rounded-lg border border-border bg-bg-sunken">
       {isFlat(value) ? (
         <dl class="divide-y divide-border">
           {Object.entries(value).map(([key, val]) => (
@@ -52,10 +47,34 @@ export function PayloadBlock({ value }: { value: unknown }) {
   );
 }
 
+/** True while the element is taller than the window, so the decision is out of sight below it. */
+function useTallerThanWindow(blockRef: preact.RefObject<HTMLElement>) {
+  const [tall, setTall] = useState(false);
+  useEffect(() => {
+    const el = blockRef.current;
+    if (!el) return;
+    const measure = () => setTall(el.offsetHeight > window.innerHeight);
+    measure();
+    window.addEventListener('resize', measure);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    return () => {
+      window.removeEventListener('resize', measure);
+      observer?.disconnect();
+    };
+  }, [blockRef]);
+  return tall;
+}
+function goToDecision(e: Event) {
+  e.preventDefault();
+  document.getElementById(DECIDE_FORM_ID)?.scrollIntoView({ block: 'start' });
+  document.getElementById('work-comment')?.focus({ preventScroll: true });
+}
+
 function ApprovalHeader({ approval: a }: { approval: ApprovalData }) {
   return (
     <header class="mt-4 mb-8">
-      <h1 class="text-display-sm text-primary font-bold break-words">
+      <h1 class="text-display-sm text-primary font-bold break-words text-balance">
         {a.decisionLabel} for {a.caseTitle ?? <span class="font-mono">{a.caseKey}</span>}
       </h1>
       <div class="flex flex-wrap gap-x-3 gap-y-1 items-center mt-2 text-body-sm text-secondary">
@@ -82,7 +101,9 @@ function payloadHeading(a: ApprovalData): string {
       : copy.payload.wasProposed;
 }
 
-function ApprovalPayload({ approval: a }: { approval: ApprovalData }) {
+function ApprovalPayload({ approval: a, canDecide }: { approval: ApprovalData; canDecide: boolean }) {
+  const blockRef = useRef<HTMLDivElement>(null);
+  const tall = useTallerThanWindow(blockRef);
   if (a.payload.state !== 'verified')
     return (
       <section class="mb-8 max-w-measure space-y-2 text-body-sm text-secondary">
@@ -91,9 +112,23 @@ function ApprovalPayload({ approval: a }: { approval: ApprovalData }) {
       </section>
     );
   return (
-    <section class="mb-8">
-      <h2 class="text-heading-sm text-primary mb-3">{payloadHeading(a)}</h2>
-      <PayloadBlock value={a.payload.value} />
+    <section class="mb-8 max-w-measure">
+      <div class="flex flex-wrap items-baseline gap-x-3 mb-3">
+        <h2 class="text-heading-sm text-primary">{payloadHeading(a)}</h2>
+        {tall && isFlat(a.payload.value) && (
+          <span class="text-caption text-secondary">{copy.payload.itemCount(Object.keys(a.payload.value).length)}</span>
+        )}
+      </div>
+      {tall && canDecide && (
+        <p class="mb-3">
+          <a href={`#${DECIDE_FORM_ID}`} onClick={goToDecision} class={linkClass}>
+            {copy.payload.goToDecision}
+          </a>
+        </p>
+      )}
+      <div ref={blockRef}>
+        <PayloadBlock value={a.payload.value} />
+      </div>
       <p class="text-caption text-secondary mt-3">{copy.payload.fingerprint}</p>
       <p class="font-mono text-caption text-secondary break-all">{a.payloadSha256}</p>
     </section>
@@ -139,9 +174,7 @@ function DecisionResult({
         </>
       )}
       <p class="mt-3">
-        <Link href="/work" class={linkClass}>
-          {copy.detail.backInbox}
-        </Link>
+        <BackLink href="/work" label={copy.detail.backInbox} />
       </p>
     </section>
   );
@@ -160,7 +193,7 @@ function ApprovalDetailForId({ id }: { id: string }) {
   const d = useApprovalDecision(a, path, replace);
   if (loading || error || !a)
     return (
-      <div class="max-w-3xl min-w-0">
+      <div class="max-w-work-main min-w-0">
         <PageTitle title={copy.detail.approvalTitle} />
         {loading ? (
           <WorkLoading detail />
@@ -174,23 +207,21 @@ function ApprovalDetailForId({ id }: { id: string }) {
       </div>
     );
   const canDecide = !d.mine && a.canDecide && a.payload.state === 'verified';
+  // One notice for the last attempt. It sits directly above the buttons, or above the result when no form is left.
+  const notice = d.notice ? (
+    <DecideNotice
+      text={d.notice}
+      isError={d.noticeIsError}
+      noticeRef={d.resultRef}
+      onCheckAgain={d.unknownOutcome ? d.checkAgain : undefined}
+    />
+  ) : null;
   return (
-    <div class="max-w-3xl min-w-0">
-      <Link href="/work/approvals" class={linkClass}>
-        {copy.detail.backApprovals}
-      </Link>
+    <div class="max-w-work-main min-w-0">
+      <BackLink href="/work/approvals" label={copy.detail.backApprovals} />
       <ApprovalHeader approval={a} />
-      <ApprovalPayload approval={a} />
-      {d.notice && (
-        <section ref={d.resultRef} tabIndex={-1} class="mb-6 max-w-measure text-body-sm text-primary">
-          <p>{d.notice}</p>
-          {d.unknownOutcome && (
-            <Button size="lg" variant="secondary" onClick={d.checkAgain} class="mt-3">
-              {copy.result.checkAgain}
-            </Button>
-          )}
-        </section>
-      )}
+      <ApprovalPayload approval={a} canDecide={canDecide} />
+      {!canDecide && notice && <div class="max-w-measure">{notice}</div>}
       <DecisionResult approval={a} mine={d.mine} resultRef={d.notice ? null : d.resultRef} />
       {canDecide ? (
         <DecideForm
@@ -199,6 +230,8 @@ function ApprovalDetailForId({ id }: { id: string }) {
           setComment={d.setComment}
           sending={d.sending}
           locked={d.locked}
+          notice={notice}
+          noteRef={d.sendingRef}
           onApprove={() => d.setConfirm(true)}
           onDecide={d.decide}
         />
@@ -207,7 +240,7 @@ function ApprovalDetailForId({ id }: { id: string }) {
         a.status === 'pending' &&
         a.payload.state === 'verified' && (
           <p class="text-body-sm text-secondary max-w-measure">
-            {workMessage(a.cannotDecideReason ?? 'not_an_approver')}
+            {cannotDecideMessage(a.cannotDecideReason)}
           </p>
         )
       )}
@@ -226,9 +259,8 @@ function ApprovalDetailForId({ id }: { id: string }) {
         onConfirm={() => d.decide('approve')}
         onCancel={() => d.setConfirm(false)}
       />
-      {/* Persistent live regions. They start empty and carry the announcement only. */}
-      <p ref={d.statusRef} role="status" tabIndex={-1} class="sr-only">{d.statusText}</p>
-      <p role="alert" class="sr-only">{d.alertText}</p>
+      {/* Persistent live region. It starts empty and carries the announcement only. */}
+      <p role="status" class="sr-only">{d.statusText}</p>
     </div>
   );
 }

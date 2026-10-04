@@ -11,10 +11,10 @@ describe('approval payload rendering', () => {
     expect(region.props.children.type).toBe('pre');
     expect(region.props.children.props.children).toContain('"INV-1002"');
   });
-  it('is a keyboard-reachable region with a name', () => {
-    const region = PayloadBlock({ value: { action: 'Release payment' } });
-    expect(region.props.role).toBe('region');
-    expect(region.props.tabIndex).toBe(0);
-    expect(region.props['aria-label']).toBeTruthy();
+  it('is a plain block: no inner scroll box and no tab stop of its own', () => {
+    const block = PayloadBlock({ value: { action: 'Release payment' } });
+    expect(block.props.role).toBeUndefined();
+    expect(block.props.tabIndex).toBeUndefined();
+    expect(block.props.class).not.toMatch(/overflow|max-h/);
   });
 });

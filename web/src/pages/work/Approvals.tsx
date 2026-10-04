@@ -6,6 +6,9 @@ import { copy } from './messages';
 // The tab classes AgentDetail uses. The first tab sits on the content edge.
 const tabClass = 'px-4 first:pl-0 py-2.5 text-body-sm font-medium border-b-2 transition-colors whitespace-nowrap';
 
+// On the Waiting tab the rows the person can decide come first. The sort is stable, so each group keeps the API order.
+const decidableFirst = (rows: ApprovalSummary[]) => rows.slice().sort((a, b) => Number(b.canDecide) - Number(a.canDecide));
+
 export function Approvals() {
   const params = new URLSearchParams(useSearch());
   const status = params.get('status') === 'all' ? 'all' : 'pending';
@@ -40,7 +43,7 @@ export function Approvals() {
         <>
           {data.approvals.length ? (
             <WorkList>
-              {data.approvals.map((a) => (
+              {(status === 'pending' ? decidableFirst(data.approvals) : data.approvals).map((a) => (
                 <ApprovalRow key={a.id} item={a} />
               ))}
             </WorkList>

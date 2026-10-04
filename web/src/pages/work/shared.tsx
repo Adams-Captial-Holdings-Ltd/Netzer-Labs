@@ -98,11 +98,11 @@ const statuses = new Map<string, Status>([
   ['done', { name: copy.status.done, dot: 'success', badge: 'success-dim' }],
   ['rejected', { name: copy.status.rejected, dot: 'error', badge: 'danger-dim' }],
   ['blocked', { name: copy.status.blocked, dot: 'error', badge: 'danger-dim' }],
-  ['active', { name: copy.status.active, dot: 'inactive', badge: 'default' }],
-  ['cancelled', { name: copy.status.cancelled, dot: 'inactive', badge: 'default' }],
+  ['active', { name: copy.status.active, dot: 'inactive', badge: 'neutral-dim' }],
+  ['cancelled', { name: copy.status.cancelled, dot: 'inactive', badge: 'neutral-dim' }],
 ]);
 function statusOf(status: string): Status {
-  return statuses.get(status) ?? { name: words(status), dot: 'inactive', badge: 'default' };
+  return statuses.get(status) ?? { name: words(status), dot: 'inactive', badge: 'neutral-dim' };
 }
 /** A list row's status: a dot and a word, one text colour for every status. */
 export function ListStatus({ status, label }: { status: string; label?: string }) {
@@ -118,6 +118,16 @@ export function HeaderStatus({ status }: { status: string }) {
 /** The one link style on the Work screens: ink and underlined (the stock indigo fails 4.5:1 as text). */
 export const linkClass =
   'inline-flex items-center min-h-11 md:min-h-6 text-body-sm text-primary underline underline-offset-2 hover:no-underline';
+
+/** A back link: the arrow is decoration, the name is the words. */
+export function BackLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Link href={href} class={linkClass}>
+      <span aria-hidden="true">&larr;&nbsp;</span>
+      {label}
+    </Link>
+  );
+}
 
 export function PageTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
@@ -167,13 +177,17 @@ export function WorkError({
       <div>
         <ErrorState title={notFound.title} message={workMessage(error)} />
         <p class="mt-4">
-          <Link class={linkClass} href={notFound.href}>
-            {notFound.label}
-          </Link>
+          <BackLink href={notFound.href} label={notFound.label} />
         </p>
       </div>
     );
-  return <ErrorState message={workMessage(error)} onRetry={canRetry(error) ? retry : undefined} />;
+  return (
+    <ErrorState
+      title={code === 'forbidden' ? copy.error.noAccess : undefined}
+      message={workMessage(error)}
+      onRetry={canRetry(error) ? retry : undefined}
+    />
+  );
 }
 export function useWork<T>(path: string) {
   const [result, setResult] = useState<{ path: string; value: T } | null>(null);
@@ -208,8 +222,10 @@ export function WorkList({ children }: { children: ComponentChildren }) {
 }
 
 // A row is one link. Below lg it is two lines: the title (two lines at most), then one metadata line
-// that truncates, with the status at its end. At lg the cells sit in fixed tracks (tailwind.config.ts)
-// so columns line up from row to row. `stacked` keeps the two-line form at every width, for a list in
+// that the status never truncates: the status ends that line, or from a phone's width down it takes its
+// own trailing line in every row, so row heights stay alike within a list. At lg the cells sit in the shared
+// grid (tailwind.config.ts) whose only flexible track is the title, so columns line up from row to row
+// and the title takes all spare width. `stacked` keeps the two-line form at every width, for a list in
 // a narrow column. The keyboard position is the focus-bar rail, not a ring.
 const rowClass = [
   'relative block min-w-0 min-h-11 px-4 py-1.5 hover:bg-row-hover',
@@ -217,60 +233,75 @@ const rowClass = [
   'before:absolute before:inset-y-1 before:left-0 before:w-1 before:rounded-full before:bg-transparent',
   'focus-visible:before:bg-focus-bar',
 ].join(' ');
-const gridClass = 'lg:grid lg:items-center lg:gap-x-4';
-function RowTitle({ text, stacked }: { text: string; stacked: boolean }) {
+const gridClass = 'lg:grid lg:items-center lg:gap-x-3';
+const gridColumns = (showKey: boolean) => (showKey ? 'lg:grid-cols-work-row-key' : 'lg:grid-cols-work-row');
+function RowTitle({ text, stacked, muted = false }: { text: string; stacked: boolean; muted?: boolean }) {
   return (
     <span
       data-work="title"
       title={text}
-      class={`block break-words line-clamp-2 text-body-sm font-medium text-primary
+      class={`block break-words line-clamp-2 text-body-sm font-medium ${muted ? 'text-secondary' : 'text-primary'}
         ${stacked ? '' : 'lg:line-clamp-none lg:truncate'}`}
     >
       {text}
     </span>
   );
 }
-type Cell = [string, ComponentChildren, string?];
+/** One metadata cell. `wide` takes two grid tracks at lg. */
+type Cell = { key: string; content: ComponentChildren; title?: string; wide?: boolean };
 function RowMeta({ cells, status, stacked }: { cells: Cell[]; status?: ComponentChildren; stacked: boolean }) {
   return (
-    <span class={`mt-0.5 flex min-w-0 items-center gap-3 ${stacked ? '' : 'lg:mt-0 lg:contents'}`}>
+    <span class={`mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 ${stacked ? '' : 'lg:mt-0 lg:contents'}`}>
       <span
         data-work="meta"
-        class={`min-w-0 flex-1 truncate text-caption text-secondary ${stacked ? '' : 'lg:contents'}`}
+        class={`min-w-0 max-w-full truncate text-caption text-secondary ${stacked ? '' : 'lg:contents'}`}
       >
-        {cells.map(([key, content, title], i) => (
+        {cells.map(({ key, content, title, wide }, i) => (
           <span
             key={key}
             title={title}
-            class={`${key === 'key' ? 'font-mono' : ''} ${stacked ? '' : 'lg:block lg:min-w-0 lg:truncate'}`}
+            class={`${key === 'key' ? 'font-mono' : ''}
+              ${stacked ? '' : `lg:block lg:min-w-0 lg:truncate ${wide ? 'lg:col-span-2' : ''}`}`}
           >
-            {i > 0 && <span aria-hidden="true" class={stacked ? '' : 'lg:hidden'}> · </span>}
+            {i > 0 && (
+              <span class={stacked ? '' : 'lg:hidden'}>
+                <span aria-hidden="true"> · </span>
+                <span class="sr-only">, </span>
+              </span>
+            )}
             {content}
           </span>
         ))}
       </span>
-      {status ? <span class={`shrink-0 ${stacked ? '' : 'lg:min-w-0'}`}>{status}</span> : null}
+      {status ? <span class={`shrink-0 max-sm:basis-full ${stacked ? '' : 'lg:min-w-0'}`}>{status}</span> : null}
     </span>
   );
 }
+/** The case key as its own cell, only when the title does not already hold it. */
+const keyCell = (title: string, caseKey: string): Cell[] =>
+  title.includes(caseKey) ? [] : [{ key: 'key', content: caseKey, title: caseKey }];
 
 export function CaseRow({ item, inboxBlocked = false }: { item: CaseSummary; inboxBlocked?: boolean }) {
   const owner = item.owner.name ?? copy.row.unassigned;
-  const stage = inboxBlocked ? copy.row.blockedAt(item.stage.name) : item.stage.name;
-  const columns = inboxBlocked ? 'lg:grid-cols-work-case-row-quiet' : 'lg:grid-cols-work-case-row';
+  const key = keyCell(item.title, item.caseKey);
+  const stage = copy.row.blockedAt(item.stage.name);
+  const updated: Cell = { key: 'time', content: <RelativeTime value={item.updatedAt} /> };
+  // The Inbox payload carries no blocker reason, so a blocked row ends by saying where to find it (the
+  // status slot, which drops to its own line when it does not fit). It has no room for the owner at lg.
+  const cells: Cell[] = inboxBlocked
+    ? [...key, { key: 'stage', content: stage, title: stage, wide: true }, updated]
+    : [...key, { key: 'stage', content: item.stage.name, title: item.stage.name },
+      { key: 'owner', content: owner, title: owner }, updated];
   return (
     <li>
-      <Link href={`/work/cases/${encodeURIComponent(item.id)}`} class={`${rowClass} ${gridClass} ${columns}`}>
+      <Link href={`/work/cases/${encodeURIComponent(item.id)}`} class={`${rowClass} ${gridClass} ${gridColumns(!!key.length)}`}>
         <RowTitle text={item.title} stacked={false} />
         <RowMeta
           stacked={false}
-          cells={[
-            ['key', item.caseKey, item.caseKey],
-            ['stage', stage, stage],
-            ['owner', owner, owner],
-            ['time', <RelativeTime value={item.updatedAt} />],
-          ]}
-          status={inboxBlocked ? undefined : <ListStatus status={item.status} />}
+          cells={cells}
+          status={inboxBlocked
+            ? <span class="text-caption text-secondary whitespace-nowrap">{copy.row.openToSee}</span>
+            : <ListStatus status={item.status} />}
         />
       </Link>
     </li>
@@ -287,29 +318,30 @@ export function ApprovalRow({
 }) {
   const title = `${item.decisionLabel} for ${item.caseTitle ?? item.caseKey}`;
   const stage = item.stageName ?? item.stage;
+  const key = keyCell(title, item.caseKey);
   // The list data cannot say why a person cannot decide, so this is the one honest word for it.
   const viewOnly = item.status === 'pending' && !item.canDecide;
-  const columns = inInbox ? 'lg:grid-cols-work-approval-row-quiet' : 'lg:grid-cols-work-approval-row';
   return (
     <li>
       <Link
         href={`/work/approvals/${encodeURIComponent(item.id)}`}
-        class={`${rowClass} ${stacked ? '' : `${gridClass} ${columns}`}`}
+        class={`${rowClass} ${stacked ? '' : `${gridClass} ${gridColumns(!!key.length)}`}`}
       >
-        <RowTitle text={title} stacked={stacked} />
+        <RowTitle text={title} stacked={stacked} muted={viewOnly} />
         <RowMeta
           stacked={stacked}
           cells={[
-            ['key', item.caseKey, item.caseKey],
-            ['stage', stage, stage],
-            [
-              'time',
-              inInbox ? copy.row.waitingFor(waitedFor(item.requestedAt))
+            ...key,
+            { key: 'stage', content: stage, title: stage },
+            {
+              key: 'time',
+              content: inInbox ? copy.row.waitingFor(waitedFor(item.requestedAt))
                 : <>{copy.requested}{' '}<RelativeTime value={item.requestedAt} /></>,
-            ],
+              wide: true,
+            },
           ]}
           status={inInbox ? undefined : (
-            <ListStatus status={item.status} label={viewOnly ? copy.row.waitingOnOthers : undefined} />
+            <ListStatus status={item.status} label={viewOnly ? copy.row.waitingViewOnly : undefined} />
           )}
         />
       </Link>

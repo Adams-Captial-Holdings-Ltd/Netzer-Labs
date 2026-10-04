@@ -137,6 +137,13 @@ export function mockWorkPlugin(): Plugin {
         if (decideId && req.method === 'POST') {
           if (mock?.startsWith('decide:')) {
             const code = mock.slice(7);
+            // not_pending means someone else decided first, so the approval is decided before the refusal.
+            const first = approvals.find((x) => x.id === decideId);
+            if (code === 'not_pending' && first?.status === 'pending')
+              Object.assign(first, {
+                status: 'approved', canDecide: false, cannotDecideReason: 'not_pending',
+                decidedAt: new Date().toISOString(), decidedBy: 'approver.a@example.test',
+              });
             return send(decideErrors[code] ?? 500, { error: code });
           }
           // mock=slow: the reply comes after a pause, so the sending state can be seen.
