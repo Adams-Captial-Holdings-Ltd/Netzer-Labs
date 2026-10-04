@@ -137,6 +137,7 @@
     --color-danger-dim: rgba(239, 68, 68, 0.12);
     --color-warning: #f59e0b;
     --color-warning-dim: rgba(245, 158, 11, 0.12);
+    --color-scrim: rgba(26, 26, 46, 0.45);
     --color-info: #06b6d4;
 
     /* ── Alpha-capable mirrors of the semantic tokens (light mode) ──
@@ -275,6 +276,7 @@
     --color-danger-dim: rgba(239, 68, 68, 0.15);
     --color-warning: #fbbf24;
     --color-warning-dim: rgba(245, 158, 11, 0.15);
+    --color-scrim: rgba(0, 0, 0, 0.6);
 
     /* Dark mirrors of the alpha triplets. These MUST be re-declared here (not
        inherited from :root) because the dark palette re-tunes their parents:

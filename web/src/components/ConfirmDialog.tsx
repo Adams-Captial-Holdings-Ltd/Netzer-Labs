@@ -1,4 +1,6 @@
+import type { ComponentChildren } from 'preact';
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
+import { Button } from './Button';
 
 type ConfirmDialogProps = {
   /** Controls visibility. When false the dialog renders nothing. */
@@ -6,7 +8,7 @@ type ConfirmDialogProps = {
   /** Heading shown at the top of the dialog. */
   title: string;
   /** Body copy explaining the consequence of confirming. */
-  message: string;
+  message: ComponentChildren;
 
   /** Label for the confirm button. Defaults to "Confirm". */
   confirmLabel?: string;
@@ -33,6 +35,7 @@ export function ConfirmDialog({
   title,
   message,
   confirmPhrase,
+  simple,
   confirmLabel = 'Confirm',
   danger = false,
   onConfirm,
@@ -40,7 +43,6 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
   const [typed, setTyped] = useState('');
   const inputId = useId();
   const descId = useId();
@@ -50,6 +52,12 @@ export function ConfirmDialog({
   // Escape to cancel + lock body scroll while open. Mirrors Modal.tsx.
   useEffect(() => {
     if (!open) return;
+    // Focus that leaves the dialog (a click outside, a script) is pulled back in.
+    const pullBack = (e: FocusEvent) => {
+      const overlay = overlayRef.current;
+      if (!overlay || (e.target instanceof Node && overlay.contains(e.target))) return;
+      overlay.querySelector<HTMLElement>('input, button:not(:disabled)')?.focus();
+    };
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
       if (e.key === 'Tab' && overlayRef.current) {
@@ -62,9 +70,11 @@ export function ConfirmDialog({
       }
     };
     document.addEventListener('keydown', handler);
+    document.addEventListener('focusin', pullBack);
     document.body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', handler);
+      document.removeEventListener('focusin', pullBack);
       document.body.style.overflow = '';
     };
   }, [open, onCancel]);
@@ -75,7 +85,11 @@ export function ConfirmDialog({
       const opener = document.activeElement;
       setTyped('');
       const t = setTimeout(
-        () => (confirmPhrase === undefined ? cancelRef : inputRef).current?.focus(),
+        () =>
+          (confirmPhrase === undefined
+            ? overlayRef.current?.querySelector<HTMLElement>('[data-initial-focus]')
+            : inputRef.current
+          )?.focus(),
         0,
       );
       return () => {
@@ -90,7 +104,8 @@ export function ConfirmDialog({
   return (
     <div
       ref={overlayRef}
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      class={`fixed inset-0 z-50 flex items-center justify-center p-4
+        ${simple ? 'bg-scrim' : 'bg-black/50 backdrop-blur-sm'}`}
       onClick={(e) => {
         if (e.target === overlayRef.current) onCancel();
       }}
@@ -101,11 +116,11 @@ export function ConfirmDialog({
     >
       <div class="bg-surface border border-border rounded-xl shadow-xl w-full max-w-md page-enter">
         <div class={`px-6 py-4 border-b ${danger ? 'border-danger/30' : 'border-border'}`}>
-          <h2 class={`text-heading-sm font-semibold ${danger ? 'text-danger' : 'text-primary'}`}>{title}</h2>
+          <h2 class={`text-heading-sm font-semibold break-words ${danger ? 'text-danger' : 'text-primary'}`}>{title}</h2>
         </div>
 
         <div class="px-6 py-4">
-          <p id={descId} class="text-body-sm text-secondary mb-4">{message}</p>
+          <p id={descId} class="text-body-sm text-secondary mb-4 break-words">{message}</p>
 
           {confirmPhrase !== undefined && (
             <>
@@ -135,31 +150,43 @@ export function ConfirmDialog({
           )}
         </div>
 
-        <div class="flex gap-3 justify-end px-6 py-4 border-t border-border">
-          <button
-            ref={cancelRef}
-            type="button"
-            onClick={onCancel}
-            class="px-4 py-2 text-body-sm font-medium border border-border rounded-lg hover:bg-surface-hover transition-colors
-              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={!matches}
-            aria-disabled={!matches}
-            class={`px-4 py-2 text-body-sm font-medium rounded-lg transition-colors
-              disabled:opacity-50 disabled:cursor-not-allowed
-              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
-              ${danger
-                ? 'bg-danger text-white hover:bg-red-600 focus-visible:ring-danger'
-                : 'bg-primary text-inverse hover:bg-primary-hover focus-visible:ring-primary'}`}
-          >
-            {confirmLabel}
-          </button>
-        </div>
+        {simple ? (
+          // Reading order is Cancel then Approve (Cancel holds the first focus).
+          // Below sm the column is reversed so Approve sits on top, full width.
+          <div class="flex flex-col-reverse gap-6 px-6 py-4 border-t border-border sm:flex-row sm:justify-end">
+            <Button size="lg" variant="secondary" data-initial-focus="true" onClick={onCancel} class="w-full sm:w-auto">
+              Cancel
+            </Button>
+            <Button size="lg" onClick={onConfirm} class="w-full sm:w-auto">
+              {confirmLabel}
+            </Button>
+          </div>
+        ) : (
+          <div class="flex gap-3 justify-end px-6 py-4 border-t border-border">
+            <button
+              type="button"
+              onClick={onCancel}
+              class="px-4 py-2 text-body-sm font-medium border border-border rounded-lg hover:bg-surface-hover transition-colors
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={!matches}
+              aria-disabled={!matches}
+              class={`px-4 py-2 text-body-sm font-medium rounded-lg transition-colors
+                disabled:opacity-50 disabled:cursor-not-allowed
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+                ${danger
+                  ? 'bg-danger text-white hover:bg-red-600 focus-visible:ring-danger'
+                  : 'bg-primary text-inverse hover:bg-primary-hover focus-visible:ring-primary'}`}
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -166,7 +166,7 @@ function RequireCapability({
 function WorkRedirect() {
   const [, setLocation] = useLocation();
   useEffect(() => { setLocation('/work', { replace: true }); }, [setLocation]);
-  return <div aria-label="Loading Work" class="skeleton h-12 w-full" />;
+  return <div role="status" class="skeleton h-12 w-full"><span class="sr-only">Loading Work</span></div>;
 }
 
 function AppShell() {
@@ -323,7 +323,7 @@ function AppShell() {
             <Route path="/work/cases/:caseId"><RequireCapability need="work:read" label="Case">{workStatusError ? workFailure : <WorkCaseDetail />}</RequireCapability></Route>
             <Route path="/work/approvals"><RequireCapability need="work:read" label="Approvals">{workStatusError ? workFailure : <WorkApprovals />}</RequireCapability></Route>
             <Route path="/work/approvals/:approvalId"><RequireCapability need="work:read" label="Approval">{workStatusError ? workFailure : <WorkApprovalDetail />}</RequireCapability></Route>
-            <Route path="/missions">{workEnabled === null ? <div aria-label="Loading Work"><div class="skeleton h-8 w-1/3 mb-3" /><div class="skeleton h-12 w-full" /></div> : workEnabled && hasCapability('work:read') ? <WorkRedirect /> : <RequireCapability need="missions:read" label="Missions"><Missions /></RequireCapability>}</Route>
+            <Route path="/missions">{workEnabled === null ? <div role="status"><span class="sr-only">Loading Work</span><div class="skeleton h-8 w-1/3 mb-3" /><div class="skeleton h-12 w-full" /></div> : workEnabled && hasCapability('work:read') ? <WorkRedirect /> : <RequireCapability need="missions:read" label="Missions"><Missions /></RequireCapability>}</Route>
             <Route path="/memories"><RequireCapability need="memories:read" label="Memories"><Memories /></RequireCapability></Route>
             <Route path="/hive"><RequireCapability need="hive:read" label="Hive Mind"><HiveMind /></RequireCapability></Route>
             <Route path="/scheduled"><RequireCapability need="scheduled:read" label="Scheduled"><ScheduledTasks /></RequireCapability></Route>

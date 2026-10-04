@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'preact/hooks';
 import { useSearchParams } from 'wouter-preact';
+import { EmptyState } from '../../components/EmptyState';
+import { Select } from '../../components/Select';
 import {
   CaseRow,
+  PageTitle,
   WorkError,
   WorkList,
   WorkLoading,
@@ -9,12 +12,35 @@ import {
   type PipelineSummary,
   useWork,
 } from './shared';
+import { copy } from './messages';
+
+const STATUS_VALUES = ['active', 'blocked', 'done', 'all'];
+const statusOptions = [
+  { value: 'active', label: copy.cases.open },
+  { value: 'blocked', label: copy.cases.blocked },
+  { value: 'done', label: copy.cases.done },
+  { value: 'all', label: copy.cases.all },
+];
+// 44 px tall and 16 px text below md (the touch size), the app's own size from md up.
+const touchSelect = 'min-h-11 max-md:text-base md:min-h-0';
+
+function Filter({ id, label, children }: { id: string; label: string; children: preact.ComponentChildren }) {
+  return (
+    <div>
+      <label for={id} class="block text-caption text-secondary mb-1">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
 export function Cases() {
   const [params, setParams] = useSearchParams();
   const pipeline = params.get('pipeline') ?? '',
     stage = params.get('stage') ?? '',
     requestedStatus = params.get('status') ?? 'active';
-  const status = ['active', 'blocked', 'done', 'all'].includes(requestedStatus) ? requestedStatus : 'active';
+  const status = STATUS_VALUES.includes(requestedStatus) ? requestedStatus : 'active';
   const query = new URLSearchParams();
   if (pipeline) query.set('pipeline', pipeline);
   if (stage) query.set('stage', stage);
@@ -29,6 +55,7 @@ export function Cases() {
     if (data?.pipelines) setLastPipelines(data.pipelines);
   }, [data?.pipelines]);
   const pipelines = data?.pipelines ?? lastPipelines;
+  const stages = pipelines.find((p) => p.id === pipeline)?.stages ?? [];
   const change = (key: string, value: string) => {
     const next = new URLSearchParams(query);
     if (value) next.set(key, value);
@@ -38,60 +65,43 @@ export function Cases() {
   };
   return (
     <div class="min-w-0">
-      <h1 class="text-heading-lg text-primary mb-6">Cases</h1>
+      <PageTitle title={copy.cases.title} subtitle={copy.cases.subtitle} />
       <div class="flex flex-wrap gap-3 mb-4">
-        <label class="text-caption text-secondary">
-          Pipeline{' '}
-          <select
-            aria-label="Pipeline"
-            class="block rounded-md border border-border bg-surface text-primary p-2
-              focus-visible:ring-2 focus-visible:ring-primary"
+        <Filter id="work-pipeline" label={copy.cases.pipeline}>
+          <Select
+            id="work-pipeline"
+            triggerClass={touchSelect}
             value={pipeline}
-            onChange={(e) => change('pipeline', e.currentTarget.value)}
-          >
-            <option value="">All pipelines</option>
-            {pipelines.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label class="text-caption text-secondary">
-          Stage{' '}
-          <select
-            aria-label="Stage"
-            class="block rounded-md border border-border bg-surface text-primary p-2
-              focus-visible:ring-2 focus-visible:ring-primary"
+            onChange={(value) => change('pipeline', value)}
+            options={[
+              { value: '', label: copy.cases.allPipelines },
+              ...pipelines.map((p) => ({ value: p.id, label: p.name })),
+            ]}
+          />
+        </Filter>
+        <Filter id="work-stage" label={copy.cases.stage}>
+          <Select
+            id="work-stage"
+            triggerClass={touchSelect}
+            disabled={!pipeline}
             value={stage}
-            onChange={(e) => change('stage', e.currentTarget.value)}
-          >
-            <option value="">All stages</option>
-            {pipelines
-              .find((p) => p.id === pipeline)
-              ?.stages.map((s) => (
-                <option key={s.id} value={s.key}>
-                  {s.name}
-                </option>
-              ))}
-          </select>
-        </label>
-        <label class="text-caption text-secondary">
-          Status{' '}
-          <select
-            aria-label="Status"
-            class="block rounded-md border border-border bg-surface text-primary p-2
-              focus-visible:ring-2 focus-visible:ring-primary"
+            onChange={(value) => change('stage', value)}
+            options={
+              pipeline
+                ? [{ value: '', label: copy.cases.allStages }, ...stages.map((s) => ({ value: s.key, label: s.name }))]
+                : [{ value: '', label: copy.cases.stageFirst }]
+            }
+          />
+        </Filter>
+        <Filter id="work-status" label={copy.cases.status}>
+          <Select
+            id="work-status"
+            triggerClass={touchSelect}
             value={status}
-            onChange={(e) => change('status', e.currentTarget.value)}
-          >
-            {['active', 'blocked', 'done', 'all'].map((s) => (
-              <option key={s} value={s}>
-                {s[0].toUpperCase() + s.slice(1)}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={(value) => change('status', value)}
+            options={statusOptions}
+          />
+        </Filter>
       </div>
       {loading ? (
         <WorkLoading />
@@ -106,13 +116,9 @@ export function Cases() {
               ))}
             </WorkList>
           ) : (
-            <p class="text-body-sm text-secondary">No cases match these filters.</p>
+            <EmptyState title={copy.cases.empty} />
           )}
-          {data.truncated && (
-            <p class="text-caption text-secondary mt-3">
-              Showing the first 200. Narrow the filters to find others.
-            </p>
-          )}
+          {data.truncated && <p class="text-caption text-secondary mt-3">{copy.cases.truncated}</p>}
         </>
       )}
     </div>

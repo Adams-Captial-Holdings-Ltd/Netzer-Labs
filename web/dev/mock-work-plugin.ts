@@ -13,6 +13,8 @@ const decideErrors: Record<string, number> = {
   decision_outcome_unknown: 503,
 };
 
+const SLOW_REPLY_MS = 2500;
+
 export function mockWorkPlugin(): Plugin {
   const approvals = structuredClone(seedApprovals);
   return {
@@ -54,13 +56,17 @@ export function mockWorkPlugin(): Plugin {
           return send(decideErrors[code] ?? 500, { error: code });
         }
         if (path === '/status' && req.method === 'GET') return send(200, { enabled: mock !== 'disabled' });
-        if (path === '/inbox' && req.method === 'GET')
+        if (path === '/inbox' && req.method === 'GET') {
+          const emptyInbox = mock === 'empty' || mock === 'empty-not-set-up';
           return send(200, {
-            approverSetUp: mock !== 'not-set-up',
-            approvals: mock === 'empty' ? [] : approvals.filter((a) => a.status === 'pending' && a.canDecide),
-            blocked: mock === 'empty' ? [] : cases.filter((c) => c.status === 'blocked'),
-            mine: mock === 'empty' ? [] : cases.slice(0, 2),
+            // mock=empty: nothing waits, set up. mock=empty-not-set-up: nothing, and not set up.
+            // mock=not-set-up: items exist but this person cannot approve.
+            approverSetUp: mock !== 'not-set-up' && mock !== 'empty-not-set-up',
+            approvals: emptyInbox ? [] : approvals.filter((a) => a.status === 'pending' && a.canDecide),
+            blocked: emptyInbox ? [] : cases.filter((c) => c.status === 'blocked'),
+            mine: emptyInbox ? [] : cases.slice(0, 2),
           });
+        }
         if (path === '/cases' && req.method === 'GET') {
           const status = url.searchParams.get('status') ?? 'active';
           if (!['active', 'blocked', 'done', 'all'].includes(status))
@@ -133,6 +139,8 @@ export function mockWorkPlugin(): Plugin {
             const code = mock.slice(7);
             return send(decideErrors[code] ?? 500, { error: code });
           }
+          // mock=slow: the reply comes after a pause, so the sending state can be seen.
+          if (mock === 'slow') await new Promise((resolve) => setTimeout(resolve, SLOW_REPLY_MS));
           const a = approvals.find((x) => x.id === decideId);
           if (!a) return send(404, { error: 'not_found' });
           let raw = '';

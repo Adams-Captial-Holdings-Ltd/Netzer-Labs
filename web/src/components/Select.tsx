@@ -12,9 +12,17 @@ interface SelectProps {
   class?: string;
   placeholder?: string;
   size?: 'sm' | 'md';
+  /** Lets a <label for> name the trigger button. */
+  id?: string;
+  /** Not openable. The trigger shows the selected label as muted text. */
+  disabled?: boolean;
+  /** Extra classes for the trigger button, such as a taller touch size. */
+  triggerClass?: string;
 }
 
-export function Select({ value, onChange, options, class: className = '', placeholder, size = 'sm' }: SelectProps) {
+export function Select({
+  value, onChange, options, class: className = '', placeholder, size = 'sm', id, disabled = false, triggerClass = '',
+}: SelectProps) {
   const [open, setOpen] = useState(false);
   // Open upward when the trigger sits too close to the viewport bottom for the
   // list to fit below (e.g. the Jarvis model picker in the page foot) — an
@@ -24,6 +32,7 @@ export function Select({ value, onChange, options, class: className = '', placeh
   const listRef = useRef<HTMLDivElement>(null);
 
   function toggleOpen() {
+    if (disabled) return;
     if (!open && ref.current) {
       const r = ref.current.getBoundingClientRect();
       const estListHeight = Math.min(options.length * 38 + 10, 240); // max-h-60 cap
@@ -62,11 +71,14 @@ export function Select({ value, onChange, options, class: className = '', placeh
   return (
     <div ref={ref} class={`relative inline-block ${className}`}>
       <button
+        id={id}
         type="button"
+        disabled={disabled}
         onClick={toggleOpen}
         class={`flex items-center gap-2 bg-surface border border-border rounded-lg ${pad} text-body-sm
           focus:ring-2 focus:ring-primary/50 outline-none hover:border-border-strong transition-colors
-          ${!selected ? 'text-muted' : 'text-primary'}`}
+          disabled:cursor-not-allowed disabled:opacity-60
+          ${disabled ? 'text-secondary' : !selected ? 'text-muted' : 'text-primary'} ${triggerClass}`}
         aria-haspopup="listbox"
         aria-expanded={open}
       >

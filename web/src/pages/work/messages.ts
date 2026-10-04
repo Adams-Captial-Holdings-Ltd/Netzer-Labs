@@ -1,4 +1,4 @@
-const sentences: Record<string, string> = {
+const sentences = new Map<string, string>(Object.entries({
   work_disabled: 'Work is not switched on for this deployment.',
   paperclip_disabled: 'The work engine is not available right now. Try again in a minute.',
   paperclip_unavailable: 'The work engine is not available right now. Try again in a minute.',
@@ -20,14 +20,146 @@ const sentences: Record<string, string> = {
   paperclip_rejected: 'The decision was not accepted. Reload and check the approval.',
   decision_outcome_unknown: 'We could not confirm the decision was recorded. Reload to check.',
   attribution_mismatch: 'Your decision may have been recorded, but we could not confirm it under your name. Do not decide again. Contact your admin.',
-};
+}));
 export const fallbackMessage =
   'Something went wrong on our side. Try again, or contact your admin.';
 export function workMessage(error: unknown): string {
-  const code = error instanceof Error ? error.message.split(':')[0] : String(error);
-  return Object.hasOwn(sentences, code) ? sentences[code] : fallbackMessage;
+  const code = error instanceof Error ? error.message.split(':').at(0) : String(error);
+  return sentences.get(code ?? '') ?? fallbackMessage;
 }
 export function canRetry(error: unknown): boolean {
   const code = error instanceof Error ? error.message : String(error);
   return !['forbidden', 'work_disabled', 'not_found'].includes(code);
 }
+
+/** Page text for the Work screens. Error sentences stay in the map above. */
+export const copy = {
+  loading: 'Loading',
+  inbox: {
+    title: 'Work Inbox',
+    subtitle: 'What is waiting for you.',
+    waiting: 'Waiting for your decision',
+    blocked: 'Blocked cases',
+    mine: 'Cases assigned to you',
+    nothing: 'Nothing needs you',
+    notSetUp: 'You are not set up to approve. Ask an admin.',
+    noneWaiting: 'Nothing waiting for your decision.',
+    noneBlocked: 'No blocked cases.',
+    noneMine: 'No cases assigned to you.',
+  },
+  cases: {
+    title: 'Cases',
+    subtitle: 'Each case is one piece of work an agent is handling, such as an invoice.',
+    empty: 'No cases match these filters.',
+    pipeline: 'Pipeline',
+    stage: 'Stage',
+    status: 'Status',
+    allPipelines: 'All pipelines',
+    allStages: 'All stages',
+    stageFirst: 'Choose a pipeline first',
+    open: 'Open',
+    blocked: 'Blocked',
+    done: 'Done',
+    all: 'All',
+    truncated: 'Showing the first 200. Narrow the filters to find others.',
+  },
+  approvals: {
+    title: 'Approvals',
+    subtitle: "Actions an agent has prepared that need a person's yes or no before they happen.",
+    empty: 'No approvals here.',
+    tabs: 'Approval tabs',
+    waiting: 'Waiting',
+    all: 'All',
+    truncated: 'Showing the first 200.',
+  },
+  detail: {
+    caseTitle: 'Case',
+    caseNotFound: 'Case not found',
+    approvalTitle: 'Approval',
+    approvalNotFound: 'Approval not found',
+    backInbox: 'Back to Inbox',
+    backCases: 'Back to Cases',
+    backApprovals: 'Back to Approvals',
+    viewCase: 'View case',
+    blockers: 'Blockers',
+    approvalsHeading: 'Approvals',
+    noApprovals: 'No approvals for this case.',
+    timeline: 'Timeline',
+    noTimeline: 'No timeline entries yet.',
+    facts: 'Facts',
+    system: 'System',
+  },
+  status: {
+    pending: 'Waiting',
+    revision_requested: 'Changes requested',
+    approved: 'Approved',
+    rejected: 'Rejected',
+    blocked: 'Blocked',
+    done: 'Done',
+    active: 'Active',
+    cancelled: 'Cancelled',
+  },
+  row: {
+    unassigned: 'Unassigned',
+    blockedAt: (stage: string) => `Blocked at ${stage}`,
+    waitingFor: (span: string) => `Waiting ${span}`,
+    requested: (span: string) => `Requested ${span}`,
+    waitingOnOthers: 'Waiting on someone else',
+  },
+  payload: {
+    region: 'Approval content',
+    ifApproved: 'If you approve, this will be done',
+    wasApproved: 'What was approved',
+    wasProposed: 'What was proposed',
+    cannotShow: 'We cannot show what would be approved, so it cannot be decided.',
+    tellAdmin: 'Tell your admin. Nothing will happen until this is fixed.',
+    fingerprint: 'A fingerprint of exactly what is shown above, kept for audit.',
+  },
+  decide: {
+    comment: 'Comment',
+    helper: 'Optional to approve. Needed to reject or request changes.',
+    deciding: (label: string, subject: string) => `You are deciding ${label} for ${subject}. This cannot be undone.`,
+    consequences: 'Approve: it goes ahead. Request changes: it goes back to be revised. Reject: it will not happen.',
+    approve: 'Approve',
+    requestChanges: 'Request changes',
+    reject: 'Reject',
+    sendingNote: 'Sending your decision.',
+    lockedNote: 'Deciding is paused until this page has been checked again.',
+    counter: (n: number) => `${n} / 4 000 characters`,
+    counterShown: 'Comment character counter shown',
+    counterOver: 'Comment exceeds 4 000 characters',
+  },
+  confirm: {
+    title: (label: string) => `Approve ${label}`,
+    lead: (label: string) => `Approve ${label} for `,
+    tail: '? This cannot be undone.',
+    approve: 'Approve',
+  },
+  result: {
+    heading: 'Decision',
+    comment: 'Comment',
+    decided: 'Decided',
+    cancelled: 'This approval was cancelled',
+    unknownPerson: 'Decider unknown',
+    approvedMine: 'You approved this. It will go ahead.',
+    rejectedMine: 'You rejected this. It will not happen.',
+    changesMine: 'You asked for changes. It goes back to be revised.',
+    approvedBy: (who: string) => `${who} approved this. It will go ahead.`,
+    rejectedBy: (who: string) => `${who} rejected this. It will not happen.`,
+    changesBy: (who: string) => `${who} asked for changes. It goes back to be revised.`,
+    recordedNoRead: 'The decision was recorded. Reload to see the latest approval.',
+    checkAgain: 'Check again',
+    checkedPending: 'Checked. Nothing was recorded and this is still waiting for a decision.',
+    checkFailed: 'We could not check just now. Try again.',
+    approvedToast: 'Approved',
+    rejectedToast: 'Rejected',
+    changesToast: 'Changes requested',
+  },
+  announce: {
+    sending: 'Sending',
+    recorded: 'Decision recorded',
+    problem: 'There is a problem with the decision',
+    checked: 'Checked',
+  },
+  requested: 'Requested',
+};

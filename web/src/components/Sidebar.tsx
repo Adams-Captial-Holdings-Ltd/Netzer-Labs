@@ -91,9 +91,9 @@ interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: '/work', label: 'Inbox', section: 'Work', minCapability: 'work:read', icon: <Inbox size={20} /> },
-  { href: '/work/cases', label: 'Cases', section: 'Work', minCapability: 'work:read', icon: <List size={20} /> },
-  { href: '/work/approvals', label: 'Approvals', section: 'Work', minCapability: 'work:read', icon: <ClipboardCheck size={20} /> },
+  { href: '/work', label: 'Inbox', section: 'Work', minCapability: 'work:read', icon: <Inbox size={18} strokeWidth={1.75} className="shrink-0" /> },
+  { href: '/work/cases', label: 'Cases', section: 'Work', minCapability: 'work:read', icon: <List size={18} strokeWidth={1.75} className="shrink-0" /> },
+  { href: '/work/approvals', label: 'Approvals', section: 'Work', minCapability: 'work:read', icon: <ClipboardCheck size={18} strokeWidth={1.75} className="shrink-0" /> },
   {
     // Wave 5 (granular RBAC): per-tab read cap. Matches the /  route gate
     // (overview:read) exactly so nav visibility and route access never diverge.
@@ -301,14 +301,14 @@ function SidebarContent({
         )}
         {!collapsed && (
           <div class="min-w-0">
-            <h1 class="text-heading-sm text-primary font-bold truncate">{companyName}</h1>
+            <p class="text-heading-sm text-primary font-bold truncate">{companyName}</p>
             <p class="text-overline text-muted uppercase tracking-wider truncate">{tagline}</p>
           </div>
         )}
       </div>
 
       <nav class="flex-1 overflow-y-auto py-3 px-2 space-y-4" role="navigation" aria-label="Main">
-        {workEnabled === null && <div aria-label="Loading Work navigation" class="skeleton h-10 mx-3" />}
+        {workEnabled === null && <div role="status" class="skeleton h-10 mx-3"><span class="sr-only">Loading Work navigation</span></div>}
         {sections.map((section) => {
           const items = NAV_ITEMS.filter((i) => i.section === section && canSee(i));
           if (items.length === 0) return null;

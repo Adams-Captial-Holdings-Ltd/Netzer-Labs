@@ -48,6 +48,12 @@ export default {
         'danger-text': 'var(--color-danger-text)',
         success: 'var(--color-success)',
         warning: 'var(--color-warning)',
+        // Status grounds (index.css). Alpha modifiers on the raw keys above emit no CSS.
+        'danger-dim': 'var(--color-danger-dim)',
+        'success-dim': 'var(--color-success-dim)',
+        'warning-dim': 'var(--color-warning-dim)',
+        // Plain dim behind a dialog that needs no blur (index.css).
+        scrim: 'var(--color-scrim)',
         // ── Alpha-capable siblings (additive; nothing above changes) ──
         // The semantic keys above are raw `var()` strings, so Tailwind has
         // nowhere to inject an alpha channel and an opacity modifier silently
@@ -174,6 +180,18 @@ export default {
         'sidebar': 'var(--sidebar-width)',
         'sidebar-collapsed': 'var(--sidebar-width-collapsed)',
         'header': 'var(--header-height)',
+      },
+      // Work screens (design.md section 6): named sizes instead of arbitrary values.
+      maxHeight: { payload: '480px' },
+      maxWidth: { 'work-main': '760px', measure: '75ch' },
+      gridTemplateColumns: {
+        // A row's cells. The quiet forms are for lists whose heading already states the status.
+        'work-case-row': 'minmax(0, 1fr) 6rem 9.5rem 8.5rem 6.5rem 6rem',
+        'work-case-row-quiet': 'minmax(0, 1fr) 6rem 12rem 8.5rem 6.5rem',
+        'work-approval-row': 'minmax(0, 1fr) 6rem 8rem 9rem 11rem',
+        'work-approval-row-quiet': 'minmax(0, 1fr) 6rem 8rem 9rem',
+        'work-detail': 'minmax(0, 1fr) 280px',
+        'payload-row': 'minmax(0, 12rem) minmax(0, 1fr)',
       },
       transitionDuration: {
         // Donor bridge: `duration-theme-normal` / `duration-theme-fast` (donor

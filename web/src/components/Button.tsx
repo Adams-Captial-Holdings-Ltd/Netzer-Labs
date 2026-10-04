@@ -32,7 +32,7 @@ const variantStyles: Record<Variant, string> = {
   secondary: 'bg-surface border border-border text-primary hover:bg-surface-hover',
   ghost: 'text-secondary hover:bg-surface-hover hover:text-primary',
   danger: 'bg-danger text-white hover:opacity-90 shadow-sm',
-  'danger-outline': 'border border-danger text-danger-text hover:opacity-80',
+  'danger-outline': 'border border-danger text-danger-text hover:bg-danger-dim',
 };
 
 const sizeStyles: Record<Size, string> = {
@@ -53,18 +53,23 @@ export function Button({
   onClick,
   ...rest
 }: ButtonProps) {
+  // aria-disabled keeps the button in the Tab order so its reason can be read. It dims like a
+  // native disabled button. Unlike native disabled it still delivers the click, so the caller
+  // decides what an inactive press does (a hint, a focus move) and must not act on it.
+  const ariaDisabled = rest['aria-disabled'] === true || rest['aria-disabled'] === 'true';
   return (
     <button
       // Spread FIRST so the explicit props below always win a name collision;
       // a caller cannot accidentally re-enable a disabled button.
       {...rest}
       type={type}
-      disabled={disabled || loading}
+      disabled={(disabled || loading) && !ariaDisabled}
       onClick={onClick}
-      class={`inline-flex items-center justify-center font-medium rounded-lg transition-all duration-normal
+      class={`inline-flex items-center justify-center font-medium rounded-lg transition-colors duration-normal
         ${variantStyles[variant]} ${sizeStyles[size]}
-        disabled:opacity-50 disabled:cursor-not-allowed
+        disabled:opacity-50 disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:cursor-not-allowed
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
+        focus-visible:ring-offset-bg
         ${className}`}
     >
       {loading ? <Spinner /> : icon}

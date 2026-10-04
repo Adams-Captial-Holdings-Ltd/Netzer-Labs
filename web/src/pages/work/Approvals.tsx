@@ -1,25 +1,32 @@
-import { Link, useSearchParams } from 'wouter-preact';
-import { ApprovalRow, WorkError, WorkList, WorkLoading, type ApprovalSummary, useWork } from './shared';
+import { Link, useSearch } from 'wouter-preact';
+import { EmptyState } from '../../components/EmptyState';
+import { ApprovalRow, PageTitle, WorkError, WorkList, WorkLoading, type ApprovalSummary, useWork } from './shared';
+import { copy } from './messages';
+
+// The tab classes AgentDetail uses. The first tab sits on the content edge.
+const tabClass = 'px-4 first:pl-0 py-2.5 text-body-sm font-medium border-b-2 transition-colors whitespace-nowrap';
+
 export function Approvals() {
-  const [params] = useSearchParams();
+  const params = new URLSearchParams(useSearch());
   const status = params.get('status') === 'all' ? 'all' : 'pending';
   const { data, error, loading, reload } = useWork<{ approvals: ApprovalSummary[]; truncated: boolean }>(
     `/approvals?status=${status}`,
   );
   return (
     <div class="min-w-0">
-      <h1 class="text-heading-lg text-primary mb-6">Approvals</h1>
-      <nav aria-label="Approval tabs" class="flex gap-6 border-b border-border mb-4">
+      <PageTitle title={copy.approvals.title} subtitle={copy.approvals.subtitle} />
+      <nav aria-label={copy.approvals.tabs} class="flex gap-1 mb-6 border-b border-border overflow-x-auto">
         {[
-          ['pending', 'Waiting'],
-          ['all', 'All'],
+          ['pending', copy.approvals.waiting],
+          ['all', copy.approvals.all],
         ].map(([key, label]) => (
           <Link
             key={key}
             href={`/work/approvals?status=${key}`}
             aria-current={status === key ? 'page' : undefined}
-            class={`inline-flex items-center min-h-11 px-2 text-body-sm focus-visible:ring-2 focus-visible:ring-primary
-              ${status === key ? 'text-primary border-b-2 border-primary' : 'text-secondary'}`}
+            class={`${tabClass} ${
+              status === key ? 'border-primary text-primary' : 'border-transparent text-secondary hover:text-primary'
+            }`}
           >
             {label}
           </Link>
@@ -38,13 +45,9 @@ export function Approvals() {
               ))}
             </WorkList>
           ) : (
-            <p class="text-body-sm text-secondary">No approvals here.</p>
+            <EmptyState title={copy.approvals.empty} />
           )}
-          {data.truncated && (
-            <p class="text-caption text-secondary mt-3">
-              Showing the first 200. Narrow the filters to find others.
-            </p>
-          )}
+          {data.truncated && <p class="text-caption text-secondary mt-3">{copy.approvals.truncated}</p>}
         </>
       )}
     </div>

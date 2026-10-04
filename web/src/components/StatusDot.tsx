@@ -1,5 +1,5 @@
 interface StatusDotProps {
-  status: 'active' | 'inactive' | 'error' | 'warning' | 'healthy' | 'idle' | 'degraded';
+  status: 'active' | 'inactive' | 'error' | 'warning' | 'healthy' | 'idle' | 'degraded' | 'success';
   size?: 'sm' | 'md';
   label?: string;
 }
@@ -7,6 +7,7 @@ interface StatusDotProps {
 const colors: Record<string, string> = {
   active: 'bg-success',
   healthy: 'bg-success',
+  success: 'bg-success',
   inactive: 'bg-gray-300 dark:bg-gray-600',
   idle: 'bg-gray-300 dark:bg-gray-600',
   error: 'bg-danger',
