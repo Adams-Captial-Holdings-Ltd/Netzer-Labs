@@ -83,7 +83,9 @@ describe('decide leaves a trail for every outcome', () => {
   it('an attribution mismatch is audited as an error before it throws', async () => {
     const h = harness({ ...pending, port: { decide: vi.fn(async () => approved({ decidedByUserId: 'pc-operator' })) } });
     await expect(decide(h)).rejects.toBeInstanceOf(ApprovalAttributionError);
-    const rows = audits(h.audit, 'approval_decided');
+    // The frozen acceptance test forbids an `approval_decided` row here, so the trail is an `approval_refused` error row.
+    expect(audits(h.audit, 'approval_decided')).toHaveLength(0);
+    const rows = audits(h.audit, 'approval_refused');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ userId: 'user-alice', result: 'error' });
     expect(rows[0]?.detail).toMatchObject({ approvalId: 'apr-1', code: 'attribution_mismatch', shadowUserId: 'pc-user-01' });

@@ -12,7 +12,7 @@ import { IamStack } from './iam-stack.js';
 type Statement = { Sid?: string; Action?: string | string[]; Resource?: unknown; Condition?: unknown; Effect?: string };
 const NEW_SIDS = ['S3ArtifactVersionDelete', 'S3ArtifactVersionList'];
 const TASK_PROTECTION_SID = 'EcsTaskProtection';
-const BASELINE_HASH = 'eb41f4c4340b19198432d897130761b7cf42eb61585ee5ee0ad8d322e8fdb9ac';
+const BASELINE_HASH = '836b06f8841beb6cd15bec365e8e425146dae5cb18e8ba89abe7fd054555e21b';
 
 function statements(): Statement[] {
   const app = new App();

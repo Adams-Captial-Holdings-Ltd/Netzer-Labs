@@ -8,6 +8,16 @@ export interface ShadowUser {
   retiredAt?: number;
 }
 
+export function validShadowUser(value: unknown): value is ShadowUser {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return (row.status === 'active' || row.status === 'retired')
+    && ['netzerUserId', 'slot', 'paperclipUserId'].every((key) =>
+      typeof row[key] === 'string' && (row[key] as string).trim().length > 0)
+    && Array.isArray(row.decisionClasses) && row.decisionClasses.every((item: unknown) => typeof item === 'string')
+    && typeof row.assignedAt === 'number' && Number.isFinite(row.assignedAt);
+}
+
 export interface ShadowSlot {
   slot: string;
   paperclipUserId: string;

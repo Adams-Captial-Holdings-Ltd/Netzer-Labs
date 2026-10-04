@@ -44,6 +44,15 @@ describe('Dynamo shadow registry', () => {
     expect(writes[1].Put).toMatchObject({ Item: { PK: 'USER#net-1', SK: 'SHADOW', status: 'active' } });
     expect(writes[1].Put.ConditionExpression).toContain(':retired');
     expect(writes[2].Put).toMatchObject({ Item: { PK: 'PCUSER#pc-1', SK: 'SHADOW' }, ConditionExpression: 'attribute_not_exists(PK)' });
+    expect(writes.map((item: { Update?: { ConditionExpression: string; ExpressionAttributeValues: object };
+      Put?: { ConditionExpression: string; ExpressionAttributeValues?: object } }) => item.Update ?? item.Put)
+      .map((item: { ConditionExpression: string; ExpressionAttributeValues?: object } | undefined) =>
+        [item?.ConditionExpression, item?.ExpressionAttributeValues])).toEqual([
+        ['#state = :free AND paperclipUserId = :paperclip',
+          { ':assigned': 'assigned', ':free': 'free', ':paperclip': 'pc-1', ':user': 'net-1', ':now': 10 }],
+        ['attribute_not_exists(PK) OR #status = :retired', { ':retired': 'retired' }],
+        ['attribute_not_exists(PK)', undefined],
+      ]);
   });
   it('refuses a taken slot before writing', async () => {
     send.mockResolvedValueOnce({ Item: { ...free, state: 'assigned' } });
@@ -72,6 +81,49 @@ describe('Dynamo shadow registry', () => {
     ]);
     expect(writes.every((write: { Delete?: unknown }) => write.Delete === undefined)).toBe(true);
     expect(writes[0].Update.UpdateExpression).toContain(':retired');
+    expect(writes.map((item: { Update: { ConditionExpression: string; ExpressionAttributeValues: object } }) =>
+      [item.Update.ConditionExpression, item.Update.ExpressionAttributeValues])).toEqual([
+      ['#state = :assigned AND netzerUserId = :user AND paperclipUserId = :paperclip',
+        { ':user': 'net-1', ':paperclip': 'pc-1', ':retired': 'retired', ':assigned': 'assigned', ':now': 20 }],
+      ...[1, 2].map(() => ['#status = :active AND netzerUserId = :user AND paperclipUserId = :paperclip',
+        { ':user': 'net-1', ':paperclip': 'pc-1', ':retired': 'retired', ':active': 'active', ':now': 20 }]),
+    ]);
+  });
+  it('allows a retired user to take a fresh slot', async () => {
+    send.mockResolvedValueOnce({ Item: free }).mockResolvedValueOnce({});
+    expect(await dynamoShadowRows().assign({ slot: '01', netzerUserId: 'net-1', decisionClasses: [], now: 20 })).toBe(true);
+    expect(send.mock.calls[1][0].input.TransactItems[1].Put.ConditionExpression)
+      .toBe('attribute_not_exists(PK) OR #status = :retired');
+  });
+  it('a retire lost race or non-active user returns false', async () => {
+    send.mockResolvedValueOnce({ Item: active }).mockRejectedValueOnce(condition());
+    expect(await dynamoShadowRows().retire({ netzerUserId: 'net-1', now: 20 })).toBe(false);
+    send.mockReset().mockResolvedValueOnce({ Item: { ...active, status: 'retired', retiredAt: 15 } });
+    expect(await dynamoShadowRows().retire({ netzerUserId: 'net-1', now: 20 })).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it('returns retirement time and rejects malformed stored rows', async () => {
+    const rows = dynamoShadowRows();
+    send.mockResolvedValueOnce({ Item: { ...active, status: 'retired', retiredAt: 15 } });
+    expect(await rows.getByNetzerUser('net-1')).toMatchObject({ retiredAt: 15 });
+    for (const bad of [
+      { ...active, status: 'Active' }, { ...active, decisionClasses: ['money', 3] },
+      { ...active, netzerUserId: '' }, { ...active, netzerUserId: 'another' }, { ...active, assignedAt: 'bad' },
+    ]) {
+      send.mockResolvedValueOnce({ Item: bad });
+      expect(await rows.getByNetzerUser('net-1')).toBeUndefined();
+    }
+    send.mockResolvedValueOnce({ Item: { ...active, paperclipUserId: 'other' } });
+    expect(await rows.getByPaperclipUser('pc-1')).toBeUndefined();
+    for (const bad of [{ ...free, state: 'FREE' }, { ...free, paperclipUserId: '' }, { ...free, slot: '00' }]) {
+      send.mockResolvedValueOnce({ Item: bad });
+      expect(await rows.getSlot('01')).toBeUndefined();
+    }
+  });
+  it('uses an explicit table name', async () => {
+    send.mockResolvedValueOnce({ Item: free });
+    await dynamoShadowRows('my-users').getSlot('01');
+    expect(send.mock.calls[0][0].input.TableName).toBe('my-users');
   });
   it('refuses slot 00 and malformed slots before any Dynamo call', async () => {
     const rows = dynamoShadowRows();

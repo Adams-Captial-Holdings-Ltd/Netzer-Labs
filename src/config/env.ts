@@ -315,6 +315,7 @@ const envSchema = z.object({
   PAPERCLIP_SIGNUP_PROBE_EMAIL: optionalNonPlaceholder(),
   /** Sign-up setup window; only the exact value `open` enables it. */
   PAPERCLIP_SIGNUP_WINDOW: z.string().optional(),
+  SHADOW_APPROVERS_SECRET_ID: z.string().optional(),
   /** Secret field `dispatch_secret`; the shared secret C-17 settled on for the dispatch route. */
   PAPERCLIP_DISPATCH_SECRET: optionalNonPlaceholder(),
   /** Port of the private dispatch listener; defaults to 3001. */

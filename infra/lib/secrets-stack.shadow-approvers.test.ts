@@ -30,7 +30,8 @@ function synth(staging = false) {
     taskRole: iam.taskRole, secrets, logsBucket: storage.logsBucket, messaging });
   const policy = Template.fromStack(iam).findResources('AWS::IAM::Policy');
   const statements = Object.values(policy).flatMap((p) => p.Properties.PolicyDocument.Statement as Statement[]);
-  const result = { secrets: Template.fromStack(secrets), compute: Template.fromStack(compute), statements };
+  const result = { secrets: Template.fromStack(secrets), compute: Template.fromStack(compute),
+    iam: Template.fromStack(iam), statements };
   vi.unstubAllEnvs();
   return result;
 }
@@ -43,12 +44,23 @@ describe('shadow approvers secret', () => {
     expect(row).toBeDefined();
     expect(row?.Properties.SecretString).toBe('{"v":1,"slots":{}}');
     expect(row?.Properties.GenerateSecretString).toBeUndefined();
+    const setup = rows.find((r) => r.Properties.Name === '/claudeclaw/shadow-approvers-setup');
+    expect(setup?.Properties.SecretString).toBe('{"v":1,"slots":{}}');
   });
   it('grants task runtime GetSecretValue on only this ARN', () => {
     const row = built.statements.find((s) => s.Sid === 'ShadowApproversRead');
     expect(row?.Action).toBe('secretsmanager:GetSecretValue');
-    expect(JSON.stringify(row?.Resource)).toContain('SecretShadowApprovers');
-    expect(JSON.stringify(row?.Resource)).not.toBe('"*"');
+    expect(row?.Resource).toEqual({ 'Fn::ImportValue': expect.stringMatching(/SecretShadowApprovers(?!Setup)/) });
+    const runtimePolicy = Object.values(built.iam.findResources('AWS::IAM::Policy'))
+      .find((policy) => JSON.stringify(policy).includes('ShadowApproversRead'));
+    expect(runtimePolicy?.Properties.Roles).toEqual([{ Ref: expect.stringMatching(/^TaskRole/) }]);
+    const computePolicies = Object.values(built.compute.findResources('AWS::IAM::Policy'));
+    expect(JSON.stringify([...built.statements, ...computePolicies]))
+      .not.toContain('SecretShadowApproversSetup');
+    expect(JSON.stringify([...built.statements, ...computePolicies]))
+      .not.toContain('/claudeclaw/shadow-approvers-setup');
+    expect([...built.statements.filter((s) => s !== row), ...computePolicies]
+      .filter((s) => JSON.stringify(s).includes('SecretShadowApprovers'))).toEqual([]);
   });
   it('has no PutSecretValue grant for the shadow secret', () => {
     const row = built.statements.find((s) => s.Sid === 'ShadowApproversRead');

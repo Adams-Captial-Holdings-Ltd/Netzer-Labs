@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AuditEvent } from '../audit/audit-writer.js';
-import type { ShadowRows } from '../paperclip/shadow-users.js';
+import { validShadowUser, type ShadowRows } from '../paperclip/shadow-users.js';
 import { payloadHash } from './executor.js';
 import type { createExecutor } from './executor.js';
 import { validateEffectKey, type EffectKey } from './effect-ledger.js';
@@ -22,11 +22,15 @@ export interface ApprovalsPort {
   decide(approvalId: string, verb: 'approve' | 'reject' | 'request-revision',
     decisionNote: string | null, boardKey: string): Promise<ApprovalRecord>;
 }
+export type ApprovalRefusedCode = 'comment_required' | 'comment_too_long' | 'not_an_approver' | 'paperclip_unavailable'
+  | 'not_found' | 'not_a_netzer_approval' | 'not_pending' | 'class_not_entitled' | 'key_unavailable';
+export type ApprovalInvalidCode = 'paperclip_unavailable' | 'not_found' | 'not_a_netzer_approval' | 'not_approved'
+  | 'hash_mismatch' | 'key_mismatch' | 'class_mismatch' | 'not_a_shadow_user' | 'approver_retired' | 'class_not_entitled';
 export class ApprovalRefusedError extends Error {
-  constructor(public readonly code: string) { super('Approval refused'); this.name = 'ApprovalRefusedError'; }
+  constructor(public readonly code: ApprovalRefusedCode) { super('Approval refused'); this.name = 'ApprovalRefusedError'; }
 }
 export class ApprovalInvalidError extends Error {
-  constructor(public readonly code: string) { super('Approval invalid'); this.name = 'ApprovalInvalidError'; }
+  constructor(public readonly code: ApprovalInvalidCode) { super('Approval invalid'); this.name = 'ApprovalInvalidError'; }
 }
 export class ApprovalAttributionError extends Error {
   constructor() { super('Approval attribution does not match'); this.name = 'ApprovalAttributionError'; }
@@ -74,7 +78,7 @@ async function readVerifiedApproval(port: ApprovalsPort, shadows: Options['shado
   catch {
     throw new ApprovalInvalidError('paperclip_unavailable');
   }
-  if (!record) throw new ApprovalInvalidError('not_found');
+  if (!record || record.id !== req.approvalId) throw new ApprovalInvalidError('not_found');
   const body = payloadOf(record);
   if (!body) throw new ApprovalInvalidError('not_a_netzer_approval');
   if (record.status !== 'approved') throw new ApprovalInvalidError('not_approved');
@@ -82,9 +86,10 @@ async function readVerifiedApproval(port: ApprovalsPort, shadows: Options['shado
   if (req.key.caseKey !== body.caseKey || req.key.stage !== body.stage || req.key.step !== body.step
     || req.key.stageEntryNo !== body.stageEntryNo) throw new ApprovalInvalidError('key_mismatch');
   if (req.decisionClass !== body.decisionClass) throw new ApprovalInvalidError('class_mismatch');
-  if (!record.decidedByUserId) throw new ApprovalInvalidError('not_a_shadow_user');
+  if (typeof record.decidedByUserId !== 'string' || !record.decidedByUserId.trim()) throw new ApprovalInvalidError('not_a_shadow_user');
   const shadow = await shadows.getByPaperclipUser(record.decidedByUserId);
-  if (!shadow) throw new ApprovalInvalidError('not_a_shadow_user');
+  if (!shadow || !validShadowUser(shadow) || shadow.paperclipUserId !== record.decidedByUserId)
+    throw new ApprovalInvalidError('not_a_shadow_user');
   const decidedAt = Date.parse(record.decidedAt ?? '');
   if (shadow.status === 'retired' && (!Number.isFinite(decidedAt)
     || typeof shadow.retiredAt !== 'number' || !Number.isFinite(shadow.retiredAt)
@@ -103,7 +108,7 @@ async function executeApprovedEffect<T>(verify: (req: VerifyRequest) => Promise<
 }
 
 export function createApprovals({ port, shadows, keys, audit }: Options) {
-  async function refuse(code: string, netzerUserId: string, approvalId: string): Promise<ApprovalRefusedError> {
+  async function refuse(code: ApprovalRefusedCode, netzerUserId: string, approvalId: string): Promise<ApprovalRefusedError> {
     try { await audit({ action: 'approval_refused', userId: netzerUserId, result: 'blocked', detail: { approvalId, code } }); }
     catch { /* A refusal must survive an audit outage. */ }
     return new ApprovalRefusedError(code);
@@ -114,6 +119,7 @@ export function createApprovals({ port, shadows, keys, audit }: Options) {
     if (!CLASS_ID.test(req.decisionClass)) throw new Error('Invalid decision class');
     const body = approvalPayload(req.key, req.payload, req.decisionClass);
     const record = await port.create({ type: APPROVAL_TYPE, payload: body });
+    if (typeof record?.id !== 'string' || !record.id.trim()) throw new Error('Invalid approval id');
     await audit({ action: 'approval_requested', result: 'ok', detail: {
       approvalId: record.id, payloadSha256: body.payloadSha256, caseKey: body.caseKey,
       stage: body.stage, step: body.step, stageEntryNo: body.stageEntryNo, decisionClass: body.decisionClass,
@@ -126,21 +132,40 @@ export function createApprovals({ port, shadows, keys, audit }: Options) {
     if (req.decision !== 'approve' && !comment) throw await refuse('comment_required', req.netzerUserId, req.approvalId);
     if (comment.length > 4_000) throw await refuse('comment_too_long', req.netzerUserId, req.approvalId);
     const shadow = await shadows.getByNetzerUser(req.netzerUserId);
-    if (!shadow || shadow.status !== 'active') throw await refuse('not_an_approver', req.netzerUserId, req.approvalId);
-    const record = await port.get(req.approvalId);
-    if (!record) throw await refuse('not_found', req.netzerUserId, req.approvalId);
+    if (!shadow || !validShadowUser(shadow) || shadow.status !== 'active')
+      throw await refuse('not_an_approver', req.netzerUserId, req.approvalId);
+    let record: ApprovalRecord | undefined;
+    try { record = await port.get(req.approvalId); }
+    catch { throw await refuse('paperclip_unavailable', req.netzerUserId, req.approvalId); }
+    if (!record || record.id !== req.approvalId) throw await refuse('not_found', req.netzerUserId, req.approvalId);
     const body = payloadOf(record);
     if (!body) throw await refuse('not_a_netzer_approval', req.netzerUserId, req.approvalId);
     if (record.status !== 'pending') throw await refuse('not_pending', req.netzerUserId, req.approvalId);
     if (!shadow.decisionClasses.includes(body.decisionClass)) throw await refuse('class_not_entitled', req.netzerUserId, req.approvalId);
     const verb = req.decision === 'request_changes' ? 'request-revision' : req.decision;
-    const decided = await port.decide(req.approvalId, verb, comment || null, await keys.boardKeyFor(shadow.slot));
-    if (decided.decidedByUserId !== shadow.paperclipUserId) throw new ApprovalAttributionError();
-    await audit({ action: 'approval_decided', userId: req.netzerUserId, result: 'ok', detail: {
+    let boardKey: string;
+    try { boardKey = await keys.boardKeyFor(shadow.slot); }
+    catch { throw await refuse('key_unavailable', req.netzerUserId, req.approvalId); }
+    let decided: ApprovalRecord;
+    try { decided = await port.decide(req.approvalId, verb, comment || null, boardKey); }
+    catch (error) {
+      try { await audit({ action: 'approval_refused', userId: req.netzerUserId, result: 'blocked',
+        detail: { approvalId: req.approvalId, code: 'paperclip_rejected' } }); } catch { /* Keep Paperclip error. */ }
+      throw error;
+    }
+    const detail = {
       approvalId: req.approvalId, shadowUserId: shadow.paperclipUserId, slot: shadow.slot,
       decisionClass: body.decisionClass, decision: req.decision, payloadSha256: body.payloadSha256,
       caseKey: body.caseKey, stage: body.stage, step: body.step, stageEntryNo: body.stageEntryNo,
-      ...(comment ? { commentSha256: createHash('sha256').update(comment).digest('hex') } : {}),
+    };
+    if (decided.decidedByUserId !== shadow.paperclipUserId) {
+      try { await audit({ action: 'approval_refused', userId: req.netzerUserId, result: 'error',
+        detail: { ...detail, code: 'attribution_mismatch' } }); } catch { /* Keep attribution failure. */ }
+      throw new ApprovalAttributionError();
+    }
+    await audit({ action: 'approval_decided', userId: req.netzerUserId, result: 'ok', detail: {
+      ...detail,
+      ...(comment ? { commentSha256: createHash('sha256').update(`${req.approvalId}\n${comment}`).digest('hex') } : {}),
     } });
     return { approvalId: req.approvalId, decision: req.decision, shadowUserId: shadow.paperclipUserId };
   }

@@ -103,7 +103,6 @@ export interface FilesystemOutputs {
  * DynamoStack exports. 23 tables (15 pre-v5.6 + 8 v5.6).
  */
 export interface DynamoOutputs {
-  usersTable: ITable;
   sessionsTable: ITable;
   hiveMindTable: ITable;
   auditLogTable: ITable;

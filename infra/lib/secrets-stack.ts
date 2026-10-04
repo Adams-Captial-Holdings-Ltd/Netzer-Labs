@@ -29,6 +29,7 @@ export class SecretsStack extends Stack implements SecretsOutputs {
   public readonly vendorKeysSecret: Secret;
   public readonly paperclipSecret: Secret;
   public readonly shadowApproversSecret: Secret;
+  public readonly shadowApproversSetupSecret: Secret;
 
   constructor(scope: Construct, id: string, props: SecretsStackProps) {
     super(scope, id, props);
@@ -124,6 +125,13 @@ export class SecretsStack extends Stack implements SecretsOutputs {
       'SecretShadowApprovers',
       RESOURCE_NAMES.secrets.shadowApprovers,
       'Paperclip shadow approver credentials',
+      [],
+      '{"v":1,"slots":{}}',
+    );
+    this.shadowApproversSetupSecret = makeSecret(
+      'SecretShadowApproversSetup',
+      RESOURCE_NAMES.secrets.shadowApproversSetup,
+      'Paperclip shadow approver setup credentials',
       [],
       '{"v":1,"slots":{}}',
     );

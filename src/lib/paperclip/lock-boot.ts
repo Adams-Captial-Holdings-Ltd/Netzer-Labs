@@ -14,26 +14,19 @@ export async function bootPaperclipLock(deps: {
   return startPaperclipLock({
     enabled: paperclipRoutingEnabled(),
     read: async () => {
-      const configPromise = loadConfig();
-      const configLoader = () => configPromise;
       const env = loadEnv();
+      let config: Awaited<ReturnType<typeof loadConfig>>;
+      try { config = await loadConfig(); }
+      catch { return { verdict: 'unknown', reason: 'paperclip_config_unavailable' }; }
       const runtimeVerdict = await readConfiguredLockVerdict({
-        loadConfig: configLoader,
+        loadConfig: async () => config,
         fetchFn,
         auditorKey: env.PAPERCLIP_LOCK_AUDITOR_KEY,
       });
-      let probeVerdict: LockVerdict = { verdict: 'unknown', reason: 'paperclip_config_unavailable' };
-      try {
-        const config = await configPromise;
-        if (config.baseUrl) {
-          probeVerdict = await readSignUpProbe({
-            fetchFn,
-            baseUrl: config.baseUrl,
-            probeEmail: env.PAPERCLIP_SIGNUP_PROBE_EMAIL,
-            windowOpen: env.PAPERCLIP_SIGNUP_WINDOW === 'open',
-          });
-        }
-      } catch { /* an unavailable config cannot support the probe */ }
+      const probeVerdict: LockVerdict = config.baseUrl
+        ? await readSignUpProbe({ fetchFn, baseUrl: config.baseUrl, probeEmail: env.PAPERCLIP_SIGNUP_PROBE_EMAIL,
+          windowOpen: env.PAPERCLIP_SIGNUP_WINDOW === 'open' })
+        : { verdict: 'unknown', reason: 'paperclip_config_missing' };
       return combineLockVerdicts(runtimeVerdict, probeVerdict);
     },
   });

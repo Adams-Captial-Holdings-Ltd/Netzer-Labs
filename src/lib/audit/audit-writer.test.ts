@@ -203,4 +203,17 @@ describe('expanded always-audited set (C5c)', () => {
       expect(ddbSend).toHaveBeenCalledTimes(3);
     } finally { killSwitchState.active = false; }
   });
+
+  it('all six step 6 actions write even under audit_log_disabled', async () => {
+    const { writeAudit } = await import('./audit-writer.js');
+    killSwitchState.active = true;
+    try {
+      for (const action of ['approval_requested', 'approval_decided', 'approval_refused',
+        'shadow_assigned', 'shadow_rotated', 'shadow_retired'] as const) {
+        await writeAudit({ action, result: 'ok' });
+      }
+      await flush();
+      expect(ddbSend).toHaveBeenCalledTimes(6);
+    } finally { killSwitchState.active = false; }
+  });
 });
