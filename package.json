@@ -52,6 +52,7 @@
     "dashboard:tunnel": "tsx scripts/dashboard-tunnel.ts",
     "warp:setup": "tsx scripts/warp-setup.ts",
     "paperclip:bootstrap": "tsx scripts/paperclip-bootstrap.ts",
+    "paperclip:shadow": "tsx scripts/paperclip-shadow.ts",
     "public:setup": "tsx scripts/public-setup.ts",
     "email:setup": "tsx scripts/email-setup.ts",
     "deploy": "tsx scripts/deploy.ts",
