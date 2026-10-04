@@ -14,17 +14,21 @@ const conditionalFailure = (error: unknown) => {
     (failure?.name === 'TransactionCanceledException' &&
       failure.CancellationReasons?.some((reason) => reason.Code === 'ConditionalCheckFailed') === true);
 };
-function slotOf(item: Record<string, unknown> | undefined, expected?: string): ShadowSlot | undefined {
-  if (!item) return undefined;
-  const valid = typeof item.slot === 'string' && /^(0[1-9]|[1-9][0-9])$/.test(item.slot)
+type SlotItem = Record<string, unknown> & {
+  slot: string; paperclipUserId: string; state: 'free' | 'assigned' | 'retired';
+};
+function isSlotItem(item: Record<string, unknown> | undefined, expected?: string): item is SlotItem {
+  return !!item && typeof item.slot === 'string' && /^(0[1-9]|[1-9][0-9])$/.test(item.slot)
     && (expected === undefined || item.slot === expected)
     && typeof item.paperclipUserId === 'string' && item.paperclipUserId.trim().length > 0
     && (item.state === 'free' || item.state === 'assigned' || item.state === 'retired')
     && (item.netzerUserId === undefined || (typeof item.netzerUserId === 'string' && !!item.netzerUserId.trim()))
     && (item.assignedAt === undefined || (typeof item.assignedAt === 'number' && Number.isFinite(item.assignedAt)))
     && (item.retiredAt === undefined || (typeof item.retiredAt === 'number' && Number.isFinite(item.retiredAt)));
-  if (!valid || typeof item.slot !== 'string' || typeof item.paperclipUserId !== 'string'
-    || (item.state !== 'free' && item.state !== 'assigned' && item.state !== 'retired')) {
+}
+function slotOf(item: Record<string, unknown> | undefined, expected?: string): ShadowSlot | undefined {
+  if (!item) return undefined;
+  if (!isSlotItem(item, expected)) {
     logger.warn({ kind: 'slot', slot: expected ?? 'unknown' }, 'malformed shadow row');
     return undefined;
   }

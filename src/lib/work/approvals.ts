@@ -167,9 +167,12 @@ export function createApprovals({ port, shadows, keys, audit }: Options) {
         detail: { ...detail, code: 'attribution_mismatch' } }); } catch { /* Keep attribution failure. */ }
       throw new ApprovalAttributionError();
     }
+    const commentSha256 = comment
+      ? createHash('sha256').update(`${req.approvalId}\n${comment}`).digest('hex')
+      : undefined;
     await audit({ action: 'approval_decided', userId: req.netzerUserId, result: 'ok', detail: {
       ...detail,
-      ...(comment ? { commentSha256: createHash('sha256').update(`${req.approvalId}\n${comment}`).digest('hex') } : {}),
+      ...(commentSha256 ? { commentSha256 } : {}),
     } });
     return { approvalId: req.approvalId, decision: req.decision, shadowUserId: shadow.paperclipUserId };
   }

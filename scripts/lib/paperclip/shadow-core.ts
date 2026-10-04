@@ -151,10 +151,10 @@ async function poolSlot(deps: ShadowDependencies, slot: string): Promise<boolean
   if (!(await readMap<KeyEntry>(deps.keys, validKey)).slots[slot]) await updateSlot(deps.keys, slot, { boardKey: null }, validKey);
   return true;
 }
-async function chooseKey(deps: ShadowDependencies, row: ShadowSlot): Promise<{ key: string; fresh: boolean }> {
+async function chooseKey(deps: ShadowDependencies, row: ShadowSlot): Promise<string> {
   const current = (await readMap<KeyEntry>(deps.keys, validKey)).slots[row.slot]?.boardKey;
   if (current && await keyValid(deps, current, row.paperclipUserId, row.slot)) {
-    if ((await listedKeys(deps, current, row.slot)).length === 1) return { key: current, fresh: false };
+    if ((await listedKeys(deps, current, row.slot)).length === 1) return current;
   }
   const request = await signIn(deps, row.slot);
   const older = await listedKeys(deps, request, row.slot);
@@ -163,12 +163,11 @@ async function chooseKey(deps: ShadowDependencies, row: ShadowSlot): Promise<{ k
   for (const id of older) {
     await expectOk(await bearer(deps, key, `/api/board-api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' }), row.slot);
   }
-  return { key, fresh: true };
+  return key;
 }
 async function assignSlot(deps: ShadowDependencies, row: ShadowSlot, name: string): Promise<string> {
-  const { key } = await chooseKey(deps, row);
-  const request = await signIn(deps, row.slot);
-  await expectOk(await request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name }) }), row.slot);
+  const key = await chooseKey(deps, row);
+  await updateProfileName(deps, row.slot, name);
   await expectOk(await deps.admin(`/api/admin/users/${encodeURIComponent(row.paperclipUserId)}/company-access`, {
     method: 'PUT', body: JSON.stringify({ companyIds: [deps.companyId] }),
   }), row.slot);
@@ -180,6 +179,10 @@ async function assignSlot(deps: ShadowDependencies, row: ShadowSlot, name: strin
     return fail(`Slot ${row.slot}: identity or role verification failed`);
   }
   return key;
+}
+async function updateProfileName(deps: ShadowDependencies, slot: string, name: string): Promise<void> {
+  const request = await signIn(deps, slot);
+  await expectOk(await request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name }) }), slot);
 }
 async function listedKeys(deps: ShadowDependencies, access: string | PaperclipRequest, slot: string): Promise<string[]> {
   const response = typeof access === 'string'
@@ -256,8 +259,7 @@ async function assign(deps: ShadowDependencies, netzerUserId: string, name: stri
     if (JSON.stringify([...existing.decisionClasses].sort()) !== JSON.stringify([...decisionClasses].sort())) {
       fail('Classes cannot be changed by assign; retire, then assign');
     }
-    const request = await signIn(deps, existing.slot);
-    await expectOk(await request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name }) }), existing.slot);
+    await updateProfileName(deps, existing.slot, name);
     await audit(deps, 'assign', { action: 'shadow_assigned', userId: netzerUserId, result: 'ok',
       detail: { slot: existing.slot, shadowUserId: existing.paperclipUserId, decisionClasses: existing.decisionClasses } });
     deps.out(`assign ${existing.slot} already assigned; nothing changed`);
@@ -315,7 +317,8 @@ async function check(deps: ShadowDependencies): Promise<boolean> {
   let secret: MapSecret<KeyEntry>;
   try { secret = await readMap<KeyEntry>(deps.keys, validKey); }
   catch (error) {
-    deps.out(error instanceof ShadowCommandError ? error.message : `secret_unreadable ${error instanceof Error ? error.name : 'UnknownError'}`);
+    const name = error instanceof Error ? error.name : 'UnknownError';
+    deps.out(error instanceof ShadowCommandError ? error.message : `secret_unreadable ${name}`);
     return false;
   }
   if (!rows.length && !Object.keys(secret.slots).length) {
@@ -324,7 +327,8 @@ async function check(deps: ShadowDependencies): Promise<boolean> {
   }
   let bad = 0;
   for (const slot of Object.keys(secret.slots)) {
-    if (!rows.some((row) => row.slot === slot) || !await registryValid(deps, slot, rows.find((row) => row.slot === slot))) {
+    const row = rows.find((candidate) => candidate.slot === slot);
+    if (!await registryValid(deps, slot, row)) {
       bad++;
       deps.out(`${slot} row_invalid`);
     }
