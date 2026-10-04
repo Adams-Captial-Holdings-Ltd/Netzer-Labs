@@ -98,7 +98,7 @@ export function WorkStatus({ status }: { status: string }) {
   const classes = {
     warning: 'bg-[var(--color-warning-dim)] text-primary',
     success: 'bg-[var(--color-success-dim)] text-primary',
-    danger: 'bg-[var(--color-danger-dim)] text-primary',
+    danger: 'bg-[var(--color-danger-dim)] text-danger-text',
     neutral: 'bg-surface text-secondary',
   };
   const dots = {
@@ -130,7 +130,7 @@ export function WorkError({ error, retry, back }: { error: unknown; retry: () =>
   if (code === 'not_found' && back)
     return (
       <div>
-        <p class="text-body-sm text-secondary">{workMessage(error)}</p>
+        <p class="text-body-sm text-danger-text">{workMessage(error)}</p>
         <Link class="inline-flex min-h-6 items-center text-primary underline focus-visible:ring-2 focus-visible:ring-primary" href={back}>
           Back to list
         </Link>

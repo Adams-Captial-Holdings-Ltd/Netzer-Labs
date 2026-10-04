@@ -22,7 +22,7 @@ export function CaseDetail() {
     <div class="min-w-0">
       <Link
         href="/work/cases"
-        class="text-body-sm text-primary underline focus-visible:ring-2 focus-visible:ring-primary"
+        class="inline-flex min-h-6 items-center text-body-sm text-primary underline focus-visible:ring-2 focus-visible:ring-primary"
       >
         Back to Cases
       </Link>
@@ -43,7 +43,7 @@ export function CaseDetail() {
               <h2 class="text-heading-sm text-primary mb-3">Blockers</h2>
               <ul class="space-y-2">
                 {c.blockers.map((b) => (
-                  <li key={b.id} class="text-body-sm text-danger break-words">
+                  <li key={b.id} class="text-body-sm text-danger-text break-words">
                     {b.title}
                   </li>
                 ))}

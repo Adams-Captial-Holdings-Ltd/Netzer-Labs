@@ -45,6 +45,7 @@ export default {
         'primary-hover': 'var(--color-primary-hover)',
         'primary-light': 'var(--color-primary-light)',
         danger: 'var(--color-danger)',
+        'danger-text': 'var(--color-danger-text)',
         success: 'var(--color-success)',
         warning: 'var(--color-warning)',
         // ── Alpha-capable siblings (additive; nothing above changes) ──

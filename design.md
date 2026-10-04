@@ -38,7 +38,7 @@ In order of preference: position (top and left first), type size and weight, spa
 - Surfaces: `bg` for the page, `surface` for panels, `bg-sunken` for wells such as a code or payload block.
 - Text: `text-primary`, `text-secondary`, `text-muted`. Muted text is never used for something the user must read to act.
 - Borders: `border`; `border-strong` only to separate a sticky bar from scrolling content.
-- Primary (`primary`, `primary-hover`): the one primary action, links, the current-place marker. It is the customer's colour under white-label, so it never carries status. Text on a primary fill always meets 4.5:1: `applyBrand()` in `web/src/lib/theme.ts` picks light or dark text for the customer's colour; nobody has to choose a compliant colour.
+- Primary (`primary`, `primary-hover`): the one primary action, links, the current-place marker. It is the customer's colour under white-label, so it never carries status. For a customer's colour, text on the primary fill always meets 4.5:1: `applyBrand()` in `web/src/lib/theme.ts` picks light or dark text; nobody has to choose a compliant colour. The stock indigo keeps its white text as the rest of the app has it (4.47:1; owner, 2026-10-04: keep the app's current look).
 - Status: `success` (approved, done), `warning` (waiting on a person, changes requested), `danger` (rejected, blocked, failed), `info` is not used for status. Each status also has a word, and an icon or dot. Status backgrounds use the `*-dim` tokens, never a full-strength fill.
 - Rows: `row-hover` for hover, `row-active` for the current row, `focus-bar` for the keyboard position.
 - Do not introduce a hex value in a component. A missing colour is a missing token: add it to `index.css` for light and dark together.

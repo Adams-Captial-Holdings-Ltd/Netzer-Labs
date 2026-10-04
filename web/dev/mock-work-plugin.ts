@@ -19,6 +19,19 @@ export function mockWorkPlugin(): Plugin {
     name: 'mock-work',
     apply: 'serve',
     configureServer(server) {
+      // This phone-trial sign-in exists only in the dev mock plugin, never production.
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        if (url.pathname !== '/__work-trial' || req.method !== 'GET') return next();
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html><html><body><p>Starting work trial…</p><script>
+          localStorage.setItem('cce_token', 'local-dev-dashboard-token');
+          localStorage.setItem('cce_onboarded', 'true');
+          localStorage.setItem('cce_role', 'admin');
+          localStorage.setItem('cce_capabilities', JSON.stringify(['overview:read', 'work:read', 'work:approve', 'missions:read']));
+          fetch('/api/work/__reset', { method: 'POST' }).then(() => { location.href = '/dashboard/work'; });
+        </script></body></html>`);
+      });
       server.middlewares.use('/api/work', async (req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost');
         const path = url.pathname;

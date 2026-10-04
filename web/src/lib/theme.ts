@@ -71,8 +71,6 @@ export interface Brand {
 // hue used by charts/inputs (--color-info, cyan 500). When a brand field is
 // unset we fall back to these exact values so the UI matches today's look.
 export const DEFAULT_PRIMARY = '#6366f1';
-const STOCK_PRIMARY_DARK = '#818cf8';
-const STOCK_PRIMARY_LIGHT = DEFAULT_PRIMARY;
 export const DEFAULT_ACCENT = '#06b6d4';
 export const DEFAULT_COMPANY_NAME = 'Netzar OS';
 // The sidebar subtitle shown under the company name when a theme doesn't set its
@@ -169,9 +167,8 @@ function rgba(hex: string, alpha: number): string {
 // it inverts the hover/light shade direction. Writing a light-derived value
 // inline clobbered that and killed dark contrast.
 //
-// Keep the stock primary fill in each mode, and choose its text and hover
-// shade from WCAG contrast. A customer fill keeps its chosen base in light
-// mode; dark mode lifts it before choosing the text and hover shade.
+// The owner chose to keep the stock look on 2026-10-04: index.css owns the
+// stock palette, while the contrast pick applies only to customer brand colors.
 /** WCAG relative luminance chooses the stronger of black and white on a brand fill. */
 export function primaryTextFor(hex: string): '#000000' | '#ffffff' {
   if (!isHexColor(hex)) return '#ffffff';
@@ -191,11 +188,11 @@ export function applyBrand() {
   const primary = isHexColor(brand.value.primaryColor) ? brand.value.primaryColor.trim() : null;
   const accent = isHexColor(brand.value.accentColor) ? brand.value.accentColor.trim() : null;
 
-  // The base fill follows the active theme. Text and hover track its contrast.
+  // Leave the stock primary palette to index.css; inline values would override
+  // its mode-specific button text and hover colors.
   if (primary === null) {
-    const stockFill = isDark ? STOCK_PRIMARY_DARK : STOCK_PRIMARY_LIGHT;
-    root.style.setProperty('--color-text-inverse', primaryTextFor(stockFill));
-    root.style.setProperty('--color-primary-hover', shade(stockFill, primaryTextFor(stockFill) === '#000000' ? 1.12 : 0.82));
+    root.style.removeProperty('--color-text-inverse');
+    root.style.removeProperty('--color-primary-hover');
     root.style.removeProperty('--color-primary');
     root.style.removeProperty('--color-primary-light');
     root.style.removeProperty('--color-primary-glow');

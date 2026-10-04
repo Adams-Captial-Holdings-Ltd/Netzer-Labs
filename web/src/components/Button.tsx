@@ -32,7 +32,7 @@ const variantStyles: Record<Variant, string> = {
   secondary: 'bg-surface border border-border text-primary hover:bg-surface-hover',
   ghost: 'text-secondary hover:bg-surface-hover hover:text-primary',
   danger: 'bg-danger text-white hover:opacity-90 shadow-sm',
-  'danger-outline': 'border border-danger text-danger hover:opacity-80',
+  'danger-outline': 'border border-danger text-danger-text hover:opacity-80',
 };
 
 const sizeStyles: Record<Size, string> = {

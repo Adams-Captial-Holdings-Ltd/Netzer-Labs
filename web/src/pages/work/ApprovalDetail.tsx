@@ -361,7 +361,7 @@ function ApprovalDetailForId({ id }: { id: string }) {
     <div class="max-w-3xl min-w-0">
       <Link
         href="/work/approvals"
-        class="text-body-sm text-primary underline focus-visible:ring-2 focus-visible:ring-primary"
+        class="inline-flex min-h-6 items-center text-body-sm text-primary underline focus-visible:ring-2 focus-visible:ring-primary"
       >
         Back to Approvals
       </Link>

@@ -13,13 +13,19 @@ function luminance(hex: string) {
 function ratio(a: string, b: string) { const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (light + 0.05) / (dark + 0.05); }
 
 describe('customer primary contrast', () => {
+  it('leaves stock button text and hover to index.css without a brand color', async () => {
+    const { brand, applyBrand } = await import('./theme');
+    brand.value = { ...brand.value, primaryColor: null };
+    applyBrand();
+    expect(properties.has('--color-text-inverse')).toBe(false);
+    expect(properties.has('--color-primary-hover')).toBe(false);
+  });
   it('uses white for invalid hex input', async () => {
     const { primaryTextFor } = await import('./theme');
     expect(primaryTextFor('not-a-colour')).toBe('#ffffff');
   });
   it('chooses readable text for dark, light, and middle customer colours', async () => {
     const { primaryTextFor, brand, applyBrand } = await import('./theme');
-    expect(properties.get('--color-text-inverse')).toBe(primaryTextFor('#6366f1'));
     for (const fill of ['#000000', '#ffffff', '#777777', '#6366f1', '#ffff00', '#00ffff', '#123abc']) {
       const text = primaryTextFor(fill);
       expect(ratio(fill, text)).toBeGreaterThanOrEqual(4.5);
