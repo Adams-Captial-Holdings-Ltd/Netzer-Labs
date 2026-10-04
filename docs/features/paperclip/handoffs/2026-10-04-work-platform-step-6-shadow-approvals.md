@@ -726,7 +726,7 @@ Sections 5.1 to 5.30 above are carried forward byte for byte from [the 2026-10-0
 
 ### 5.32 Added 2026-10-04 (Work Platform step 6)
 
-Sections 5.1 to 5.31 above are carried forward byte for byte from [the 2026-10-03 Work Platform step 5 handoff](2026-10-03-work-platform-step-5-safe-actions.md) (its section 5), the newest session log. The rows below continue that ledger's ID scheme at A148 and M100 (both reserved by step 5's landing). The next free IDs are A155, M104 and P94. A150 is carried unchanged; after the review fix round the bootstrap reuses a valid lock auditor key, and `--new-auditor` forces a new one, which needs the sign-up window. A74 (the approval comment) is closed by the owner's answer of 2026-10-04 (optional on Approve); its row above is carried unchanged.
+Sections 5.1 to 5.31 above are carried forward byte for byte from [the 2026-10-03 Work Platform step 5 handoff](2026-10-03-work-platform-step-5-safe-actions.md) (its section 5), the newest session log. The rows below continue that ledger's ID scheme at A148 and M100 (both reserved by step 5's landing). The next free IDs are A156, M104 and P94. A150 is carried unchanged; after the review fix round the bootstrap reuses a valid lock auditor key, and `--new-auditor` forces a new one, which needs the sign-up window. A74 (the approval comment) is closed by the owner's answer of 2026-10-04 (optional on Approve); its row above is carried unchanged.
 
 | ID | Kind | New finding | Required correction or precaution |
 |---|---|---|---|
@@ -744,6 +744,7 @@ Sections 5.1 to 5.31 above are carried forward byte for byte from [the 2026-10-0
 | M103 | Mistake (mine) | The frozen gate's allowed-file list missed `scripts/deploy.ts`, although the spec says the deploy passes the window switch and calls the probe. Found only at the first full gate run. Owner: "Yes, amend it (Recommended)" (gate v3, one path; v1 and v2 kept). | When a gate freezes an allowed-file list, run it once against a throwaway commit that touches every seam the spec names. |
 | P93 | Precaution | A read-only reviewer ran `git checkout <sha>` and left the worktree on a detached HEAD; the next commit landed off the branch. | Tell every reviewer "no git command that moves HEAD", and check `git status -sb` before each commit. |
 | A154 | Finding (review, carried) | `verifyApproval` refusals write no audit row; only `decide` audits. Also untested end to end: the command line sets the table names before it imports the modules that read them. | The step that wires the executor to `verifyApproval` decides whether a refused verification is audited. |
+| A155 | Finding (second critic, carried) | Two checks the approvals library does not make: `verifyApproval` does not require `decidedAt` to be at or after the shadow row's `assignedAt` (a decision made with a slot's key between the company-access grant and the registry transaction would verify as the assignee's; it needs an operator holding the key), and neither `decide` nor `verifyApproval` checks that the Netzer user is still active (a deactivated approver counts until `retire` or `check`). | Step 7 binds `decide` to the signed-in session and decides both checks when it wires the route. |
 
 ## 6. Pending work
 
@@ -804,7 +805,7 @@ VERIFICATION RESULTS (run by the coordinator on `e194bad`, the last commit that 
 | `npm run typecheck` | exit 0 on `768ecf6` | exit 0 after W2, W3 and W4 (`3fafb9a` and `79b06d0` among them) |
 | `npm test` | exit 0 on `768ecf6`: 329 files, 4346 tests | exit 0 on `e194bad`: 342 files, 4634 tests |
 | `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `768ecf6`: 329 files, 4346 tests | exit 0 on `e194bad`: 342 files, 4634 tests |
-| `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | exit 0 on `768ecf6` | `npm run build` exit 0 after W3 and W4; the web checks not run since the baseline |
+| `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | exit 0 on `768ecf6` | all three exit 0 on `e194bad` |
 | `npm run local:test:integration` | NOT RUN (port 4566 is held by another stack's emulator; A144) | NOT RUN (A144) |
 | `node scripts/ci/docs-links.mjs`, `node scripts/ci/feature-knowledge.mjs`, `git diff --check` | OK on `768ecf6` | see the docs row below |
 | Frozen gate self-test on `fc51ef6` (the red commit) | n/a | exit 1 with 22 FAIL, 1 PASS (S6-C00) and 5 PENDING (`s6-fc51ef6-gate-red.log`) |
@@ -816,14 +817,14 @@ VERIFICATION RESULTS (run by the coordinator on `e194bad`, the last commit that 
 | `node scripts/ci/docs-links.mjs`, `feature-knowledge.mjs`, `runnable-blocks.mjs`, `docs-assets.mjs`, `docs-mermaid.mjs` (docs pass, uncommitted tree) | OK on `768ecf6` for the first two | exit 0 on the tip; see VERIFICATION RESULTS above |
 | Live proofs S6-L1 to S6-L5 | n/a | PENDING: need staging and an AWS call, each with the owner's yes. Not passed |
 
-Anything not run, and why: `npm run local:test:integration` (A144). The full `npm test` in both flag states, the web checks, the frozen gate and the critic on the final tip are the next action (section 6). No AWS call was made and nothing ran against a real Paperclip.
+Anything not run, and why: `npm run local:test:integration` (A144). The full `npm test` in both flag states, the web checks and the gate ran on the tip (see VERIFICATION RESULTS above). No AWS call was made and nothing ran against a real Paperclip.
 
 ## 8. Environment state
 
 - **Tools and services**: the work ran in the worktree `Netzer-Labs/.worktrees/wp-step6-approvals`. Codex built the work orders on the Build Ladder: gpt-6-sol at xhigh for W1, gpt-6-luna at medium for W2, gpt-6-sol at high for W3 and W4. The docs were written by a Sonnet subagent. `jg` (jevgrep) was ready; `headroom` was not routed (`headroom doctor` exit 2, desktop app). Another stack's emulator holds port 4566 and was not touched.
 - **Active processes**: none left running by this session. The reviewers' reports are outside the repository, in `~/.claude/plans/netzer-work-platform-reviews/`.
 - **Environment variables**: names only, never values. Added: `SHADOW_APPROVERS_SECRET_ID` (task env, the secret's name), `PAPERCLIP_SIGNUP_WINDOW` (orchestrator task, only `open` counts), `PAPERCLIP_SIGNUP_PROBE_EMAIL` (from the Paperclip secret field `signup_probe_email`) and `CCE_PAPERCLIP_SIGNUP_WINDOW` (deploy and CDK input). Read by the operator command line: `PAPERCLIP_BASE_URL`, `CCE_PAPERCLIP_ADMIN_EMAIL`, `PAPERCLIP_ADMIN_PASSWORD`, `CCE_NAME_SUFFIX`, `AWS_REGION`.
-- **Uncommitted work left in the tree**: the docs changes that this file belongs to.
+- **Uncommitted work left in the tree**: none.
 
 ## 9. Related documents
 
