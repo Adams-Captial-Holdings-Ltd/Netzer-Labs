@@ -1,4 +1,5 @@
 import type { Plugin } from 'vite';
+import type { ApprovalDetail } from '../src/pages/work/shared';
 import { approvals as seedApprovals, cases, pipeline } from './work-fixtures';
 
 const decideErrors: Record<string, number> = {
@@ -14,6 +15,16 @@ const decideErrors: Record<string, number> = {
 };
 
 const SLOW_REPLY_MS = 2500;
+
+// A list or case row carries the approval without its payload, fingerprint and decision details.
+const toSummary = ({
+  payloadSha256: _h,
+  payload: _p,
+  cannotDecideReason: _r,
+  decidedBy: _d,
+  decisionComment: _n,
+  ...summary
+}: ApprovalDetail) => summary;
 
 export function mockWorkPlugin(): Plugin {
   const approvals = structuredClone(seedApprovals);
@@ -93,18 +104,7 @@ export function mockWorkPlugin(): Plugin {
             ? send(200, {
                 case: {
                   ...c,
-                  approvals: approvals
-                    .filter((a) => a.caseId === c.id)
-                    .map(
-                      ({
-                        payloadSha256: _h,
-                        payload: _p,
-                        cannotDecideReason: _r,
-                        decidedBy: _d,
-                        decisionComment: _n,
-                        ...summary
-                      }) => summary,
-                    ),
+                  approvals: approvals.filter((a) => a.caseId === c.id).map(toSummary),
                 },
               })
             : send(404, { error: 'not_found' });
@@ -113,18 +113,7 @@ export function mockWorkPlugin(): Plugin {
           const status = url.searchParams.get('status') ?? 'pending';
           if (!['pending', 'all'].includes(status)) return send(400, { error: 'invalid_query' });
           return send(200, {
-            approvals: approvals
-              .filter((a) => status === 'all' || a.status === 'pending')
-              .map(
-                ({
-                  payloadSha256: _h,
-                  payload: _p,
-                  cannotDecideReason: _r,
-                  decidedBy: _d,
-                  decisionComment: _n,
-                  ...summary
-                }) => summary,
-              ),
+            approvals: approvals.filter((a) => status === 'all' || a.status === 'pending').map(toSummary),
             truncated: false,
           });
         }

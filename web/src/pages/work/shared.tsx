@@ -54,6 +54,19 @@ export type PipelineSummary = {
   stages: { id: string; key: string; name: string; kind: string }[];
 };
 
+/** Shows `text` with the case key kept whole: the key never breaks at its hyphen, the rest wraps as usual. */
+export function KeepKey({ text, caseKey }: { text: string; caseKey: string }) {
+  const at = caseKey ? text.indexOf(caseKey) : -1;
+  if (at < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <span class="whitespace-nowrap">{caseKey}</span>
+      {text.slice(at + caseKey.length)}
+    </>
+  );
+}
+
 export function words(s: string): string {
   return s
     .replace(/(?:_|-)+/g, ' ')
@@ -74,12 +87,12 @@ function elapsedWords(iso: string): string | null {
   const unit = delta < HOUR ? 'minute' : delta < DAY ? 'hour' : 'day';
   return `${n} ${unit}${n === 1 ? '' : 's'}`;
 }
-export function time(iso: string): string {
+function time(iso: string): string {
   const span = elapsedWords(iso);
   return span === null ? 'unknown time' : span === '' ? 'just now' : `${span} ago`;
 }
 /** How long something has waited, for example "3 days". */
-export function waitedFor(iso: string): string {
+function waitedFor(iso: string): string {
   const span = elapsedWords(iso);
   return span === null ? 'unknown time' : span === '' ? 'less than a minute' : span;
 }
@@ -105,7 +118,7 @@ function statusOf(status: string): Status {
   return statuses.get(status) ?? { name: words(status), dot: 'inactive', badge: 'neutral-dim' };
 }
 /** A list row's status: a dot and a word, one text colour for every status. */
-export function ListStatus({ status, label }: { status: string; label?: string }) {
+function ListStatus({ status, label }: { status: string; label?: string }) {
   const s = statusOf(status);
   return <span class="whitespace-nowrap"><StatusDot status={s.dot} label={label ?? s.name} /></span>;
 }
@@ -184,7 +197,7 @@ export function WorkError({
   return (
     <ErrorState
       title={code === 'forbidden' ? copy.error.noAccess : undefined}
-      message={workMessage(error)}
+      message={code === 'forbidden' ? copy.error.askAdmin : workMessage(error)}
       onRetry={canRetry(error) ? retry : undefined}
     />
   );
@@ -222,8 +235,8 @@ export function WorkList({ children }: { children: ComponentChildren }) {
 }
 
 // A row is one link. Below lg it is two lines: the title (two lines at most), then one metadata line
-// that the status never truncates: the status ends that line, or from a phone's width down it takes its
-// own trailing line in every row, so row heights stay alike within a list. At lg the cells sit in the shared
+// that the status never truncates: the status takes its own trailing line in every row, so its place and
+// the row heights stay alike within a list. At lg the cells sit in the shared
 // grid (tailwind.config.ts) whose only flexible track is the title, so columns line up from row to row
 // and the title takes all spare width. `stacked` keeps the two-line form at every width, for a list in
 // a narrow column. The keyboard position is the focus-bar rail, not a ring.
@@ -273,7 +286,7 @@ function RowMeta({ cells, status, stacked }: { cells: Cell[]; status?: Component
           </span>
         ))}
       </span>
-      {status ? <span class={`shrink-0 max-sm:basis-full ${stacked ? '' : 'lg:min-w-0'}`}>{status}</span> : null}
+      {status ? <span class={`shrink-0 text-caption max-lg:basis-full ${stacked ? '' : 'lg:min-w-0'}`}>{status}</span> : null}
     </span>
   );
 }

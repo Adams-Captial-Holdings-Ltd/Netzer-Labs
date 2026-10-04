@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../../lib/api';
 import { toast } from '../../components/Toast';
-import { copy, workMessage } from './messages';
+import { copy, errorCode, workMessage } from './messages';
 import type { ApprovalDetail as ApprovalData } from './shared';
 
 export type Decision = 'approve' | 'reject' | 'request_changes';
@@ -91,7 +91,7 @@ export function useApprovalDecision(
       }
     } catch (e) {
       if (!active.current) return;
-      const code = e instanceof Error ? (e.message.split(':').at(0) ?? '') : String(e);
+      const code = errorCode(e);
       const mismatch = code === 'attribution_mismatch';
       const unknown = !refusedBeforeDecision.has(code) && !mismatch;
       const gone = noLongerWaiting.has(code);

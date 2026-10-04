@@ -246,7 +246,7 @@ test('403 permission error shows a sentence', async ({ page }) => {
     route.continue({ url: `${route.request().url()}&mock=forbidden` }),
   );
   await page.goto('/dashboard/work/cases');
-  await expect(page.getByText('You do not have access to this. Ask an admin.')).toBeVisible();
+  await expect(page.getByText('Ask an admin to give you access.')).toBeVisible();
 });
 
 test('work engine error shows a sentence and retry', async ({ page }) => {
@@ -274,7 +274,8 @@ test('a viewer keeps Missions with Work enabled', async ({ page }) => {
 test('a failed Work status check keeps the Work error and retry', async ({ page }) => {
   await page.route('**/api/work/status?**', route => route.fulfill({ status: 503, body: '{"error":"unavailable"}' }));
   await page.goto('/dashboard/work');
-  await expect(page.getByText('Could not check Work availability. Try again.')).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Work' })).toBeVisible();
+  await expect(page.getByText('The Work availability check failed. Try again.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
 });
 
@@ -824,6 +825,13 @@ test('the sending spinner does not change a button width and the textarea shares
   await reject.click();
   await expect(reject.locator('svg.animate-spin')).toHaveCount(1);
   expect((await reject.boundingBox())!.width).toBe(before);
+  // The spinner keeps clear of the label: there is a gap between its right edge and the first letter.
+  const gap = await reject.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el.lastChild!);
+    return range.getBoundingClientRect().left - el.querySelector('svg.animate-spin')!.getBoundingClientRect().right;
+  });
+  expect(gap).toBeGreaterThanOrEqual(3);
   await expect(page.getByRole('region', { name: 'Decision' })).toBeVisible({ timeout: 15_000 });
 });
 
@@ -890,6 +898,7 @@ test('a forbidden Work page keeps its title and says You do not have access', as
   await page.goto('/dashboard/work/cases');
   await expect(page.getByRole('heading', { level: 1, name: 'Cases' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'You do not have access' })).toBeVisible();
+  await expect(page.getByText(/You do not have access/)).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
 });
 
@@ -916,4 +925,68 @@ test('the Cases filter shows a visible focus ring', async ({ page }) => {
   await page.keyboard.press('Tab');
   await pipeline.focus();
   expect(await pipeline.evaluate((e) => getComputedStyle(e).boxShadow)).not.toBe('none');
+});
+
+test('a case key never breaks at its hyphen in the approval title or the deciding line', async ({ page }) => {
+  for (const width of [375, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await detail(page, 'approval-8');
+    const lines = [page.getByRole('heading', { level: 1 }), page.getByText(/You are deciding .* This cannot be undone\./)];
+    for (const line of lines) {
+      const key = line.locator('span', { hasText: 'INV-1008' });
+      await expect(key, `key span at ${width}`).toHaveCount(1);
+      expect(await key.evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('nowrap');
+      expect(await key.evaluate((e) => e.getClientRects().length)).toBe(1);
+    }
+  }
+});
+
+// The status word's text box, relative to its row: left edge and bottom edge (equal bottoms at one font size mean one baseline).
+const statusBox = (row: Locator) =>
+  row.evaluate((li) => {
+    const word = [...li.querySelectorAll('span')].find((s) => !s.children.length && /^(Open|Blocked|Waiting|Open to see why)/.test(s.textContent ?? ''))!;
+    const text = (el: Element) => { const r = document.createRange(); r.selectNodeContents(el); return r.getBoundingClientRect(); };
+    return { left: Math.round(text(word).left - li.getBoundingClientRect().left), bottom: text(word).bottom, timeBottom: text(li.querySelector('time')!).bottom };
+  });
+
+test('at 1280 the status word shares the baseline of the row text, in Cases and in the Inbox', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  for (const path of ['/work/cases', '/work']) {
+    await page.goto(`/dashboard${path}`);
+    const rows = page.getByRole('main').getByRole('listitem');
+    await expect(rows.first()).toBeVisible();
+    for (const row of (await rows.all()).slice(0, 8)) {
+      const box = await statusBox(row).catch(() => null);
+      if (box) expect(Math.abs(box.bottom - box.timeBottom), `${path} status baseline`).toBeLessThan(0.6);
+    }
+  }
+});
+
+test('between sm and lg the status sits at the same place in every row', async ({ page }) => {
+  for (const width of [640, 768, 1023]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of ['/work/cases', '/work/approvals']) {
+      await page.goto(`/dashboard${path}`);
+      const rows = page.getByRole('main').getByRole('listitem');
+      await expect(rows.first()).toBeVisible();
+      const lefts = new Set<number>();
+      for (const row of (await rows.all()).slice(0, 8)) lefts.add((await statusBox(row)).left);
+      expect(lefts.size, `${path} at ${width}`).toBe(1);
+    }
+  }
+});
+
+test('at 375 the helper keeps clear of the deciding line, and a notice above the result keeps clear of its heading', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 900 });
+  await detail(page, 'approval-8');
+  const hint = (await page.locator('#comment-hint').boundingBox())!;
+  const deciding = (await page.getByText(/You are deciding/).boundingBox())!;
+  expect(deciding.y - (hint.y + hint.height)).toBeGreaterThanOrEqual(16);
+  await page.route('**/api/work/approvals/approval-8/decision', route =>
+    route.continue({ url: withMock(route.request().url(), 'decide:not_pending') }));
+  await page.getByRole('textbox', { name: COMMENT }).fill('Sample reason');
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  const refusal = (await page.getByRole('alert').filter({ hasText: 'This has already been decided.' }).boundingBox())!;
+  const heading = (await page.getByRole('heading', { name: 'Decision', exact: true }).boundingBox())!;
+  expect(heading.y - (refusal.y + refusal.height)).toBeGreaterThanOrEqual(24);
 });

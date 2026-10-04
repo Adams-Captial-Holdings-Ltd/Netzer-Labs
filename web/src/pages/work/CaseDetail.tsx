@@ -3,6 +3,7 @@ import {
   ApprovalRow,
   BackLink,
   HeaderStatus,
+  KeepKey,
   PageTitle,
   RelativeTime,
   WorkError,
@@ -46,7 +47,9 @@ export function CaseDetail() {
     <div class="min-w-0">
       <BackLink href="/work/cases" label={copy.detail.backCases} />
       <header class="mt-4 mb-8">
-        <h1 class="text-display-sm text-primary font-bold break-words">{c.title}</h1>
+        <h1 class="text-display-sm text-primary font-bold break-words">
+          <KeepKey text={c.title} caseKey={c.caseKey} />
+        </h1>
         <div class="flex flex-wrap items-center gap-3 mt-2">
           <HeaderStatus status={c.status} />
           <span class="text-body-sm text-secondary">{c.stage.name}</span>

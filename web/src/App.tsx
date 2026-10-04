@@ -236,8 +236,11 @@ function AppShell() {
   }, []);
 
   const workFailure = (
-    <ErrorState message="Could not check Work availability. Try again."
-      onRetry={() => setWorkStatusVersion(v => v + 1)} />
+    <div class="min-w-0">
+      <h1 class="text-display-sm text-primary font-bold mb-6">Work</h1>
+      <ErrorState title="Could not reach Work" message="The Work availability check failed. Try again."
+        onRetry={() => setWorkStatusVersion(v => v + 1)} />
+    </div>
   );
 
   return (

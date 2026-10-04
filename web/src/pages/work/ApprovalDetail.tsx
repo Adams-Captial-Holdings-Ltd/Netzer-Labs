@@ -4,6 +4,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import {
   BackLink,
   HeaderStatus,
+  KeepKey,
   PageTitle,
   RelativeTime,
   WorkError,
@@ -75,7 +76,9 @@ function ApprovalHeader({ approval: a }: { approval: ApprovalData }) {
   return (
     <header class="mt-4 mb-8">
       <h1 class="text-display-sm text-primary font-bold break-words text-balance">
-        {a.decisionLabel} for {a.caseTitle ?? <span class="font-mono">{a.caseKey}</span>}
+        {a.decisionLabel} for{' '}
+        {a.caseTitle ? <KeepKey text={a.caseTitle} caseKey={a.caseKey} />
+          : <span class="font-mono whitespace-nowrap">{a.caseKey}</span>}
       </h1>
       <div class="flex flex-wrap gap-x-3 gap-y-1 items-center mt-2 text-body-sm text-secondary">
         <HeaderStatus status={a.status} />
@@ -212,6 +215,7 @@ function ApprovalDetailForId({ id }: { id: string }) {
     <DecideNotice
       text={d.notice}
       isError={d.noticeIsError}
+      aboveForm={canDecide}
       noticeRef={d.resultRef}
       onCheckAgain={d.unknownOutcome ? d.checkAgain : undefined}
     />

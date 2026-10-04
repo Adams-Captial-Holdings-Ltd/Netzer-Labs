@@ -14,13 +14,13 @@ import {
 } from './shared';
 import { copy } from './messages';
 
-const STATUS_VALUES = ['active', 'blocked', 'done', 'all'];
 const statusOptions = [
   { value: 'active', label: copy.cases.open },
   { value: 'blocked', label: copy.cases.blocked },
   { value: 'done', label: copy.cases.done },
   { value: 'all', label: copy.cases.all },
 ];
+const STATUS_VALUES = statusOptions.map((o) => o.value);
 // 44 px tall and 16 px text below md (the touch size), the app's own size from md up.
 const touchSelect = 'min-h-11 max-md:text-base md:min-h-0';
 

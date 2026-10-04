@@ -81,10 +81,11 @@ export function Button({
   );
 }
 
-// At lg the spinner sits in the button's left padding, so showing it never changes the button's width.
+// At lg the spinner sits in the button's left padding (4px in, 4px clear of the label), so showing it
+// never changes the button's width.
 function Spinner({ overlay }: { overlay: boolean }) {
   return (
-    <svg class={`animate-spin h-4 w-4 ${overlay ? 'absolute left-2 top-1/2 -mt-2' : ''}`} viewBox="0 0 24 24" fill="none">
+    <svg class={`animate-spin h-4 w-4 ${overlay ? 'absolute left-1 top-1/2 -mt-2' : ''}`} viewBox="0 0 24 24" fill="none">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>

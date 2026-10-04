@@ -24,9 +24,12 @@ const sentences = new Map<string, string>(Object.entries({
 }));
 export const fallbackMessage =
   'Something went wrong on our side. Try again, or contact your admin.';
+/** The code in an error: for an Error the text before any ":", otherwise its string form. */
+export function errorCode(error: unknown): string {
+  return error instanceof Error ? (error.message.split(':').at(0) ?? '') : String(error);
+}
 export function workMessage(error: unknown): string {
-  const code = error instanceof Error ? error.message.split(':').at(0) : String(error);
-  return sentences.get(code ?? '') ?? fallbackMessage;
+  return sentences.get(errorCode(error)) ?? fallbackMessage;
 }
 /** The sentence for a reason the person cannot decide: an unknown reason still says that, not "went wrong". */
 export function cannotDecideMessage(reason: string | null): string {
@@ -109,7 +112,6 @@ export const copy = {
     unassigned: 'Unassigned',
     blockedAt: (stage: string) => `Blocked at ${stage}`,
     waitingFor: (span: string) => `Waiting ${span}`,
-    requested: (span: string) => `Requested ${span}`,
     waitingViewOnly: 'Waiting · view only',
     openToSee: 'Open to see why',
   },
@@ -166,5 +168,5 @@ export const copy = {
     checked: 'Checked',
   },
   requested: 'Requested',
-  error: { noAccess: 'You do not have access' },
+  error: { noAccess: 'You do not have access', askAdmin: 'Ask an admin to give you access.' },
 };
