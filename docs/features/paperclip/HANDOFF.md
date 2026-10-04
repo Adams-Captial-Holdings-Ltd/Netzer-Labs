@@ -3,14 +3,27 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-10-04
-as_of_commit: 768ecf64633af4fb4c109eca6ea511afee2d39be
+as_of_commit: a2fc82d97ef6ed123f3007fdf195959ebfaf3b8b
 ---
 
 # Paperclip integration handoff
 
-## Current state (2026-10-04, step 6)
+## Current state (2026-10-04, step 7)
 
-This section was checked on 2026-10-04 against `origin/development` `768ecf6`. The sections below it are older state and were not re-checked.
+This section was checked on 2026-10-04 against the code commit `a2fc82d` and `origin/development` `d1d3a66`. The sections below it are older state and were not re-checked.
+
+- **Branch:** `feature/wp-step7-work-ui` (from `origin/development` `d1d3a66`; merge target `development`). It is fourteen code commits ahead of `d1d3a66` (last code commit `a2fc82d`) when this was written; a polish pass was still running, so read `git log` for the real tip. **Pushed:** not recorded in the step log, and the worktree has no remote-tracking ref for it, so it looks unpushed. **PR:** none recorded. The owner's yes to push and open the PR is recorded; the merge needs its own yes.
+- **Step 6 is merged:** PR #205 merged into `development` as `d1d3a66` (shadow identities and approvals, [ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md)). Nothing was deployed.
+- **Step 7 is built locally:** the read-only Work BFF at `/api/work` (seven routes), the `work:read` and `work:approve` capabilities, the approval payload row in the effect ledger table, the two approver checks left open by step 6 (A155), five screens under `/work` with a decide flow, the `/missions` redirect, and `design.md` and `PRODUCT.md` ([ADR 0017](../../adr/0017-netzer-identity-and-work-ui.md), decisions 52 to 58 in the [decision log](decision-log.md)). Reviews, two fix rounds and three design critique rounds are done; the third found no open critical or structural issue at `c285bfd`.
+- **Not done when this was written:** the final full validation, the frozen gate and a fresh critic run on the commit that carries this file (results: the pull request description); the owner's phone trial of the decide flow (link in the session log). `npm run local:test:integration` was not run (port 4566 is held by another stack). No pack is installed anywhere, so the screens are proven on made-up fixtures and the live reads S7-L1 to S7-L3 are PENDING.
+- **Open for the owner:** whether "conforming it to how our tables work" means moving Paperclip's data into Netzar's own tables (a one-way door that would supersede ADRs 0010 and 0012); the first real pack by name; the pack-export design items (A161).
+- **Deployment:** none. `feature/*` and `development` deploy nothing. There was no staging trip and no AWS call.
+
+**Next action:** read what the polish pass left, run the final validation, the gate and the critic on the tip, then push and open the PR into `development`. Then the owner's phone trial. Step 8 (pack install and the signed license) is next. Session log: [Work Platform step 7](handoffs/2026-10-04-work-platform-step-7-work-ui.md).
+
+## State as of 2026-10-04 (step 6)
+
+This section was checked on 2026-10-04 against `origin/development` `768ecf6`, before PR #205 merged. The sections below it are older state and were not re-checked.
 
 - **Branch:** `feature/wp-step6-shadow-approvals` (from `origin/development` `768ecf6`; merge target `development`). Commits on it: `fc51ef6`, `f65e1c8`, `13b046c`, `3fafb9a`, `79b06d0`, the review-round red tests `dab3954`, the step 6 records `12aef9d`, and the review fix round `fe2e891` (source and infrastructure) and `d7c599f` (scripts). **Pushed:** no. **PR:** none.
 - **Step 5 is merged:** PR #204 merged into `development` as `768ecf6` (the effect ledger, the executor and the tool policy, [ADR 0013](../../adr/0013-sync-attach-execution-contract.md)). Nothing was deployed.
@@ -209,6 +222,7 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 
 | Session | Date | Summary |
 |---|---|---|
+| [Work Platform step 7: the Work UI core](handoffs/2026-10-04-work-platform-step-7-work-ui.md) | 2026-10-04 | Built the Work BFF, the two capabilities, the approval payload row and five screens with a decide flow on `feature/wp-step7-work-ui`, then reviews, two fix rounds and three design critique rounds (ADR 0017, `design.md`, decisions 52 to 58). Four `/court` trials on the product direction. Carries the ledger forward and adds A156 to A162, S7-06, M104 to M106 and P94 to P98. Phone trial and live reads PENDING. Not deployed |
 | [Work Platform step 6: shadow identities and approvals](handoffs/2026-10-04-work-platform-step-6-shadow-approvals.md) | 2026-10-04 | Built the hash-bound approvals library, the shadow-user pool with its operator command line, the board-key secret and closed sign-up with a probe in the runtime lock on `feature/wp-step6-shadow-approvals` (ADR 0016, ADR 0014). Carries the ledger forward and adds A148 to A153, M100, M101 and P91. Review fixes decided, not yet built; live proofs PENDING. Not pushed or deployed |
 | [Work Platform step 5: safe actions](handoffs/2026-10-03-work-platform-step-5-safe-actions.md) | 2026-10-03 | Built the effect ledger (a new table with a frozen key), the deterministic executor and frozen drafts as a library, the AI-step tool policy, the turn ID with one audit row per tool call, and `pack effect list` and `pack effect resolve` on `feature/wp-step5-safe-actions`. The completion write is not ledgered yet (A140). Carries the ledger forward and adds A140 to A147, M98, M99 and P90. The review fan-out and the fix round are done (`d32f612`, `42c7a04`); the final validation is not. Not pushed; nothing deployed |
 | [Work Platform step 4: the execution contract](handoffs/2026-10-03-work-platform-step-4-execution-contract.md) | 2026-10-03 | Built the held dispatch route, the attempt row with a fenced lease, the completion writer, the sweep, the drain and the load balancer address on `feature/wp-step4-execution-contract` (ADR 0013). Carries the ledger forward and adds A132 to A139, M96, M97, P87 to P89. Merged as PR #203 (`af91a47`); nothing deployed |
@@ -240,4 +254,4 @@ Newest first. Every session working in this folder adds one file to `handoffs/` 
 | [updatedSince patch and Phase 0](handoffs/2026-08-18-updated-since-patch-and-phase-0.md) | 2026-08-18 | Added the approved artifact patch and ADR |
 | [Codex review](handoffs/2026-08-18-codex-review.md) | 2026-08-18 | Established the original release-contract finding |
 
-Authorities: [README](README.md), [implementation plan](implementation-plan.md), [plan audit](plan-audit.md), [bar and phases](bar-and-phases.md), [ADR 0010](../../adr/0010-paperclip-work-engine.md), the [Work Platform record](minimum-sellable-product.md) with its [DO NOT BUILD list](do-not-build.md) and [decision log](decision-log.md), and [the newest session handoff](handoffs/2026-09-29-work-platform-architecture-record.md).
+Authorities: [README](README.md), [implementation plan](implementation-plan.md), [plan audit](plan-audit.md), [bar and phases](bar-and-phases.md), [ADR 0010](../../adr/0010-paperclip-work-engine.md), the [Work Platform record](minimum-sellable-product.md) with its [DO NOT BUILD list](do-not-build.md) and [decision log](decision-log.md), and [the newest session handoff](handoffs/2026-10-04-work-platform-step-7-work-ui.md).

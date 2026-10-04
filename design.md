@@ -23,12 +23,12 @@ Precise, quiet, dense, trustworthy, plain-spoken. People come here to decide som
 
 ## 3. Visual Hierarchy
 
-In order of preference: position (top and left first), type size and weight, spacing, text colour level (primary, secondary, muted), then a border. A background fill or a card comes last. A page has one `heading-lg` title. Section titles are `heading-sm`. Row titles are `body-sm` at weight 500; row metadata is `caption` in `text-secondary`.
+In order of preference: position (top and left first), type size and weight, spacing, text colour level (primary, secondary, muted), then a border. A background fill or a card comes last. A page has one title in the app's existing page-title size (`display-sm`) and a one-line subtitle in `body-sm` and `text-secondary` that says what the page lists (decision 58). Section titles are `heading-sm`. Row titles are `body-sm` at weight 500; row metadata is `caption` in `text-secondary`.
 
 ## 4. Typography
 
 - Families: `font-sans` (system stack with Inter) for everything; `font-mono` only for case keys, ids, hashes and JSON.
-- Scale: use the named sizes in `web/tailwind.config.ts` (`heading-lg`, `heading-sm`, `body`, `body-sm`, `caption`, `overline`). `display-*` is not used inside the app shell.
+- Scale: use the named sizes in `web/tailwind.config.ts` (`heading-lg`, `heading-sm`, `body`, `body-sm`, `caption`, `overline`). `display-*` is not used inside the app shell, except `display-sm` for the page title (decision 58).
 - Lists and tables use `body-sm`. Long-form case content (a draft, a comment) uses `body` with a line length of at most 75 characters.
 - Numbers in columns, counts and times use `tabular-nums`.
 - `overline` is for sidebar section labels only. Do not put an overline above a page or section heading.
@@ -38,14 +38,14 @@ In order of preference: position (top and left first), type size and weight, spa
 - Surfaces: `bg` for the page, `surface` for panels, `bg-sunken` for wells such as a code or payload block.
 - Text: `text-primary`, `text-secondary`, `text-muted`. Muted text is never used for something the user must read to act.
 - Borders: `border`; `border-strong` only to separate a sticky bar from scrolling content.
-- Primary (`primary`, `primary-hover`): the one primary action, links, the current-place marker. It is the customer's colour under white-label, so it never carries status. For a customer's colour, text on the primary fill always meets 4.5:1: `applyBrand()` in `web/src/lib/theme.ts` picks light or dark text; nobody has to choose a compliant colour. The stock indigo keeps its white text as the rest of the app has it (4.47:1; owner, 2026-10-04: keep the app's current look).
+- Primary (`primary`, `primary-hover`): the one primary action and the current-place marker (decision 58). Links are ink (`text-primary`) and underlined, because the stock indigo fails 4.5:1 as text (decision 58). It is the customer's colour under white-label, so it never carries status. For a customer's colour, text on the primary fill always meets 4.5:1: `applyBrand()` in `web/src/lib/theme.ts` picks light or dark text; nobody has to choose a compliant colour. The stock indigo keeps its white text as the rest of the app has it (4.47:1; owner, 2026-10-04: keep the app's current look).
 - Status: `success` (approved, done), `warning` (waiting on a person, changes requested), `danger` (rejected, blocked, failed), `info` is not used for status. Each status also has a word, and an icon or dot. Status backgrounds use the `*-dim` tokens, never a full-strength fill.
 - Rows: `row-hover` for hover, `row-active` for the current row, `focus-bar` for the keyboard position.
 - Do not introduce a hex value in a component. A missing colour is a missing token: add it to `index.css` for light and dark together.
 
 ## 6. Spacing and Layout
 
-- Spacing uses the 4 px scale (`--space-1` to `--space-12`). Inside a row: 12 px vertical, 16 px horizontal. Between a heading and its content: 12 px. Between sections: 32 px, and more space above a heading than below it.
+- Spacing uses the 4 px scale (`--space-1` to `--space-12`). Inside a row: compact vertical padding and 16 px horizontal, so that 10 rows fit at 1280 by 720 (decision 58). Between a heading and its content: 12 px. Between sections: 32 px, and more space above a heading than below it.
 - Page gutter: 24 px at 768 and up, 16 px below.
 - Lists span the content width. Detail pages use one main column (at most 760 px of text) and, at 1024 and up, a facts column of 280 px on the right.
 - The app shell (sidebar 260 px, header 56 px) is fixed; pages do not draw their own chrome.
@@ -63,8 +63,8 @@ Reuse what exists in `web/src/components/`; do not fork a variant for one screen
 - **Lists**: a bordered panel of rows. Each row is one link target (the whole row), 44 px tall at minimum, title first. No per-row action buttons in Work lists.
 - **Filters**: native `<select>` (`Select.tsx`) in one row above the list; they wrap at small sizes.
 - **Empty, error, loading**: `EmptyState.tsx`, `ErrorState.tsx`, `Skeleton.tsx`. Skeletons copy the shape of the content they replace.
-- **Payload block**: a `bg-sunken` well. A flat object renders as a definition list (label left, value right; stacked at small sizes). Anything else renders as formatted JSON in `font-mono` (`RawJsonBlock.tsx`). The sha256 sits under the block in `caption` mono.
-- **Decide form**: the comment box, one sentence naming what is being decided and that it cannot be undone, then Approve (primary), Request changes (secondary), Reject (outlined danger), with at least 24 px between any two of them at every size. It sits below the content it decides and is never sticky: the person passes what they approve to reach the buttons.
+- **Payload block**: a `bg-sunken` well. A flat object renders as a definition list (label left, value right; stacked at small sizes). A nested payload renders as formatted JSON in a plain `font-mono` block, not in `RawJsonBlock.tsx` (decision 58). The block is shown in full at every size, with no height cap; when it is taller than the window and the person can decide, a "Go to decision" link above it jumps to the decide form (decision 58). The sha256 sits under the block in `caption` mono.
+- **Decide form**: the comment box, one sentence naming what is being decided and that it cannot be undone, then Approve (primary), Request changes (secondary), Reject (outlined danger), with at least 24 px between any two of them at every size. Request changes and Reject show at full contrast at rest, and Reject or Request changes with an empty comment is answered by a message beside the comment box, not by a faded button (decision 58). It sits below the content it decides and is never sticky: the person passes what they approve to reach the buttons.
 - **Dialogs** (`Modal.tsx`, `ConfirmDialog.tsx`): only for a task that needs protected focus. An approval is read and decided in the page; the one dialog in that flow is the confirm that Approve opens (section 9).
 - **Toast** (`Toast.tsx`): confirmation after a decision. Never the only place an error appears.
 
@@ -72,7 +72,7 @@ Reuse what exists in `web/src/components/`; do not fork a variant for one screen
 
 - Hover is a hint, never the only way to find something.
 - Focus is always visible: the ring on controls, `focus-bar` on rows.
-- A control that cannot be used yet says why in text next to it (for example "Add a comment to reject or request changes"). It uses `aria-disabled` and stays in the Tab order, so keyboard and screen-reader users find the reason.
+- A control that cannot be used yet says why in text next to it (for example "Sending your decision" while a decision is being sent; decision 58). It uses `aria-disabled` and stays in the Tab order, so keyboard and screen-reader users find the reason.
 - A decision cannot be undone (the work engine has no way to reverse one), and the page says so before it is made. Approve is the only decision one tap could send, so at every screen size it opens a confirm (`ConfirmDialog.tsx`) that names the decision label and the case key and repeats "This cannot be undone"; the confirm's own primary button sends it. Reject and Request changes need a typed comment and no confirm. A decision is sent once: the buttons disable while sending.
 - After a decision the page stays and shows the result in place ("You approved this", the time, the comment); a toast is a second confirmation, never the only one.
 - An unknown outcome is said plainly ("We could not confirm the decision was recorded. Reload to check.") and never shown as a failure.
@@ -84,9 +84,9 @@ Motion shows a change of state or place and nothing else. 100 to 200 ms (`durati
 ## 11. Responsive Design
 
 - 1024 and up: sidebar open; detail pages show the facts column.
-- 768 to 1023: the facts column moves above the main column as a two-column definition grid.
-- Below 768: the sidebar is a drawer; list rows stack to two lines (title; then metadata); filters wrap; the decide buttons stack full width, Approve first, each at least 44 px tall, with at least 24 px between them.
-- No horizontal page scroll at 375. A payload block may scroll sideways inside itself.
+- 768 to 1023: the facts column moves below the timeline as a two-column definition grid (decision 58).
+- Below 768: the sidebar is a drawer; list rows stack to two lines (title; then metadata); filters wrap; the decide buttons stack full width, Approve first, each at least 44 px tall, with at least 24 px between them; a detail page's facts follow its timeline (decision 58).
+- No horizontal page scroll at 375. A payload block wraps its content and never scrolls inside itself (decision 58).
 
 ## 12. Accessibility
 
@@ -121,7 +121,7 @@ Not on Work screens, and not in new screens elsewhere:
 
 Known drift in older components (found 2026-10-04; fix when a step touches them, not before): `Badge.tsx` uses the `overline` size and `/10` alpha fills where section 5 asks for the `*-dim` tokens; `Toast.tsx` uses text glyphs as icons; the Agents grid uses cards with coloured top bars. New screens follow this file, not those. Two gaps are closed in step 7 because the Work screens need them: `Button.tsx` has no outlined danger variant, and `applyBrand()` does not check the contrast of a customer's colour.
 
-- `web/src/pages/Sessions.tsx`: copy how it handles loading, empty and error and where it puts filters. Do not copy its page-title size or its table header style; sections 3 and 4 govern new screens.
+- `web/src/pages/Sessions.tsx`: copy how it handles loading, empty and error and where it puts filters. Do not copy its table header style; sections 3 and 4 govern new screens, and the page-title size is the app's existing one (decision 58).
 - `web/src/pages/AgentDetail.tsx`: a detail page reached by a route, with a back link.
 - `web/src/components/ErrorState.tsx` and `EmptyState.tsx`: the wording pattern (what happened, what to do).
 - The row tokens (`row-hover`, `row-active`, `focus-bar`) in `web/src/index.css`, with the reasoning in the comments there.
