@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'preact/hooks';
 import { useSearchParams } from 'wouter-preact';
 import {
   CaseRow,
@@ -12,7 +13,8 @@ export function Cases() {
   const [params, setParams] = useSearchParams();
   const pipeline = params.get('pipeline') ?? '',
     stage = params.get('stage') ?? '',
-    status = params.get('status') ?? 'active';
+    requestedStatus = params.get('status') ?? 'active';
+  const status = ['active', 'blocked', 'done', 'all'].includes(requestedStatus) ? requestedStatus : 'active';
   const query = new URLSearchParams();
   if (pipeline) query.set('pipeline', pipeline);
   if (stage) query.set('stage', stage);
@@ -22,6 +24,11 @@ export function Cases() {
     pipelines: PipelineSummary[];
     truncated: boolean;
   }>(`/cases?${query}`);
+  const [lastPipelines, setLastPipelines] = useState<PipelineSummary[]>([]);
+  useEffect(() => {
+    if (data?.pipelines) setLastPipelines(data.pipelines);
+  }, [data?.pipelines]);
+  const pipelines = data?.pipelines ?? lastPipelines;
   const change = (key: string, value: string) => {
     const next = new URLSearchParams(query);
     if (value) next.set(key, value);
@@ -43,7 +50,7 @@ export function Cases() {
             onChange={(e) => change('pipeline', e.currentTarget.value)}
           >
             <option value="">All pipelines</option>
-            {data?.pipelines.map((p) => (
+            {pipelines.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -60,7 +67,7 @@ export function Cases() {
             onChange={(e) => change('stage', e.currentTarget.value)}
           >
             <option value="">All stages</option>
-            {data?.pipelines
+            {pipelines
               .find((p) => p.id === pipeline)
               ?.stages.map((s) => (
                 <option key={s.id} value={s.key}>

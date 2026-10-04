@@ -18,7 +18,7 @@ export function Approvals() {
             key={key}
             href={`/work/approvals?status=${key}`}
             aria-current={status === key ? 'page' : undefined}
-            class={`text-body-sm py-2 focus-visible:ring-2 focus-visible:ring-primary
+            class={`inline-flex items-center min-h-11 px-2 text-body-sm focus-visible:ring-2 focus-visible:ring-primary
               ${status === key ? 'text-primary border-b-2 border-primary' : 'text-secondary'}`}
           >
             {label}

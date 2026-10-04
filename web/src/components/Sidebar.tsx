@@ -266,7 +266,7 @@ function SidebarContent({
   //  - no minCapability → ungated, visible to everyone (its route is ungated too).
   const canSee = (item: NavItem) => {
     if (item.section === 'Work' && workEnabled !== true) return false;
-    if (item.href === '/missions' && workEnabled !== false) return false;
+    if (item.href === '/missions' && workEnabled === true && hasCapability('work:read')) return false;
     if (item.minCapability) {
       return identityResolved && hasCapability(item.minCapability);
     }

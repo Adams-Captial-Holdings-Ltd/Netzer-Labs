@@ -318,8 +318,10 @@ jobs:
       - name: Install dashboard dependencies
         run: npm ci --prefix web
 
-      - name: Work web unit test
-        run: ./node_modules/.bin/vitest run web/src/lib/theme.test.ts --config web/vite.config.ts
+      - name: Work web unit tests
+        run: |
+          shopt -s globstar
+          ./node_modules/.bin/vitest run web/src/**/*.test.ts web/src/**/*.test.tsx --config web/vite.config.ts
 
       - name: Install the pinned Playwright browser
         run: npx playwright install --with-deps chromium

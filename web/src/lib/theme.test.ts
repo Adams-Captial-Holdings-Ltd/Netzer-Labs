@@ -13,6 +13,10 @@ function luminance(hex: string) {
 function ratio(a: string, b: string) { const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (light + 0.05) / (dark + 0.05); }
 
 describe('customer primary contrast', () => {
+  it('uses white for invalid hex input', async () => {
+    const { primaryTextFor } = await import('./theme');
+    expect(primaryTextFor('not-a-colour')).toBe('#ffffff');
+  });
   it('chooses readable text for dark, light, and middle customer colours', async () => {
     const { primaryTextFor, brand, applyBrand } = await import('./theme');
     expect(properties.get('--color-text-inverse')).toBe(primaryTextFor('#6366f1'));

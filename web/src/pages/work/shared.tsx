@@ -58,7 +58,10 @@ export function words(s: string): string {
     .replace(/^./, (c) => c.toUpperCase());
 }
 export function time(iso: string): string {
-  const delta = Math.max(0, Date.now() - new Date(iso).getTime());
+  const parsed = new Date(iso).getTime();
+  if (!Number.isFinite(parsed)) return 'unknown time';
+  const delta = Math.max(0, Date.now() - parsed);
+  if (delta < 60000) return 'just now';
   const n =
     delta < 3600000
       ? Math.floor(delta / 60000)
@@ -69,11 +72,10 @@ export function time(iso: string): string {
   return `${n} ${unit}${n === 1 ? '' : 's'} ago`;
 }
 export function RelativeTime({ value }: { value: string }) {
-  return (
-    <time dateTime={value} title={new Date(value).toLocaleString()}>
-      {time(value)}
-    </time>
-  );
+  const valid = Number.isFinite(new Date(value).getTime());
+  return valid ? (
+    <time dateTime={value} title={new Date(value).toLocaleString()}>{time(value)}</time>
+  ) : <span>unknown time</span>;
 }
 const statusNames: Record<string, string> = {
   pending: 'Waiting',
@@ -114,7 +116,8 @@ export function WorkStatus({ status }: { status: string }) {
 }
 export function WorkLoading({ detail = false }: { detail?: boolean }) {
   return (
-    <div aria-label="Loading work" class="space-y-3">
+    <div role="status" class="space-y-3">
+      <span class="sr-only">Loading</span>
       <Skeleton class="h-7 w-1/3" />
       {Array.from({ length: detail ? 3 : 10 }, (_, i) => (
         <Skeleton key={i} class="h-12 w-full" />
@@ -128,7 +131,7 @@ export function WorkError({ error, retry, back }: { error: unknown; retry: () =>
     return (
       <div>
         <p class="text-body-sm text-secondary">{workMessage(error)}</p>
-        <Link class="text-primary underline focus-visible:ring-2 focus-visible:ring-primary" href={back}>
+        <Link class="inline-flex min-h-6 items-center text-primary underline focus-visible:ring-2 focus-visible:ring-primary" href={back}>
           Back to list
         </Link>
       </div>
@@ -145,7 +148,7 @@ export function useWork<T>(path: string) {
     setLoading(true);
     setError(null);
     api
-      .get<T>(`/work${path}${path.includes('?') ? '&' : '?'}_=${version}`, ac.signal)
+      .get<T>(`/work${path}${path.includes('?') ? '&' : '?'}_=${Date.now()}-${version}`, ac.signal)
       .then((value) => setResult({ path, value }))
       .catch((e) => {
         if (!ac.signal.aborted) setError(e);

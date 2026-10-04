@@ -13,6 +13,7 @@ import { Sidebar, sidebarCollapsed } from './components/Sidebar';
 import { Header } from './components/Header';
 import { ToastContainer } from './components/Toast';
 import { JarvisWidget } from './components/JarvisWidget';
+import { ErrorState } from './components/ErrorState';
 import { EmptyState } from './components/EmptyState';
 import { TourOverlay } from './components/TourOverlay';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -172,13 +173,30 @@ function AppShell() {
   const collapsed = sidebarCollapsed.value;
   const [location, setLocation] = useLocation();
   const [workEnabled, setWorkEnabled] = useState<boolean | null>(null);
+  const [workStatusError, setWorkStatusError] = useState(false);
+  const [workStatusVersion, setWorkStatusVersion] = useState(0);
 
   useEffect(() => { loadRole(); }, []);
   useEffect(() => {
     const ac = new AbortController();
-    api.get<{ enabled: boolean }>('/work/status', ac.signal).then(x => setWorkEnabled(x.enabled)).catch(() => { if (!ac.signal.aborted) setWorkEnabled(false); });
+    setWorkStatusError(false);
+    async function check() {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const result = await api.get<{ enabled: unknown }>(`/work/status?_=${Date.now()}-${workStatusVersion}-${attempt}`, ac.signal);
+          if (typeof result.enabled !== 'boolean') throw new Error('invalid_work_status');
+          if (!ac.signal.aborted) setWorkEnabled(result.enabled);
+          return;
+        } catch {
+          if (ac.signal.aborted) return;
+          if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+      if (!ac.signal.aborted) { setWorkEnabled(false); setWorkStatusError(true); }
+    }
+    void check();
     return () => ac.abort();
-  }, []);
+  }, [workStatusVersion]);
 
   // First sign-in lands on the Getting Started checklist (replacing the old
   // OnboardingWizard modal). The legacy 'cce_onboarded' key marks existing
@@ -216,6 +234,11 @@ function AppShell() {
     }, 1500);
     return () => clearTimeout(t);
   }, []);
+
+  const workFailure = (
+    <ErrorState message="Could not check Work availability. Try again."
+      onRetry={() => setWorkStatusVersion(v => v + 1)} />
+  );
 
   return (
     <div class="min-h-screen bg-page">
@@ -295,12 +318,12 @@ function AppShell() {
             <Route path="/alerting"><RequireCapability need="security:write" label="Alerting"><Alerting /></RequireCapability></Route>
             <Route path="/integrations"><RequireCapability need="integrations:read" label="Integrations"><Integrations /></RequireCapability></Route>
             <Route path="/vectors"><RequireCapability need="vectors:read" label="Knowledge"><Vectors /></RequireCapability></Route>
-            <Route path="/work"><RequireCapability need="work:read" label="Work"><WorkInbox /></RequireCapability></Route>
-            <Route path="/work/cases"><RequireCapability need="work:read" label="Cases"><WorkCases /></RequireCapability></Route>
-            <Route path="/work/cases/:caseId"><RequireCapability need="work:read" label="Case"><WorkCaseDetail /></RequireCapability></Route>
-            <Route path="/work/approvals"><RequireCapability need="work:read" label="Approvals"><WorkApprovals /></RequireCapability></Route>
-            <Route path="/work/approvals/:approvalId"><RequireCapability need="work:read" label="Approval"><WorkApprovalDetail /></RequireCapability></Route>
-            <Route path="/missions">{workEnabled === null ? <div aria-label="Loading Work"><div class="skeleton h-8 w-1/3 mb-3" /><div class="skeleton h-12 w-full" /></div> : workEnabled ? <WorkRedirect /> : <RequireCapability need="missions:read" label="Missions"><Missions /></RequireCapability>}</Route>
+            <Route path="/work"><RequireCapability need="work:read" label="Work">{workStatusError ? workFailure : <WorkInbox />}</RequireCapability></Route>
+            <Route path="/work/cases"><RequireCapability need="work:read" label="Cases">{workStatusError ? workFailure : <WorkCases />}</RequireCapability></Route>
+            <Route path="/work/cases/:caseId"><RequireCapability need="work:read" label="Case">{workStatusError ? workFailure : <WorkCaseDetail />}</RequireCapability></Route>
+            <Route path="/work/approvals"><RequireCapability need="work:read" label="Approvals">{workStatusError ? workFailure : <WorkApprovals />}</RequireCapability></Route>
+            <Route path="/work/approvals/:approvalId"><RequireCapability need="work:read" label="Approval">{workStatusError ? workFailure : <WorkApprovalDetail />}</RequireCapability></Route>
+            <Route path="/missions">{workEnabled === null ? <div aria-label="Loading Work"><div class="skeleton h-8 w-1/3 mb-3" /><div class="skeleton h-12 w-full" /></div> : workEnabled && hasCapability('work:read') ? <WorkRedirect /> : <RequireCapability need="missions:read" label="Missions"><Missions /></RequireCapability>}</Route>
             <Route path="/memories"><RequireCapability need="memories:read" label="Memories"><Memories /></RequireCapability></Route>
             <Route path="/hive"><RequireCapability need="hive:read" label="Hive Mind"><HiveMind /></RequireCapability></Route>
             <Route path="/scheduled"><RequireCapability need="scheduled:read" label="Scheduled"><ScheduledTasks /></RequireCapability></Route>

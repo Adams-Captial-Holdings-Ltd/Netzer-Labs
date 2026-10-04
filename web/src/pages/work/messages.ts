@@ -19,12 +19,13 @@ const sentences: Record<string, string> = {
   comment_too_long: 'The comment is too long (4 000 characters at most).',
   paperclip_rejected: 'The decision was not accepted. Reload and check the approval.',
   decision_outcome_unknown: 'We could not confirm the decision was recorded. Reload to check.',
+  attribution_mismatch: 'Your decision may have been recorded, but we could not confirm it under your name. Do not decide again. Contact your admin.',
 };
 export const fallbackMessage =
-  'Something went wrong on our side. Nothing was decided by you here. Contact your admin.';
+  'Something went wrong on our side. Try again, or contact your admin.';
 export function workMessage(error: unknown): string {
   const code = error instanceof Error ? error.message.split(':')[0] : String(error);
-  return sentences[code] ?? fallbackMessage;
+  return Object.hasOwn(sentences, code) ? sentences[code] : fallbackMessage;
 }
 export function canRetry(error: unknown): boolean {
   const code = error instanceof Error ? error.message : String(error);

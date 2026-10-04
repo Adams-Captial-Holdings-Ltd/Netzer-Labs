@@ -1,6 +1,18 @@
 import type { Plugin } from 'vite';
 import { approvals as seedApprovals, cases, pipeline } from './work-fixtures';
 
+const decideErrors: Record<string, number> = {
+  comment_required: 400, comment_too_long: 400, body_too_large: 413, invalid_body: 400,
+  invalid_query: 400, unauthorized: 401, internal_error: 500, dashboard_read_disabled: 503,
+  forbidden: 403, no_user_session: 403, not_an_approver: 403, class_not_entitled: 403,
+  approver_inactive: 403, not_found: 404, not_a_netzer_approval: 404,
+  stale_payload: 409, not_pending: 409, payload_unavailable: 409, payload_mismatch: 409,
+  paperclip_rejected: 409, work_disabled: 503, paperclip_disabled: 503,
+  paperclip_unavailable: 503, paperclip_locked: 503, paperclip_ratelimited: 429,
+  key_unavailable: 503, attribution_mismatch: 500,
+  decision_outcome_unknown: 503,
+};
+
 export function mockWorkPlugin(): Plugin {
   const approvals = structuredClone(seedApprovals);
   return {
@@ -24,7 +36,10 @@ export function mockWorkPlugin(): Plugin {
             error: 'forbidden',
             requiredCapability: req.method === 'POST' ? 'work:approve' : 'work:read',
           });
-        if (mock?.startsWith('error:')) return send(503, { error: mock.slice(6) });
+        if (mock?.startsWith('error:')) {
+          const code = mock.slice(6);
+          return send(decideErrors[code] ?? 500, { error: code });
+        }
         if (path === '/status' && req.method === 'GET') return send(200, { enabled: mock !== 'disabled' });
         if (path === '/inbox' && req.method === 'GET')
           return send(200, {
@@ -101,6 +116,10 @@ export function mockWorkPlugin(): Plugin {
         }
         const decideId = path.match(/^\/approvals\/([^/]+)\/decision$/)?.[1];
         if (decideId && req.method === 'POST') {
+          if (mock?.startsWith('decide:')) {
+            const code = mock.slice(7);
+            return send(decideErrors[code] ?? 500, { error: code });
+          }
           const a = approvals.find((x) => x.id === decideId);
           if (!a) return send(404, { error: 'not_found' });
           let raw = '';
@@ -129,7 +148,7 @@ export function mockWorkPlugin(): Plugin {
           a.canDecide = false;
           a.cannotDecideReason = 'not_pending';
           a.decidedAt = new Date().toISOString();
-          a.decidedBy = 'Sample Decider B';
+          a.decidedBy = 'approver.b@example.test';
           a.decisionComment = body.comment ?? null;
           return send(200, { ok: true, approvalId: a.id, decision: body.decision });
         }

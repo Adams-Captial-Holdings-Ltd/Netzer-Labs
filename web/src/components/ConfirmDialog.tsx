@@ -1,14 +1,13 @@
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 
-interface ConfirmDialogProps {
+type ConfirmDialogProps = {
   /** Controls visibility. When false the dialog renders nothing. */
   open: boolean;
   /** Heading shown at the top of the dialog. */
   title: string;
   /** Body copy explaining the consequence of confirming. */
   message: string;
-  /** Optional exact phrase to type before confirming. Matching is exact (trimmed). */
-  confirmPhrase?: string;
+
   /** Label for the confirm button. Defaults to "Confirm". */
   confirmLabel?: string;
   /** Style the confirm action as destructive (red). */
@@ -17,7 +16,7 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   /** Called on Cancel, Escape, or overlay click. */
   onCancel: () => void;
-}
+} & ({ confirmPhrase: string; simple?: never } | { simple: true; confirmPhrase?: never });
 
 /**
  * A modal with an optional type-to-confirm gate for high-impact actions.
@@ -53,6 +52,14 @@ export function ConfirmDialog({
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
+      if (e.key === 'Tab' && overlayRef.current) {
+        const controls = [...overlayRef.current.querySelectorAll<HTMLElement>('input, button:not(:disabled)')];
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (!first || !last) return;
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
     };
     document.addEventListener('keydown', handler);
     document.body.style.overflow = 'hidden';

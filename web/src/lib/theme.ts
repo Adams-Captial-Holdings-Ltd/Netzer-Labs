@@ -71,6 +71,8 @@ export interface Brand {
 // hue used by charts/inputs (--color-info, cyan 500). When a brand field is
 // unset we fall back to these exact values so the UI matches today's look.
 export const DEFAULT_PRIMARY = '#6366f1';
+const STOCK_PRIMARY_DARK = '#818cf8';
+const STOCK_PRIMARY_LIGHT = DEFAULT_PRIMARY;
 export const DEFAULT_ACCENT = '#06b6d4';
 export const DEFAULT_COMPANY_NAME = 'Netzar OS';
 // The sidebar subtitle shown under the company name when a theme doesn't set its
@@ -172,6 +174,7 @@ function rgba(hex: string, alpha: number): string {
 // mode; dark mode lifts it before choosing the text and hover shade.
 /** WCAG relative luminance chooses the stronger of black and white on a brand fill. */
 export function primaryTextFor(hex: string): '#000000' | '#ffffff' {
+  if (!isHexColor(hex)) return '#ffffff';
   const { r, g, b } = hexToRgb(hex);
   const linear = (channel: number) => {
     const v = channel / 255;
@@ -190,9 +193,9 @@ export function applyBrand() {
 
   // The base fill follows the active theme. Text and hover track its contrast.
   if (primary === null) {
-    const stockFill = isDark ? '#818cf8' : DEFAULT_PRIMARY;
+    const stockFill = isDark ? STOCK_PRIMARY_DARK : STOCK_PRIMARY_LIGHT;
     root.style.setProperty('--color-text-inverse', primaryTextFor(stockFill));
-    root.style.setProperty('--color-primary-hover', shade(stockFill, 1.12));
+    root.style.setProperty('--color-primary-hover', shade(stockFill, primaryTextFor(stockFill) === '#000000' ? 1.12 : 0.82));
     root.style.removeProperty('--color-primary');
     root.style.removeProperty('--color-primary-light');
     root.style.removeProperty('--color-primary-glow');
