@@ -417,6 +417,7 @@ export class ComputeStack extends Stack implements ComputeOutputs {
         TABLE_INTER_AGENT_TASKS: RESOURCE_NAMES.ddb.interAgentTasks,
         TABLE_COMPACTION_EVENTS: RESOURCE_NAMES.ddb.compactionEvents,
         TABLE_QUEUE_LEASE: RESOURCE_NAMES.ddb.queueLease,
+        TABLE_EFFECT_LEDGER: RESOURCE_NAMES.ddb.effectLedger,
         TABLE_SPEND_LEDGER: RESOURCE_NAMES.ddb.spendLedger,
         TABLE_IDENTITIES: RESOURCE_NAMES.ddb.identities,
         TABLE_DASHBOARD_TOKENS: RESOURCE_NAMES.ddb.dashboardTokens,

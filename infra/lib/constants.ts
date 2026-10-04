@@ -97,6 +97,7 @@ export function buildResourceNames(suffix: string = APP_NAME_SUFFIX) {
       interAgentTasks: `${app}-inter-agent-tasks`,
       compactionEvents: `${app}-compaction-events`,
       queueLease: `${app}-queue-lease`,
+      effectLedger: `${app}-effect-ledger`,
       // C4: cross-surface identity mapping.
       identities: `${app}-identities`,
       // v5.6: hook idempotency + consolidation spawn ledger + extensions

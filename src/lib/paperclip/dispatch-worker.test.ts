@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { TEST_ISSUE_ID } from './test-helpers.js';
 import type { ProjectedMission } from './mission-projection.js';
 import type { PaperclipDispatchContext } from './types.js';
+import { EffectUnknownError, EffectConflictError, EffectRetryableError } from '../work/executor.js';
 import {
   DISPATCH_CONTEXT_MAX_CHARS,
   DISPATCH_CONTEXT_MAX_ENTRIES,
@@ -176,6 +177,8 @@ describe('parseDispatchBody (pure; the route turns null into a 400)', () => {
   });
 });
 
+
+
 describe('the measured Paperclip push, pinned as a fixture', () => {
   // A CHARACTERIZATION of the vendor's wire shape, in the spirit of
   // tests/contract/artifact-characterization.json but hand-written, because no
@@ -235,6 +238,31 @@ describe('C-13 / A30: neutralizeForPrompt is actually called on inbound text', (
 });
 
 describe('the held attempt', () => {
+  it('runs the dispatched turn as an AI step', async () => {
+    const runTurn = vi.fn(async () => ({ text: 'done' }));
+    await runDispatchAttempt(ctx(), {
+      engine: { getMission: async () => mission() } as never,
+      getSessionFn: async () => null,
+      appendTurnsFn: async () => {},
+      runTurn: runTurn as never,
+    });
+    expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { aiStep: true } }));
+  });
+
+  it('passes the issue and attempt number as correlation', async () => {
+    const runTurn = vi.fn(async () => ({ text: 'done' }));
+    await runDispatchAttempt(ctx(), {
+      attemptNo: 3,
+      engine: { getMission: async () => mission() } as never,
+      getSessionFn: async () => null,
+      appendTurnsFn: async () => {},
+      runTurn: runTurn as never,
+    });
+    expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({
+      correlation: { issueId: TEST_ISSUE_ID, attemptNo: 3 },
+    }));
+  });
+
   it('passes caller history and the genuine run id to a machine turn, then appends the answer', async () => {
     const runTurn = vi.fn(async () => ({ text: 'done', costUsd: 0, toolCallCount: 0 }));
     const appendTurnsFn = vi.fn(async () => {});
@@ -380,4 +408,20 @@ describe('source guards on the dispatch path', () => {
       /deps\.runTurn \?\? runAgentTurn/,
     );
   });
+});
+
+describe('executor errors on the dispatch path', () => {
+  for (const [error, code, status, retryable] of [
+    [new EffectUnknownError(), 'effect_unknown', 409, false],
+    [new EffectConflictError(), 'effect_conflict', 409, false],
+    [new EffectRetryableError(), 'effect_retry', 503, true],
+  ] as const) {
+    it(`maps ${code} from a failed turn`, async () => {
+      await expect(runDispatchAttempt(ctx(), {
+        engine: { getMission: async () => mission() } as never,
+        getSessionFn: async () => null,
+        runTurn: (async () => { throw error; }) as never,
+      })).rejects.toMatchObject({ code, status, retryable });
+    });
+  }
 });

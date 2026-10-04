@@ -168,6 +168,7 @@ tools.register('paperclip_add_comment', {
     },
   ),
   async invoke(args, ctx) {
+    if (!ctx.runId) return { text: 'This action needs a Paperclip run. Use the work screens to comment or create tasks.', isError: true };
     // GATE 1, AT INVOKE. The substrate router, read per call. With the legacy
     // DynamoDB board active there is no comment thread to write to, and
     // pretending otherwise would silently drop the agent's note.
@@ -244,6 +245,7 @@ tools.register('paperclip_create_subtask', {
     },
   ),
   async invoke(args, ctx) {
+    if (!ctx.runId) return { text: 'This action needs a Paperclip run. Use the work screens to comment or create tasks.', isError: true };
     if (!paperclipRoutingEnabled()) {
       return { text: formatWrongSubstrate(), isError: true };
     }

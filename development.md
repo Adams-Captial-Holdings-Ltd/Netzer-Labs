@@ -64,7 +64,7 @@ state lives in DynamoDB and S3.
   proxies `/api` to the orchestrator.
 - **Backend**: Hono on `@hono/node-server` (`src/index.ts`), port 3000, plus a
   raw WebSocket upgrade for the Jarvis voice relay.
-- **Database**: DynamoDB, 32 tables, single table style with `PK`/`SK`.
+- **Database**: DynamoDB, 33 tables, single table style with `PK`/`SK`.
 - **Object storage**: S3 for agent prompts, media, vectors and branding.
 - **Auth**: bearer token, plus optional SES magic links. No Cognito at runtime.
 - **AI**: Amazon Bedrock (Converse / ConverseStream) for every agent turn.
@@ -81,7 +81,7 @@ flowchart LR
     Orch --> Floci["Floci :4566<br/>local AWS emulator"]
 
     subgraph FL ["Inside Floci"]
-        DDB[("DynamoDB<br/>32 tables")]
+        DDB[("DynamoDB<br/>33 tables")]
         S3[("S3<br/>4 buckets")]
         SQS["SQS + SNS"]
         SM["Secrets Manager + KMS"]
@@ -170,7 +170,7 @@ created .env from .env.local.example
 starting Floci emulator...
  Container netzer-os-floci  Healthy
 Provisioning local emulator at http://127.0.0.1:4566
-  DynamoDB   32 created, 0 already present (32 tables)
+  DynamoDB   33 created, 0 already present (33 tables)
   S3         4 created, 0 already present
   SNS topic  arn:aws:sns:us-east-1:000000000000:claudeclaw-config-invalidation
   SQS queue  http://127.0.0.1:4566/000000000000/claudeclaw-scheduled-fire
@@ -306,7 +306,7 @@ State is **in memory by default**, so every restart is a clean slate and
 
 ### Provisioning
 
-`scripts/local/provision.ts` creates the 32 DynamoDB tables, 4 S3 buckets, the
+`scripts/local/provision.ts` creates the 33 DynamoDB tables, 4 S3 buckets, the
 config invalidation SNS topic and the scheduled fire SQS queue. It is idempotent.
 
 Table schemas are **not hand written**. `scripts/local/table-schemas.ts`
@@ -335,7 +335,7 @@ Note: Vite binds `localhost`, which resolves to IPv6 `::1` on macOS. Use
 ## Database
 
 - **Engine**: DynamoDB, emulated by Floci. There is no SQL database.
-- **Tables**: 32, all `PAY_PER_REQUEST`, mostly `PK` (S) + `SK` (S) with
+- **Tables**: 33, all `PAY_PER_REQUEST`, mostly `PK` (S) + `SK` (S) with
   `GSI1PK`/`GSI1SK` style indexes. Exceptions found in the schema:
   `claudeclaw-jarvis-tickets` keys on `ticket`, and `claudeclaw-jarvis-ledger`
   has a NUMBER sorted GSI on `expiresAt`.
@@ -872,7 +872,7 @@ Things that are not obvious from the README and cost real time to establish.
 4. **`infra/lib/constants.ts` is the single source of truth for every resource
    name**, via `buildResourceNames()`. `infra/lib/dynamo-stack.ts` is the source
    of truth for schemas, and its header comment claiming "All 14 DynamoDB
-   tables" is stale: it creates 32.
+   tables" is stale: it creates 33.
 5. **The CDK stack can be synthesized offline** and read for exact table
    schemas. This is what the local provisioner does, which is why it cannot
    drift from `infra/`.

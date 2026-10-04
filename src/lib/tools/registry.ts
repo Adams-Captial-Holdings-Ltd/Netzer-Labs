@@ -21,6 +21,7 @@ export interface ToolContext {
   requestId?: string;
   /** Genuine caller-held Paperclip run id. Ordinary chat turns omit it. */
   runId?: string;
+  turnId?: string;
   /** Speaker id if known (Slack user / Telegram chat); used for audit attribution. */
   userId?: string;
   /** Surface this turn came from — lets tools tailor side effects. */
@@ -110,6 +111,7 @@ export interface ToolHandler {
   invoke: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
   /** Allowlist gate. Only agents in this set get the tool. Empty = all. */
   allowedAgents?: Set<string>;
+  readOnly?: boolean;
 }
 
 class ToolRegistry {
@@ -117,6 +119,10 @@ class ToolRegistry {
 
   register(name: string, handler: ToolHandler): void {
     this.tools.set(name, handler);
+  }
+
+  isReadOnly(name: string): boolean {
+    return this.tools.get(name)?.readOnly === true;
   }
 
   /** Bedrock toolConfig.tools list filtered for a given agent. */

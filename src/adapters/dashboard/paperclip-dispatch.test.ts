@@ -117,4 +117,11 @@ describe('held dispatch route', () => {
     const route = await readFile(new URL('./paperclip-dispatch.ts', import.meta.url), 'utf8');
     expect(route).not.toMatch(/hasCapability|requiredRole|authz-matrix|auth\/permissions/);
   });
+  it('passes the attempt handle number to work as its third argument', async () => {
+    const h = harness();
+    await h.send(h.body);
+    expect(h.work).toHaveBeenCalledTimes(1);
+    expect((h.work as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][2]).toBe(h.map.get(ISSUE)?.attemptNo);
+  });
+
 });

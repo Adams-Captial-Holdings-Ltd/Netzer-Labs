@@ -209,6 +209,7 @@ tools.register('schedule_task', {
 });
 
 tools.register('list_scheduled_tasks', {
+  readOnly: true,
   spec: spec(
     'list_scheduled_tasks',
     'Show scheduled tasks (active, done, and cancelled) for this agent so the user can review them. Use when the user asks "what reminders do I have", "show my scheduled tasks", or "what did you schedule for me".',

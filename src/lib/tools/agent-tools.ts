@@ -304,6 +304,7 @@ tools.register('log_to_hive', {
 });
 
 tools.register('search_hive', {
+  readOnly: true,
   spec: spec(
     'search_hive',
     'Search the Hive Mind for relevant cross-agent notes. Pass a topic for an exact-match index lookup, or a free-text query for a slower substring scan, or neither for the most recent notes.',

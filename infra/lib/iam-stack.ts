@@ -70,6 +70,7 @@ export class IamStack extends Stack implements IamOutputs {
       props.dynamo.interAgentTasksTable.tableArn,
       props.dynamo.compactionEventsTable.tableArn,
       props.dynamo.queueLeaseTable.tableArn,
+      props.dynamo.effectLedgerTable.tableArn,
       props.dynamo.identitiesTable.tableArn,
       // Dashboard tokens: read at auth time (lookupToken) and written by the
       // root-token seed. Without this grant the fail-closed Jarvis WS handshake

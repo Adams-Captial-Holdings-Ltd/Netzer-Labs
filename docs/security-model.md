@@ -95,6 +95,39 @@ Paperclip, the work engine, runs as a private container beside the orchestrator.
 
 `scripts/paperclip-bootstrap.ts` creates the auditor. **Rotation is manual:** set `lock_auditor_key` to `REPLACE_ME` in the Paperclip secret and run the bootstrap, which creates a new auditor and a new key. Then **roll the orchestrator service** (a new deployment): ECS reads secrets only when a task starts, so a running task keeps the old value (or `REPLACE_ME`) and its lock reads `unknown` until it is replaced. Rotation does not revoke the old key: remove the old auditor's board key and membership in Paperclip after the roll. Residuals: the auditor key is a long-lived read-only member key, and a read-only member can read the full agent rows, which hold the dispatch bearer, so a leak exposes company work data and the means to forge a dispatch from inside Paperclip's security group; the lock reads an http agent's adapter type, not where it points; a violation read at start refuses every start of the orchestrator (a deploy, a scale-out, a crash restart), so one Paperclip toggle can become an outage until it is reverted; a retired auditor's key keeps working as a viewer until an operator revokes it; a bootstrap run that fails before it saves the secret leaves an orphan auditor too; tool gateways are not read at start; a violation that appears while running is caught within 60 s; log redaction covers the known secret field names at the top level and one level down, not arbitrary content.
 
+## AI steps cannot write (step 5)
+
+A turn that Paperclip dispatches is an AI step. An AI step reads, analyzes, recommends and drafts. It does not write to a business system ([ADR 0013](adr/0013-sync-attach-execution-contract.md), "Deterministic writes only"). The agent loop enforces this with a tool policy (`src/lib/tools/tool-policy.ts`, applied in `src/agent/agent-loop.ts`). The dispatch worker (`src/lib/paperclip/dispatch-worker.ts`) runs every dispatched turn with `toolPolicy: { aiStep: true }`.
+
+- **Built-in tools: default deny.** In an AI step, a built-in tool runs only when its handler is marked `readOnly: true`. An unmarked tool counts as a write, and so does a tool the registry does not know. Only a handler that creates, updates, deletes or sends nothing on any store or outside system may be marked. The marked tools are `get_time`, `list_agents`, `dynamodb_query`, `search_hive`, `list_memories`, `search_memories`, `list_missions`, `salesforce_query`, `list_scheduled_tasks` and `s3_vectors_search`. `read_artifact` and `web_search` are not marked, because their handlers write audit rows or can disable a pattern, so an AI step cannot call them.
+- **Remote tools.** In an AI step, a remote (MCP) tool runs only when the role allowlist names it. With no allowlist, every remote tool is denied in an AI step.
+- **Role allowlist.** The allowlist is the top-level `tools` key in the agent's `agents/<id>/agent.yaml` in the config bucket, loaded with the agent's other config (`src/lib/config/agent-loader.ts`). It applies in every turn, not only in AI steps. The loader parses the file as YAML and reads only that key. These cases hold:
+  - A missing `agent.yaml` is normal. It means no allowlist.
+  - An empty file, a file with only comments, and a file with no top-level `tools` key mean no allowlist.
+  - A `tools` value that is a list of strings is the allowlist. An empty list (`tools: []`) allows nothing.
+  - Any other shape denies every tool: a value that is not a list of strings, a top-level value that is not a mapping, or YAML that does not parse. The loader logs a warning with the agent ID and returns an empty list.
+  - A storage error other than "not found" while reading the file fails the turn with `AgentConfigUnavailableError`. The result is not cached, so the next turn reads the file again.
+
+  An AI step stays default-deny when there is no allowlist, so a missing allowlist never lets an AI step write. An allowlist cannot grant a write to an AI step: a name on the list still has to be read-only, or remote and named, to run there.
+- **Two checks.** The policy is applied to the list of tools offered to the model, and again at dispatch, because the model can name a tool that was never offered. The existing per-agent `allowedAgents` check and the War Room tool blocklist still apply.
+- **Denied calls.** A denied call is not run. The model gets an error tool result, and the call is audited as `tool_invoke` with `result: blocked` and `detail.reason` set to `not_in_role_allowlist` or `write_denied_in_ai_step`. The warning log line holds IDs and the reason only.
+- **Agent Paperclip writes need a run.** `paperclip_add_comment` and `paperclip_create_subtask` refuse before any Paperclip call when the turn holds no run (A109, A119). Humans act through their own keys (step 6) and the work screens (step 7).
+
+Every turn has a `turnId`, minted when `runAgentTurn` starts. It is returned on the turn result, passed to the tools, written in the turn's log lines and written in the `agent_turn` audit row with `runId`, `issueId` and `attemptNo` when the caller gave them.
+
+Every tool call writes one `tool_invoke` audit row with the tool name, the agent, the chat, the surface, the result (`ok`, `error` or `blocked`) and a `detail` of `turnId`, `toolCallId`, `argsHash` (a sha256 of the arguments) and the run, issue and attempt IDs when known. A row never holds the arguments, the result or error text. The write is fire-and-forget, so a failing audit store never breaks a turn, and the `audit_log_disabled` kill switch can drop these rows. A few tool handlers (for example the Paperclip tools and `send_email`) also write their own `tool_invoke` row, so one call can have two rows.
+
+Known limits, recorded and not fixed in step 5 (they are taken up in step 16, security and audit depth):
+
+- `tool_invoke` rows are not in the always-audited set, so the `audit_log_disabled` kill switch drops them.
+- Some handlers write a second `tool_invoke` row of their own, so one call can have two rows.
+- The effect ledger table shares the task role's general table grant, which includes delete and scan.
+- A read error on an agent's `CLAUDE.md` still falls back to the built-in persona. The allowlist is read separately from `agent.yaml` and fails closed (above).
+- A remote tool name that is cut to fit the name limit can map two remote tools to one name (this was already so before step 5).
+- `--by` on `pack effect resolve` is self-asserted. In a customer's account the customer admin runs the command (decision 18).
+
+Writes made through the effect executor are audited separately. `effect_applied`, `effect_unknown` and `effect_resolved` are always-audited actions and carry IDs and hashes only (see the ADR). The executor is a library in step 5; the completion write on the dispatch path is not ledgered yet.
+
 ## Surface authentication
 
 - **Slack:** HMAC signature verification on the raw body with a 5-minute replay window, on `/slack/events`, `/slack/commands`, and `/slack/interactive`. A missing signing secret fails **closed** (requests rejected, 401). Verification is unconditional — there is no `slack_signature_check_disabled` kill switch (it was removed as an auth-bypass primitive); break-glass for a broken secret is to close ingress, not to accept unsigned traffic.

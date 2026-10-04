@@ -1,10 +1,12 @@
 /** Frozen acceptance tests for the `pack` CLI (Work Platform step 3, gate s3-proof). */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runPackCli } from './pack.js';
+import { createExecutor, payloadHash } from '../src/lib/work/executor.js';
+import type { EffectRow, EffectRows } from '../src/lib/work/effect-ledger.js';
 
 const VALID = join(dirname(fileURLToPath(import.meta.url)), '../tests/fixtures/packs/valid');
 const scratch = mkdtempSync(join(tmpdir(), 'pack-cli-test-'));
@@ -12,7 +14,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function run(argv: string[]): { code: number; lines: string[] } {
   const lines: string[] = [];
-  const code = runPackCli(argv, (line) => lines.push(line));
+  const code = runPackCli(argv, (line) => lines.push(line)) as number;
   return { code, lines };
 }
 function badPack(): string {
@@ -54,5 +56,124 @@ describe('pack CLI', () => {
   it('S3-C12 is wired as `npm run pack`', () => {
     const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8'));
     expect(pkg.scripts.pack).toBe('tsx scripts/pack.ts');
+  });
+});
+
+describe('effect review cases', () => {
+  const key = { caseKey: 'case-1', stage: 'intake', step: 'write', stageEntryNo: 2 };
+  const row: EffectRow = { kind: 'effect', key, state: 'unknown', payloadHash: 'hash',
+    version: 1, createdAt: 0, updatedAt: 1_750_000_000_000 };
+  const call = async (args: string[], executor: Pick<ReturnType<typeof createExecutor>, 'listUnknown' | 'resolve'>) => {
+    const lines: string[] = [];
+    const code = await runPackCli(args, (line) => lines.push(line), { executor });
+    return { code, lines };
+  };
+  const args = ['effect', 'resolve', 'case-1', 'intake', 'write', '2', '--applied', '--by', 'user-ana'];
+
+  it('effect list failure exits 1 with one safe reason line', async () => {
+    const executor = { listUnknown: vi.fn().mockRejectedValue(new Error('private detail')), resolve: vi.fn() };
+    expect(await call(['effect', 'list'], executor)).toEqual({ code: 1, lines: ['Error'] });
+  });
+
+  it('a non-unknown resolve names its reason code', async () => {
+    const executor = createExecutor({ rows: { get: async () => ({ ...row, state: 'applied' }),
+      create: async () => false, replace: async () => false, listUnknown: async () => [],
+      getDraft: async () => undefined, createDraft: async () => false },
+    isDraining: () => false, audit: async () => {}, now: Date.now });
+    expect(await call(args, executor)).toEqual({ code: 1, lines: ['EffectResolveError: not_unknown'] });
+  });
+
+  it('rejects invalid effect commands and resolver arguments', async () => {
+    const executor = { listUnknown: vi.fn(), resolve: vi.fn() };
+    const invalid = [
+      ['effect'], ['effect', 'bogus'], ['effect', 'list', 'extra'],
+      ...['01', 'abc', '-1', '9007199254740993'].map((entry) => [...args.slice(0, 5), entry, ...args.slice(6)]),
+      [...args.slice(0, 7), '--by', '--applied'],
+    ];
+    for (const entry of invalid) expect((await call(entry, executor)).code).toBe(2);
+    expect(executor.resolve).not.toHaveBeenCalled();
+  });
+
+  it('prints no trailing field for absent issueId and sanitizes control characters', async () => {
+    const executor = { listUnknown: vi.fn(async () => [{ ...row, key: { ...key, caseKey: 'case\n1' } }]), resolve: vi.fn() };
+    const output = await call(['effect', 'list'], executor);
+    expect(output.lines).toEqual([`case?1 intake write 2 ${new Date(row.updatedAt).toISOString()}`]);
+  });
+
+  it('effect resolve end to end clears an unknown row', async () => {
+    const effects = new Map<string, EffectRow>([['case', { ...row, payloadHash: payloadHash(null) }]]);
+    const rows: EffectRows = {
+      get: async () => effects.get('case'), create: async () => false,
+      replace: async (_key, version, next) => { if (effects.get('case')?.version !== version) return false;
+        effects.set('case', next); return true; },
+      listUnknown: async () => [...effects.values()].filter((item) => item.state === 'unknown'),
+      getDraft: async () => undefined, createDraft: async () => false,
+    };
+    const executor = createExecutor({ rows, isDraining: () => false, audit: async () => {}, now: Date.now });
+    expect((await call(['effect', 'list'], executor)).lines).toHaveLength(1);
+    expect(await call(args, executor)).toEqual({ code: 0, lines: ['Effect resolved'] });
+    expect(await call(['effect', 'list'], executor)).toEqual({ code: 0, lines: ['No unknown effects'] });
+    const apply = vi.fn(async () => 'new');
+    await executor.runEffect({ key, payload: null, fence: async () => {}, apply });
+    expect(apply).not.toHaveBeenCalled();
+  });
+});
+
+describe('pack effect', () => {
+  const key = { caseKey: 'case-1', stage: 'intake', step: 'write', stageEntryNo: 2 };
+  const row = { kind: 'effect' as const, key, state: 'unknown' as const, payloadHash: 'secret-hash',
+    result: 'secret-result', issueId: 'issue-1', version: 1, createdAt: 0, updatedAt: 1_750_000_000_000 };
+  function fake() {
+    return { listUnknown: vi.fn(async () => [row]), resolve: vi.fn(async () => {}) };
+  }
+  async function runEffect(argv: string[], executor: ReturnType<typeof fake>) {
+    const lines: string[] = [];
+    const code = await runPackCli(argv, (line) => lines.push(line), { executor });
+    return { code, lines };
+  }
+
+  it('effect list prints IDs only and no result text', async () => {
+    const executor = fake();
+    const output = await runEffect(['effect', 'list'], executor);
+    expect(output.code).toBe(0);
+    expect(output.lines).toEqual([`case-1 intake write 2 ${new Date(row.updatedAt).toISOString()} issue-1`]);
+    expect(output.lines.join(' ')).not.toContain('secret');
+    executor.listUnknown.mockResolvedValueOnce([]);
+    expect((await runEffect(['effect', 'list'], executor)).lines).toEqual(['No unknown effects']);
+  });
+
+  it('effect resolve applied calls the executor with parsed key and user', async () => {
+    const executor = fake();
+    const output = await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '2', '--applied', '--by', 'user-1'], executor);
+    expect(output.code).toBe(0);
+    expect(output.lines).toHaveLength(1);
+    expect(executor.resolve).toHaveBeenCalledWith(key, 'applied', 'user-1');
+  });
+
+  it('effect resolve not applied passes the other outcome', async () => {
+    const executor = fake();
+    expect((await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '2', '--not-applied', '--by', 'user-1'], executor)).code).toBe(0);
+    expect(executor.resolve).toHaveBeenCalledWith(key, 'not_applied', 'user-1');
+  });
+
+  it('effect resolve executor error exits 1 without leaking its message', async () => {
+    const executor = fake();
+    executor.resolve.mockRejectedValueOnce(Object.assign(new Error('private details'), { name: 'EffectUnknownError' }));
+    expect(await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '2', '--applied', '--by', 'user-1'], executor))
+      .toEqual({ code: 1, lines: ['EffectUnknownError'] });
+  });
+
+  it('effect resolve bad arguments exit 2 and never call resolve', async () => {
+    const executor = fake();
+    const args = ['effect', 'resolve', 'case-1', 'intake', 'write', '2'];
+    for (const suffix of [[], ['--applied'], ['--applied', '--not-applied', '--by', 'user-1'],
+      ['--applied', '--by'], ['--applied', '--by', 'user-1', 'extra']]) {
+      const output = await runEffect([...args, ...suffix], executor);
+      expect(output.code).toBe(2);
+      expect(output.lines).toHaveLength(1);
+      expect(output.lines[0]).toMatch(/^Usage:/);
+    }
+    expect((await runEffect(['effect', 'resolve', 'case-1', 'intake', 'write', '0', '--applied', '--by', 'user-1'], executor)).code).toBe(2);
+    expect(executor.resolve).not.toHaveBeenCalled();
   });
 });

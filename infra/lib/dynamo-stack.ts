@@ -51,6 +51,7 @@ export class DynamoStack extends Stack implements DynamoOutputs {
   public readonly interAgentTasksTable: Table;
   public readonly compactionEventsTable: Table;
   public readonly queueLeaseTable: Table;
+  public readonly effectLedgerTable: Table;
   public readonly spendLedgerTable: Table;
   /** C4: cross-surface identity mapping. */
   public readonly identitiesTable: Table;
@@ -266,6 +267,19 @@ export class DynamoStack extends Stack implements DynamoOutputs {
       tableName: RESOURCE_NAMES.ddb.queueLease,
       partitionKey: { name: 'PK', type: AttributeType.STRING },
       timeToLiveAttribute: 'ttl',
+    });
+
+    this.effectLedgerTable = new Table(this, 'EffectLedgerTable', {
+      ...baseProps,
+      tableName: RESOURCE_NAMES.ddb.effectLedger,
+      partitionKey: { name: 'PK', type: AttributeType.STRING },
+      sortKey: { name: 'SK', type: AttributeType.STRING },
+    });
+    this.effectLedgerTable.addGlobalSecondaryIndex({
+      indexName: 'gsi1-unknown',
+      partitionKey: { name: 'GSI1PK', type: AttributeType.STRING },
+      sortKey: { name: 'GSI1SK', type: AttributeType.STRING },
+      projectionType: ProjectionType.ALL,
     });
 
     // ── spend_ledger (C2-full, invariant I3) ────────────────────────
@@ -514,6 +528,7 @@ export class DynamoStack extends Stack implements DynamoOutputs {
       InterAgentTasks: this.interAgentTasksTable,
       CompactionEvents: this.compactionEventsTable,
       QueueLease: this.queueLeaseTable,
+      EffectLedger: this.effectLedgerTable,
       SpendLedger: this.spendLedgerTable,
       Identities: this.identitiesTable,
       HookIdempotency: this.hookIdempotencyTable,

@@ -9,7 +9,7 @@
  * at TOOL_TURN_LIMIT to avoid runaway loops.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   ConverseCommand,
   type ContentBlock,
@@ -30,6 +30,7 @@ import {
 import { pickDefaultModel, turnCost, resolveModel, resolveModelInvocation } from '../lib/bedrock/models.js';
 import { loadAgent } from '../lib/config/agent-loader.js';
 import { tools, type ToolMedia, type ToolResult } from '../lib/tools/registry.js';
+import { toolDecision } from '../lib/tools/tool-policy.js';
 import type { ArtifactDescriptor } from '../lib/chat/artifacts-repo.js';
 import { mcpToolsFor, isMcpToolName, invokeMcpTool } from '../lib/mcp/mcp-tools.js';
 import { logger, truncateForLog } from '../observability/logger.js';
@@ -213,6 +214,8 @@ export interface AgentTurnRequest {
   requestId?: string;
   /** Genuine caller-held Paperclip run id. Chat turns leave this absent. */
   runId?: string;
+  toolPolicy?: { aiStep?: boolean };
+  correlation?: { issueId?: string; attemptNo?: number };
   userText: string;
   history: Turn[];
   modelOverride?: string;
@@ -511,6 +514,7 @@ export interface TurnRefusal {
 }
 
 export interface AgentTurnResponse {
+  turnId: string;
   stopped?: true;
   text: string;
   modelId: string;
@@ -756,8 +760,9 @@ export async function scanOutboundReply(
  * is the supported way to detect them; see `AgentTurnResponse.refusal`.
  */
 export async function runAgentTurn(req: AgentTurnRequest): Promise<AgentTurnResponse> {
+  const turnId = randomUUID();
   // A turn stopped before it began starts no paid work: no admission, no hold.
-  if (req.abortSignal?.aborted) return stoppedBeforeStart(req);
+  if (req.abortSignal?.aborted) return stoppedBeforeStart(req, turnId);
   const spendAdmission = await admitTurnSpend({
     idempotencyKey: randomUUID(),
     attribution: {
@@ -783,7 +788,7 @@ export async function runAgentTurn(req: AgentTurnRequest): Promise<AgentTurnResp
     throw new CostCapExceededError(blocked?.spendUsd ?? Number.NaN, blocked?.capUsd ?? Number.NaN);
   }
   try {
-    const result = await runAdmittedTurn(req, spendAdmission);
+    const result = await runAdmittedTurn(req, spendAdmission, turnId);
     // Refusal short-circuits (frozen / rate-limited) return without spending;
     // release the un-spent hold. No-op when the body already settled.
     void spendAdmission.abort();
@@ -795,8 +800,9 @@ export async function runAgentTurn(req: AgentTurnRequest): Promise<AgentTurnResp
 }
 
 /** The response of a turn stopped before it began: nothing ran, nothing was reserved. */
-function stoppedBeforeStart(req: AgentTurnRequest): AgentTurnResponse {
+function stoppedBeforeStart(req: AgentTurnRequest, turnId: string): AgentTurnResponse {
   return {
+    turnId,
     text: '', stopped: true, modelId: req.modelOverride ?? '', costUsd: 0, latencyMs: 0,
     inputTokens: 0, outputTokens: 0, toolCallCount: 0, blocked: false,
   };
@@ -886,8 +892,12 @@ export async function engageEmergencyHalt(ctx: {
 async function runAdmittedTurn(
   req: AgentTurnRequest,
   spendAdmission: TurnSpendAdmission,
+  turnId: string,
 ): Promise<AgentTurnResponse> {
   const surface = req.surface ?? 'system';
+  const auditIds = { turnId, ...(req.runId ? { runId: req.runId } : {}),
+    ...(req.correlation?.issueId ? { issueId: req.correlation.issueId } : {}),
+    ...(req.correlation?.attemptNo !== undefined ? { attemptNo: req.correlation.attemptNo } : {}) };
   // Absent = 'machine'. Opt-OUT by default: a caller gains the ability to halt
   // the fleet only by declaring `origin: 'human_chat'` (see `TurnOrigin`).
   const origin: TurnOrigin = req.origin ?? 'machine';
@@ -939,6 +949,7 @@ async function runAdmittedTurn(
     });
     if (req.onChunk) req.onChunk(text);
     return {
+      turnId,
       text,
       modelId: '',
       costUsd: 0,
@@ -970,6 +981,7 @@ async function runAdmittedTurn(
       'Sessions are temporarily frozen for maintenance. Your message was not processed. Please try again shortly.';
     if (req.onChunk) req.onChunk(refusal);
     return {
+      turnId,
       text: refusal,
       modelId: '',
       costUsd: 0,
@@ -1007,6 +1019,7 @@ async function runAdmittedTurn(
       'You have reached the request rate limit. Please wait a moment and try again.';
     if (req.onChunk) req.onChunk(refusal);
     return {
+      turnId,
       text: refusal,
       modelId: '',
       costUsd: 0,
@@ -1071,10 +1084,20 @@ async function runAdmittedTurn(
   // the model from planning around a tool it can't call; the dispatch gate in
   // the tool loop backstops it.
   const blockedToolNames = new Set(req.blockedTools ?? []);
-  const toolList =
+  const unblockedToolList =
     blockedToolNames.size > 0
       ? rawToolList.filter((t) => !blockedToolNames.has(t.toolSpec?.name ?? ''))
       : rawToolList;
+  const applyToolPolicy = req.toolPolicy !== undefined || agent.tools !== undefined;
+  const decisionFor = (name: string) => toolDecision(name, {
+    aiStep: req.toolPolicy?.aiStep,
+    allow: agent.tools,
+    remote: isMcpToolName(name),
+    readOnly: req.toolPolicy?.aiStep && !isMcpToolName(name) ? tools.isReadOnly(name) : false,
+  });
+  const toolList = applyToolPolicy
+    ? unblockedToolList.filter((t) => decisionFor(t.toolSpec?.name ?? '').allowed)
+    : unblockedToolList;
 
   // Guardrail kill switch OR a per-turn skip (War Room): drop the configured
   // guardrail. req.skipGuardrail is scoped to this one turn, so it never
@@ -1103,6 +1126,7 @@ async function runAdmittedTurn(
     {
       agentId: req.agentId,
       chatId: req.chatId,
+      turnId,
       modelId,
       historyLen: req.history.length,
       tools: toolList.length,
@@ -1214,10 +1238,11 @@ async function runAdmittedTurn(
     await writeAudit({
       ...usage, action: 'agent_turn', result: 'ok',
       detail: { stopped: true, toolCallCount, cacheReadInputTokens: totalCacheRead,
-        cacheWriteInputTokens: totalCacheWrite, ...(req.runId ? { runId: req.runId } : {}) },
+        cacheWriteInputTokens: totalCacheWrite, ...auditIds },
     });
     const text = lastEmitted ? await scanOutboundReply(lastEmitted, { agentId: req.agentId, chatId: req.chatId }) : '';
     return {
+      turnId,
       text, stopped: true, modelId, costUsd, latencyMs, inputTokens: totalIn, outputTokens: totalOut,
       toolCallCount, blocked: false,
       ...(turnArtifacts.length > 0 ? { artifacts: turnArtifacts } : {}),
@@ -1267,6 +1292,7 @@ async function runAdmittedTurn(
       {
         agentId: req.agentId,
         chatId: req.chatId,
+        turnId,
         modelId,
         inputTokens: initial.inputTokens,
         outputTokens: initial.outputTokens,
@@ -1311,7 +1337,7 @@ async function runAdmittedTurn(
       detail: {
         cacheReadInputTokens: initial.cacheReadInputTokens,
         cacheWriteInputTokens: initial.cacheWriteInputTokens,
-        ...(req.runId ? { runId: req.runId } : {}),
+        ...auditIds,
       },
       ...(req.userId ? { userId: req.userId } : {}),
       result: 'ok',
@@ -1324,6 +1350,7 @@ async function runAdmittedTurn(
           chatId: req.chatId,
         });
     return {
+      turnId,
       // Never return empty: a stored empty turn makes Bedrock reject every
       // later request in this chat. `max_tokens` with no text is the reply
       // that got cut off mid-tool-call, so say that rather than "(no
@@ -1343,7 +1370,7 @@ async function runAdmittedTurn(
   // content blocks and can dispatch tools. Each tool result extends
   // the messages array; loop until end_turn or limit.
   logger.info(
-    { agentId: req.agentId, chatId: req.chatId },
+    { agentId: req.agentId, chatId: req.chatId, turnId },
     'tool-use detected, switching to non-streaming dispatch',
   );
 
@@ -1450,7 +1477,7 @@ async function runAdmittedTurn(
       const tu = block.toolUse;
       const args = (tu.input as Record<string, unknown> | undefined) ?? {};
       logger.info(
-        { agentId: req.agentId, chatId: req.chatId, tool: tu.name, argCount: Object.keys(args).length },
+        { agentId: req.agentId, chatId: req.chatId, turnId, tool: tu.name, argCount: Object.keys(args).length },
         'invoking tool',
       );
       try {
@@ -1468,6 +1495,7 @@ async function runAdmittedTurn(
       const toolCtx = {
         agentId: req.agentId,
         chatId: req.chatId,
+        turnId,
         ...(req.userId ? { userId: req.userId } : {}),
         ...(req.surface ? { surface: req.surface } : {}),
         ...(req.runId ? { runId: req.runId } : {}),
@@ -1478,19 +1506,44 @@ async function runAdmittedTurn(
         ...(req.abortSignal ? { abortSignal: req.abortSignal } : {}),
       };
       if (req.abortSignal?.aborted) return stoppedTurn();
-      const result: ToolResult = dispatchKilledMidTurn
-        ? {
-            text: 'Tool use was disabled by a kill switch mid-turn; the call was not executed.',
-            isError: true,
-          }
-        : blockedToolNames.has(tu.name ?? '')
+      const name = tu.name ?? '';
+      const decision = applyToolPolicy ? decisionFor(name) : { allowed: true as const };
+      if (!decision.allowed) {
+        logger.warn({ agentId: req.agentId, chatId: req.chatId, turnId,
+          toolCallId: tu.toolUseId, toolName: name, reason: decision.reason }, 'tool policy denied call');
+      }
+      let result: ToolResult;
+      try {
+        result = dispatchKilledMidTurn
           ? {
-              text: `Tool '${tu.name}' is blocked by this room's tool policy.`,
+              text: 'Tool use was disabled by a kill switch mid-turn; the call was not executed.',
               isError: true,
             }
-          : isMcpToolName(tu.name ?? '')
-            ? await invokeMcpTool(tu.name ?? '', args, toolCtx)
-            : await tools.invoke(tu.name ?? '', args, toolCtx);
+          : !decision.allowed
+            ? { text: `Tool '${name}' is not allowed in this step.`, isError: true }
+          : blockedToolNames.has(name)
+            ? {
+                text: `Tool '${name}' is blocked by this room's tool policy.`,
+                isError: true,
+              }
+            : isMcpToolName(name)
+              ? await invokeMcpTool(name, args, toolCtx)
+              : await tools.invoke(name, args, toolCtx);
+      } catch (error) {
+        logger.warn({ agentId: req.agentId, chatId: req.chatId, turnId,
+          toolCallId: tu.toolUseId, toolName: name,
+          errName: error instanceof Error ? error.name : 'Error' }, 'tool dispatch failed');
+        result = { text: `Tool '${name}' failed.`, isError: true };
+      }
+      void writeAudit({
+        action: 'tool_invoke', toolName: name, agentId: req.agentId, chatId: req.chatId,
+        surface, ...(req.userId ? { userId: req.userId } : {}),
+        result: !decision.allowed || dispatchKilledMidTurn || blockedToolNames.has(name)
+          ? 'blocked' : result.isError ? 'error' : 'ok',
+        detail: { ...auditIds, toolCallId: tu.toolUseId ?? '',
+          argsHash: createHash('sha256').update(JSON.stringify(args)).digest('hex'),
+          ...(!decision.allowed ? { reason: decision.reason } : {}) },
+      }).catch(() => {});
       try {
         req.onToolResult?.({ name: tu.name ?? '', callIndex: toolCallCount - 1, toolUseId: tu.toolUseId ?? '',
           ...toolResultForDisplay(tu.name ?? '', result, redact), isError: !!result.isError });
@@ -1581,14 +1634,14 @@ async function runAdmittedTurn(
         lastText = synthText;
         if (emitModelChunk) emitModelChunk(synthText);
         logger.info(
-          { agentId: req.agentId, chatId: req.chatId, toolCallCount },
+          { agentId: req.agentId, chatId: req.chatId, turnId, toolCallCount },
           'forced synthesis after tool-budget exhaustion',
         );
       }
     } catch (err) {
       if (req.abortSignal?.aborted || (err as { name?: string })?.name === 'AbortError') return stoppedTurn();
       logger.warn(
-        { agentId: req.agentId, chatId: req.chatId, err: err instanceof Error ? err.message : String(err) },
+        { agentId: req.agentId, chatId: req.chatId, turnId, err: err instanceof Error ? err.message : String(err) },
         'forced-synthesis call failed; falling back to placeholder text',
       );
     }
@@ -1608,6 +1661,7 @@ async function runAdmittedTurn(
     {
       agentId: req.agentId,
       chatId: req.chatId,
+      turnId,
       modelId,
       inputTokens: totalIn,
       outputTokens: totalOut,
@@ -1654,7 +1708,7 @@ async function runAdmittedTurn(
       toolCallCount,
       cacheReadInputTokens: totalCacheRead,
       cacheWriteInputTokens: totalCacheWrite,
-      ...(req.runId ? { runId: req.runId } : {}),
+      ...auditIds,
     },
     ...(req.userId ? { userId: req.userId } : {}),
     result: 'ok',
@@ -1669,6 +1723,7 @@ async function runAdmittedTurn(
       });
 
   return {
+    turnId,
     text: safeText,
     modelId,
     costUsd,

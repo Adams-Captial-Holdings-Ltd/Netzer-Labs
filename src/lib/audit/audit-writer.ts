@@ -194,7 +194,10 @@ export interface AuditEvent {
     | 'seat_policy_updated'
     // Power switch: a dashboard-initiated pause of the whole stack (flips kill
     // switches + drains compute via the external power Lambda).
-    | 'power_pause';
+    | 'power_pause'
+    | 'effect_applied'
+    | 'effect_unknown'
+    | 'effect_resolved';
   agentId?: string;
   chatId?: string;
   /** Speaker id when known (Slack user, Telegram chat numeric, dashboard operator). */
@@ -223,6 +226,9 @@ export interface AuditEvent {
  * it is the set of break-glass-proof security events.
  */
 const ALWAYS_AUDITED_ACTIONS: ReadonlySet<AuditEvent['action']> = new Set([
+  'effect_applied',
+  'effect_unknown',
+  'effect_resolved',
   'panic_triggered',
   'panic_restored',
   'panic_repaired',

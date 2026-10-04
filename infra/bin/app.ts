@@ -266,6 +266,7 @@ const backup = new BackupStack(app, `${stackPrefix}-Backup`, {
     dynamo.interAgentTasksTable.tableArn,
     dynamo.compactionEventsTable.tableArn,
     dynamo.queueLeaseTable.tableArn,
+    dynamo.effectLedgerTable.tableArn,
     dynamo.identitiesTable.tableArn,
     dynamo.hookIdempotencyTable.tableArn,
     dynamo.spawnLedgerTable.tableArn,

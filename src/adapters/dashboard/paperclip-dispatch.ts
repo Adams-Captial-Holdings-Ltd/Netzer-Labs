@@ -70,7 +70,7 @@ export interface PaperclipDispatchDeps {
   knownAgents?: () => string[];
   enabledAgents?: () => Promise<readonly string[]>;
   attempts?: ReturnType<typeof createAttemptStore>;
-  work?: (ctx: PaperclipDispatchContext, signal: AbortSignal) => Promise<AttemptOutcome>;
+  work?: (ctx: PaperclipDispatchContext, signal: AbortSignal, attemptNo?: number) => Promise<AttemptOutcome>;
   deliver?: (ctx: PaperclipDispatchContext, outcome: AttemptOutcome) => Promise<void>;
   holdMs?: number;
   pollMs?: number;
@@ -90,7 +90,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
   const readSecret = deps.secret ?? (() => loadEnv().PAPERCLIP_DISPATCH_SECRET);
   const knownAgents = deps.knownAgents ?? listKnownAgents;
   const enabledAgents = deps.enabledAgents ?? defaultEnabledAgents;
-  const work = deps.work ?? ((ctx, signal) => runDispatchAttempt(ctx, { abortSignal: signal }));
+  const work = deps.work ?? ((ctx, signal, attemptNo) => runDispatchAttempt(ctx, { abortSignal: signal, attemptNo }));
   const deliver = deps.deliver ?? deliverOutcome;
   let cachedAttempts = deps.attempts;
   const attempts = () => cachedAttempts ??= createAttemptStore({ rows: dynamoAttemptRows(), holderId: RUNNER_HOLDER_ID, now: Date.now });
@@ -185,7 +185,7 @@ export function buildPaperclipDispatchRouter(deps: PaperclipDispatchDeps = {}): 
     void (async () => {
       try {
         let outcome: AttemptOutcome;
-        try { outcome = await withRenewal(handle, (signal) => work(ctx, signal), true); }
+        try { outcome = await withRenewal(handle, (signal) => work(ctx, signal, handle.attemptNo), true); }
         catch (err) {
           if (err instanceof FencedOutError) throw err;
           const failure = err instanceof DispatchFailure ? err : new DispatchFailure('agent_failed', 500, true);

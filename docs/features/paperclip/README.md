@@ -20,6 +20,14 @@ implemented_by:
   - src/lib/paperclip/task-protection.ts
   - src/lib/paperclip/dispatch-drain.ts
   - src/lib/paperclip/lock-boot.ts
+  - src/lib/work/effect-ledger.ts
+  - src/lib/work/effect-rows-dynamo.ts
+  - src/lib/work/executor.ts
+  - src/lib/tools/tool-policy.ts
+  - src/agent/agent-loop.ts
+  - src/lib/config/agent-loader.ts
+  - src/lib/audit/audit-writer.ts
+  - scripts/pack.ts
   - src/lib/missions/mission-acl.ts
   - src/lib/missions/format.ts
   - src/lib/state/mission-tasks-repo.ts
@@ -44,6 +52,8 @@ implemented_by:
   - infra/lib/paperclip-stack.ts
   - infra/bin/app.ts
   - infra/lib/constants.ts
+  - infra/lib/dynamo-stack.ts
+  - infra/lib/iam-stack.ts
   - .github/workflows/deploy.yml
   - scripts/deploy.ts
   - scripts/teardown.ts
@@ -61,6 +71,12 @@ tested_by:
   - src/lib/paperclip/reconciler.test.ts
   - src/lib/paperclip/dispatch-worker.test.ts
   - src/lib/paperclip/attempt-store.test.ts
+  - src/lib/work/executor.test.ts
+  - src/lib/work/effect-rows-dynamo.test.ts
+  - src/lib/tools/tool-policy.test.ts
+  - src/agent/agent-loop.tool-policy.test.ts
+  - infra/lib/dynamo-stack.effect-ledger.test.ts
+  - scripts/pack.test.ts
   - src/adapters/dashboard/paperclip-dispatch.sync-attach.test.ts
   - src/adapters/dashboard/missions.test.ts
   - src/adapters/dashboard/paperclip-dispatch.test.ts
@@ -159,6 +175,18 @@ Paperclip is live in staging as the missions system of record; the 2026-09-06 li
   the request open, keeps one attempt row per issue, runs the turn, writes the
   outcome to Paperclip with the genuine run id and only then answers 2xx; it
   never answers 202 and never fabricates a run id ([ADR 0013](../../adr/0013-sync-attach-execution-contract.md)).
+- **Safe actions (step 5, built on a branch, not merged).** A write that must
+  not repeat goes through an executor backed by an effect ledger, a DynamoDB
+  table with a frozen key. A retry returns the recorded result, an ambiguous
+  outcome stops as `unknown` until a person runs `pack effect resolve`, and a
+  fenced-out or draining holder writes nothing. The executor is a library: the
+  completion write on the dispatch path is not ledgered yet, because the
+  dispatch carries no case key or stage. Every dispatched turn is an AI step,
+  and an AI step cannot call a write tool: a built-in tool must be marked
+  read-only and a remote tool must be named in the role allowlist. Every turn
+  has a `turnId`, and every tool call writes one `tool_invoke` audit row with
+  IDs and an argument hash ([ADR 0013](../../adr/0013-sync-attach-execution-contract.md),
+  [security model](../../security-model.md#ai-steps-cannot-write-step-5)).
 - **The Missions anti-corruption layer.** The existing four
   `/api/missions*` contracts and capability gates are served through a
   `MissionEngine`, with the legacy handlers retained as one whole router-level
@@ -168,7 +196,7 @@ Paperclip is live in staging as the missions system of record; the 2026-09-06 li
 - **Cross-surface mission parity.** Dashboard, Jarvis, Telegram, Slack, Discord
   and CLI formatting share the same mission vocabulary. Assignment push is an
   honest notification path; the two native Paperclip verbs are exposed through
-  the approved `paperclip_*` tools; successful `paperclip_*` mutations write one `tool_invoke` audit record; mission-tool mutations do not (P49).
+  the approved `paperclip_*` tools; successful `paperclip_*` mutations write one `tool_invoke` audit record of their own, and mission-tool mutations did not (P49). Since step 5 the agent loop also writes one `tool_invoke` row for every tool call.
 - **The widened public Mission model.** The board and every text surface use six
   ordered states (`open`, `in_progress`, `blocked`, `in_review`, `done`,
   `cancelled`) and four priority bands (`critical`, `high`, `medium`, `low`).
@@ -221,6 +249,8 @@ owner delegation) → Phase 8.5 → the same-origin UI/session bridge → Phases
 10–12 → the final legacy retirement. The volatile pass/fail counts and exact
 next action belong in [HANDOFF.md](HANDOFF.md), not this index.
 
+**Added 2026-10-03 (step 5).** The step 5 claims in this README (the effect ledger, the executor, the tool policy, the turn audit and `pack effect`) were checked on 2026-10-03 against the code on `feature/wp-step5-safe-actions` at `42c7a04` (after the review fixes and the cleanup), which is not merged or deployed. The rest of this README is still as of `f0c26fb` and the step 4 claims were added without re-checking the older ones.
+
 **Added 2026-09-29.** The Work Platform record supersedes the pieces of [missions-engine-plan.md](missions-engine-plan.md) that it marks SUPERSEDED, which include the same-origin UI/session bridge (the board bridge is on the [DO NOT BUILD list](do-not-build.md)). Its build order is the [build steps](minimum-sellable-product.md#build-steps). The code claims in this README are still as of `f0c26fb`; the 2026-09-29 record re-verified none of them.
 
 ## 4. Source of truth
@@ -252,6 +282,9 @@ ledger are local, gitignored, per-machine scratch. Do not cite them.
 | Client and engine | `src/lib/paperclip/client.ts`, `config.ts`, `agent-map.ts`, `mission-engine.ts`, `paperclip-mission-engine.ts` | Authenticated API boundary with pagination, timeout/rate-limit errors, retry-safe writes, circuit breaking, actor-key selection and no synthesized run ids |
 | Reconciler | `src/lib/paperclip/reconciler.ts`, `watermark.ts` | Observing poller over the patched feed; overlaps the stored max timestamp, dedupes `(id, updatedAt)`, refuses corrupt or unfiltered feeds, and advances the watermark conditionally |
 | Inbound dispatch | `src/adapters/dashboard/paperclip-dispatch.ts`, `src/lib/paperclip/dispatch-worker.ts` | Constant-time shared-secret check, held request (cap 240 s), per-issue attempt row with a fenced lease (`attempt-store.ts`), completion writer, `pending_dispatch` sweep, drain and scale-in protection (step 4, on a branch); genuine run-id propagation |
+| Effect ledger and executor | `src/lib/work/effect-ledger.ts`, `effect-rows-dynamo.ts`, `executor.ts`, `infra/lib/dynamo-stack.ts` (step 5, on a branch) | `<app>-effect-ledger` table (`PK = CASE#<caseKey>`, `SK = EFFECT#<stage>#<step>#<stageEntryNo>`, drafts under `DRAFT#`, point-in-time recovery, no expiry, sparse `gsi1-unknown` index). Rows are `pending`, `applied`, `retryable` or `unknown`. `runEffect` fences before every write, leaves a `pending` row younger than 270 s alone (`effect_retry`), reads back an older `pending` row before any retry, refuses a changed payload (`EffectConflictError`) and stops an unknown outcome or an unknown stored state (`EffectUnknownError`). An `applied` row keeps `auditPending` until its audit row is written, and a replay repairs a lost audit. `resolve` writes its audit row first. `saveDraftOnce` saves a draft once (at most 300 000 bytes). A library: not wired to the dispatch completion write |
+| Tool policy and turn audit | `src/lib/tools/tool-policy.ts`, `src/lib/tools/registry.ts`, `src/agent/agent-loop.ts`, `src/lib/config/agent-loader.ts`, `src/lib/audit/audit-writer.ts` (step 5, on a branch) | `toolDecision` is default-deny in an AI step (a built-in tool must be `readOnly: true`; a remote tool must be in the role allowlist from `agent.yaml`, read with a YAML parse; a storage error reading the file fails the turn). The loop applies it to the offered tool list and again at dispatch. A denied call is audited `blocked`. Each turn has a `turnId`; each tool call writes one `tool_invoke` row (IDs and an argument hash). `effect_applied`, `effect_unknown` and `effect_resolved` are always audited |
+| `pack effect` | `scripts/pack.ts` (step 5, on a branch) | `pack effect list` prints the unknown rows (IDs only). `pack effect resolve <caseKey> <stage> <step> <stageEntryNo> (--applied \| --not-applied) --by <userId>` clears one. On any failure each prints one line, the error's name (plus the code for `EffectResolveError`), and exits 1 |
 | Missions ACL and privacy | `src/lib/missions/mission-acl.ts` (`canReadBoard`, `canMutateMission`), `src/adapters/dashboard/missions.ts`, `src/lib/tools/privacy-tools.ts` | Preserves the four `/api/missions*` envelopes/capability gates, resolves the public 8-character reference without silent ambiguity, and joins Netzar-side provenance into privacy exports |
 | Mission surfaces and tools | `src/lib/missions/format.ts`, `src/lib/tools/mission-tools.ts`, `src/lib/tools/paperclip-tools.ts` | One status/priority vocabulary across chat surfaces; assignment notification parity; exact approved Paperclip verbs; one audit record per successful mutation |
 | Dashboard and CLI | `web/src/pages/Missions.tsx`, `web/src/lib/glossary.ts`, `scripts/mission.ts` | Six ordered kanban lanes, four priority labels and no due-date rendering; CLI list uses `owner`, create sends the actual route body, and show scans bounded real owner boards because no detail route exists |
@@ -385,7 +418,9 @@ const failure = await paperclip.getHealth().catch((err: unknown) => err);
 - Flipping `CCE_PAPERCLIP_ENABLED` hides legacy DynamoDB missions from the board
   (DL-7, no migration); staging had 2, both cancelled, before the flip.
 - Paperclip 2026.722.0 does not dedupe wakeups by `idempotencyKey`; the orchestrator's guard was the `(runId, issueId)` claim; step 4 replaces it with the per-issue attempt row (`ATTEMPT#<issueId>`; a retry belongs to it by `retryOfRunId`).
-- `tool_invoke` audit rows are written only by tools that call `writeAudit` (`paperclip_add_comment`, `paperclip_create_subtask`); mission tools do not.
+- Since step 5 the agent loop writes one `tool_invoke` audit row for every tool call, with IDs and an argument hash and never the arguments or the result. Some handlers (the `paperclip_*` write tools among them) also write their own row, so a call can have two. The `audit_log_disabled` kill switch can drop `tool_invoke` rows; it cannot drop `effect_applied`, `effect_unknown` or `effect_resolved`.
+- Every Paperclip-dispatched turn is an AI step (`toolPolicy: { aiStep: true }`). In an AI step a built-in tool runs only when its handler is marked `readOnly: true` (10 tools are), and a remote tool runs only when the role allowlist names it. The allowlist (the top-level `tools` key in `agent.yaml`) applies in every turn; an agent with no `tools` key, or no `agent.yaml`, has no allowlist, and any other shape of the value denies every tool. `paperclip_add_comment` and `paperclip_create_subtask` refuse when the turn holds no run.
+- The effect ledger key `(caseKey, stage, step, stageEntryNo)` and the table shape are frozen (one-way, owner decision 2026-10-03). A `pending` row is never retried blind (a row younger than 270 s is not touched at all), an `unknown` row stops every call until `pack effect resolve`, and the same key with a different payload hash is `effect_conflict`. The dispatch error codes are `effect_unknown` (409), `effect_conflict` (409) and `effect_retry` (503, retryable).
 
 ### Paperclip task-definition variables the probe made necessary
 
@@ -460,6 +495,8 @@ Measured by the Phase 0 live critic (P1-1) creating a small parent/child/blocked
 | The first T1+ install creates an always-on database/task floor | [Cost guide](../../cost-guide.md) and `scripts/cost-estimate.mjs` price about $104/month for the Paperclip substrate | Keep Paperclip out of ordinary T0; require the existing money confirmation before deploy and show the Paperclip lines in that gate |
 | The vendored `updatedSince` patch can diverge from upstream | [ADR 0010 amendment](../../adr/0010-paperclip-work-engine.md) | Re-evaluate every artifact re-pin and drop the patch when an upstream release implements the proven contract |
 | Node-vs-Postgres clock skew beyond the configured overlap can still lose a row | `src/lib/paperclip/watermark.ts` documents the exact limit; overlap fixes truncation, not unbounded clock skew | Monitor watermark lag and keep `paperclip/poll_overlap_ms` sized from observed clocks |
+| The completion write is not ledgered (step 5) | `src/lib/work/executor.ts` is not called by `dispatch-worker.ts`; the dispatch carries `issueId`, `runId` and `retryOfRunId` only, with no case key or stage | Wire it in the step that puts the case key and the stage on the wire (step 8 or 13); do not invent a stand-in key (the key is frozen) |
+| Step 5 staging proofs are not run | The `effect-ledger` table, a restart between `pending` and `applied`, and the restore drill need staging ([ADR 0013](../../adr/0013-sync-attach-execution-contract.md)) | Run at the staging trip (owner gate); the restore drill is step 13 |
 | Legacy retirement is not yet allowed | [bar-and-phases.md](bar-and-phases.md) Phase 9 requires two clean production weeks and a separately reviewed final commit | Keep the router switch, legacy handlers and `paperclip_disabled`; delete only after the production evidence gate |
 | Phase 8.5 and Four Pillars Phases 10–12 are still outstanding | [HANDOFF](HANDOFF.md) | Continue in the recorded order: Phase 0 (P0-2 live re-check and P0-3's update case after this branch's deploy and the bootstrap repair) → Phase 1 (including P1-3 parent-owner delegation) → 8.5 from the observed shapes in section 6 → the UI/session bridge → 10–12 |
 | Dispatch was rejected on every push until the P0-2 fix; the research adapter had no url until the bootstrap reconcile runs | 2026-09-06 Phase 0 live critic (staging `dd16ca4`, run 34021795520): every push 400 `invalid_body`; Research's `adapterConfig` had no `url` and Paperclip escalated its issues to Main within ~1 s | Fixed on `fix/paperclip-p0-2-dispatch-push`; deploy this branch, run the bootstrap over the tunnel with `PAPERCLIP_DISPATCH_SLUGS=main,research`, then re-run the live critic for P0-2 and P0-3's update case |
@@ -490,6 +527,12 @@ runs it. Run it whenever the Dockerfile build stage changes:
 
 ```powershell
 $env:ORCHESTRATOR_IMAGE_BUILD_TEST=1; npx vitest run --config vitest.integration.config.ts scripts/lib/lifecycle/orchestrator-dockerfile.build.integration.test.ts
+```
+
+Step 5 (safe actions) focused tests:
+
+```powershell
+npx vitest run src/lib/work src/lib/config/agent-loader.tools.test.ts src/lib/config/agent-loader.tools.review.test.ts src/lib/tools/tool-policy.test.ts src/agent/agent-loop.tool-policy.test.ts src/agent/agent-loop.tool-policy.review.test.ts src/lib/tools/paperclip-tools.test.ts src/lib/paperclip/dispatch-worker.test.ts scripts/pack.test.ts infra/lib/dynamo-stack.effect-ledger.test.ts
 ```
 
 Docs gates, required before any push that touches this folder:

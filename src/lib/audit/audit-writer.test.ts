@@ -190,4 +190,17 @@ describe('expanded always-audited set (C5c)', () => {
     expect(ddbSend).toHaveBeenCalledTimes(4);
     killSwitchState.active = false;
   });
+
+  it('effect actions write even under audit_log_disabled', async () => {
+    const { writeAudit } = await import('./audit-writer.js');
+    ddbSend.mockReset();
+    ddbSend.mockResolvedValue({});
+    killSwitchState.active = true;
+    try {
+      for (const action of ['effect_applied', 'effect_unknown', 'effect_resolved'] as const)
+        await writeAudit({ action, result: 'ok' });
+      await flush();
+      expect(ddbSend).toHaveBeenCalledTimes(3);
+    } finally { killSwitchState.active = false; }
+  });
 });
