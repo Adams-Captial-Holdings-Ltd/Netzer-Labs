@@ -78,14 +78,23 @@ export function defaultShadowKeyStore(): ReturnType<typeof createShadowKeyStore>
       if (!secretId) throw new ShadowKeyUnavailableError('unknown');
       const { GetSecretValueCommand, SecretsManagerClient } = await import('@aws-sdk/client-secrets-manager');
       secretsClient ??= new SecretsManagerClient({ ...(process.env.AWS_REGION ? { region: process.env.AWS_REGION } : {}) });
+      let secretString: string;
       try {
         const result = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretId }));
         if (!result.SecretString) throw new ShadowKeyUnavailableError('unknown');
-        return result.SecretString;
+        secretString = result.SecretString;
       } catch (error) {
         logger.warn({ errorName: error instanceof Error ? error.name : 'UnknownError' }, 'shadow key secret read failed');
         throw new ShadowKeyUnavailableError('unknown');
       }
+      let valid = false;
+      try { valid = !!parseSecret(JSON.parse(secretString) as unknown); }
+      catch { /* Secret content is never logged. */ }
+      if (!valid) {
+        logger.warn({}, 'shadow key secret invalid');
+        throw new ShadowKeyUnavailableError('unknown');
+      }
+      return secretString;
     },
   });
 }

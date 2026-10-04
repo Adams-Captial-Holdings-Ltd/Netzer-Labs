@@ -15,6 +15,7 @@ function fixture() {
   const people = new Map<string, string>();
   const keys = new Map<string, { id: string; name: string; owner: string; revokedAt: string | null }>();
   const memberships = new Map<string, { id: string; role: string }>();
+  const profiles = new Map<string, string>();
   const lines: string[] = []; const calls: string[] = []; const audits: AuditEvent[] = [];
   let closed = false; let serial = 0;
   let failPoint = '';
@@ -69,7 +70,7 @@ function fixture() {
     }
     if (path === '/api/auth/sign-in/email') { const id = people.get(String(data.email)); return id ? json({ user: { id } }, 200, id) : json({}, 401); }
     if (path === '/api/auth/get-session') return json({ user: { id: owner } });
-    if (path === '/api/auth/profile') return json({ name: data.name });
+    if (path === '/api/auth/profile') { profiles.set(owner ?? '', String(data.name)); return json({ name: data.name }); }
     if (path === '/api/board-api-keys' && method === 'POST') {
       if (!owner) return json({}, 401);
       const token = `pcp_board_new_secret_${++serial}`;
@@ -113,7 +114,7 @@ function fixture() {
     if (state !== 'free') shadows.set(user, { slot, netzerUserId: user, paperclipUserId: id, decisionClasses: ['money'], status: state === 'assigned' ? 'active' : 'retired', assignedAt: 1 });
     if (state === 'assigned') { memberships.set(id, { id: `member-${id}`, role: 'operator' }); keys.set(oldKey, { id: `key-old-${slot}`, name: `netzer-shadow-${slot}-old`, owner: id, revokedAt: null }); }
   }
-  return { core: createShadowCore(deps), deps, rows, slots, shadows, lines, calls, audits, keys, memberships, seed,
+  return { core: createShadowCore(deps), deps, rows, slots, shadows, profiles, lines, calls, audits, keys, memberships, seed,
     close: () => { closed = true; }, crashAt: (point: string) => { failPoint = point; },
     status: (id: string, value: string) => peopleStatus.set(id, value),
     read: () => JSON.parse(secret) as { slots: Record<string, { boardKey: string | null }> },
@@ -147,6 +148,19 @@ describe('shadow operator core', () => {
     expect(f.shadows.get('net-1')?.status).toBe('active');
     expect([...f.keys.values()].filter((key) => !key.revokedAt)).toHaveLength(1);
   });
+  it('assign sends the profile name again after the key was stored', async () => {
+    const f = fixture(); f.seed('01'); f.crashAt('grant');
+    await expect(f.core.assign('net-1', 'Alice', ['money'])).rejects.toThrow();
+    f.profiles.clear();
+    await f.core.assign('net-1', 'Alice', ['money']);
+    expect(f.profiles.get('pc-01')).toBe('Alice');
+  });
+  it('assign replaces the failed claimant name when another user takes the slot', async () => {
+    const f = fixture(); f.seed('01'); f.crashAt('row assign');
+    await expect(f.core.assign('net-1', 'Alice', ['money'])).rejects.toThrow();
+    await f.core.assign('net-2', 'Bob', ['money']);
+    expect(f.profiles.get('pc-01')).toBe('Bob');
+  });
   it('rotate deletes the old key and stores the new one', async () => { const f = fixture(); f.seed('01', 'assigned'); await f.core.rotate('net-1'); expect(f.keys.get(oldKey)?.revokedAt).toBe('now'); expect(f.read().slots['01'].boardKey).not.toBe(oldKey); });
   it('rotate revokes an orphan key as well', async () => {
     const f = fixture(); f.seed('01', 'assigned');
@@ -157,7 +171,33 @@ describe('shadow operator core', () => {
   });
   it('retire archives membership and nulls the key', async () => { const f = fixture(); f.seed('01', 'assigned'); await f.core.retire('net-1'); expect(f.memberships.has('pc-01')).toBe(false); expect(f.read().slots['01'].boardKey).toBeNull(); expect(f.slots.get('01')?.state).toBe('retired'); });
   it('check passes on a healthy pool', async () => { const f = fixture(); f.seed('01', 'assigned'); expect(await f.core.check()).toBe(true); expect(f.lines).toEqual(['check 1 assigned slots healthy']); });
-  it('check fails on a mismatched user id', async () => { const f = fixture(); f.seed('01', 'assigned'); f.slots.set('01', { ...f.slots.get('01')!, paperclipUserId: 'wrong' }); expect(await f.core.check()).toBe(false); expect(f.lines).toEqual(['01 identity_mismatch']); });
+  it('check and list show a secret slot whose registry row is missing as invalid', async () => {
+    const f = fixture(); f.seed('01', 'assigned'); f.slots.delete('01');
+    expect(await f.core.check()).toBe(false);
+    expect(f.lines).toContain('01 row_invalid');
+    await f.core.list();
+    expect(f.lines).toContain('01 invalid');
+  });
+  it('check and list reject an assigned slot with a missing reverse user row', async () => {
+    const f = fixture(); f.seed('01', 'assigned');
+    f.rows.getByPaperclipUser = async () => undefined;
+    expect(await f.core.check()).toBe(false);
+    expect(f.lines).toContain('01 row_invalid');
+    await f.core.list();
+    expect(f.lines).toContain('01 invalid');
+  });
+  it('check fails on a mismatched user id', async () => { const f = fixture(); f.seed('01', 'assigned'); f.slots.set('01', { ...f.slots.get('01')!, paperclipUserId: 'wrong' }); expect(await f.core.check()).toBe(false); expect(f.lines).toEqual(['01 row_invalid']); });
+  it('check labels an unreadable secret with the error name', async () => {
+    const f = fixture(); f.seed('01', 'assigned');
+    f.deps.keys.read = async () => { throw Object.assign(new Error('hidden'), { name: 'TimeoutError' }); };
+    expect(await f.core.check()).toBe(false);
+    expect(f.lines).toEqual(['secret_unreadable TimeoutError']);
+  });
+  it('check labels a malformed secret as invalid', async () => {
+    const f = fixture(); f.seed('01', 'assigned'); f.deps.keys.read = async () => '{broken';
+    expect(await f.core.check()).toBe(false);
+    expect(f.lines).toEqual(['secret_invalid']);
+  });
   it('check refuses an empty table', async () => {
     const f = fixture();
     expect(await f.core.check()).toBe(false);
@@ -193,6 +233,29 @@ describe('shadow operator core', () => {
     const f = fixture(); f.seed('01', 'retired');
     await f.core.list();
     expect(f.lines).toEqual(['01 retired net-1 -']);
+  });
+  it('assign updates the name but refuses to change active classes', async () => {
+    const f = fixture(); f.seed('01', 'assigned');
+    await f.core.assign('net-1', 'Alice', ['money']);
+    expect(f.profiles.get('pc-01')).toBe('Alice');
+    expect(f.lines.at(-1)).toContain('already assigned');
+    const calls = f.calls.length;
+    await expect(f.core.assign('net-1', 'Bob', ['clinical'])).rejects.toThrow('retire, then assign');
+    expect(f.calls).toHaveLength(calls);
+    expect(f.shadows.get('net-1')?.decisionClasses).toEqual(['money']);
+  });
+  it('retire revokes the board key before clearing the secret', async () => {
+    const f = fixture(); f.seed('01', 'assigned');
+    await f.core.retire('net-1');
+    expect(f.keys.get(oldKey)?.revokedAt).toBe('now');
+    expect(f.read().slots['01'].boardKey).toBeNull();
+  });
+  it('retire continues and warns once when key revocation fails', async () => {
+    const f = fixture(); f.seed('01', 'assigned'); f.crashAt('delete');
+    await f.core.retire('net-1');
+    expect(f.lines).toEqual(['01 key_revoke_failed', 'retire 01']);
+    expect(f.read().slots['01'].boardKey).toBeNull();
+    expect(f.slots.get('01')?.state).toBe('retired');
   });
   it.each(['setup write', 'sign up', 'session', 'row create', 'runtime write'])('pool resumes after %s fails', async (step) => {
     const f = fixture(); f.crashAt(step);

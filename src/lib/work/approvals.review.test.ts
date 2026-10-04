@@ -107,6 +107,23 @@ describe('decide leaves a trail for every outcome', () => {
     expect(audits(h.audit, 'approval_refused').at(-1)?.detail).toMatchObject({ approvalId: 'apr-1', code: 'paperclip_rejected' });
     expect(audits(h.audit, 'approval_decided')).toHaveLength(0);
   });
+  it.each([new Error('timeout'), Object.assign(new Error('service unavailable'), { status: 503 })])
+  ('an unknown decision outcome is audited as an error and rethrown', async (failure) => {
+    const h = harness({ ...pending, port: { decide: vi.fn(async () => { throw failure; }) } });
+    await expect(decide(h)).rejects.toBe(failure);
+    expect(audits(h.audit, 'approval_refused').at(-1)).toMatchObject({ result: 'error',
+      detail: { approvalId: 'apr-1', code: 'decision_outcome_unknown' } });
+    expect(audits(h.audit, 'approval_decided')).toHaveLength(0);
+  });
+
+  it('refuses a board key with a control character before sending', async () => {
+    const h = harness(pending);
+    const approvals = createApprovals({ port: h.port, shadows: h.shadows, audit: h.audit, now: () => 5_000,
+      keys: { boardKeyFor: async () => 'pcp_board_x\n' } });
+    const promise = approvals.decide({ netzerUserId: 'user-alice', approvalId: 'apr-1', decision: 'approve' });
+    expect(await code(promise)).toBe('key_unavailable');
+    expect(h.port.decide).not.toHaveBeenCalled();
+  });
 
   it('a key that cannot be read is a refusal (key_unavailable), with nothing sent', async () => {
     const h = harness(pending);

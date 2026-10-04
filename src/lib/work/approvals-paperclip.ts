@@ -48,7 +48,10 @@ export function paperclipApprovalsPort(deps: Dependencies = {}): ApprovalsPort {
       return approvalRecord(value, 200);
     },
     async get(id) {
-      try { return await (await client()).request<ApprovalRecord>('GET', `/api/approvals/${encodeURIComponent(id)}`); }
+      try {
+        const value = await (await client()).request<unknown>('GET', `/api/approvals/${encodeURIComponent(id)}`);
+        return approvalRecord(value, 200);
+      }
       catch (error) {
         if (error instanceof PaperclipError && error.status === 404) return undefined;
         throw error;

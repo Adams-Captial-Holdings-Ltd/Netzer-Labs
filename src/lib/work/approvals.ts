@@ -146,11 +146,15 @@ export function createApprovals({ port, shadows, keys, audit }: Options) {
     let boardKey: string;
     try { boardKey = await keys.boardKeyFor(shadow.slot); }
     catch { throw await refuse('key_unavailable', req.netzerUserId, req.approvalId); }
+    if (!boardKey || /\s|[\x00-\x1f\x7f]/.test(boardKey)) throw await refuse('key_unavailable', req.netzerUserId, req.approvalId);
     let decided: ApprovalRecord;
     try { decided = await port.decide(req.approvalId, verb, comment || null, boardKey); }
     catch (error) {
-      try { await audit({ action: 'approval_refused', userId: req.netzerUserId, result: 'blocked',
-        detail: { approvalId: req.approvalId, code: 'paperclip_rejected' } }); } catch { /* Keep Paperclip error. */ }
+      const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
+      const rejected = typeof status === 'number' && status >= 400 && status <= 499;
+      try { await audit({ action: 'approval_refused', userId: req.netzerUserId, result: rejected ? 'blocked' : 'error',
+        detail: { approvalId: req.approvalId, code: rejected ? 'paperclip_rejected' : 'decision_outcome_unknown' } }); }
+      catch { /* Keep Paperclip error. */ }
       throw error;
     }
     const detail = {

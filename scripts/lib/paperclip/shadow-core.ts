@@ -36,11 +36,14 @@ const validKey = (entry: Record<string, unknown>): boolean =>
 const validSetup = (entry: Record<string, unknown>): boolean =>
   Object.keys(entry).length === 2 && typeof entry.email === 'string' && typeof entry.password === 'string';
 async function readMap<T>(store: Store, valid: (entry: Record<string, unknown>) => boolean): Promise<MapSecret<T>> {
+  let content: string;
+  try { content = await store.read(); }
+  catch (error) { throw new ShadowCommandError(`secret_unreadable ${error instanceof Error ? error.name : 'UnknownError'}`); }
   try {
-    const parsed: unknown = JSON.parse(await store.read());
+    const parsed: unknown = JSON.parse(content);
     if (validMap<T>(parsed, valid)) return parsed;
   } catch { /* The content may hold secrets. */ }
-  return fail('Shadow approver secret is invalid');
+  return fail('secret_invalid');
 }
 async function updateSlot<T>(store: Store, slot: string, entry: T, valid: (value: Record<string, unknown>) => boolean) {
   // ponytail: Secrets Manager has no compare-and-set here; one operator at a time; upgrade via a version-stage check.
@@ -163,11 +166,9 @@ async function chooseKey(deps: ShadowDependencies, row: ShadowSlot): Promise<{ k
   return { key, fresh: true };
 }
 async function assignSlot(deps: ShadowDependencies, row: ShadowSlot, name: string): Promise<string> {
-  const { key, fresh } = await chooseKey(deps, row);
-  if (fresh) {
-    const request = await signIn(deps, row.slot);
-    await expectOk(await request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name }) }), row.slot);
-  }
+  const { key } = await chooseKey(deps, row);
+  const request = await signIn(deps, row.slot);
+  await expectOk(await request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name }) }), row.slot);
   await expectOk(await deps.admin(`/api/admin/users/${encodeURIComponent(row.paperclipUserId)}/company-access`, {
     method: 'PUT', body: JSON.stringify({ companyIds: [deps.companyId] }),
   }), row.slot);
@@ -228,6 +229,13 @@ async function retireSlot(deps: ShadowDependencies, shadow: ShadowUser): Promise
   if (shadow.status === 'active' && !await deps.rows.retire({ netzerUserId: shadow.netzerUserId, now: deps.now() })) {
     fail(`Slot ${slot}: retirement lost a race`);
   }
+  if (key) {
+    try {
+      for (const id of await listedKeys(deps, key, slot)) {
+        await expectOk(await bearer(deps, key, `/api/board-api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' }), slot);
+      }
+    } catch { deps.out(`${slot} key_revoke_failed`); }
+  }
   if (key) await updateSlot(deps.keys, slot, { boardKey: null }, validKey);
 }
 async function pool(deps: ShadowDependencies, size = 25): Promise<void> {
@@ -245,9 +253,14 @@ async function assign(deps: ShadowDependencies, netzerUserId: string, name: stri
   if ((await deps.users.get(netzerUserId))?.status !== 'active') fail('Netzer user is not active');
   const existing = await deps.rows.getByNetzerUser(netzerUserId);
   if (existing?.status === 'active') {
+    if (JSON.stringify([...existing.decisionClasses].sort()) !== JSON.stringify([...decisionClasses].sort())) {
+      fail('Classes cannot be changed by assign; retire, then assign');
+    }
+    const request = await signIn(deps, existing.slot);
+    await expectOk(await request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify({ name }) }), existing.slot);
     await audit(deps, 'assign', { action: 'shadow_assigned', userId: netzerUserId, result: 'ok',
       detail: { slot: existing.slot, shadowUserId: existing.paperclipUserId, decisionClasses: existing.decisionClasses } });
-    deps.out(`assign ${existing.slot}`);
+    deps.out(`assign ${existing.slot} already assigned; nothing changed`);
     return;
   }
   const row = (await deps.rows.listSlots()).filter((item) => item.state === 'free')
@@ -284,20 +297,40 @@ async function retire(deps: ShadowDependencies, netzerUserId: string): Promise<v
     detail: { slot: shadow.slot, shadowUserId: shadow.paperclipUserId } });
   deps.out(`retire ${shadow.slot}`);
 }
+async function registryValid(deps: ShadowDependencies, slot: string, row: ShadowSlot | undefined): Promise<boolean> {
+  const stored = await deps.rows.getSlot(slot);
+  if (!row || !stored || row.slot !== slot || stored.state !== row.state ||
+    stored.paperclipUserId !== row.paperclipUserId || stored.netzerUserId !== row.netzerUserId) return false;
+  if (row.state !== 'assigned') return true;
+  if (!row.netzerUserId) return false;
+  const [byNetzer, byPaperclip] = await Promise.all([
+    deps.rows.getByNetzerUser(row.netzerUserId), deps.rows.getByPaperclipUser(row.paperclipUserId),
+  ]);
+  return !!byNetzer && !!byPaperclip && [byNetzer, byPaperclip].every((user) =>
+    user.slot === slot && user.netzerUserId === row.netzerUserId &&
+    user.paperclipUserId === row.paperclipUserId && user.status === 'active');
+}
 async function check(deps: ShadowDependencies): Promise<boolean> {
   const rows = await deps.rows.listSlots();
-  if (!rows.length) {
+  let secret: MapSecret<KeyEntry>;
+  try { secret = await readMap<KeyEntry>(deps.keys, validKey); }
+  catch (error) {
+    deps.out(error instanceof ShadowCommandError ? error.message : `secret_unreadable ${error instanceof Error ? error.name : 'UnknownError'}`);
+    return false;
+  }
+  if (!rows.length && !Object.keys(secret.slots).length) {
     deps.out(`no slot rows found in table ${deps.tableName ?? 'unknown'}`);
     return false;
   }
-  let secret: MapSecret<KeyEntry>;
-  try { secret = await readMap<KeyEntry>(deps.keys, validKey); }
-  catch {
-    deps.out('secret_invalid');
-    return false;
-  }
   let bad = 0;
+  for (const slot of Object.keys(secret.slots)) {
+    if (!rows.some((row) => row.slot === slot) || !await registryValid(deps, slot, rows.find((row) => row.slot === slot))) {
+      bad++;
+      deps.out(`${slot} row_invalid`);
+    }
+  }
   for (const row of rows.filter((item) => item.state === 'assigned')) {
+    if (!await registryValid(deps, row.slot, row)) continue;
     const key = secret.slots[row.slot]?.boardKey;
     let reason = !key ? 'key_missing' : !row.netzerUserId ? 'user_missing' : undefined;
     if (!reason && row.netzerUserId && (await deps.users.get(row.netzerUserId))?.status !== 'active') reason = 'user_inactive';
@@ -330,7 +363,13 @@ async function probe(deps: ShadowDependencies): Promise<boolean> {
   return verdict.verdict === 'clean';
 }
 async function list(deps: ShadowDependencies): Promise<void> {
-  for (const row of await deps.rows.listSlots()) {
+  const rows = await deps.rows.listSlots();
+  const secret = await readMap<KeyEntry>(deps.keys, validKey);
+  const slots = [...new Set([...rows.map((row) => row.slot), ...Object.keys(secret.slots)])].sort();
+  for (const slot of slots) {
+    const row = rows.find((item) => item.slot === slot);
+    if (!await registryValid(deps, slot, row)) { deps.out(`${slot} invalid`); continue; }
+    if (!row) continue;
     const shadow = row.state === 'assigned' && row.netzerUserId
       ? await deps.rows.getByNetzerUser(row.netzerUserId) : undefined;
     deps.out(`${row.slot} ${row.state} ${row.netzerUserId ?? '-'} ${shadow?.decisionClasses.join(',') ?? '-'}`);

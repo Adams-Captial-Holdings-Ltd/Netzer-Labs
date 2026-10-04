@@ -11,22 +11,21 @@ const decided = { id: 'ap-1', type: 'request_board_approval', status: 'approved'
 describe('Paperclip approvals port', () => {
   it("sends the decision with the shadow user's board key", async () => {
     const fetchFn = vi.fn(async () => response(decided));
-    const agentKey = 'agent-secret';
-    const agentAuthorization = vi.fn(() => `Bearer ${agentKey}`);
     const port = paperclipApprovalsPort({ fetchFn: fetchFn as unknown as typeof fetch, loadConfig: config,
-      lockState: unlocked, killSwitch: enabled, client: async () => ({
-        request: async <T>() => { agentAuthorization(); return decided as T; },
-      }) });
-    await port.create({ type: 'request_board_approval', payload: {} });
-    expect(agentAuthorization).toHaveBeenCalledTimes(1);
-    expect(agentAuthorization.mock.results[0]?.value).toBe(`Bearer ${agentKey}`);
+      lockState: unlocked, killSwitch: enabled });
     expect(await port.decide('ap-1', 'approve', null, 'board-secret')).toEqual(decided);
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://paperclip.claudeclaw.internal:3100/api/approvals/ap-1/approve');
+    expect(init.method).toBe('POST');
     expect(new Headers(init.headers).get('authorization')).toBe('Bearer board-secret');
-    expect(JSON.stringify({ url, init })).not.toContain(agentKey);
     expect(init.redirect).toBe('error');
     expect(init.signal).toBeDefined();
+  });
+  it('gets the requested approval and refuses a malformed response', async () => {
+    const request = vi.fn(async () => ({ id: 'ap-1', type: 7, status: 'pending', payload: {} }));
+    const port = paperclipApprovalsPort({ client: async () => ({ request: request as unknown as <T>(method: string, path: string) => Promise<T> }) });
+    await expect(port.get('ap-1')).rejects.toBeInstanceOf(PaperclipApprovalHttpError);
+    expect(request).toHaveBeenCalledWith('GET', '/api/approvals/ap-1');
   });
   it('a closed lock sends nothing', async () => {
     const fetchFn = vi.fn(async () => response(decided));

@@ -61,4 +61,14 @@ describe('shadow key cache and default store', () => {
     ]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain('sensitive detail');
   });
+  it.each(['{broken', JSON.stringify({ v: 1, slots: { '01': { boardKey: 7 } } })])
+  ('warns once without secret content when the default secret is invalid', async (body) => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    vi.stubEnv('SHADOW_APPROVERS_SECRET_ID', '/my/runtime-secret'); resetEnvCache();
+    sdk.send.mockResolvedValueOnce({ SecretString: body });
+    await expect(defaultShadowKeyStore().boardKeyFor('01')).rejects.toBeInstanceOf(ShadowKeyUnavailableError);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[1]).toBe('shadow key secret invalid');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(body);
+  });
 });

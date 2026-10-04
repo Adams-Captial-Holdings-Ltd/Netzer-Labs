@@ -59,6 +59,7 @@ async function liveCore(env: Record<string, string>, names: ReturnType<typeof re
   const baseUrl = required(env, 'PAPERCLIP_BASE_URL').replace(/\/+$/, '');
   process.env.TABLE_USERS = names.users;
   process.env.TABLE_AUDIT_LOG = names.audit;
+  if (!process.env.AWS_REGION && env.AWS_REGION?.trim()) process.env.AWS_REGION = env.AWS_REGION.trim();
   const [{ dynamoShadowRows }, { getUser }, { writeAuditOrThrow }] = await Promise.all([
     import('../src/lib/paperclip/shadow-rows-dynamo.js'), import('../src/lib/state/users-repo.js'),
     import('../src/lib/audit/audit-writer.js'),
