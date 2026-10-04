@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { AuditEvent } from '../audit/audit-writer.js';
 import { validShadowUser, type ShadowRows } from '../paperclip/shadow-users.js';
 import { payloadHash } from './executor.js';
-import { savePayloadOnce, type PayloadRows } from './approval-payloads.js';
+import { readApprovalPayload, savePayloadOnce, type PayloadRows } from './approval-payloads.js';
 import type { createExecutor } from './executor.js';
 import { validateEffectKey, type EffectKey } from './effect-ledger.js';
 
@@ -24,7 +24,8 @@ export interface ApprovalsPort {
     decisionNote: string | null, boardKey: string): Promise<ApprovalRecord>;
 }
 export type ApprovalRefusedCode = 'comment_required' | 'comment_too_long' | 'not_an_approver' | 'paperclip_unavailable'
-  | 'not_found' | 'not_a_netzer_approval' | 'not_pending' | 'class_not_entitled' | 'key_unavailable' | 'approver_inactive';
+  | 'not_found' | 'not_a_netzer_approval' | 'not_pending' | 'class_not_entitled' | 'key_unavailable' | 'approver_inactive'
+  | 'payload_unavailable' | 'payload_mismatch';
 export type ApprovalInvalidCode = 'paperclip_unavailable' | 'not_found' | 'not_a_netzer_approval' | 'not_approved'
   | 'hash_mismatch' | 'key_mismatch' | 'class_mismatch' | 'not_a_shadow_user' | 'approver_retired' | 'class_not_entitled'
   | 'decided_before_assignment';
@@ -153,6 +154,13 @@ export function createApprovals({ port, shadows, keys, audit, now, payloads, use
     if (!body) throw await refuse('not_a_netzer_approval', req.netzerUserId, req.approvalId);
     if (record.status !== 'pending') throw await refuse('not_pending', req.netzerUserId, req.approvalId);
     if (!shadow.decisionClasses.includes(body.decisionClass)) throw await refuse('class_not_entitled', req.netzerUserId, req.approvalId);
+    if (payloads) {
+      let checked: Awaited<ReturnType<typeof readApprovalPayload>>;
+      try { checked = await readApprovalPayload(payloads, body); }
+      catch { throw await refuse('payload_unavailable', req.netzerUserId, req.approvalId); }
+      if (checked.state === 'unavailable') throw await refuse('payload_unavailable', req.netzerUserId, req.approvalId);
+      if (checked.state === 'mismatch') throw await refuse('payload_mismatch', req.netzerUserId, req.approvalId);
+    }
     const verb = req.decision === 'request_changes' ? 'request-revision' : req.decision;
     let boardKey: string;
     try { boardKey = await keys.boardKeyFor(shadow.slot); }

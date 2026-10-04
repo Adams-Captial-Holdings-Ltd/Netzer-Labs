@@ -36,7 +36,7 @@ describe('Paperclip Work reads', () => {
   });
   it('a malformed response is logged once', async () => {
     const h = harness({ [pipelinesPath]: { secret: 'PATIENT-JANE' } });
-    expect(await h.reads.listPipelines()).toEqual([]);
+    await expect(h.reads.listPipelines()).rejects.toMatchObject({ code: 'paperclip_unavailable' });
     expect(h.logs).toEqual([{ code: 'malformed_response', count: 1 }]);
   });
   it('a record that is not a Netzer approval is kept out of the Work lists', async () => {
@@ -85,7 +85,7 @@ describe('Paperclip Work reads', () => {
   });
   it('drops a malformed case detail before reading its events', async () => {
     const h = harness({ '/api/cases/c1': { ...item, pipeline, blockers: [] } });
-    expect(await h.reads.getCase('c1')).toBeUndefined();
+    await expect(h.reads.getCase('c1')).rejects.toMatchObject({ code: 'paperclip_unavailable' });
     expect(h.logs).toEqual([{ code: 'malformed_record', count: 1 }]);
     expect(h.calls).toEqual(['/api/cases/c1']);
   });
@@ -114,5 +114,128 @@ describe('Paperclip Work reads', () => {
     const h = harness({ [pipelinesPath]: [{ ...pipeline, id: undefined, title: 'PATIENT-JANE' }] });
     await h.reads.listPipelines();
     expect(JSON.stringify(h.logs)).toBe('[{"code":"malformed_record","count":1}]');
+  });
+  it('shares one case index for concurrent and repeated filtered reads', async () => {
+    const h = harness({ [pipelinesPath]: [pipeline], [casesPath]: [item] });
+    await Promise.all([h.reads.listCases({ status: 'all' }), h.reads.listCases({ status: 'active' })]);
+    await h.reads.listCases({ status: 'blocked' });
+    expect(h.calls.filter((path) => path === '/api/cases/c1')).toHaveLength(1);
+    expect(h.calls.filter((path) => path === casesPath)).toHaveLength(1);
+  });
+  it('does not cache a failed index read', async () => {
+    const request = vi.fn().mockRejectedValueOnce(new TypeError('fetch failed')).mockResolvedValue([]);
+    const reads = paperclipWorkReads({ client: async () => ({ request }), companyId: async () => 'co1' });
+    await expect(reads.listCases({ status: 'all' })).rejects.toMatchObject({ code: 'paperclip_unavailable' });
+    await reads.listCases({ status: 'all' });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+  it('limits case detail reads to eight in flight', async () => {
+    let active = 0; let peak = 0;
+    const request = vi.fn(async (_method: string, path: string) => {
+      if (path === pipelinesPath) return [pipeline];
+      if (path === casesPath) return Array.from({ length: 20 }, (_, i) => ({ ...item, case: { ...item.case, id: `c${i}` } }));
+      active += 1; peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1; return { blockers: [] };
+    });
+    const reads = paperclipWorkReads({ client: async () => ({ request: request as never }), companyId: async () => 'co1' });
+    expect((await reads.listCases({ status: 'all' })).cases).toHaveLength(20);
+    expect(peak).toBe(8);
+  });
+  it('distinguishes exactly 200 approvals from 201', async () => {
+    const h = harness({ [approvalsPath]: Array.from({ length: 200 }, (_, i) => ({ ...approval, id: `a${i}` })) });
+    expect((await h.reads.listApprovals('all')).truncated).toBe(false);
+  });
+  it('distinguishes exactly 200 cases from 201', async () => {
+    const rows = Array.from({ length: 200 }, (_, i) => ({ ...item, case: { ...item.case, id: `c${i}` }, blockers: [] }));
+    const h = harness({ [pipelinesPath]: [pipeline], [casesPath]: rows });
+    expect((await h.reads.listCases({ status: 'all' })).truncated).toBe(false);
+  });
+  it('a malformed approval detail fails rather than looking absent', async () => {
+    const h = harness({ '/api/approvals/a1': { id: 'a1', type: APPROVAL_TYPE } });
+    await expect(h.reads.getApproval('a1')).rejects.toMatchObject({ code: 'paperclip_unavailable' });
+  });
+  it('a missing case detail is absent', async () => {
+    const h = harness({ '/api/cases/c1': new PaperclipError({ status: 404 }) });
+    expect(await h.reads.getCase('c1')).toBeUndefined();
+  });
+  it('uses the real blocker link shape and a second case read', async () => {
+    const h = harness({ '/api/cases/c1': { ...item, pipeline, blockers: [{ blockedByCaseId: 'c0' }], case: { ...item.case, fields: {} } },
+      '/api/cases/c0': { case: { title: 'Earlier case' } }, '/api/cases/c1/events': [], '/api/cases/c1/issue-links': [] });
+    expect((await h.reads.getCase('c1'))?.blockers).toEqual([{ id: 'c0', title: 'Earlier case' }]);
+    expect(h.calls).toContain('/api/cases/c0');
+  });
+  it('skips missing blockers and comments, counts each, and caps read fanout', async () => {
+    const blockers = Array.from({ length: 30 }, (_, i) => ({ blockedByCaseId: `b${i}` }));
+    const links = Array.from({ length: 15 }, (_, i) => ({ issue: { id: `i${i}` } }));
+    const responses: Record<string, unknown> = { '/api/cases/c1': { ...item, pipeline, blockers, case: { ...item.case, fields: {} } },
+      '/api/cases/c1/events': [], '/api/cases/c1/issue-links': links };
+    for (let i = 0; i < 30; i++) responses[`/api/cases/b${i}`] = new PaperclipError({ status: 404 });
+    for (let i = 0; i < 15; i++) responses[`/api/issues/i${i}/comments`] = new PaperclipError({ status: 404 });
+    const h = harness(responses);
+    const result = await h.reads.getCase('c1');
+    expect(result?.blockers).toEqual([]);
+    expect(h.calls.filter((path) => path.startsWith('/api/cases/b'))).toHaveLength(25);
+    expect(h.calls.filter((path) => path.includes('/comments'))).toHaveLength(10);
+    expect(h.logs.filter((entry) => entry.code === 'malformed_record').reduce((sum, entry) => sum + entry.count, 0)).toBe(35);
+  });
+  it('orders timeline, truncates detail strings and limits comments', async () => {
+    const long = 'x'.repeat(5_000);
+    const h = harness({ '/api/cases/c1': { ...item, pipeline, blockers: [], case: { ...item.case, title: long, summary: long, fields: { long } } },
+      '/api/cases/c1/events': [{ createdAt: '2026-10-04T09:00:00Z', type: 'moved', summary: long }],
+      '/api/cases/c1/issue-links': [{ issue: { id: 'i1' } }],
+      '/api/issues/i1/comments': [{ createdAt: '2026-10-04T10:00:00Z', body: long }] });
+    const result = await h.reads.getCase('c1');
+    expect(result?.title).toHaveLength(4_000);
+    expect(result?.summary).toHaveLength(4_000);
+    expect(result?.fields[0]?.value).toHaveLength(500);
+    expect(result?.timeline.map((event) => event.kind)).toEqual(['comment', 'event']);
+    expect(result?.timeline.every((event) => event.text.length === 4_000)).toBe(true);
+    expect(h.request).toHaveBeenCalledWith('GET', '/api/issues/i1/comments', { query: { limit: 100 } });
+  });
+  it('maps TypeError and timeouts to unavailable', async () => {
+    for (const error of [new TypeError('fetch failed'), new Error('request timeout')]) {
+      const h = harness({ [pipelinesPath]: error });
+      await expect(h.reads.listCases({ status: 'all' })).rejects.toMatchObject({ code: 'paperclip_unavailable' });
+    }
+  });
+  it('filters cases by pipeline, stage and done status from one cached index', async () => {
+    const second = { id: 'p2', name: 'Other', stages: [{ id: 's2', key: 'finish', name: 'Finish', kind: 'review' }] };
+    const done = { ...item, case: { ...item.case, id: 'c2', terminalKind: 'done' }, stage: second.stages[0], blockers: [] };
+    const h = harness({ [pipelinesPath]: [pipeline, second], [casesPath]: [item], '/api/pipelines/p2/cases': [done] });
+    expect((await h.reads.listCases({ status: 'done' })).cases.map((row) => row.id)).toEqual(['c2']);
+    expect((await h.reads.listCases({ status: 'all', pipeline: 'p2', stage: 's2' })).cases.map((row) => row.id)).toEqual(['c2']);
+    expect((await h.reads.listCases({ status: 'active', stage: 'finish' })).cases).toEqual([]);
+    expect(h.calls.filter((path) => path === casesPath)).toHaveLength(1);
+  });
+  it('rejects malformed foreign approval details but hides well-formed foreign approvals', async () => {
+    const bad = harness({ '/api/approvals/a1': { id: 'a1', type: 'hire_agent' } });
+    await expect(bad.reads.getApproval('a1')).rejects.toMatchObject({ code: 'paperclip_unavailable' });
+    const foreign = harness({ '/api/approvals/a1': { ...approval, type: 'hire_agent', payload: { name: 'other approval' } } });
+    expect(await foreign.reads.getApproval('a1')).toBeUndefined();
+  });
+  it('normalizes decidedAt like createdAt', async () => {
+    const h = harness({ '/api/approvals/a1': { ...approval, decidedAt: '2026-10-04T10:00:00Z' } });
+    expect((await h.reads.getApproval('a1'))?.decidedAt).toBe('2026-10-04T10:00:00.000Z');
+  });
+  it.each([
+    { terminalKind: 'unknown' },
+    { terminalKind: null, id: '' },
+  ])('drops malformed case list records', async (bad) => {
+    const h = harness({ [pipelinesPath]: [pipeline], [casesPath]: [{ ...item, case: { ...item.case, ...bad } }] });
+    expect((await h.reads.listCases({ status: 'all' })).cases).toEqual([]);
+    expect(h.logs).toContainEqual({ code: 'malformed_record', count: 1 });
+  });
+  it.each([
+    { payloadSha256: 'short' },
+    { payloadSha256: 'A'.repeat(64) },
+    { stageEntryNo: 0 },
+    { stageEntryNo: 1.5 },
+    { decisionClass: 'Bad' },
+    { extra: true },
+  ])('drops malformed approval list payloads', async (bad) => {
+    const h = harness({ [approvalsPath]: [{ ...approval, payload: { ...approval.payload, ...bad } }] });
+    expect((await h.reads.listApprovals('all')).approvals).toEqual([]);
+    expect(h.logs).toEqual([{ code: 'malformed_record', count: 1 }]);
   });
 });

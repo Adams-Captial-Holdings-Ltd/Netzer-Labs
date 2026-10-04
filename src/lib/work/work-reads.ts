@@ -15,7 +15,16 @@ const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typ
 const string = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const nullableString = (v: unknown): v is string | null => v === null || typeof v === 'string';
 const array = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
+const short = (v: string, limit = 4_000): string => v.slice(0, limit);
 const date = (v: unknown): string | undefined => v instanceof Date ? v.toISOString() : string(v) && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : undefined;
+async function mapEight<T, R>(items: T[], map: (item: T) => Promise<R>): Promise<R[]> {
+  const result = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(8, items.length) }, async () => {
+    while (next < items.length) { const at = next++; result[at] = await map(items[at]!); }
+  }));
+  return result;
+}
 export type WorkApprovalPayload = { netzerApproval: 1; payloadSha256: string; caseKey: string; stage: string; step: string; stageEntryNo: number; decisionClass: string };
 export function validNetzerApprovalPayload(v: unknown): v is WorkApprovalPayload {
   if (!isObject(v)) return false;
@@ -59,19 +68,21 @@ function workCase(v: unknown, p: PipelineSummary, blockers: unknown = []): WorkC
   const active = isObject(v.activeWork) ? v.activeWork : undefined;
   const ownerKind = c.leaseOwnerType === 'user' ? 'person' : c.leaseOwnerType === 'agent' ? 'agent' : 'none';
   const ownerName = string(active?.name) ? active.name : string(active?.agentName) ? active.agentName : null;
-  return { id: c.id, caseKey: c.caseKey, title: c.title, pipeline: { id: p.id, name: p.name },
-    stage: { id: s.id, key: s.key, name: s.name, kind: s.kind }, status,
-    owner: { kind: ownerKind, name: ownerName }, updatedAt: date(c.updatedAt)!, leaseUserId: c.leaseUserId ?? null };
+  return { id: short(c.id), caseKey: short(c.caseKey), title: short(c.title), pipeline: { id: short(p.id), name: short(p.name) },
+    stage: { id: short(s.id), key: short(s.key), name: short(s.name), kind: short(s.kind) }, status,
+    owner: { kind: ownerKind, name: ownerName ? short(ownerName) : null }, updatedAt: date(c.updatedAt)!, leaseUserId: c.leaseUserId ? short(c.leaseUserId) : null };
 }
 function approval(v: unknown): WorkApproval | undefined {
   if (!isObject(v) || !string(v.id) || !string(v.type) || !string(v.status) || !date(v.createdAt)
     || !validNetzerApprovalPayload(v.payload) || v.type !== APPROVAL_TYPE
     || !['pending', 'revision_requested', 'approved', 'rejected', 'cancelled'].includes(v.status)
     || (v.decidedByUserId !== undefined && !nullableString(v.decidedByUserId))
-    || (v.decidedAt !== undefined && !nullableString(v.decidedAt))) return undefined;
-  return { id: v.id, type: v.type, status: v.status, payload: v.payload,
-    decidedByUserId: v.decidedByUserId as string | null | undefined, decidedAt: v.decidedAt as string | null | undefined,
-    createdAt: date(v.createdAt)!, decisionNote: nullableString(v.decisionNote) ? v.decisionNote : null };
+    || (v.decidedAt !== undefined && !nullableString(v.decidedAt))
+    || (typeof v.decidedAt === 'string' && !date(v.decidedAt))) return undefined;
+  return { id: short(v.id), type: v.type, status: v.status, payload: v.payload,
+    decidedByUserId: typeof v.decidedByUserId === 'string' ? short(v.decidedByUserId) : null,
+    decidedAt: v.decidedAt == null ? null : date(v.decidedAt) ?? null,
+    createdAt: date(v.createdAt)!, decisionNote: typeof v.decisionNote === 'string' ? short(v.decisionNote) : null };
 }
 
 export function paperclipWorkReads(options: Options = {}): WorkReads {
@@ -91,7 +102,7 @@ export function paperclipWorkReads(options: Options = {}): WorkReads {
     }
   }
   function checked<T>(rows: unknown, mapper: (v: unknown) => T | undefined): T[] {
-    if (!Array.isArray(rows)) { log('malformed_response', 1); return []; }
+    if (!Array.isArray(rows)) { log('malformed_response', 1); throw new WorkReadError('paperclip_unavailable'); }
     const mapped = rows.map(mapper);
     const bad = mapped.filter((v) => v === undefined).length;
     if (bad) log('malformed_record', bad);
@@ -105,16 +116,25 @@ export function paperclipWorkReads(options: Options = {}): WorkReads {
       throw mapped ?? error;
     }
   };
-  async function listPipelines() { return checked(await read(`${await companyPath()}/pipelines`), pipeline); }
+  let pipelineCache: { value: PipelineSummary[]; until: number } | undefined;
+  let pipelineFlight: Promise<PipelineSummary[]> | undefined;
+  async function listPipelines() {
+    if (pipelineCache && Date.now() < pipelineCache.until) return pipelineCache.value;
+    if (!pipelineFlight) pipelineFlight = (async () => {
+      const value = checked(await read(`${await companyPath()}/pipelines`), pipeline);
+      pipelineCache = { value, until: Date.now() + 15_000 }; return value;
+    })().finally(() => { pipelineFlight = undefined; });
+    return pipelineFlight;
+  }
   async function getCase(caseId: string): Promise<WorkCaseDetail | undefined> {
     let raw: unknown;
     try { raw = await read(`/api/cases/${encodeURIComponent(caseId)}`, undefined, true); }
     catch (error) { if (error instanceof PaperclipError && error.status === 404) return undefined; throw error; }
     if (!isObject(raw) || !isObject(raw.pipeline) || !isObject(raw.case)
-      || !isObject(raw.case.fields) || !Array.isArray(raw.blockers)) { log('malformed_record', 1); return undefined; }
+      || !isObject(raw.case.fields) || !Array.isArray(raw.blockers)) { log('malformed_record', 1); throw new WorkReadError('paperclip_unavailable'); }
     const p = pipeline({ ...raw.pipeline, stages: [] });
     const base = p && workCase(raw, p, raw.blockers);
-    if (!base) { log('malformed_record', 1); return undefined; }
+    if (!base) { log('malformed_record', 1); throw new WorkReadError('paperclip_unavailable'); }
     const [events, links] = await Promise.all([
       read(`/api/cases/${encodeURIComponent(caseId)}/events`, { order: 'desc', limit: 100 }),
       read(`/api/cases/${encodeURIComponent(caseId)}/issue-links`),
@@ -122,16 +142,18 @@ export function paperclipWorkReads(options: Options = {}): WorkReads {
     const c = raw.case as Record<string, unknown>;
     const fields = isObject(c.fields) ? Object.keys(c.fields).sort().slice(0, 24).flatMap((name) => {
       const value = c.fields && (c.fields as Record<string, unknown>)[name];
-      return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? [{ name, value: String(value) }] : [];
+      return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? [{ name: short(name), value: short(String(value), 500) }] : [];
     }) : [];
     const blockers: WorkCaseDetail['blockers'] = [];
     let badBlockers = 0;
-    for (const b of array(raw.blockers)) {
-      if (isObject(b) && string(b.id) && string(b.title)) { blockers.push({ id: b.id, title: b.title }); continue; }
+    for (const b of array(raw.blockers).slice(0, 25)) {
+      if (isObject(b) && string(b.id) && string(b.title)) { blockers.push({ id: short(b.id), title: short(b.title) }); continue; }
       if (isObject(b) && string(b.blockedByCaseId)) {
-        const blocking = await read(`/api/cases/${encodeURIComponent(b.blockedByCaseId)}`);
+        let blocking: unknown;
+        try { blocking = await read(`/api/cases/${encodeURIComponent(b.blockedByCaseId)}`, undefined, true); }
+        catch (error) { if (!(error instanceof PaperclipError && error.status === 404)) throw error; }
         if (isObject(blocking) && isObject(blocking.case) && string(blocking.case.title)) {
-          blockers.push({ id: b.blockedByCaseId, title: blocking.case.title }); continue;
+          blockers.push({ id: short(b.blockedByCaseId), title: short(blocking.case.title) }); continue;
         }
       }
       badBlockers += 1;
@@ -141,56 +163,72 @@ export function paperclipWorkReads(options: Options = {}): WorkReads {
     const timeline = checked(items, (v) => {
       if (!isObject(v) || !date(v.createdAt) || !string(v.type)) return undefined;
       return { at: date(v.createdAt)!, kind: 'event' as const,
-        actor: isObject(v.actorAgent) && string(v.actorAgent.name) ? v.actorAgent.name : null,
-        text: string(v.summary) ? v.summary : v.type.replace(/_/g, ' ') } as WorkCaseDetail['timeline'][number];
+        actor: isObject(v.actorAgent) && string(v.actorAgent.name) ? short(v.actorAgent.name) : null,
+        text: short(string(v.summary) ? v.summary : v.type.replace(/_/g, ' ')) } as WorkCaseDetail['timeline'][number];
     });
-    for (const link of checked(links, (v) => isObject(v) && isObject(v.issue) && string(v.issue.id) ? v.issue.id : undefined)) {
-      const comments = await read(`/api/issues/${encodeURIComponent(link)}/comments`);
+    for (const link of checked(links, (v) => isObject(v) && isObject(v.issue) && string(v.issue.id) ? v.issue.id : undefined).slice(0, 10)) {
+      let comments: unknown;
+      try { comments = await read(`/api/issues/${encodeURIComponent(link)}/comments`, { limit: 100 }, true); }
+      catch (error) { if (error instanceof PaperclipError && error.status === 404) { log('malformed_record', 1); continue; } throw error; }
       timeline.push(...checked(comments, (v) => isObject(v) && date(v.createdAt) && string(v.body)
-        ? { at: date(v.createdAt)!, kind: 'comment' as const, actor: null, text: v.body } as WorkCaseDetail['timeline'][number] : undefined));
+        ? { at: date(v.createdAt)!, kind: 'comment' as const, actor: null, text: short(v.body) } as WorkCaseDetail['timeline'][number] : undefined));
     }
-    return { ...base, summary: nullableString(c.summary) ? c.summary : null, fields, blockers,
+    return { ...base, summary: typeof c.summary === 'string' ? short(c.summary) : null, fields, blockers,
       timeline: timeline.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100) };
   }
-  async function listCases(q: Parameters<WorkReads['listCases']>[0]) {
-    const pipelines = await listPipelines(); const cases: WorkCase[] = []; let truncated = false;
-    for (const p of pipelines) {
-      if (q.pipeline && q.pipeline !== p.id) continue;
-      const raw = await read(`/api/pipelines/${encodeURIComponent(p.id)}/cases`, q.stage ? { stageKey: p.stages.find((s) => s.id === q.stage)?.key ?? q.stage } : undefined);
-      const rows = checked(raw, (v) => workCase(v, p) ? v : undefined);
-      for (const row of rows) {
-        const preliminary = workCase(row, p)!;
-        if (q.stage && q.stage !== preliminary.stage.id && q.stage !== preliminary.stage.key) continue;
-        if (q.status === 'active' && (preliminary.status === 'done' || preliminary.status === 'cancelled')) continue;
-        if (q.status === 'blocked' && (preliminary.status === 'done' || preliminary.status === 'cancelled')) continue;
-        if (q.status === 'done' && preliminary.status !== 'done' && preliminary.status !== 'cancelled') continue;
-        // The pinned case-list response has no blockers (pipelines.ts:1432).
-        // Its detail response carries them (pipelines.ts:2212).
-        // ponytail: one upstream detail read per listed case, at most 200 per request; upgrade with a bulk blockers read upstream or a short cache.
-        const detail = isObject(row) && Array.isArray(row.blockers) ? row : await read(`/api/cases/${encodeURIComponent(preliminary.id)}`);
-        if (!isObject(detail) || !Array.isArray(detail.blockers)) { log('malformed_record', 1); continue; }
-        const item = workCase(row, p, detail.blockers)!;
-        if (q.stage && q.stage !== item.stage.id && q.stage !== item.stage.key) continue;
-        if (q.status === 'blocked' && item.status !== 'blocked') continue;
-        if (cases.length === 200) { truncated = true; break; }
-        cases.push(item);
+  type CaseIndex = { cases: WorkCase[]; pipelines: PipelineSummary[]; truncated: boolean };
+  let indexCache: { value: CaseIndex; until: number } | undefined;
+  let indexFlight: Promise<CaseIndex> | undefined;
+  async function caseIndex() {
+    if (indexCache && Date.now() < indexCache.until) return indexCache.value;
+    if (!indexFlight) indexFlight = (async () => {
+      const pipelines = await listPipelines();
+      const candidates: { row: unknown; pipeline: PipelineSummary; base: WorkCase }[] = [];
+      for (const p of pipelines) {
+        const rows = checked(await read(`/api/pipelines/${encodeURIComponent(p.id)}/cases`), (v) => workCase(v, p) ? v : undefined);
+        for (const row of rows) {
+          if (candidates.length >= 201) break;
+          candidates.push({ row, pipeline: p, base: workCase(row, p)! });
+        }
+        if (candidates.length >= 201) break;
       }
-      if (truncated) break;
-    }
-    return { cases, truncated: truncated || cases.length >= 200 };
+      // ponytail: one detail read per case at most every 15 s, eight at a time; upgrade to an upstream bulk blockers endpoint.
+      const mapped = await mapEight(candidates, async ({ row, pipeline: p, base }) => {
+        let detail: unknown;
+        try { detail = isObject(row) && Array.isArray(row.blockers) ? row : await read(`/api/cases/${encodeURIComponent(base.id)}`, undefined, true); }
+        catch (error) { if (!(error instanceof PaperclipError && error.status === 404)) throw error; }
+        if (!isObject(detail) || !Array.isArray(detail.blockers)) { log('malformed_record', 1); return undefined; }
+        return workCase(row, p, detail.blockers);
+      });
+      const cases = mapped.filter((item): item is WorkCase => item !== undefined);
+      const value = { cases, pipelines, truncated: candidates.length > 200 };
+      indexCache = { value, until: Date.now() + 15_000 }; return value;
+    })().finally(() => { indexFlight = undefined; });
+    return indexFlight;
+  }
+  async function listCases(q: Parameters<WorkReads['listCases']>[0]) {
+    const index = await caseIndex();
+    const cases = index.cases.filter((item) => (!q.pipeline || item.pipeline.id === q.pipeline)
+      && (!q.stage || item.stage.id === q.stage || item.stage.key === q.stage)
+      && (q.status === 'all' || q.status === 'active' && item.status !== 'done' && item.status !== 'cancelled'
+        || q.status === 'blocked' && item.status === 'blocked'
+        || q.status === 'done' && (item.status === 'done' || item.status === 'cancelled')));
+    return { cases: cases.slice(0, 200), truncated: index.truncated || cases.length > 200 };
   }
   async function listApprovals(status: 'pending' | 'all') {
     const raw = await read(`${await companyPath()}/approvals`, status === 'pending' ? { status: 'pending' } : undefined);
     // Foreign approvals are intentionally excluded, and counted with malformed rows.
-    const approvals = checked(raw, approval);
-    return { approvals: approvals.slice(0, 200), truncated: approvals.length >= 200 };
+    const approvals = checked(raw, (row) => approval(row));
+    return { approvals: approvals.slice(0, 200), truncated: approvals.length > 200 };
   }
   async function getApproval(id: string) {
     let raw: unknown;
     try { raw = await read(`/api/approvals/${encodeURIComponent(id)}`, undefined, true); }
     catch (error) { if (error instanceof PaperclipError && error.status === 404) return undefined; throw error; }
     const mapped = approval(raw);
-    if (!mapped) log('malformed_record', 1);
+    if (!mapped && isObject(raw) && string(raw.id) && string(raw.type) && raw.type !== APPROVAL_TYPE
+      && string(raw.status) && date(raw.createdAt) && isObject(raw.payload)) return undefined;
+    if (!mapped) { log('malformed_record', 1); throw new WorkReadError('paperclip_unavailable'); }
     return mapped;
   }
   return { listPipelines, listCases, getCase, listApprovals, getApproval };
