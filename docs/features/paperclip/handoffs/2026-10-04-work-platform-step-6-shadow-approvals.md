@@ -3,7 +3,7 @@ feature: paperclip
 document_role: session-handoff
 status: current
 observed_at: 2026-10-04
-as_of_commit: d7c599f30934fc5cb1077f8a22781ececc8a4a47
+as_of_commit: e194bad399a8c098b8d0ca60ae0476d1ed9b9c8d
 session_slug: work-platform-step-6-shadow-approvals
 supersedes: 2026-10-03-work-platform-step-5-safe-actions.md
 ---
@@ -27,7 +27,7 @@ supersedes: 2026-10-03-work-platform-step-5-safe-actions.md
 
 ## 2. Current state summary
 
-Work Platform step 6 of 18 (shadow identities and approvals) is built locally on `feature/wp-step6-shadow-approvals` in eleven commits on top of `768ecf6` (section 4.1): the frozen red tests, four builder work orders, the review-round red tests, the step 6 records and the two commits of the review fix round. The code adds a hash-bound approvals library (`requestApproval`, `decide`, `verifyApproval`, `runApprovedEffect`), a Paperclip port that sends a decision with the approver's own board key, a board-key store over a Secrets Manager secret (a second secret, read by no service, holds the slot logins), shadow registry rows in the users table, an operator command line (`npm run paperclip:shadow`: pool, assign, rotate, retire, check, probe, list), sign-up closed by default in the Paperclip task, and a sign-up probe composed into the runtime lock. The approval record and the secret layout are one-way, frozen by the owner on 2026-10-04. The library is not on the dispatch path (A140), and the dashboard route that calls `decide` is step 7.
+Work Platform step 6 of 18 (shadow identities and approvals) is built locally on `feature/wp-step6-shadow-approvals` in twelve commits on top of `768ecf6` (section 4.1): the frozen red tests, four builder work orders, the review-round red tests, the step 6 records and the two commits of the review fix round. The code adds a hash-bound approvals library (`requestApproval`, `decide`, `verifyApproval`, `runApprovedEffect`), a Paperclip port that sends a decision with the approver's own board key, a board-key store over a Secrets Manager secret (a second secret, read by no service, holds the slot logins), shadow registry rows in the users table, an operator command line (`npm run paperclip:shadow`: pool, assign, rotate, retire, check, probe, list), sign-up closed by default in the Paperclip task, and a sign-up probe composed into the runtime lock. The approval record and the secret layout are one-way, frozen by the owner on 2026-10-04. The library is not on the dispatch path (A140), and the dashboard route that calls `decide` is step 7.
 
 A five-reviewer code and security review ran on `79b06d0`. Its result changed four decisions on 2026-10-04 (section 4.3): the secret is split in two, the post-deploy sign-up check is the orchestrator's start-time lock, and a set of review fixes is decided. The review fix round built them in two commits, `fe2e891` and `d7c599f` (section 4.1), and the docs now describe the code after them. The final full validation, the frozen gate and the fresh critic have not run on the tip. Nothing ran against a real Paperclip or a real AWS account. Nothing is pushed and nothing is deployed. The live proofs S6-L1 to S6-L5 are PENDING (section 6). Step 7 (the first Work UI) is next after this PR.
 
@@ -786,13 +786,24 @@ Run the final full validation (section 7), the frozen gate and the independent c
 
 This table lists only what the session log records as run, with its numbers. Rows that name a commit describe that commit, not the tip. The run logs are outside the repository, in `~/.claude/plans/netzer-work-platform-logs/`. No result for the review fix round (`fe2e891`, `d7c599f`) is recorded in this file.
 
-VERIFICATION RESULTS: filled by the coordinator after the final run
+VERIFICATION RESULTS (run by the coordinator on `e194bad`, the last commit that changes code or tests; the commit after it changes this file only):
+
+- `npm run typecheck`: PASS.
+- `npm test`: PASS, 342 files, 4634 tests (baseline `768ecf6`: 329 files, 4346 tests).
+- `CCE_PAPERCLIP_ENABLED=1 npm test`: PASS, 342 files, 4634 tests.
+- `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build`: PASS.
+- `node scripts/ci/docs-links.mjs`, `feature-knowledge.mjs`, `runnable-blocks.mjs`, `docs-assets.mjs`, `docs-mermaid.mjs`: exit 0. `GITHUB_BASE_REF=development node scripts/ci/diagrams-drift.mjs`: exit 0.
+- `git diff --check`: PASS.
+- `npm run local:test:integration`: NOT RUN locally. Port 4566 was held by another local stack's emulator. GitHub CI runs it on the PR.
+- The step 6 gate (v3: the frozen gate plus two allowed paths, `.github/workflows/deploy.yml` and `scripts/deploy.ts`, each added with the owner's yes): 23 PASS, 0 FAIL, 5 PENDING (S6-L1 to S6-L5).
+- A first independent critic failed the step on `9f1cdd3` for one loosened assertion in `bootstrap-core.test.ts`; `e194bad` restores the exact assertion. A second independent critic runs on the tip; its verdict goes in the PR body.
+- Nothing ran against a real Paperclip or real AWS. S6-L1 to S6-L5 stay PENDING.
 
 | Command | Baseline (before changes) | After changes |
 |---|---|---|
 | `npm run typecheck` | exit 0 on `768ecf6` | exit 0 after W2, W3 and W4 (`3fafb9a` and `79b06d0` among them) |
-| `npm test` | exit 0 on `768ecf6`: 329 files, 4346 tests | not run in full yet. Scoped runs below |
-| `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `768ecf6`: 329 files, 4346 tests | not run in full yet. Scoped runs below |
+| `npm test` | exit 0 on `768ecf6`: 329 files, 4346 tests | exit 0 on `e194bad`: 342 files, 4634 tests |
+| `CCE_PAPERCLIP_ENABLED=1 npm test` | exit 0 on `768ecf6`: 329 files, 4346 tests | exit 0 on `e194bad`: 342 files, 4634 tests |
 | `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | exit 0 on `768ecf6` | `npm run build` exit 0 after W3 and W4; the web checks not run since the baseline |
 | `npm run local:test:integration` | NOT RUN (port 4566 is held by another stack's emulator; A144) | NOT RUN (A144) |
 | `node scripts/ci/docs-links.mjs`, `node scripts/ci/feature-knowledge.mjs`, `git diff --check` | OK on `768ecf6` | see the docs row below |
@@ -802,7 +813,7 @@ VERIFICATION RESULTS: filled by the coordinator after the final run
 | `npx vitest run` on `shadow-keys`, `sign-up-probe` and `lock-boot.sign-up` (W2, `13b046c`) | n/a | 59 of 59 passed. `src/lib/paperclip src/config` with the flag off and on: 38 files, 641 tests each. `client.mock-server.test.ts` was run by the coordinator, not the sandbox (P91) |
 | `npx vitest run infra/lib src/lib/paperclip src/lib/work scripts/lib/lifecycle scripts/lib/paperclip` (W3, `3fafb9a`) | n/a | flag off and on: 74 files, 1328 tests each |
 | `npx vitest run scripts/lib/paperclip` (W4, `79b06d0`) | n/a | 3 files, 81 tests passed |
-| `node scripts/ci/docs-links.mjs`, `feature-knowledge.mjs`, `runnable-blocks.mjs`, `docs-assets.mjs`, `docs-mermaid.mjs` (docs pass, uncommitted tree) | OK on `768ecf6` for the first two | not recorded for the fix-round docs edits; see VERIFICATION RESULTS above |
+| `node scripts/ci/docs-links.mjs`, `feature-knowledge.mjs`, `runnable-blocks.mjs`, `docs-assets.mjs`, `docs-mermaid.mjs` (docs pass, uncommitted tree) | OK on `768ecf6` for the first two | exit 0 on the tip; see VERIFICATION RESULTS above |
 | Live proofs S6-L1 to S6-L5 | n/a | PENDING: need staging and an AWS call, each with the owner's yes. Not passed |
 
 Anything not run, and why: `npm run local:test:integration` (A144). The full `npm test` in both flag states, the web checks, the frozen gate and the critic on the final tip are the next action (section 6). No AWS call was made and nothing ran against a real Paperclip.
