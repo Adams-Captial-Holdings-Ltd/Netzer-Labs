@@ -17,6 +17,7 @@ import { type Env, isReadyForTraffic } from './config/env.js';
 import { buildTelegramRouter } from './adapters/telegram/handler.js';
 import { buildSlackRouter } from './adapters/slack/handler.js';
 import { buildDashboardRouter, buildAuthRouter } from './adapters/dashboard/handler.js';
+import { buildWorkRouter } from './adapters/dashboard/work.js';
 import { buildDashboardSpaRouter } from './adapters/dashboard/spa.js';
 import { buildStatusRouter } from './adapters/status/handler.js';
 import { buildPanicRouter } from './adapters/dashboard/panic.js';
@@ -143,6 +144,7 @@ export function buildApp(env: Env): Hono {
   // (traffic arrives on loopback), and the ALB and WAF never see tunnel traffic.
   // This position keeps it away from the dashboard bearer middleware.
   app.all('/api/paperclip/dispatch', (c) => c.notFound());
+  app.route('/api/work', buildWorkRouter());
   app.route('/api', buildDashboardRouter());
   app.route('/dashboard', buildDashboardSpaRouter());
   // D5: public status page. Mounted before /health so the route order

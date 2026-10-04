@@ -75,6 +75,8 @@
  *   members:read      list members (users) + view their profiles.
  *   members:write     invite / change-role / disable members, custom-profile CRUD.
  *   config:write      runtime-config writes (tunables, alert recipients).
+ *   work:read         read Work cases and approvals (operator and up).
+ *   work:approve      decide Work approvals (operator and up; shadow entitlement also required).
  *   owner:admin       deployment-level ownership — manage OTHER owners and the
  *                     break-glass surface. OWNER-ONLY. This is the capability
  *                     that keeps the hierarchy strict: an admin holds every
@@ -117,6 +119,8 @@ export const CAPABILITIES = [
   'members:read',
   'members:write',
   'config:write',
+  'work:read',
+  'work:approve',
   'owner:admin',
   // Seat administration (absorbed from PR #42's seat/workspace design, minus
   // the EC2-workspace surface). Seats bind a dashboard user to a SeatPolicy
@@ -220,6 +224,8 @@ const OPERATOR_CAPS: readonly Capability[] = [
   'agents:write',
   'cost:write',
   'config:write',
+  'work:read',
+  'work:approve',
   'members:read',
   // Operator-tier READS: security-posture cards + integrations inventory +
   // SOC 2 / HIPAA compliance gap analysis. Read-only — IAM-adjacent
