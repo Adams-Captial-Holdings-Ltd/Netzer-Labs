@@ -167,17 +167,20 @@ function rgba(hex: string, alpha: number): string {
 // it inverts the hover/light shade direction. Writing a light-derived value
 // inline clobbered that and killed dark contrast.
 //
-// Two rules keep both modes legible:
-//  1. Unset/invalid field -> fall back to the stock default. For the primary
-//     family the property is REMOVED so the cascade resolves to the per-mode
-//     index.css default (:root for light, .dark for dark). Those tokens are
-//     defined in BOTH blocks, so clearing the inline override restores the
-//     exact stock palette in whichever mode is active. Accent is the exception
-//     (see below).
-//  2. A set brand color is shaded toward the active theme: in dark we lift the
-//     primary toward white and invert the hover/light derivation, mirroring how
-//     index.css tunes the stock indigo per mode, so a brand primary stays
-//     legible on the dark surface instead of sinking into it.
+// Keep the stock primary fill in each mode, and choose its text and hover
+// shade from WCAG contrast. A customer fill keeps its chosen base in light
+// mode; dark mode lifts it before choosing the text and hover shade.
+/** WCAG relative luminance chooses the stronger of black and white on a brand fill. */
+export function primaryTextFor(hex: string): '#000000' | '#ffffff' {
+  const { r, g, b } = hexToRgb(hex);
+  const linear = (channel: number) => {
+    const v = channel / 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  return luminance > 0.179128784747792 ? '#000000' : '#ffffff';
+}
+
 export function applyBrand() {
   const root = document.documentElement;
   const isDark = resolvedTheme.value === 'dark';
@@ -185,24 +188,22 @@ export function applyBrand() {
   const primary = isHexColor(brand.value.primaryColor) ? brand.value.primaryColor.trim() : null;
   const accent = isHexColor(brand.value.accentColor) ? brand.value.accentColor.trim() : null;
 
-  // Unset -> clear the inline override and let :root / .dark in index.css win.
-  // Set -> derive the per-mode shades. In light the base sits as-is and hover
-  // goes darker / light goes lighter (matches the stock :root ramp). In dark we
-  // lift the base toward white first, then hover goes lighter and the light
-  // shade lighter still, matching the inverted .dark ramp.
+  // The base fill follows the active theme. Text and hover track its contrast.
   if (primary === null) {
+    const stockFill = isDark ? '#818cf8' : DEFAULT_PRIMARY;
+    root.style.setProperty('--color-text-inverse', primaryTextFor(stockFill));
+    root.style.setProperty('--color-primary-hover', shade(stockFill, 1.12));
     root.style.removeProperty('--color-primary');
-    root.style.removeProperty('--color-primary-hover');
     root.style.removeProperty('--color-primary-light');
     root.style.removeProperty('--color-primary-glow');
-    // Cleared alongside the family, so the per-mode :root/.dark triplet wins
-    // again. Leaving a stale brand triplet behind would desync every
-    // alpha utility (bg-primary-a/10 and friends) from --color-primary.
+    // Clear the alpha mirror with the brand fill so the stock mode wins.
     root.style.removeProperty('--color-primary-rgb');
   } else {
     const base = isDark ? shade(primary, 1.18) : primary;
     root.style.setProperty('--color-primary', base);
-    root.style.setProperty('--color-primary-hover', shade(base, isDark ? 1.12 : 0.82));
+    const text = primaryTextFor(base);
+    root.style.setProperty('--color-text-inverse', text);
+    root.style.setProperty('--color-primary-hover', shade(base, text === '#000000' ? 1.12 : 0.82));
     root.style.setProperty('--color-primary-light', shade(base, isDark ? 1.28 : 1.25));
     // The alpha-capable mirror of --color-primary, as a space-separated RGB
     // triplet for `rgb(var(--color-primary-rgb) / <alpha-value>)` (the

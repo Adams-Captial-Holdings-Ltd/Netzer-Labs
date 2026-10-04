@@ -134,11 +134,11 @@ describe('route-drift guard', () => {
     // Jarvis-navigable surface, so they are excluded from the drift check.
     const PRE_AUTH_ROUTES = new Set(['/accept', '/verify']);
 
-    // Static routes in App.tsx (exclude the `:param` detail routes, the
-    // path-less NotFound catch-all, and the pre-auth routes above).
+    // Routes in App.tsx (include the five Work routes, including its
+    // detail paths; exclude older detail routes and the pre-auth routes).
     const appPaths = [...app.matchAll(/<Route\s+path="([^"]+)"/g)]
       .map((m) => m[1])
-      .filter((p) => !p.includes(':') && !PRE_AUTH_ROUTES.has(p));
+      .filter((p) => (!p.includes(':') || p.startsWith('/work/')) && !PRE_AUTH_ROUTES.has(p));
 
     expect(new Set(ROUTE_TABLE.map((r) => r.route))).toEqual(new Set(appPaths));
 
@@ -171,6 +171,7 @@ describe('route-drift guard', () => {
       'audit:read': 'viewer',
       'vectors:read': 'viewer',
       'missions:read': 'viewer',
+      'work:read': 'operator',
       'memories:read': 'viewer',
       'hive:read': 'viewer',
       'scheduled:read': 'viewer',

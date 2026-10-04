@@ -89,9 +89,9 @@ export interface RouteMeta {
 }
 
 /**
- * The navigable route table. Mirrors the static routes in App.tsx (the
- * `:param` detail routes and NotFound are excluded — navigate('/agents/main')
- * is validated as "/agents is allowed"). `/jarvis` is always present.
+ * The navigable route table. Mirrors App.tsx. Work detail routes have their
+ * own entries; older `:param` detail routes and NotFound are excluded.
+ * `/jarvis` is always present.
  *
  * minRole mirrors the per-route gate in App.tsx, collapsed onto the Jarvis
  * role rung (viewer < operator < admin). App.tsx gates each route with a
@@ -126,6 +126,11 @@ export const ROUTE_TABLE: readonly RouteMeta[] = [
   { route: '/cost', label: 'Cost', section: 'Operations', minRole: 'operator' },
   { route: '/audit', label: 'Audit Log', section: 'Operations', minRole: 'viewer' },
   { route: '/vectors', label: 'Knowledge', section: 'Advanced', minRole: 'viewer' },
+  { route: '/work', label: 'Inbox', section: 'Work', minRole: 'operator' },
+  { route: '/work/cases', label: 'Cases', section: 'Work', minRole: 'operator' },
+  { route: '/work/cases/:caseId', label: 'Case', section: 'Work', minRole: 'operator' },
+  { route: '/work/approvals', label: 'Approvals', section: 'Work', minRole: 'operator' },
+  { route: '/work/approvals/:approvalId', label: 'Approval', section: 'Work', minRole: 'operator' },
   { route: '/missions', label: 'Missions', section: 'Advanced', minRole: 'viewer' },
   { route: '/memories', label: 'Memories', section: 'Advanced', minRole: 'viewer' },
   { route: '/hive', label: 'Hive Mind', section: 'Advanced', minRole: 'viewer' },
