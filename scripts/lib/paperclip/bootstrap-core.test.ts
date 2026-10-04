@@ -245,7 +245,7 @@ describe('runtime lock bootstrap', () => {
         if (path.endsWith('/members')) return json({ members: [{ id: 'member-1', principalId: 'auditor-user' }] });
         return json(path.endsWith('/member-1') ? { membershipRole: 'viewer' } : {});
       };
-      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey: 'fake-stale-key', fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toMatchObject({ action: 'created', key, email: expect.stringMatching(/^lock-auditor-[0-9a-f]+@netzer\.invalid$/) });
+      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey: 'fake-stale-key', fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toEqual({ action: 'created', key, email: `lock-auditor-${'07'.repeat(32)}@netzer.invalid` });
       expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('POST /api/auth/sign-up/email');
       expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('PATCH /api/auth/profile');
       expect(calls.map((c) => `${c.method} ${c.pathname}`)).toContain('POST /api/board-api-keys');
