@@ -109,7 +109,7 @@ import {
 import { SEED_DEFAULTS, applyEnvOverrides, runSeed } from './lib/seed-defaults.js';
 import { validateConfiguredSurfaces, type SurfaceCheck } from './lib/surface-validate.js';
 import { buildApp, buildResourceNames, paperclipProvisioned } from '../infra/lib/constants.js';
-import { checkPostDeploySignUp } from './lib/lifecycle/sign-up-deploy-probe.js';
+import { runPostDeploySignUpProbe } from './lib/lifecycle/sign-up-deploy-probe.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = dirname(dirname(__filename));
@@ -738,21 +738,17 @@ async function main(): Promise<void> {
     await rollFargateService(env);
     await waitForServiceStable(env);
     if (paperclipEnabled === true) {
-      let probeEmail: string | undefined;
-      try {
-        const secret = await secretsClient.send(new GetSecretValueCommand({ SecretId: `${secretBase}/paperclip` }));
-        const fields: unknown = JSON.parse(secret.SecretString ?? '{}');
-        if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
-          const value = (fields as Record<string, unknown>).signup_probe_email;
-          if (typeof value === 'string' && value !== 'REPLACE_ME') probeEmail = value;
-        }
-      } catch { /* An unreadable probe address is an unknown verdict. */ }
-      const probe = await checkPostDeploySignUp({ fetchFn: fetch,
-        baseUrl: buildResourceNames(nameSuffix).paperclipInternalUrl,
-        probeEmail, windowOpen: env.CCE_PAPERCLIP_SIGNUP_WINDOW === 'open' });
-      if (probe.status === 'fail') throw new DeployAbort('sign_up_open: Paperclip sign-up is open after deploy');
-      if (probe.status === 'warn') console.warn(warn(`Paperclip sign-up probe inconclusive (${probe.code})`));
-      else console.log(ok('Paperclip sign-up is closed'));
+      await runPostDeploySignUpProbe({ fetchFn: fetch, env: {
+        PAPERCLIP_BASE_URL: env.PAPERCLIP_BASE_URL,
+        CCE_PAPERCLIP_SIGNUP_WINDOW: env.CCE_PAPERCLIP_SIGNUP_WINDOW,
+      },
+        readSecret: async () => {
+          const secret = await secretsClient.send(new GetSecretValueCommand({ SecretId: `${secretBase}/paperclip` }));
+          if (!secret.SecretString) throw new Error('Secret is empty');
+          return secret.SecretString;
+        },
+        print: (line) => console.log(line), abort: (message) => new DeployAbort(message),
+      });
     }
     await postDeployInstructions(env, outputs);
     await waitForAlbHealthy(outputs);

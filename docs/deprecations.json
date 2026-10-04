@@ -901,6 +901,21 @@
       "introduced": "v1.9.0"
     },
     {
+      "surface": "env",
+      "id": "PAPERCLIP_SIGNUP_PROBE_EMAIL",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "PAPERCLIP_SIGNUP_WINDOW",
+      "introduced": "v1.9.0"
+    },
+    {
+      "surface": "env",
+      "id": "SHADOW_APPROVERS_SECRET_ID",
+      "introduced": "v1.9.0"
+    },
+    {
       "surface": "runtime-config-key",
       "id": "paperclip/poll_interval_ms",
       "introduced": "v1.9.0"

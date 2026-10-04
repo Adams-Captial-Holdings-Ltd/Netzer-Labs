@@ -126,6 +126,35 @@ describe('runtime lock bootstrap', () => {
     expect(calls.map((call) => call.pathname)).toEqual(['/api/cli-auth/me']);
   });
 
+  it('keeps a valid auditor when the probe email is missing', async () => {
+    const { calls, opts } = auditor({ companyIds: [COMPANY], role: 'viewer' });
+    const lines: string[] = [];
+    expect(await ensureLockAuditor({ ...opts, requireProbeEmail: true, out: (line) => lines.push(line) }))
+      .toEqual({ action: 'reused' });
+    expect(calls.some((call) => call.pathname === '/api/auth/sign-up/email')).toBe(false);
+    expect(lines).toEqual(['Probe address unknown; re-run bootstrap inside a sign-up window with --new-auditor.']);
+  });
+
+  it('creates a new auditor when explicitly forced', async () => {
+    const { calls, opts } = auditor({ companyIds: [COMPANY], role: 'viewer' });
+    expect(await ensureLockAuditor({ ...opts, newAuditor: true })).toEqual({ action: 'created',
+      key: 'fake-minted-key', email: `lock-auditor-${'07'.repeat(32)}@netzer.invalid` });
+    expect(calls.some((call) => call.pathname === '/api/auth/sign-up/email')).toBe(true);
+  });
+
+  it('honors the --new-auditor bootstrap flag', async () => {
+    const { calls, opts } = auditor({ companyIds: [COMPANY], role: 'viewer' });
+    const original = process.argv;
+    process.argv = [...original, '--new-auditor'];
+    try {
+      const result = await ensureLockAuditor(opts);
+      expect(result.action).toBe('created');
+      expect(calls.some((call) => call.pathname === '/api/auth/sign-up/email')).toBe(true);
+    } finally {
+      process.argv = original;
+    }
+  });
+
   it.each([
     ['operator role', { companyIds: [COMPANY], role: 'operator' }],
     ['another company', { companyIds: ['another-company'], role: 'viewer' }],
@@ -136,7 +165,8 @@ describe('runtime lock bootstrap', () => {
     const { calls, opts } = auditor(stored);
     vi.stubGlobal('fetch', () => { throw new Error('global fetch called'); });
     try {
-      expect(await ensureLockAuditor(opts)).toMatchObject({ action: 'created', key: 'fake-minted-key' });
+      expect(await ensureLockAuditor(opts)).toEqual({ action: 'created', key: 'fake-minted-key',
+        email: `lock-auditor-${'07'.repeat(32)}@netzer.invalid` });
       expect(calls.map((call) => `${call.method} ${call.pathname}`)).toContain('POST /api/auth/sign-up/email');
     } finally { vi.unstubAllGlobals(); }
   });
@@ -150,7 +180,8 @@ describe('runtime lock bootstrap', () => {
     const { opts } = auditor({ status: 401 });
     vi.stubGlobal('fetch', () => { throw new Error('global fetch called'); });
     try {
-      expect(await ensureLockAuditor(opts)).toMatchObject({ action: 'created', key: 'fake-minted-key' });
+      expect(await ensureLockAuditor(opts)).toEqual({ action: 'created', key: 'fake-minted-key',
+        email: `lock-auditor-${'07'.repeat(32)}@netzer.invalid` });
     } finally { vi.unstubAllGlobals(); }
   });
 
@@ -253,7 +284,10 @@ describe('runtime lock bootstrap', () => {
       const request: PaperclipRequest = async (path) => path.endsWith('/members')
         ? json({ members: [{ id: 'member-1', principalId: 'auditor-user' }] })
         : json({ membershipRole: 'viewer' });
-      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal', storedKey, fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toMatchObject({ action: 'created', key: 'fake-minted-key' });
+      expect(await ensureLockAuditor({ request, companyId: COMPANY, baseUrl: 'http://paperclip.internal',
+        storedKey, fetchFn, randomBytesFn: () => Buffer.alloc(32, 7) })).toEqual({
+        action: 'created', key: 'fake-minted-key', email: `lock-auditor-${'07'.repeat(32)}@netzer.invalid`,
+      });
       expect(calls[0]).toBe('POST /api/auth/sign-up/email');
       expect(calls.filter((call) => call === 'GET /api/cli-auth/me')).toHaveLength(2);
     } finally { vi.unstubAllGlobals(); }

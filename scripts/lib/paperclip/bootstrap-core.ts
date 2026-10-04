@@ -136,15 +136,22 @@ export async function ensureLockAuditor(opts: {
   storedKey?: string | undefined;
   storedEmail?: string | undefined;
   requireProbeEmail?: boolean;
+  newAuditor?: boolean;
+  out?: (line: string) => void;
   fetchFn?: typeof fetch;
   randomBytesFn?: typeof randomBytes;
 }): Promise<{ action: 'reused'; email?: string } | { action: 'created'; key: string; email: string }> {
   const fetchFn = opts.fetchFn ?? fetch;
   const whoami = (key: string) => auditorWhoami(fetchFn, opts.baseUrl, key);
   const stored = opts.storedKey && opts.storedKey !== 'REPLACE_ME' ? opts.storedKey : undefined;
-  if (stored && (!opts.requireProbeEmail || (opts.storedEmail && opts.storedEmail !== 'REPLACE_ME')) &&
+  if (stored && !opts.newAuditor && !process.argv.includes('--new-auditor') &&
     await reusableAuditorKey(await whoami(stored), opts.companyId)) {
-    return { action: 'reused', ...(opts.storedEmail ? { email: opts.storedEmail } : {}) };
+    const email = opts.storedEmail && opts.storedEmail !== 'REPLACE_ME' ? opts.storedEmail : undefined;
+    if (!email && opts.requireProbeEmail) {
+      const message = 'Probe address unknown; re-run bootstrap inside a sign-up window with --new-auditor.';
+      (opts.out ?? ((line) => process.stdout.write(`${line}\n`)))(message);
+    }
+    return { action: 'reused', ...(email ? { email } : {}) };
   }
 
   const created = await createLockAuditor(opts.baseUrl, fetchFn, opts.randomBytesFn ?? randomBytes);
