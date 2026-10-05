@@ -825,13 +825,13 @@ test('the sending spinner does not change a button width and the textarea shares
   await reject.click();
   await expect(reject.locator('svg.animate-spin')).toHaveCount(1);
   expect((await reject.boundingBox())!.width).toBe(before);
-  // The spinner keeps clear of the label: there is a gap between its right edge and the first letter.
-  const gap = await reject.evaluate((el) => {
-    const range = document.createRange();
-    range.selectNodeContents(el.lastChild!);
-    return range.getBoundingClientRect().left - el.querySelector('svg.animate-spin')!.getBoundingClientRect().right;
+  // The spinner sits in the middle of the button and the label is faded out, so the two never touch.
+  const centred = await reject.evaluate((el) => {
+    const b = el.getBoundingClientRect(); const s = el.querySelector('svg.animate-spin')!.getBoundingClientRect();
+    return Math.abs((s.left + s.right) / 2 - (b.left + b.right) / 2);
   });
-  expect(gap).toBeGreaterThanOrEqual(3);
+  expect(centred).toBeLessThanOrEqual(1);
+  expect(await reject.locator('span').last().evaluate((e) => getComputedStyle(e).opacity)).toBe('0');
   await expect(page.getByRole('region', { name: 'Decision' })).toBeVisible({ timeout: 15_000 });
 });
 

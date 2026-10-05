@@ -76,16 +76,16 @@ export function Button({
         ${className}`}
     >
       {loading ? <Spinner overlay={size === 'lg'} /> : icon}
-      {children}
+      {loading && size === 'lg' ? <span class="opacity-0">{children}</span> : children}
     </button>
   );
 }
 
-// At lg the spinner sits in the button's left padding (4px in, 4px clear of the label), so showing it
-// never changes the button's width.
+// At lg the spinner is centred over the button and the label is faded out (it keeps its space and its
+// accessible name), so showing it never changes the button's width and never touches the label.
 function Spinner({ overlay }: { overlay: boolean }) {
   return (
-    <svg class={`animate-spin h-4 w-4 ${overlay ? 'absolute left-1 top-1/2 -mt-2' : ''}`} viewBox="0 0 24 24" fill="none">
+    <svg class={`animate-spin h-4 w-4 ${overlay ? 'absolute inset-0 m-auto' : ''}`} viewBox="0 0 24 24" fill="none">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>
