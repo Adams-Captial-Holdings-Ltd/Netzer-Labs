@@ -3,20 +3,21 @@ feature: paperclip
 document_role: handoff
 status: current
 observed_at: 2026-10-04
-as_of_commit: a2fc82d97ef6ed123f3007fdf195959ebfaf3b8b
+as_of_commit: 46d25c6969b9437497bfb94710ab35ed450df004
 ---
 
 # Paperclip integration handoff
 
 ## Current state (2026-10-04, step 7)
 
-This section was checked on 2026-10-04 against the code commit `a2fc82d` and `origin/development` `d1d3a66`. The sections below it are older state and were not re-checked.
+This section was checked on 2026-10-04 against the code commit `46d25c6` and `origin/development` `d1d3a66`. The sections below it are older state and were not re-checked.
 
-- **Branch:** `feature/wp-step7-work-ui` (from `origin/development` `d1d3a66`; merge target `development`). It is fourteen code commits ahead of `d1d3a66` (last code commit `a2fc82d`) when this was written; a polish pass was still running, so read `git log` for the real tip. **Pushed:** not recorded in the step log, and the worktree has no remote-tracking ref for it, so it looks unpushed. **PR:** none recorded. The owner's yes to push and open the PR is recorded; the merge needs its own yes.
+- **Branch:** `feature/wp-step7-work-ui` (from `origin/development` `d1d3a66`; merge target `development`). Its last code commit is `46d25c6`. **Pushed:** yes. **PR:** [#206](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/206), open with CI green on `46d25c6` and not merged when this was written. The owner's yes to push and open the PR is recorded; the merge needs its own yes.
 - **Step 6 is merged:** PR #205 merged into `development` as `d1d3a66` (shadow identities and approvals, [ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md)). Nothing was deployed.
-- **Step 7 is built locally:** the read-only Work BFF at `/api/work` (seven routes), the `work:read` and `work:approve` capabilities, the approval payload row in the effect ledger table, the two approver checks left open by step 6 (A155), five screens under `/work` with a decide flow, the `/missions` redirect, and `design.md` and `PRODUCT.md` ([ADR 0017](../../adr/0017-netzer-identity-and-work-ui.md), decisions 52 to 58 in the [decision log](decision-log.md)). Reviews, two fix rounds and three design critique rounds are done; the third found no open critical or structural issue at `c285bfd`.
-- **Not done when this was written:** the final full validation, the frozen gate and a fresh critic run on the commit that carries this file (results: the pull request description); the owner's phone trial of the decide flow (link in the session log). `npm run local:test:integration` was not run (port 4566 is held by another stack). No pack is installed anywhere, so the screens are proven on made-up fixtures and the live reads S7-L1 to S7-L3 are PENDING.
-- **Open for the owner:** whether "conforming it to how our tables work" means moving Paperclip's data into Netzar's own tables (a one-way door that would supersede ADRs 0010 and 0012); the first real pack by name; the pack-export design items (A161).
+- **Step 7 is built:** the Work BFF at `/api/work` (seven routes: six reads and one decide route), the `work:read` and `work:approve` capabilities, the approval payload row in the effect ledger table, the two approver checks left open by step 6 (A155), five screens under `/work` with a decide flow, the `/missions` redirect, and `design.md` and `PRODUCT.md` ([ADR 0017](../../adr/0017-netzer-identity-and-work-ui.md), decisions 52 to 58 in the [decision log](decision-log.md)). Reviews, two fix rounds and three design critique rounds are done; the third found no open critical or structural issue at `c285bfd`.
+- **Not done when this was written:** the merge (it needs the owner's yes); the owner's phone trial of the decide flow (link in the session log). The final validation, the frozen gate and the critics' verdicts are in the pull request description. `npm run local:test:integration` was not run locally (port 4566 is held by another stack); CI's integration job passed on the pull request. No pack is installed anywhere, so the screens are proven on made-up fixtures and the live reads S7-L1 to S7-L3 are PENDING.
+- **Open for the owner, first (A163):** after the PR opened the owner questioned whether these screens fit what Paperclip is built for. A source review found that Paperclip's default-on product is a company of AI agents (agents, tasks, runs, routines, approvals, budgets, audit), and that pipelines and cases, which the pack format and the Cases screens rest on, are experimental upstream. Two trials left conditions open: stop building on pipelines, and prove one real workflow end to end on the default-on core. Step 8 planning settles this with the owner before any specification (session handoff, sections 4.3 and 6.3).
+- **Also open for the owner:** whether "conforming it to how our tables work" means moving Paperclip's data into Netzar's own tables (a one-way door that would supersede ADRs 0010 and 0012); the first real pack by name; the pack-export design items (A161).
 - **Deployment:** none. `feature/*` and `development` deploy nothing. There was no staging trip and no AWS call.
 
 **Next action:** read what the polish pass left, run the final validation, the gate and the critic on the tip, then push and open the PR into `development`. Then the owner's phone trial. Step 8 (pack install and the signed license) is next. Session log: [Work Platform step 7](handoffs/2026-10-04-work-platform-step-7-work-ui.md).

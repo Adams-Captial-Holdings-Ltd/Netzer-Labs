@@ -3,7 +3,7 @@ feature: paperclip
 document_role: session-handoff
 status: current
 observed_at: 2026-10-04
-as_of_commit: a2fc82d97ef6ed123f3007fdf195959ebfaf3b8b
+as_of_commit: 46d25c6969b9437497bfb94710ab35ed450df004
 session_slug: work-platform-step-7-work-ui
 supersedes: 2026-10-04-work-platform-step-6-shadow-approvals.md
 ---
@@ -20,20 +20,20 @@ supersedes: 2026-10-04-work-platform-step-6-shadow-approvals.md
 | Branch it merges into next | `development` |
 | AWS environment that branch reaches | none: `feature/*` and `development` deploy nothing ([mapping](../../../../development.md#branch-to-environment-mapping)) |
 | Commit at session start | `d1d3a66` (`d1d3a66970cd548f9529a234ef2b51ecdc29378e`, the merge of PR #205, step 6, into `development`) |
-| Commit at session end | a file cannot name its own commit; read `git log -1 feature/wp-step7-work-ui`. This file describes the code at `a2fc82d` (CL1), fourteen commits ahead of `d1d3a66`; the docs commit that carries this file follows it |
-| Pushed | not when this was written. The owner's yes to push and open the PR is recorded (section 4.3); the push follows the final validation, and the merge needs its own yes |
-| PR | none recorded |
+| Commit at session end | a file cannot name its own commit; read pull request #206 or its merge commit on `development`. This file describes the code at `46d25c6`; the docs commit that carries this file follows it |
+| Pushed | yes, on 2026-10-04, after the final validation. The owner's yes to push and open the PR is recorded (section 4.3); the merge needs its own yes |
+| PR | [#206](https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs/pull/206) into `development`: open, CI green on `46d25c6`, not merged when this was written |
 | Deployed | no. `development` deploys nothing. There was no staging trip and no AWS call in this step |
 
 ## 2. Current state summary
 
-Work Platform step 7 of 18 (the Work UI core and the first Design Gauntlet) is built locally on `feature/wp-step7-work-ui` in sixteen commits on top of `d1d3a66` (section 4.1). Terms used here: a **case** is one piece of work an agent is handling, such as an invoice. An **approval** is a request that a person say yes, no or "change it" before an agent does something that cannot be undone. The **BFF** (back end for front end) is the small server layer between the screens and Paperclip, the open-source work engine that Netzer runs unmodified and pinned. A **pack** is a bundle of workflow definitions that Netzer installs and plans to resell. The **Design Gauntlet** is the process of design critique rounds that checks each screen.
+Work Platform step 7 of 18 (the Work UI core and the first Design Gauntlet) is built locally on `feature/wp-step7-work-ui` in the commits listed in section 4.1, on top of `d1d3a66`. Terms used here: a **case** is one piece of work an agent is handling, such as an invoice. An **approval** is a request that a person say yes, no or "change it" before an agent does something that cannot be undone. The **BFF** (back end for front end) is the small server layer between the screens and Paperclip, the open-source work engine that Netzer runs unmodified and pinned. A **pack** is a bundle of workflow definitions that Netzer installs and plans to resell. The **Design Gauntlet** is the process of design critique rounds that checks each screen.
 
 The code adds a BFF at `/api/work` with seven routes (six reads and one decide route), two capabilities (`work:read`, `work:approve`), a payload row in the effect ledger table so that an approver sees exactly the payload that was hashed, the two approver checks that step 6 left open (A155), and five screens under `/work` (Inbox, Cases, Case, Approvals, Approval) with a decide flow. `/missions` redirects to the Work Inbox where Work is on. The design rulebook `design.md` and the product context `PRODUCT.md` are new. The wire contract, the capability names, the payload row, `PRODUCT.md` and `design.md` were frozen or locked by the owner on 2026-10-04.
 
 A five-reviewer review ran on `6914219`. Two fix rounds (`3195505` server, `740a60e` web) followed. Then three design critique rounds ran (the third found zero open critical and zero open structural issues at `c285bfd`). On 2026-10-04 the owner asked for the screens to match the app's current look; that is decision 58 (section 4.3). A last polish pass (called CL1 in the log) was dispatched to a Claude builder; its result is not recorded here.
 
-Not done when this was written: the final full validation, the frozen gate and a fresh critic run on the commit that carries this file, so their results are in the pull request description and the step log, not here. Push, PR and merge had not happened. No pack is installed anywhere, so no real case or approval exists. The screens are proven against made-up fixtures and the live reads (S7-L1 to S7-L3, named in [ADR 0017](../../../adr/0017-netzer-identity-and-work-ui.md)) are PENDING. The owner's phone trial of the decide flow is not recorded. Step 8 (pack install and the signed license) is next.
+Not done when this was written: the final full validation, the frozen gate and a fresh critic run on the commit that carries this file, so their results are in the pull request description and the step log, not here. The branch is pushed and open as pull request #206; it was not merged when this was written. After the PR opened, the owner questioned whether these screens fit what Paperclip is built for. A source review and two more trials followed (section 4.3), and their conditions are open (section 6.3, A163). No pack is installed anywhere, so no real case or approval exists. The screens are proven against made-up fixtures and the live reads (S7-L1 to S7-L3, named in [ADR 0017](../../../adr/0017-netzer-identity-and-work-ui.md)) are PENDING. The owner's phone trial of the decide flow is not recorded. Step 8 (pack install and the signed license) is next.
 
 ## 3. Codebase understanding
 
@@ -70,7 +70,7 @@ Not done when this was written: the final full validation, the frozen gate and a
 - Case content stays inside the page. Toasts, the tab title, URLs and logs carry codes, labels and ids only.
 - One sentence for every error code, in `web/src/pages/work/messages.ts`.
 - Test the mounted router, not only the router object. A gate that compares a path that is not the mounted path looks fine in a unit test and does nothing in the server (P96).
-- Sample data in the web mock, the fixtures, the browser specs and the tests written during the build is invoice and vendor style (M104). The three frozen step 7 tests and the step 6 tests still use clinical-style sample strings; a frozen test changes only with the owner's yes, so they are left as they are.
+- Sample data in the web mock, the fixtures, the browser specs and the tests written during the build is invoice and vendor style (M104). Two of the three frozen step 7 tests (`work.test.ts`, `approval-payloads.test.ts`) and tests from steps 5 and 6 still use clinical-style sample strings; a frozen test changes only with the owner's yes, so they are left as they are.
 - Rerun the full suite with `CCE_PAPERCLIP_ENABLED=1` after every work order (P95).
 
 ## 4. Work completed
@@ -95,7 +95,12 @@ Commits on `feature/wp-step7-work-ui`, oldest first (frozen acceptance tests bef
 - [x] `a46dd73` the dev mock no longer crashes when a request is aborted mid-body.
 - [x] `c285bfd` DF2: the second design critique round. Built by a Claude sonnet subagent. One deviation was kept: list rows use compact padding, because the larger padding breaks the 10-row rule (decision 58).
 - [x] `a2fc82d` CL1: round 3 polish items R1 to R6 and R9, and the cleanup pass. Built by a Claude sonnet subagent. Cleanup: one `errorCode()` helper replaces duplicated parsing, an unused message key and three unused exports are gone, the Cases status list is derived from its options, and the dev mock has one summary helper. No change needed, with reasons: the decide form and the approval page component have no clean seam to split on; every mock switch is used by a spec; no spec duplicates another.
-- [ ] The final full validation, the frozen gate and a fresh critic on the tip, push, PR and merge: not done as far as the log shows.
+- [x] `cf2a9b0` docs: this handoff, decision 58, the `design.md` amendments and the ADR 0017 addition.
+- [x] `9ef4710` invoice-style sample strings in the two builder tests the final critic named (`work-reads.test.ts`, `work.wiring.test.ts`), and corrections to this handoff. Strings only; no assertion changed.
+- [x] The final full validation, the frozen gate and a fresh critic passed on `cf2a9b0`, and a second fresh critic passed the `9ef4710` change (section 7). The branch was pushed and pull request #206 opened into `development`.
+- [x] `ad1d270` CI fix: a row's metadata line wraps below desktop width instead of cutting off. The no-truncation spec failed at 375 px in CI, where the fonts are wider than on macOS (P99).
+- [x] `46d25c6` CI fix: the sending spinner is centred over the button and the label is faded while sending, so the two never touch. With CI's fonts the old spinner sat under 2 px from the label (P99).
+- [ ] Merge: needs the owner's yes with CI green. Not merged when this was written.
 
 In plain sentences. The BFF is read-only apart from the decide route. The inbox, case list and approval list are built from shape-checked Paperclip reads; a malformed record is dropped and counted, not shown (A158 records that the list does not yet say it is partial). The decide route takes the person from the session, refuses a payload hash that differs from the one on the approval, and refuses a comment that breaks the comment rule. The decide route's gate order and codes are in ADR 0017.
 
@@ -142,6 +147,14 @@ The four `/court` trials of 2026-10-04 on the product direction (the court is a 
 - **The recorded way packs are made** (run `20261004-172411`). Guilty 12 to 0, read as unproven, not condemned. Conditions, parked for steps 8 and 9: name and hand-write a first real pack and carry it through the signed install; a Studio cost estimate; one page on how staff fit, test and fix a pack for a client.
 
 The log also records the earlier `design.md` trial (run `20261004-142018`, guilty 12 to 0), which is covered by decision 56 above.
+
+After the PR opened, on 2026-10-04, the owner wrote about these screens: "Idk about this UI it I feel like its not what the purpose of what paperclip is actually built for and you re evaluate and reverse engineer the ui and to integrate it with our app". He later restated the goal: "I want a AI organization that works together than I can build continous workflows over so I can resell later." Neither is a recorded decision, and the roadmap is unchanged. What followed:
+
+- **A source review of Paperclip's own UI** at the pinned release (read from code and docs; nothing was run). Paperclip describes itself as the app for running a company of AI agents: agents with reporting lines, tasks, runs, routines, approvals, budgets and an audit log, all on by default. Pipelines and cases are experimental there: off by default, hidden when off, and its docs give experimental features no compatibility or support promise. Its README lists "Not a workflow builder" as a non-goal. Step 7's Approvals screens call Paperclip's default-on approvals API. Step 7's Cases screens, and the pack format from step 3, rest on pipelines and cases. The coordinator laid out three ways to integrate: embed Paperclip's UI, rebuild its main screens natively, or keep these screens and add its core in its own order. The owner has not chosen one.
+- **Keep these screens and add Paperclip's core natively, agents and tasks first** (run `20261004-200911`). Guilty 9 to 3. Not rejected: building natively in small steps. Rejected: a sequence with no size and no place on the roadmap. Conditions: size a thin agents-and-tasks slice by running it against the pinned Paperclip, with the live run split out; the owner records where those screens sit against steps 8 and 9; state one model for the Work area instead of keeping these screens "as built".
+- **Paperclip is the right tool** for an AI organization, continuous workflows and resale (run `20261004-201656`). Guilty 12 to 0, read as unproven, not condemned. The sentence: stop building on pipelines. Conditions: name one real workflow, hand-write it as a pack, install it and run it end to end on the pinned Paperclip using only its default-on core (agents, tasks, routines, approvals); a rough cost of staying against switching; one sentence each on what "organization" and "continuous" mean for that workflow, and what a pack buyer is promised.
+
+The owner then wrote "Can you finish step 7". The merge still needs his yes with CI green (section 6.3).
 
 Build rung: Jev picked sol at high for W1 (unsure; the coordinator's rule: the library is auth-adjacent and one-way), sol at xhigh for W2 (0.86 sure) and sol at high for W3 (unsure). gpt-6-astra and Fable did not run. Codex ran out of credits at DF1; Claude sonnet subagents built DF1, DF2 and CL1.
 
@@ -790,6 +803,8 @@ Sections 5.1 to 5.32 above are carried forward byte for byte from [the 2026-10-0
 | P96 | Precaution | W2's status gate compared a path that is not the mounted path, so it did nothing in the server (found by the coordinator's read; fixed in W2b). | Test the mounted router. A `/status` route gate under `app.route` must be registered between the auth middleware and the gate middleware, as in `src/adapters/dashboard/work.ts`, and `work.wiring.test.ts` requests `/api/work/status` through the mounted app. |
 | P97 | Precaution | Playwright hangs on `.click()` of an `aria-disabled` control. Two specs did it (W3 and R2b). A mock that keeps state between specs leaks one spec's result into the next. | Never `.click()` an `aria-disabled` control; assert its text and state instead. Reset the mock per spec. The log notes that the shared `Button` now delivers clicks while `aria-disabled`. |
 | P98 | Precaution | Codex's workspace ran out of credits at DF1 on 2026-10-04 (`gpt-6-sol` at xhigh exited 1 with no edits, 94k tokens). Claude sonnet subagents built DF1, DF2 and CL1 under the Codex-limit rule, and the coordinator reran every proof. | When Codex stops on credits, hand the build to a Claude builder with the same work order; the coordinator still reruns typecheck, build, unit and e2e itself. |
+| P99 | Precaution | Two layout specs that passed on macOS failed in CI, where the fonts are wider: a one-line metadata row overflowed at 375 px, and a spinner sat under 2 px from a button label. A third CI failure was the known flaky Chat spec (`artifacts.spec.ts:476`, a typing-speed limit); it passed on a re-run. | Do not assert a pixel gap or a one-line fit that depends on font width. Before pushing a layout spec, probe it with extra letter spacing (0.05em and 0.1em) at 375 and 768. Re-run the flaky Chat job; do not change code for it. |
+| A163 | Finding (open, owner) | Paperclip's own purpose and UI are a company of AI agents (agents, tasks, runs, routines, approvals, budgets, audit). Pipelines and cases, which the pack format (step 3) and step 7's Cases screens rest on, are experimental upstream and carry no compatibility promise. Two trials on 2026-10-04 (runs `20261004-200911` and `20261004-201656`) left conditions open (section 4.3). | Step 8 planning settles this with the owner before any specification: whether packs stay on pipelines or move to the default-on core, and which one real workflow proves the choice end to end. Moving the pack format is a one-way door and needs the owner's yes. |
 
 Recorded in the log without an ID:
 
@@ -803,22 +818,23 @@ Recorded in the log without an ID:
 
 ### 6.1 Smallest next action
 
-Check `git log -1` and `git status -sb` in the worktree. If the pull request is not open yet: run the final full validation (section 7), the s7-proof gate and a fresh critic on the tip, then push and open the PR into `development` (the owner's push and PR yes is recorded in section 4.3; the merge needs its own yes with the CI result in hand).
+Pull request #206 is open, and CI was green on `46d25c6`, the last code commit. Ask the owner for the merge yes with the CI result in hand, then merge with a merge commit (`gh pr merge 206 --merge --match-head-commit <full sha>`). After the merge, step 8 starts with the owner questions in section 6.3 (A163), before any specification.
 
 ### 6.2 Immediate next steps
 
-1. The final validation, the gate and the critic's verdict on the tip.
-2. Push and open the PR. The PR body records the validation list on the final commit, the critic's verdict, the existing tests this step updated (`authz-matrix.test.ts`, `approvals-paperclip.test.ts`, `route-manifest.test.ts`) and the named blocker for `npm run local:test:integration`.
+1. The merge of pull request #206: the owner's yes, with CI green on its head commit. The final validation, the gate and the critics' verdicts are in the PR description.
+2. After the merge: delete the merged branch, update the progress page and write the step 8 handoff.
 3. The owner's phone trial of the decide flow. The trial link the log gives is `http://10.102.112.216:5187/__work-trial`, a dev preview with made-up invoice data. The result is not recorded, and the log does not say whether that preview is still running. When the owner has tried it, record the result in `design.md` (stage two of its lock) and in decision 58's revisit trigger.
-4. Step 8, pack install and the signed license, is next. It takes the open conditions from the trials (A161): name and hand-write a first real pack and carry it through the signed install. It also decides field masking, key fields chosen by a pack and wiring the executor and `verifyApproval` (A140, A154).
+4. Step 8, pack install and the signed license, is next. It takes the open conditions from the trials (A161, A163): settle with the owner whether packs stay on Paperclip's experimental pipelines or move to its default-on core, then name and hand-write a first real pack and carry it through the signed install and a finished run. It also decides field masking, key fields chosen by a pack and wiring the executor and `verifyApproval` (A140, A154).
 
 ### 6.3 Blockers and open questions
 
-- [ ] Blocker: `npm run local:test:integration` was not run (the baseline records NOTRUN because port 4566 is held by the Netzar Chat local stack, and running it would mutate that emulator). Needs a free port 4566, or the CI run on the pull request.
+- [x] `npm run local:test:integration` was not run locally (port 4566 is held by the Netzar Chat local stack, and running it would mutate that emulator). CI's "Integration Tests (LocalStack)" job passed on pull request #206.
 - [ ] Owner gates: the merge needs the owner's yes. The push and PR yes is recorded (section 4.3).
 - [ ] The owner's phone trial of the decide flow: not recorded (section 6.2, item 3).
 - [ ] Open question for the owner, asked and not answered: does "conforming it to how our tables work" mean moving Paperclip's data into Netzar's own tables? If yes, it is a one-way door that supersedes ADRs 0010 and 0012. Nothing was changed for it.
 - [ ] The first real pack by name: the owner said there is no real package. The trial conditions stay open (A161).
+- [ ] Open for the owner (A163): the two trials after the PR opened say to stop building on pipelines and to prove one real workflow end to end on Paperclip's default-on core. Not decided: whether the pack format moves off pipelines (a one-way door: ADR 0018 and ADR 0021 would be superseded), which workflow is the proof, and where agents and tasks screens sit against steps 8 and 9.
 - [ ] Polish items the round 3 critic listed that CL1 did not take: R7 (a full-width error panel), R8 (the "Go to decision" threshold compares the payload height to the window, not to the form's position; not verified at runtime), R10 (a heading level skip in the empty and error states) and a repeated title in the confirm dialog. CL1 did give the Work availability error in `App.tsx` a page title and a sentence that names what failed.
 - [ ] Not verified in any capture (round 3 critic): hover, keyboard focus, 400% zoom and screen readers.
 - [ ] Carried review items: A158, A159, A160, A162 and S7-06 (section 5.33). R2 left items 10 and 12 partly done: four "health" lines in the older chat mock, and the toast has no role, so its text is asserted through its live region.
@@ -847,13 +863,13 @@ This table lists only what the step log records as run, with its numbers. Rows t
 | Command | Baseline `d1d3a66` | After changes |
 |---|---|---|
 | `npm run typecheck` | PASS | exit 0 at W2c, R1, `740a60e`, DF1 and DF2 (`c285bfd`, root and web both 0) |
-| `npm test` | PASS, 342 files, 4634 tests | 4808 of 4808 at W2c and W3; 4845 of 4845 at R1 and at `740a60e` |
+| `npm test` | PASS, 342 files, 4634 tests | 4808 of 4808 at W2c and W3; 4845 of 4845 at R1, at `740a60e`, on `cf2a9b0` and on `9ef4710` (350 files) |
 | `CCE_PAPERCLIP_ENABLED=1 npm test` | PASS, 342 files, 4634 tests | same counts as above. W2's first flag-on run had 3 failures; W2c fixed them (P95) |
 | `npm run build`, `npm --prefix web run typecheck`, `npm --prefix web run build` | PASS | exit 0 at `740a60e`; web typecheck, web build and build 0 at DF1 and DF2 |
 | Web unit tests | n/a | 6 of 6 (3 files) at `740a60e`; 8 of 8 at DF1 and at DF2 |
-| `npm run e2e:work` | n/a | W3: 11 of 13, then 18 of 18 three runs in a row; `740a60e`: 30 of 30 twice; `fd4d1a6`: 30 of 30; DF1: 51 of 51; `a46dd73`: 51 of 51; DF2 (`c285bfd`): 70 of 70; CL1 (`a2fc82d`): 74 of 74 |
-| Design gates G1 to G5 (25 route and size rows) | n/a | run 3 (after D1): 25 of 25; run 6 at `5df4a73` with a real brand colour: 25 of 25; run 7 at `c285bfd`: 25 of 25, detector clean. Density at 1280 by 720 in run 3: Inbox 10, Cases 11, Approvals 11 rows in view. Run 1 is void (M106) |
-| `npm run local:test:integration` | NOT RUN | NOT RUN |
+| `npm run e2e:work` | n/a | W3: 11 of 13, then 18 of 18 three runs in a row; `740a60e`: 30 of 30 twice; `fd4d1a6`: 30 of 30; DF1: 51 of 51; `a46dd73`: 51 of 51; DF2 (`c285bfd`): 70 of 70; CL1 (`a2fc82d`): 74 of 74; `46d25c6`: 74 of 74 locally and in CI |
+| Design gates G1 to G5 (25 route and size rows) | n/a | run 3 (after D1): 25 of 25; run 6 at `5df4a73` with a real brand colour: 25 of 25; run 7 at `c285bfd`: 25 of 25, detector clean. Density at 1280 by 720 in run 3: Inbox 10, Cases 11, Approvals 11 rows in view. Run 1 is void (M106) Runs 8 and 9 at `cf2a9b0` and `9ef4710`: 25 of 25, detector clean |
+| `npm run local:test:integration` | NOT RUN | NOT RUN locally. CI's "Integration Tests (LocalStack)" job passed on pull request #206 |
 | Docs gates: `docs-links`, `feature-knowledge`, `runnable-blocks`, `docs-assets`, `docs-mermaid` | `docs-links`, `feature-knowledge` OK | exit 0 on the docs commit `6914219` (the log says "five docs CI scripts exit 0"). This documentation pass, run by the docs writer on the uncommitted docs edits: the same five scripts and `GITHUB_BASE_REF=development node scripts/ci/diagrams-drift.mjs` all exit 0, and `git diff --check -- docs design.md` exits 0 |
 | Live reads S7-L1 to S7-L3 | n/a | PENDING |
 
@@ -863,6 +879,9 @@ Reviews and critics, all fresh read-only sub-agents:
 - Five reviewers on `6914219`: security 0 critical, 1 high, 2 medium, 7 low; code 0, 1, 12, 12; silent failures 3 critical, 8 high, 9 medium, 6 low; TypeScript 0, 5, 12, 15 (verdict BLOCK); tests 36 gaps (the top one: the server mount was untested, rated 9 of 10). R1 and R2 answered them.
 - Design critics round 2 (on the build after DF1): UX open 1 critical and 4 structural; Visual 1 and 3; Implementation 0 and 4. DF2 answered them. The blind A/B against GitHub's public pages: ours won, in round 2.
 - Design critic round 3 at `c285bfd`: open critical 0, open structural 0; the stop rule was met. Its polish list (R1 to R10) went to CL1 in part.
+- Final critic at `cf2a9b0` (no build context; it re-ran the gate itself): PASS. No critical or high finding. Two medium: clinical-style strings in two builder tests (fixed in `9ef4710`), and one stalled gate run that did not recur. Six low, carried in the PR description. A second fresh critic passed the `9ef4710` change.
+- The frozen gate passed on `cf2a9b0` and on `9ef4710`, with one amendment to its allowed-file list after the freeze: `web/tailwind.config.ts` was added (Jev 0.92 that this corrects an oversight; `design.md` names that file as the home for tokens). The frozen original is kept beside the amended copy, outside the repository. Jev on "did the review truly pass": yes, 0.89.
+- CI on pull request #206: every check green on `46d25c6`, after two fixes to layout specs that depended on font width and one re-run of the known flaky Chat spec (P99).
 
 Anything not run, and why: `npm run local:test:integration` (port 4566). A full `npm test` in both flag states and the frozen gate run on the commit that carries this file; their results are in the pull request description and the step log. No AWS call was made and nothing ran against a real Paperclip.
 
