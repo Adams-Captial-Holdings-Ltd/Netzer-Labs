@@ -267,7 +267,7 @@ function RowMeta({ cells, status, stacked }: { cells: Cell[]; status?: Component
     <span class={`mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 ${stacked ? '' : 'lg:mt-0 lg:contents'}`}>
       <span
         data-work="meta"
-        class={`min-w-0 max-w-full truncate text-caption text-secondary ${stacked ? '' : 'lg:contents'}`}
+        class={`min-w-0 max-w-full text-caption text-secondary ${stacked ? 'lg:truncate' : 'lg:contents'}`}
       >
         {cells.map(({ key, content, title, wide }, i) => (
           <span
