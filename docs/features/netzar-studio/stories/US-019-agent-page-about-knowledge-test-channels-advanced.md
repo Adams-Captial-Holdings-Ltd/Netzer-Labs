@@ -178,6 +178,7 @@
 
 ## 7. Definition of Done (DoD) Checklist
 *Before this story can be marked as complete:*
+- [ ] **Story exit gate (owner rule, all four required on the exact HEAD, evidence block recorded):** (1) code review: fresh critic, findings fixed or owner-waived; (2) unit tests: red SHA then green, full suite + typecheck; (3) UAT: every Given/When/Then scenario marked PASS and accepted; (4) E2E: run through the real entry point, happy + main failure path (or `N/A: reason` for docs/owner tasks). See [story-exit-gate](../story-exit-gate.md). Lessons in [LESSONS.md](../LESSONS.md) checked before PLANNING; any failure adds an entry with a guard. `PENDING` only for a gate needing an environment that does not exist yet (story is then Done locally).
 - [ ] Code is written and follows CLAUDE.md / CONTRIBUTING.md, minimum correct diff (/ponytail).
 - [ ] Peer code review is completed and approved. T2: fresh Claude critic + free checks (npm audit, secret scan, typecheck) + step maid (Q68).
 - [ ] A frozen failing test came first (red SHA recorded); the gate is green on a clean checkout of the exact HEAD: `npx vitest run src/lib/web-agents/ src/adapters/dashboard/authz-matrix.test.ts` and `npx playwright test --config tests/e2e/workspace/playwright.config.ts agent-page.spec.ts`; full `npm test` green.

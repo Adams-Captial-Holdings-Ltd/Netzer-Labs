@@ -11,6 +11,7 @@ Every Gauntlet step in the [backlog](../backlog.md) has one user story here, wri
 - **Points.** 1 point is about 1 hour of factory work, rounded to 1/2/3/5/8/13 (Q47).
 - **N/A lines.** A template line that doesn't apply says `N/A:` with the reason (designs on an ADR, deploy before the AWS account exists) (Q70).
 - **Personas.** A first-time AI user, B business process owner, E enterprise administrator (PRD 1.3), O factory operator, P design partner (Q54). C and D wait until 2027.
+- **Exit gate (owner rule 2026-10-24).** Every story passes code review, unit tests, UAT and E2E before anything moves forward, at every tier. See [story-exit-gate](../story-exit-gate.md) and [LESSONS](../LESSONS.md). The tier rule below only sets review depth.
 - **Review per tier (Q68).** T3 (schema, versions, security, engine, ADRs): full layers + one Greptile pass. T2 (UI and features): fresh critic + free checks + step maid. T1 and docs: free checks. Codex reviews only code someone else built (Q51).
 - **Done (Q50).** Merged to `development` with the owner's yes and verified locally; staging is PENDING until the AWS account (NZR-42) exists. Every merge or push needs the owner's yes.
 - **Analytics (Q55).** Named product events in the existing audit log, separate event type, no personal data.

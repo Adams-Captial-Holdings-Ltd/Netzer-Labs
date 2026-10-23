@@ -175,6 +175,7 @@
 
 ## 7. Definition of Done (DoD) Checklist
 *Before this story can be marked as complete:*
+- [ ] **Story exit gate (owner rule, all four required on the exact HEAD, evidence block recorded):** (1) code review: fresh critic, findings fixed or owner-waived; (2) unit tests: red SHA then green, full suite + typecheck; (3) UAT: every Given/When/Then scenario marked PASS and accepted; (4) E2E: run through the real entry point, happy + main failure path (or `N/A: reason` for docs/owner tasks). See [story-exit-gate](../story-exit-gate.md). Lessons in [LESSONS.md](../LESSONS.md) checked before PLANNING; any failure adds an entry with a guard. `PENDING` only for a gate needing an environment that does not exist yet (story is then Done locally).
 - [ ] Code is written and follows CLAUDE.md / CONTRIBUTING.md, minimum correct diff (/ponytail). For this spike: prototype code stays on `spike/nzr-33-engine` and is not merged; only `engine-spike.md`, the ADR and the handoff are merged.
 - [ ] Peer code review is completed and approved. Full review layers incl. one Greptile pass (Q68): fresh Claude critic (re-computes one cost row, re-checks the authority table) + security reviewer (T6 rows) (+ NVIDIA roles after bake-off); owner reviews and accepts the ADR.
 - [ ] A frozen failing test came first (red SHA recorded) for each fault in the spike tests on the spike branch; Docs CI green on the docs PR HEAD (`docs-links`, `feature-knowledge`, `runnable-blocks`).

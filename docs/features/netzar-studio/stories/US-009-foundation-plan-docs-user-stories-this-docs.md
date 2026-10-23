@@ -131,6 +131,7 @@
 
 ## 7. Definition of Done (DoD) Checklist
 *Before this story can be marked as complete:*
+- [ ] **Story exit gate (owner rule, all four required on the exact HEAD, evidence block recorded):** (1) code review: fresh critic, findings fixed or owner-waived; (2) unit tests: red SHA then green, full suite + typecheck; (3) UAT: every Given/When/Then scenario marked PASS and accepted; (4) E2E: run through the real entry point, happy + main failure path (or `N/A: reason` for docs/owner tasks). See [story-exit-gate](../story-exit-gate.md). Lessons in [LESSONS.md](../LESSONS.md) checked before PLANNING; any failure adds an entry with a guard. `PENDING` only for a gate needing an environment that does not exist yet (story is then Done locally).
 - [ ] Docs follow `docs/features/README.md`; `DOCS-ONLY` prints nothing; `STATUS` prints nothing.
 - [ ] Peer code review is completed and approved. Free checks only (Q68): docs CI, secret scan on the diff.
 - [ ] Docs CI green: `node scripts/ci/feature-knowledge.mjs`, `node scripts/ci/docs-links.mjs`, `node scripts/ci/runnable-blocks.mjs`, `node scripts/ci/docs-assets.mjs`; `TRACE` prints `uncovered: []`.
