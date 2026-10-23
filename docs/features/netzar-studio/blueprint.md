@@ -32,7 +32,7 @@ A person with no coding knowledge describes a business process in chat and gets 
 | Cuts | NZR-39, then NZR-37 (Paperclip retirement moves to January), then NZR-29, then NZR-18. Kill rule: drafter under 70% on the live eval at the Nov 23 gate stops UI work until the drafter is fixed. | 72 |
 | Capacity | One lane. Resize the VPS to 8 GB before running two lanes; Playwright runs serially. | 69 |
 | Plan docs | Before step 1 of new feature work: PRD, CONSTRAINTS, ARCHITECTURE, DATA-MODEL, SECURITY, DEPLOY, design.md (in [foundation/](foundation/CONSTRAINTS.md)). OBSERVABILITY and TEST-STRATEGY are C1 stories. | 48 |
-| Designs | Full MOCK set (phone + desktop, light mode, seeded sample data) for the Workflows slice. Every other screen is an inventory row marked NO-MOCK-YET with a due date. **Decision line (Q77):** this departs from the gauntlet PLAN gate wording "every screen has a screenshot"; accepted because the other screens are built weeks later and will change; revisit trigger: a NO-MOCK-YET screen reaching its step's PLANNING without a mock. Dark mode not required until CONSTRAINTS says so. | 49, 77 |
+| Designs | Full MOCK set (desktop only (Q108), light mode, seeded sample data) for the Workflows slice. Every other screen is an inventory row marked NO-MOCK-YET with a due date. **Decision line (Q77):** this departs from the gauntlet PLAN gate wording "every screen has a screenshot"; accepted because the other screens are built weeks later and will change; revisit trigger: a NO-MOCK-YET screen reaching its step's PLANNING without a mock. Dark mode not required until CONSTRAINTS says so. | 49, 77 |
 | Stories | One plan story + one step story per backlog item in the owner's template; N/A lines carry a reason; task stories written at each step's planning. Stories cite PRD IDs. Points: 1 pt ≈ 1 h, rounded to 1/2/3/5/8/13. | 70, 46, 47, 53 |
 | Tracking | Repo is the source of truth; Plane mirrors it only with the owner's yes. Plane NZR-41 (review gauntlet v2) is now in the repo backlog, scoped to wiring. The AWS account is NZR-42. US-n = NZR-n. | 53, 74, 76 |
 | Done | Merged to development (owner yes for every merge/push) + verified locally; staging PENDING until the AWS account exists. UAT = owner accepts a short demo; real testers for golden-workflow stories. | 50, 51 |
@@ -46,6 +46,23 @@ A person with no coding knowledge describes a business process in chat and gets 
 | Local env | Floci to ≥ 2.1.0 (ConverseStream proxy; verified in the Floci changelog, compatibility checked by smoke tests, pinned by digest). Keyword search locally, so local drafter knowledge scores are labelled not representative. | 90 |
 | Deploy | Never use the `staging` branch; owner adds a GitHub guard (disable the workflow or protect the branch). New account deployed with the repo's own `npm run up` from the VPS. Pilot webhook ingress via the existing Cloudflare tunnel scripts, decided in NZR-35 with a security review (signing + replay window, rate limit, body-size cap). Telegram and Slack off in the pilot. | 91, 92, 93 |
 | Housekeeping | The plan lands as one docs PR cut from origin/development. Fetch before every build. | 74, 80 |
+
+## 2b. Owner decisions, grill round 5 (2026-10-24, Q94 to Q116)
+
+- **Desktop only (Q108).** Mocks, screens and e2e target desktop 1440 x 900 only. No phone, no iPad. Replaces the phone + desktop rule (Q49) everywhere below.
+- **Guided builder (Q100 to Q104).** Home shows 6 big example cards plus "Something else" with a big mic. The builder asks one question per screen with 2 to 4 big answer buttons plus "Something else" (type or speak) and a progress bar ("2 of 4"). Chat is only an "Ask" box. Tapping a step offers Change who, Change what, Remove, Move up/down. Autosave everywhere, no Save button, a big Undo always visible.
+- **Accessibility (Q105).** 20px text in the builder, AAA 7:1 text contrast, a "Bigger text" button, usable at 200% zoom. Supersedes 18px (Q25) in the builder.
+- **Try it (Q106).** One "Try it" button with the sample already picked; show the finished result first ("Here's the report it would send you"). (Owner text cut off after "step...".)
+- **Help (Q107).** A "Help me" button on every screen explains that screen in plain words and can read it aloud. No arrow tours.
+- **Words (Q99).** Keep "workflow" or "process", and "agent"; the users are business people. Add a plain-words explanation beside them.
+- **Reference user (Q98, Q112).** "Margaret, 67": office manager, uses email and Facebook, has never heard the word "workflow". Tests on desktop.
+- **Testers (Q109).** Same bar as before, at least 2 of 5 testers are 60+, and "finished without tapping Help" is tracked as a product event.
+- **Look (Q96, Q97).** Clean look with each step lighting up as it runs; no dragging boxes. Stay Preact + Tailwind 3; copy shadcn's look as code, no new library. Recreate the animated chat box look in Tailwind/CSS (Q42).
+- **Missions (Q94).** Rebuilt on the new workflow engine (part of NZR-37, January).
+- **Approvals (Q95).** Approval before every external write in the MVP.
+- **Sandbox (Q85).** Sealed sandbox: yes.
+- **No Temporal (Q110).** Needs an always-on server, breaks serverless, $65 to 95 a month for the pilot. We build on AWS, so anything borrowed (its run view) must run on AWS serverless or managed services. (Owner text cut off after "Borrow its run-view and...".)
+- **Process (Q111 to Q116).** Apply round 5, start coding NZR-43 then NZR-5/6 without waiting for the docs PR review; NVIDIA free tier allowed for development with test data only (Q113); docs branch pushed and PR opened (Q114); Plane mirrored (Q115); AWS account open, Bedrock access requested (Q116).
 
 ## 3. Decisions kept from v1 (grill 1)
 | Area | Decision | Q |
@@ -121,10 +138,10 @@ Total: 205 points. Main risk: C2b holds 57 points in 2 weeks. If the Nov 9 re-pl
 9. Feature docs pass docs CI; Plane mirrors the plan after the owner's yes.
 
 ## 9. Open owner items
-- Open the AWS account and request Bedrock (NZR-42, this week; drop-dead Nov 9).
-- Read the NVIDIA free-tier terms and say yes or no (gates NVIDIA builders and reviewers).
+- AWS account is open and Bedrock access requested (Q116); NZR-42 verifies it is usable (drop-dead Nov 9).
+- NVIDIA free-tier: owner said yes (Q113).
 - Book 5 testers by Nov 15 (NZR-47); hold 2 design-partner calls by Nov 23 (NZR-46).
 - Answer the brief's owner-only questions: first insurance agency, what they pay today, who signs, pilot in PGN AWS (Q79).
 - GitHub: disable the `staging` deploy workflow or protect the branch (Q91; only the owner can change this setting).
 - Rotate the secrets exposed by `/api/config` after NZR-43 merges, in the rebuild and on legacy app.pgnos.ai (Q81, Q84).
-- Yes/no: push this branch and open the docs PR; mirror stories and the v2 backlog to Plane.
+- Docs PR and Plane mirror: owner said yes (Q114, Q115).

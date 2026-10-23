@@ -196,7 +196,7 @@ Concretely (round 5, design target "Margaret, 67", Q98): she taps one of 6 big e
   - [NZR-49 / US-049](US-049-plain-workflows-tab-list-new-open-draft.md) Plain Workflows tab: list, new, open draft
   - Uses NZR-18's mic if it is merged (Q100). Reads US-017's `nz_home_prefill`.
   - See NOTES for a suggested NZR-5 dependency.
-* **UI/UX Design:** design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-002, W-003). See [design.md](../foundation/design.md).
+* **UI/UX Design:** design.md Workflows slice gallery (MOCK, desktop only (Q108), light) (W-002, W-003). See [design.md](../foundation/design.md).
   - Current mocks: [W-002 describe](../../../assets/netzar-studio/mock/W-002-describe-desktop.png), [W-002 unclear](../../../assets/netzar-studio/mock/W-002-unclear-desktop.png), [W-002 model down](../../../assets/netzar-studio/mock/W-002-model-down-desktop.png), [W-003 clarify](../../../assets/netzar-studio/mock/W-003-clarify-desktop.png).
   - **PENDING OWNER Q100/Q101/Q102:** the current W-002/W-003 mocks show a chat transcript. The recommendation replaces it with three screens:
     1. A start screen with 6 big cards plus "Something else" (mic and text box).
@@ -389,7 +389,7 @@ getMeta(workflowId: string): Promise<WorkflowMeta | null>;
 *Before pulling this story into a sprint:*
 - [ ] User persona and "So That" benefit are clear and verified (Margaret, Q98 pending).
 - [ ] Acceptance criteria cover both happy paths and edge cases (9 scenarios: card, tap question, home prefill, permission, invalid, injection, authz, degraded, limits).
-- [ ] UX/UI designs are attached and finalized: design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-002, W-003) (MOCK screenshots; NO-MOCK-YET entries must be mocked before the step starts, Q77). If Q100–Q102 are accepted, the round-5 screens (6 cards, one-question tap screen, working, cannot-build, refused) are mocked at iPad and desktop.
+- [ ] UX/UI designs are attached and finalized: design.md Workflows slice gallery (MOCK, desktop only (Q108), light) (W-002, W-003) (MOCK screenshots; NO-MOCK-YET entries must be mocked before the step starts, Q77). If Q100–Q102 are accepted, the round-5 screens (6 cards, one-question tap screen, working, cannot-build, refused) are mocked at iPad and desktop.
 - [ ] Dependencies have been identified and are unblocked:
   - NZR-12 schema, validator and store with `appendDraftRev`
   - NZR-14 drafter v0 and baseline

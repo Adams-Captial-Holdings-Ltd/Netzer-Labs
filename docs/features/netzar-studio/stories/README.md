@@ -14,7 +14,7 @@ Every Gauntlet step in the [backlog](../backlog.md) has one user story here, wri
 - **Review per tier (Q68).** T3 (schema, versions, security, engine, ADRs): full layers + one Greptile pass. T2 (UI and features): fresh critic + free checks + step maid. T1 and docs: free checks. Codex reviews only code someone else built (Q51).
 - **Done (Q50).** Merged to `development` with the owner's yes and verified locally; staging is PENDING until the AWS account (NZR-42) exists. Every merge or push needs the owner's yes.
 - **Analytics (Q55).** Named product events in the existing audit log, separate event type, no personal data.
-- **Designs (Q49, Q77).** Full MOCK set (phone + desktop, light) for the Workflows slice; every other screen is an inventory row marked NO-MOCK-YET with a due date in [design.md](../foundation/design.md).
+- **Designs (Q49, Q77).** Full MOCK set (desktop only (Q108), light) for the Workflows slice; every other screen is an inventory row marked NO-MOCK-YET with a due date in [design.md](../foundation/design.md).
 
 ## Index
 

@@ -48,7 +48,7 @@
 
 ## 4. Technical Notes & Constraints
 * **Dependencies:** PGN AWS account with Bedrock access (NZR-42, drop-dead Nov 9); owner yes on NVIDIA free-tier terms before any repo code goes to NVIDIA (Q65); 5 testers booked by Nov 15 (NZR-47); 2 design-partner calls by Nov 23 (NZR-46). Full order in the [backlog](../backlog.md).
-* **UI/UX Design:** [design.md](../foundation/design.md): full MOCK set for the Workflows slice (W-01 to W-10, phone + desktop, light); every other screen has an inventory row marked NO-MOCK-YET with a due date (Q77).
+* **UI/UX Design:** [design.md](../foundation/design.md): full MOCK set for the Workflows slice (W-01 to W-10, desktop only (Q108), light); every other screen has an inventory row marked NO-MOCK-YET with a due date (Q77).
 * **Non-Functional Requirements:** [CONSTRAINTS.md](../foundation/CONSTRAINTS.md): NFR-001 to NFR-010 as numbers (Home interactive <= 3 s p95, draft <= 45 s p95, WCAG 2.2 AA with 18px Workspace text and 44px targets, zero unauthorized actions, zero duplicate external writes, spend caps). Security: [SECURITY.md](../foundation/SECURITY.md). Scale: <= 50 users and about 1,000 runs/day per install.
 * **Data & Analytics:** Named product events in the existing audit log as a separate event type with no personal data (Q55), catalogued in OBSERVABILITY.md (NZR-44). North-star: golden workflow completions (`journey.golden_completed`). Guardrails: drafter eval score, external writes during tests (must be 0), cost per draft.
 

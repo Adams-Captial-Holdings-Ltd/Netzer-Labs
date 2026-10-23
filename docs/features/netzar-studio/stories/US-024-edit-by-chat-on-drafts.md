@@ -166,7 +166,7 @@ Benefit: every change either keeps the draft valid or is refused with the old ve
   - [NZR-23 / US-023](US-023-workflow-drafter-describe-draft-or-clarifying-question.md) Workflow drafter: describe -> draft or clarifying question.
   - Also uses NZR-12's validator and store, through NZR-23.
   - Also uses NZR-25's preview, step sheet and step route. NZR-25 lists NZR-24 as a soft dependency; see NOTES for the order.
-* **UI/UX Design:** design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-006, W-007). See [design.md](../foundation/design.md).
+* **UI/UX Design:** design.md Workflows slice gallery (MOCK, desktop only (Q108), light) (W-006, W-007). See [design.md](../foundation/design.md).
   - Current mocks: [W-006 edit by chat](../../../assets/netzar-studio/mock/W-006-edit-by-chat-desktop.png), [W-007 history](../../../assets/netzar-studio/mock/W-007-history-desktop.png).
   - **PENDING OWNER Q101:** chat is an "Ask" box under the steps, not a scrolling transcript. The box has:
     - one line of text, plus a mic if NZR-18 is merged
@@ -368,7 +368,7 @@ export function isUndoRequest(text: string): boolean;   // /^\s*(undo( that| it)
 *Before pulling this story into a sprint:*
 - [ ] User persona and "So That" benefit are clear and verified (Margaret, Q98 pending).
 - [ ] Acceptance criteria cover both happy paths and edge cases: chat edit, refusal, undo/history, Change what, AC-020 removal, authz, concurrency, degraded.
-- [ ] UX/UI designs are attached and finalized: design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-006, W-007) (MOCK screenshots; NO-MOCK-YET entries must be mocked before the step starts, Q77). If Q101/Q104 are accepted, also: the Ask box, the always-visible Undo, the removed-step card, at iPad and desktop.
+- [ ] UX/UI designs are attached and finalized: design.md Workflows slice gallery (MOCK, desktop only (Q108), light) (W-006, W-007) (MOCK screenshots; NO-MOCK-YET entries must be mocked before the step starts, Q77). If Q101/Q104 are accepted, also: the Ask box, the always-visible Undo, the removed-step card, at iPad and desktop.
 - [ ] Dependencies have been identified and are unblocked:
   - NZR-23 merged, with the session pattern, `QuestionScreen` and `workflow_draft_saved`
   - NZR-12 store with the optional `undoTo`/`changes` fields

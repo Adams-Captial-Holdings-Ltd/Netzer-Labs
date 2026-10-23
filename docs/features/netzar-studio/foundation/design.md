@@ -8,7 +8,9 @@ as_of_commit: d1d3a66970cd548f9529a234ef2b51ecdc29378e
 
 # Netzar Studio rebuild: design
 
-> Foundation PLAN design doc. Owner rules: Q49 (every state, marked MOCK) as refined by Q77 (full mocks only for the Workflows slice, phone + desktop, light mode, seeded sample data; every other screen is an inventory row marked NO-MOCK-YET with a date). The departure from the PLAN-gate wording "every screen has a screenshot" is recorded in [blueprint v2](../blueprint.md) section 2 (Designs) and becomes a line in the C1 mock-policy ADR (NZR-8).
+> Foundation PLAN design doc. Owner rules: Q49 (every state, marked MOCK) as refined by Q77 (full mocks only for the Workflows slice, desktop only (Q108), light mode, seeded sample data; every other screen is an inventory row marked NO-MOCK-YET with a date). The departure from the PLAN-gate wording "every screen has a screenshot" is recorded in [blueprint v2](../blueprint.md) section 2 (Designs) and becomes a line in the C1 mock-policy ADR (NZR-8).
+
+> **Round 5 override (Q108):** desktop only. Ignore every Phone column and phone viewport below; no phone mocks are produced or tested. See blueprint section 2b for the guided-builder rules (Q100 to Q107).
 
 ## Owner decisions, grill round 4 (2026-10-23)
 
@@ -148,7 +150,7 @@ The States column below lists only states the page builds itself, plus "denied (
 
 ### 3. New screens for the rebuild
 
-**Mock status (Q77).** The Workflows slice needs full mocks before build: every state, phone and desktop, light mode, seeded sample data, marked MOCK. Every other screen is **NO-MOCK-YET**. Mock-due dates below are the planner's proposal (owner may change them):
+**Mock status (Q77).** The Workflows slice needs full mocks before build: every state, desktop only (Q108), light mode, seeded sample data, marked MOCK. Every other screen is **NO-MOCK-YET**. Mock-due dates below are the planner's proposal (owner may change them):
 - Workflows slice mocks: **done** 2026-10-23 (section 2); remaining slice states due Nov 9.
 - Workspace, Home and Admin mocks: due **Nov 23** (that work starts around Nov 24).
 

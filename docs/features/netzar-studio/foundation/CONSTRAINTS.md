@@ -47,7 +47,7 @@ as_of_commit: d1d3a66970cd548f9529a234ef2b51ecdc29378e
 | C-23 | Touch targets | >= 44 x 44 px | computed-style check | blueprint 7.5 |
 | C-24 | Motion | `prefers-reduced-motion` disables animation; no function depends on motion | Playwright with reduced motion | NZR-17 |
 | C-25 | Colour scheme | light mode required; dark mode not required for MVP (revisit trigger: an owner or tester request) | design.md | Q77 |
-| C-26 | Viewports | phone 390 x 844 and desktop 1440 x 900 | mock + e2e screenshots | Q49 |
+| C-26 | Viewports | desktop 1440 x 900 only (Q108) | mock + e2e screenshots | Q49 |
 
 ## 4. Usability (people, not machines)
 
