@@ -10,6 +10,11 @@ as_of_commit: d1d3a66970cd548f9529a234ef2b51ecdc29378e
 
 > Foundation PLAN design doc. Owner rules: Q49 (every state, marked MOCK) as refined by Q77 (full mocks only for the Workflows slice, phone + desktop, light mode, seeded sample data; every other screen is an inventory row marked NO-MOCK-YET with a date). The departure from the PLAN-gate wording "every screen has a screenshot" is recorded in [blueprint v2](../blueprint.md) section 2 (Designs) and becomes a line in the C1 mock-policy ADR (NZR-8).
 
+## Owner decisions, grill round 4 (2026-10-23)
+
+- **O-1 / Q87.** Home at `/` for everyone; Overview at `/overview` with a redirect; ROUTE_TABLE, nav manifest tests, tour, walkthrough and first-run redirect updated in NZR-15.
+- **O-2 / Q86.** The Admin link shows to anyone holding any Admin-screen capability and lists only what they can open; server-side checks stay on every screen.
+
 ## 1. Rules every Workspace screen follows
 
 - Plain words, no jargon. Every status says what happened and what to do next. Never show raw JSON, stack traces or model ids to business users.

@@ -1,6 +1,6 @@
-# [US-046] Book 5 testers + friendly dry-run (synthetic documents)
+# [US-047] Book 5 testers + friendly dry-run (synthetic documents)
 
-> Backlog task NZR-46 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: OBJ-001. Provisional ID: confirmed when the Plane mirror creates it.
+> Backlog task NZR-47 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: OBJ-001. Provisional ID: confirmed when the Plane mirror creates it.
 
 ## 1. User Story Statement
 * **As a** Persona A, first-time AI user (PRD 1.3)

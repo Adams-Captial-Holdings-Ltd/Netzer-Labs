@@ -1,6 +1,6 @@
-# [US-048] Plain Workflows tab: list, new, open draft
+# [US-049] Plain Workflows tab: list, new, open draft
 
-> Backlog task NZR-48 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: AC-001, FR-001. Provisional ID: confirmed when the Plane mirror creates it.
+> Backlog task NZR-49 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: AC-001, FR-001. Provisional ID: confirmed when the Plane mirror creates it.
 
 ## 1. User Story Statement
 * **As a** Persona A, first-time AI user (PRD 1.3)
@@ -40,7 +40,7 @@
 * **Dependencies:** [NZR-12 / US-012](US-012-workflow-definition-schema-validator.md) Workflow definition schema + validator
 * **UI/UX Design:** design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-001, W-013). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** Text >= 18px, targets >= 44px, axe 0 serious/critical on this tab. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `workflow.list_viewed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `workflow.list_viewed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

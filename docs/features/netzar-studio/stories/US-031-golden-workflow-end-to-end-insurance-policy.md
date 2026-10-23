@@ -32,10 +32,10 @@
 ---
 
 ## 4. Technical Notes & Constraints
-* **Dependencies:** [NZR-48 / US-048](US-048-plain-workflows-tab-list-new-open-draft.md) Plain Workflows tab: list, new, open draft; [NZR-23 / US-023](US-023-workflow-drafter-describe-draft-or-clarifying-question.md) Workflow drafter: describe -> draft or clarifying question; [NZR-24 / US-024](US-024-edit-by-chat-on-drafts.md) Edit-by-chat on drafts; [NZR-25 / US-025](US-025-plain-language-preview-numbered-steps-no-canvas.md) Plain-language preview (numbered steps, no canvas) + agent picker; [NZR-26 / US-026](US-026-sample-data-test-runner-sealed-sandbox-ready.md) Sample-data test runner (sealed sandbox) + Ready flag
+* **Dependencies:** [NZR-49 / US-049](US-049-plain-workflows-tab-list-new-open-draft.md) Plain Workflows tab: list, new, open draft; [NZR-23 / US-023](US-023-workflow-drafter-describe-draft-or-clarifying-question.md) Workflow drafter: describe -> draft or clarifying question; [NZR-24 / US-024](US-024-edit-by-chat-on-drafts.md) Edit-by-chat on drafts; [NZR-25 / US-025](US-025-plain-language-preview-numbered-steps-no-canvas.md) Plain-language preview (numbered steps, no canvas) + agent picker; [NZR-26 / US-026](US-026-sample-data-test-runner-sealed-sandbox-ready.md) Sample-data test runner (sealed sandbox) + Ready flag
 * **UI/UX Design:** design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-001 to W-013). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** Playwright serial on the VPS. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `journey.golden_completed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `journey.golden_completed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 
@@ -52,7 +52,7 @@
 - [ ] User persona and "So That" benefit are clear and verified.
 - [ ] Acceptance criteria cover both happy paths and edge cases.
 - [ ] UX/UI designs are attached and finalized: design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-001 to W-013) (MOCK screenshots; NO-MOCK-YET entries must be mocked before the step starts, Q77).
-- [ ] Dependencies have been identified and are unblocked (NZR-48, NZR-23, NZR-24, NZR-25, NZR-26).
+- [ ] Dependencies have been identified and are unblocked (NZR-49, NZR-23, NZR-24, NZR-25, NZR-26).
 - [ ] The team has reviewed and estimated the story points (3 pts; re-checked at the Nov 9 re-plan, Q71).
 - [ ] Task stories (build slices) are written at this step's PLANNING, before code (Q70).
 

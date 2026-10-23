@@ -1,6 +1,6 @@
-# [US-047] Design partner runs the golden workflow live + paid pilot or LOI
+# [US-048] Design partner runs the golden workflow live + paid pilot or LOI
 
-> Backlog task NZR-47 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: OBJ-008, OBJ-005. Provisional ID: confirmed when the Plane mirror creates it.
+> Backlog task NZR-48 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: OBJ-008, OBJ-005. Provisional ID: confirmed when the Plane mirror creates it.
 
 ## 1. User Story Statement
 * **As a** Design partner (first insurance agency; Q63)
@@ -32,7 +32,7 @@
 ---
 
 ## 4. Technical Notes & Constraints
-* **Dependencies:** [NZR-38 / US-038](US-038-pilot-deploy-to-pgn-aws-account-runbook.md) Pilot deploy to PGN AWS account + runbook; [NZR-45 / US-045](US-045-business-brief-icp-single-pain-price-hypothesis.md) Business brief: ICP, single pain, price hypothesis, 2 partner calls
+* **Dependencies:** [NZR-38 / US-038](US-038-pilot-deploy-to-pgn-aws-account-runbook.md) Pilot deploy to PGN AWS account + runbook; [NZR-46 / US-046](US-046-business-brief-icp-single-pain-price-hypothesis.md) Business brief: ICP, single pain, price hypothesis, 2 partner calls
 * **UI/UX Design:** N/A: business outcome.
 * **Non-Functional Requirements:** Partner consent recorded; no customer production data. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
 * **Data & Analytics:** N/A: no product event for this step; standard audit entries only.
@@ -52,7 +52,7 @@
 - [ ] User persona and "So That" benefit are clear and verified.
 - [ ] Acceptance criteria cover both happy paths and edge cases.
 - [ ] UX/UI designs: N/A: business outcome.
-- [ ] Dependencies have been identified and are unblocked (NZR-38, NZR-45).
+- [ ] Dependencies have been identified and are unblocked (NZR-38, NZR-46).
 - [ ] The team has reviewed and estimated the story points (2 pts; re-checked at the Nov 9 re-plan, Q71).
 - [ ] Task stories (build slices) are written at this step's PLANNING, before code (Q70).
 

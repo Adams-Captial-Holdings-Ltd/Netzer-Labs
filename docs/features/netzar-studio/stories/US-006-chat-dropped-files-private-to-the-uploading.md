@@ -29,10 +29,15 @@
 * **When** B's chat or any knowledge route tries to retrieve A's file
 * **Then** nothing from A's file is returned and the denial is audited
 
-### Scenario 3: Existing files
-* **Given** files dropped before the fix
-* **When** the fix is deployed locally
-* **Then** they become private to their original chat (or are flagged for review if the owner chat is unknown), never public
+### Scenario 3: Old files fail closed
+* **Given** files dropped before the fix, with no record of who uploaded them
+* **When** the fix runs
+* **Then** they become admin-only (quarantined), never public, and the move is audited
+
+### Scenario 4: Reassign list
+* **Given** quarantined files
+* **When** an admin opens the list
+* **Then** each file shows name, agent, date and size, and the admin can reassign it to a chat or delete it
 
 ---
 
@@ -40,7 +45,7 @@
 * **Dependencies:** None.
 * **UI/UX Design:** N/A: no user interface in this step.
 * **Non-Functional Requirements:** No data migration that loses files; expand/contract only. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `security.scope_denied (audit)`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `security.scope_denied (audit)`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

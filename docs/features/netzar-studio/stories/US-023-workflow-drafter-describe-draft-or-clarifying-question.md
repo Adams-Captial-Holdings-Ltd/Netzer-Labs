@@ -10,7 +10,7 @@
 ---
 
 ## 2. Business Context & Description
-* **Background:** The core of the product. The drafter is an agent prompt + tools reading the agent's knowledge (and playbooks once NZR-27 lands). Asks at most 3 clarifying questions. Kill rule (Q72): under 70% on the live eval at the Nov 23 gate stops UI work.
+* **Background:** The core of the product. The drafter prompt ships in the repo as product code (Q88), so the eval can hash it; the S3 copy is seeded from the repo version at deploy (ADR line in NZR-8). It is an agent prompt + tools reading the agent's knowledge (and playbooks once NZR-27 lands). Asks at most 3 clarifying questions. Kill rule (Q72): under 70% on the live eval at the Nov 23 gate stops UI work.
 * **Target Value:** >= 80% of 30 eval cases give a schema-valid draft in <= 3 questions (target); >= 70% at Nov 23 (kill line).
 * **User Persona Profile:** Persona A, first-time AI user (PRD 1.3). PRD: [foundation/PRD.md](../foundation/PRD.md).
 
@@ -42,10 +42,10 @@
 ---
 
 ## 4. Technical Notes & Constraints
-* **Dependencies:** [NZR-12 / US-012](US-012-workflow-definition-schema-validator.md) Workflow definition schema + validator; [NZR-14 / US-014](US-014-drafter-eval-set-30-cases-scorer-live.md) Drafter eval set (30 cases) + scorer + live baseline; [NZR-48 / US-048](US-048-plain-workflows-tab-list-new-open-draft.md) Plain Workflows tab: list, new, open draft
+* **Dependencies:** [NZR-12 / US-012](US-012-workflow-definition-schema-validator.md) Workflow definition schema + validator; [NZR-14 / US-014](US-014-drafter-eval-set-30-cases-scorer-live.md) Drafter eval set (30 cases) + scorer + live baseline; [NZR-49 / US-049](US-049-plain-workflows-tab-list-new-open-draft.md) Plain Workflows tab: list, new, open draft
 * **UI/UX Design:** design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-002, W-003). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** NFR-002 ack <= 3 s; NFR-003 <= 45 s p95; cost per draft logged. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `workflow.draft_requested`, `workflow.draft_created`, `workflow.clarify_asked`, `workflow.draft_failed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `workflow.draft_requested`, `workflow.draft_created`, `workflow.clarify_asked`, `workflow.draft_failed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 
@@ -62,7 +62,7 @@
 - [ ] User persona and "So That" benefit are clear and verified.
 - [ ] Acceptance criteria cover both happy paths and edge cases.
 - [ ] UX/UI designs are attached and finalized: design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-002, W-003) (MOCK screenshots; NO-MOCK-YET entries must be mocked before the step starts, Q77).
-- [ ] Dependencies have been identified and are unblocked (NZR-12, NZR-14, NZR-48).
+- [ ] Dependencies have been identified and are unblocked (NZR-12, NZR-14, NZR-49).
 - [ ] The team has reviewed and estimated the story points (8 pts; re-checked at the Nov 9 re-plan, Q71).
 - [ ] Task stories (build slices) are written at this step's PLANNING, before code (Q70).
 

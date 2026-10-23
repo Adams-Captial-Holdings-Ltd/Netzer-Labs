@@ -45,7 +45,7 @@
 * **Dependencies:** [NZR-5 / US-005](US-005-fix-vectors-scope-leak-knowledge-routes-enforce.md) Fix /vectors scope leak: knowledge routes enforce agent scope
 * **UI/UX Design:** design.md screen inventory (NO-MOCK-YET). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** Audit every decision. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `fact.proposed`, `fact.approved`, `fact.rejected`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `fact.proposed`, `fact.approved`, `fact.rejected`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

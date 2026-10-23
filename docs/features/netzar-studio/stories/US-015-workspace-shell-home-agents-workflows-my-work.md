@@ -29,13 +29,23 @@
 * **When** they open it
 * **Then** they land on the new home of that screen, not a 404
 
+### Scenario 3: Home owns /
+* **Given** any signed-in user
+* **When** they open `/`
+* **Then** Home loads; Overview is at `/overview` and the old Overview path redirects there
+
+### Scenario 4: Lists stay in sync
+* **Given** the route change
+* **When** the drift and nav manifest tests run
+* **Then** Sidebar NAV_ITEMS, App routes and Jarvis ROUTE_TABLE agree, and the tour, walkthrough and first-run redirect point at the new paths
+
 ---
 
 ## 4. Technical Notes & Constraints
 * **Dependencies:** [NZR-31 / US-031](US-031-golden-workflow-end-to-end-insurance-policy.md) Golden workflow end to end: insurance policy review
 * **UI/UX Design:** design.md screen inventory (NO-MOCK-YET until Nov 24). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** NFR-001 Home interactive <= 3 s p95; 18px; 44px targets. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `nav.area_opened`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `nav.area_opened`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

@@ -10,7 +10,7 @@
 ---
 
 ## 2. Business Context & Description
-* **Background:** Q11-Q16, Q29-Q31 from grill 1 plus grill 2: pilot in PGN's own AWS account as a written exception to the customer-hosted data-plane rule (Q64); NO-MOCK-YET screens departing from the PLAN gate wording (Q77); live eval with hash-checked results (Q66).
+* **Background:** Q11-Q16, Q29-Q31 from grill 1 plus grill 2: pilot in PGN's own AWS account as a written exception to the customer-hosted data-plane rule (Q64); NO-MOCK-YET screens departing from the PLAN gate wording (Q77); live eval with hash-checked results, run on the VPS only (Q66, Q89); drafter prompt ships in the repo and seeds S3 at deploy, an exception to "prompts live in S3" (Q88).
 * **Target Value:** 6 ADRs merged with scale/maintainability/cost/reliability trade-offs.
 * **User Persona Profile:** Factory operator (the owner running the VPS gauntlet; Q54). PRD: [foundation/PRD.md](../foundation/PRD.md).
 

@@ -10,7 +10,7 @@
 ---
 
 ## 2. Business Context & Description
-* **Background:** Known leak found in discovery: `/vectors`, `/vectors/search` and `/vectors/answer` accept any scope. Q62/Q75: patched in week 0 as a T3 security-boundary step (failing test first, highest effort, owner review), in parallel with the docs because the files don't overlap. SECURITY.md cites this step's tests as evidence.
+* **Background:** Known leak found in discovery: `/vectors`, `/vectors/search` and `/vectors/answer` accept any scope. Owner rule (Q82), defined in SECURITY.md: admins and the agent's own runtime read an agent's private scope; everyone else reads shared/company scopes and their own chat files only. Q62/Q75: patched in week 0 as a T3 security-boundary step (failing test first, highest effort, owner review), in parallel with the docs because the files don't overlap. SECURITY.md cites this step's tests as evidence.
 * **Target Value:** 0 successful cross-scope reads in permission tests (NFR-010).
 * **User Persona Profile:** Persona E, enterprise administrator (PRD 1.3). PRD: [foundation/PRD.md](../foundation/PRD.md).
 
@@ -19,17 +19,22 @@
 ## 3. Acceptance Criteria (Confirmation)
 *Use the BDD (Behavior-Driven Development) "Given-When-Then" format for clarity.*
 
-### Scenario 1: Own scope works
-* **Given** a viewer with access to agent X
-* **When** they call `/vectors/search` for X's scope
-* **Then** results return as before
+### Scenario 1: Admin reads private
+* **Given** an admin
+* **When** they call `/vectors/search` on agent X's private scope
+* **Then** results return (one test for the admin role)
 
-### Scenario 2: Other scope denied
-* **Given** a viewer without access to agent Y's private scope
-* **When** they call `/vectors`, `/vectors/search` or `/vectors/answer` with Y's scope
-* **Then** each returns 403 with a plain error, no data, and an audit entry
+### Scenario 2: Agent runtime reads its own private
+* **Given** agent X running a turn
+* **When** it searches its own private scope
+* **Then** results return; it cannot search agent Y's private scope (one test for the agent role)
 
-### Scenario 3: No scope given
+### Scenario 3: Viewer limited to shared + own chat files
+* **Given** a viewer
+* **When** they call `/vectors`, `/vectors/search` or `/vectors/answer` on any agent's private scope
+* **Then** each returns 403 with a plain error, no data, and an audit entry; shared/company scopes and their own chat files still work (one test for the viewer role)
+
+### Scenario 4: No scope given
 * **Given** any viewer
 * **When** they call a `/vectors*` route with no or a malformed scope
 * **Then** the request is rejected (400) rather than defaulting to a broad scope
@@ -37,10 +42,10 @@
 ---
 
 ## 4. Technical Notes & Constraints
-* **Dependencies:** None.
+* **Dependencies:** [NZR-43 / US-043](US-043-fix-api-config-secret-exposure-category-allowlist.md) Fix /api/config secret exposure: category allowlist, server-side deny, masking
 * **UI/UX Design:** N/A: no user interface in this step.
 * **Non-Functional Requirements:** Authz checked server-side; existing 4,634+ tests still pass. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `security.scope_denied (audit)`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `security.scope_denied (audit)`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 
@@ -57,7 +62,7 @@
 - [ ] User persona and "So That" benefit are clear and verified.
 - [ ] Acceptance criteria cover both happy paths and edge cases.
 - [ ] UX/UI designs: N/A: no user interface in this step.
-- [ ] Dependencies have been identified and are unblocked (none).
+- [ ] Dependencies have been identified and are unblocked (NZR-43).
 - [ ] The team has reviewed and estimated the story points (5 pts; re-checked at the Nov 9 re-plan, Q71).
 - [ ] Task stories (build slices) are written at this step's PLANNING, before code (Q70).
 

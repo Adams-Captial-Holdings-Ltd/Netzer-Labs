@@ -35,7 +35,7 @@
 * **Dependencies:** [NZR-33 / US-033](US-033-spike-step-functions-vs-own-dynamodb-engine.md) Spike: Step Functions vs own DynamoDB engine
 * **UI/UX Design:** N/A: engine; run history UI is in My Work.
 * **Non-Functional Requirements:** NFR-008 zero duplicate writes. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `run.started`, `run.completed`, `run.failed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `run.started`, `run.completed`, `run.failed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

@@ -20,7 +20,7 @@ Every Gauntlet step in the [backlog](../backlog.md) has one user story here, wri
 
 | Story | Cycle | Pts | Tier | Priority | Persona | Requirement IDs |
 |---|---|---|---|---|---|---|
-| [US-000](US-000-netzar-studio-rebuild.md) Netzar Studio rebuild (plan) | all | 200 | T3 | Must Have | A, B, E, P | OBJ-001, OBJ-005, OBJ-006, OBJ-008 |
+| [US-000](US-000-netzar-studio-rebuild.md) Netzar Studio rebuild (plan) | all | 205 | T3 | Must Have | A, B, E, P | OBJ-001, OBJ-005, OBJ-006, OBJ-008 |
 | [US-003](US-003-clean-clone-builder-workspace-on-the-vps.md) Clean-clone builder workspace on the VPS (no .env, lockfile installs) | C0 | 3 | T2 | Must Have | O | OBJ-006, NFR-007 |
 | [US-005](US-005-fix-vectors-scope-leak-knowledge-routes-enforce.md) Fix /vectors scope leak: knowledge routes enforce agent scope | C0 | 5 | T3 | Must Have | E | FR-012, FR-029, NFR-007, NFR-010 |
 | [US-006](US-006-chat-dropped-files-private-to-the-uploading.md) Chat-dropped files private to the uploading chat | C0 | 5 | T3 | Must Have | E | FR-012, FR-029, NFR-010 |
@@ -28,6 +28,7 @@ Every Gauntlet step in the [backlog](../backlog.md) has one user story here, wri
 | [US-040](US-040-gauntlet-model-routing-on-the-vps-codex.md) Gauntlet model routing on the VPS: Codex builds, fresh Claude critic, NVIDIA roles after bake-off | C0 | 5 | T2 | Must Have | O | NFR-009 |
 | [US-041](US-041-review-gauntlet-v2-wiring-q68-tier-policy.md) Review gauntlet v2 wiring: Q68 tier policy + Kodus/CodeRabbit on the VPS | C0 | 3 | T2 | Should Have | O | NFR-007 |
 | [US-042](US-042-open-pgn-aws-account-request-bedrock-model.md) Open PGN AWS account + request Bedrock model access (owner, drop-dead Nov 9) | C0 | 1 | N/A | Must Have | O | OBJ-006 |
+| [US-043](US-043-fix-api-config-secret-exposure-category-allowlist.md) Fix /api/config secret exposure: category allowlist, server-side deny, masking | C0 | 5 | T3 | Must Have | E | NFR-007, FR-015 |
 | [US-007](US-007-adrs-supersede-0012-0017-d21-amend-do.md) ADRs: supersede 0012 + 0017 d21, amend do-not-build #1 | C1 | 3 | T3 | Must Have | O | FR-030, OBJ-007 |
 | [US-008](US-008-adrs-workflows-as-data-eval-flywheel-knowledge.md) ADRs: workflows-as-data, eval flywheel, knowledge layers, agent runtime, pilot hosting, mock policy | C1 | 5 | T3 | Must Have | O | OBJ-004, OBJ-006, FR-012, FR-027 |
 | [US-010](US-010-local-model-env-floci-nvidia-dev-backend.md) Local model env: Floci + NVIDIA dev backend (test data only) | C1 | 5 | T2 | Must Have | O | NFR-009 |
@@ -35,17 +36,17 @@ Every Gauntlet step in the [backlog](../backlog.md) has one user story here, wri
 | [US-012](US-012-workflow-definition-schema-validator.md) Workflow definition schema + validator | C1 | 5 | T3 | Must Have | B | FR-001, FR-004, FR-008, AC-002, AC-020, AC-021 |
 | [US-013](US-013-trigger-contract-design-webhook-api-form-embed.md) Trigger contract design (webhook/api/form/embed/integration/schedule) | C1 | 2 | T3 | Should Have | B | FR-011, AC-026 |
 | [US-014](US-014-drafter-eval-set-30-cases-scorer-live.md) Drafter eval set (30 cases) + scorer + live baseline | C1 | 5 | T2 | Must Have | B | FR-001, FR-027, NFR-003 |
-| [US-043](US-043-observability-md-logs-product-events-run-history.md) OBSERVABILITY.md: logs, product events, run history, alerts | C1 | 3 | T1 | Should Have | E | FR-014, FR-023 |
-| [US-044](US-044-test-strategy-md-pyramid-replay-vs-live.md) TEST-STRATEGY.md: pyramid, replay vs live eval, e2e journeys | C1 | 3 | T1 | Should Have | O | FR-027, NFR-005 |
-| [US-045](US-045-business-brief-icp-single-pain-price-hypothesis.md) Business brief: ICP, single pain, price hypothesis, 2 partner calls | C1 | 2 | N/A | Must Have | P | OBJ-008 |
-| [US-046](US-046-book-5-testers-friendly-dry-run-synthetic.md) Book 5 testers + friendly dry-run (synthetic documents) | C1 | 1 | N/A | Must Have | A | OBJ-001 |
+| [US-044](US-044-observability-md-logs-product-events-run-history.md) OBSERVABILITY.md: logs, product events, run history, alerts | C1 | 3 | T1 | Should Have | E | FR-014, FR-023 |
+| [US-045](US-045-test-strategy-md-pyramid-replay-vs-live.md) TEST-STRATEGY.md: pyramid, replay vs live eval, e2e journeys | C1 | 3 | T1 | Should Have | O | FR-027, NFR-005 |
+| [US-046](US-046-business-brief-icp-single-pain-price-hypothesis.md) Business brief: ICP, single pain, price hypothesis, 2 partner calls | C1 | 2 | N/A | Must Have | P | OBJ-008 |
+| [US-047](US-047-book-5-testers-friendly-dry-run-synthetic.md) Book 5 testers + friendly dry-run (synthetic documents) | C1 | 1 | N/A | Must Have | A | OBJ-001 |
 | [US-023](US-023-workflow-drafter-describe-draft-or-clarifying-question.md) Workflow drafter: describe -> draft or clarifying question | C2a | 8 | T2 | Must Have | A | FR-001, FR-002, AC-002, AC-003, AC-004, AC-010, NFR-002, NFR-003 |
 | [US-024](US-024-edit-by-chat-on-drafts.md) Edit-by-chat on drafts | C2a | 5 | T2 | Must Have | A | FR-020, AC-007, AC-020 |
 | [US-025](US-025-plain-language-preview-numbered-steps-no-canvas.md) Plain-language preview (numbered steps, no canvas) + agent picker | C2a | 5 | T2 | Must Have | A | FR-004, AC-003, AC-006 |
 | [US-026](US-026-sample-data-test-runner-sealed-sandbox-ready.md) Sample-data test runner (sealed sandbox) + Ready flag | C2a | 8 | T3 | Must Have | A | FR-005, AC-005, FR-014, NFR-008 |
 | [US-030](US-030-live-eval-gate-per-drafter-change-nightly.md) Live eval gate: per drafter change + nightly, hash-checked in CI | C2a | 3 | T2 | Must Have | O | FR-027 |
 | [US-031](US-031-golden-workflow-end-to-end-insurance-policy.md) Golden workflow end to end: insurance policy review | C2a | 3 | T2 | Must Have | B | AC-001, AC-002, AC-003, AC-004, AC-005, AC-006, AC-007 |
-| [US-048](US-048-plain-workflows-tab-list-new-open-draft.md) Plain Workflows tab: list, new, open draft | C2a | 3 | T2 | Must Have | A | AC-001, FR-001 |
+| [US-049](US-049-plain-workflows-tab-list-new-open-draft.md) Plain Workflows tab: list, new, open draft | C2a | 3 | T2 | Must Have | A | AC-001, FR-001 |
 | [US-015](US-015-workspace-shell-home-agents-workflows-my-work.md) Workspace shell: Home, Agents, Workflows, My Work, Library | C2b | 8 | T2 | Must Have | A | OBJ-001, AC-001, NFR-001, NFR-005 |
 | [US-016](US-016-admin-console-6-sections-holding-today-s.md) Admin console: 6 sections holding today's admin screens | C2b | 5 | T2 | Must Have | E | FR-015, FR-013, OBJ-007 |
 | [US-017](US-017-home-animated-chat-hero-tailwind-css-port.md) Home: animated chat hero (Tailwind/CSS port) + quick actions | C2b | 5 | T2 | Should Have | A | NFR-001, NFR-002, AC-001 |
@@ -64,7 +65,7 @@ Every Gauntlet step in the [backlog](../backlog.md) has one user story here, wri
 | [US-036](US-036-publish-activate-approval-rollback.md) Publish / Activate (approval) / Rollback | C3 | 5 | T3 | Must Have | B | FR-008, FR-010, AC-022 |
 | [US-038](US-038-pilot-deploy-to-pgn-aws-account-runbook.md) Pilot deploy to PGN AWS account + runbook | C3 | 5 | T3 | Must Have | E | OBJ-006 |
 | [US-039](US-039-later-stretch-forms-embed-triggers.md) Later (stretch): forms/embed triggers | C3 | 5 | T3 | Could Have | B | FR-011 |
-| [US-047](US-047-design-partner-runs-the-golden-workflow-live.md) Design partner runs the golden workflow live + paid pilot or LOI | C3 | 2 | N/A | Must Have | P | OBJ-008, OBJ-005 |
+| [US-048](US-048-design-partner-runs-the-golden-workflow-live.md) Design partner runs the golden workflow live + paid pilot or LOI | C3 | 2 | N/A | Must Have | P | OBJ-008, OBJ-005 |
 | [US-037](US-037-migrate-off-paperclip-and-retire-it-moved.md) Migrate off Paperclip and retire it (moved to January) | LATER | 8 | T3 | Should Have | O | FR-030 |
 
 Parked (Q59, engdept parked): NZR-1, NZR-2, NZR-4. No story.

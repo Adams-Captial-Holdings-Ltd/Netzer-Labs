@@ -19,12 +19,22 @@
 ## 3. Acceptance Criteria (Confirmation)
 *Use the BDD (Behavior-Driven Development) "Given-When-Then" format for clarity.*
 
-### Scenario 1: Turn succeeds
+### Scenario 1: Floci upgraded safely
+* **Given** Floci pinned at 1.6.0 (no streaming, no embeddings)
+* **When** the dev container is moved to 2.1.0 or later (ConverseStream proxy; 2.0.0 was a major release), pinned by digest, with Zion's yes for the pull
+* **Then** the existing local smoke tests pass before anything else uses it
+
+### Scenario 2: Turn succeeds
 * **Given** Floci running and the dev proxy configured
-* **When** a test agent runs one turn with a tool call
+* **When** a test agent runs one turn with a tool call, streamed
 * **Then** the turn completes and the cost ledger records it
 
-### Scenario 2: Only test data
+### Scenario 3: Keyword search caveat
+* **Given** no embeddings locally
+* **When** knowledge search runs in dev
+* **Then** it uses keyword search, and every local drafter eval result is labelled 'knowledge: keyword, not representative' until re-measured on Bedrock
+
+### Scenario 4: Only test data
 * **Given** a prompt containing anything other than seeded test data
 * **When** it would be sent to the dev backend
 * **Then** the runbook forbids it and the sample set is the only input used by scripts

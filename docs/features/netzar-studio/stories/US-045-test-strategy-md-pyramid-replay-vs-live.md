@@ -1,45 +1,40 @@
-# [US-043] OBSERVABILITY.md: logs, product events, run history, alerts
+# [US-045] TEST-STRATEGY.md: pyramid, replay vs live eval, e2e journeys
 
-> Backlog task NZR-43 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: FR-014, FR-023. Provisional ID: confirmed when the Plane mirror creates it.
+> Backlog task NZR-45 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: FR-027, NFR-005. Provisional ID: confirmed when the Plane mirror creates it.
 
 ## 1. User Story Statement
-* **As a** Persona E, enterprise administrator (PRD 1.3)
-* **I want** one page that says what is logged, measured and alerted
-* **So that** admins can see what workflows did and the owner can read the tester and pilot numbers
+* **As a** Factory operator (the owner running the VPS gauntlet; Q54)
+* **I want** the test layers written down, including what replay can and cannot prove
+* **So that** no gate claims more than its tests show
 
 ---
 
 ## 2. Business Context & Description
-* **Background:** Q48 (C1 story). Q55: product analytics are named events written to the existing audit log, as a separate event type with no personal data.
-* **Target Value:** Every event named in a story is listed with its fields.
-* **User Persona Profile:** Persona E, enterprise administrator (PRD 1.3). PRD: [foundation/PRD.md](../foundation/PRD.md).
+* **Background:** Q48 (C1 story), Q66: replay tests the harness only; live eval on each drafter change + nightly.
+* **Target Value:** Every MVP journey has a named e2e test.
+* **User Persona Profile:** Factory operator (the owner running the VPS gauntlet; Q54). PRD: [foundation/PRD.md](../foundation/PRD.md).
 
 ---
 
 ## 3. Acceptance Criteria (Confirmation)
 *Use the BDD (Behavior-Driven Development) "Given-When-Then" format for clarity.*
 
-### Scenario 1: Event catalogue
-* **Given** all stories' Data & Analytics lines
-* **When** OBSERVABILITY.md is written
-* **Then** each event has name, fields, and a 'no personal data' check
-
-### Scenario 2: No PII
-* **Given** an event definition containing a user name, email or document text
+### Scenario 1: Layers named
+* **Given** the doc
 * **When** it is reviewed
-* **Then** it is rejected and replaced by ids
+* **Then** unit, integration, replay, live eval, e2e and axe layers each name their command and when they run
 
-### Scenario 3: Allow-list at write time
-* **Given** the WORM audit keeps rows for 7 years
-* **When** the doc specifies the event writer
-* **Then** it requires a per-event field allow-list enforced when the event is written, not later redaction
+### Scenario 2: Replay limit stated
+* **Given** a drafter prompt change
+* **When** the doc is consulted
+* **Then** it says replay cannot score it and the live eval must run
 
 ---
 
 ## 4. Technical Notes & Constraints
 * **Dependencies:** [NZR-9 / US-009](US-009-foundation-plan-docs-user-stories-this-docs.md) Foundation PLAN docs + user stories (this docs PR)
 * **UI/UX Design:** N/A: documentation.
-* **Non-Functional Requirements:** Events: separate audit event type, no personal data (Q55). Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
+* **Non-Functional Requirements:** Playwright runs serially on the VPS (Q69). Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
 * **Data & Analytics:** N/A: no product event for this step; standard audit entries only.
 
 ---
@@ -48,7 +43,7 @@
 * **Epic Name:** M1 Foundations ready (cycle C1 Foundations, 2026-10-27 to 2026-11-09)
 * **Priority:** Should Have
 * **Story Points / Effort Estimate:** 3 (raw estimate 3 h; 1 pt is about 1 h of factory work, rounded to 1/2/3/5/8/13, Q47)
-* **Rigor tier:** T1 · **Deploy reach:** local only · **Labels:** docs, ops
+* **Rigor tier:** T1 · **Deploy reach:** local only · **Labels:** docs, eval
 
 ---
 

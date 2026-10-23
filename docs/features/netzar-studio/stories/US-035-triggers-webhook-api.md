@@ -10,7 +10,7 @@
 ---
 
 ## 2. Business Context & Description
-* **Background:** Per NZR-13 contract.
+* **Background:** Per NZR-13 contract. Pilot ingress (Q92): Cloudflare tunnel on a pgnos.ai subdomain, matching the existing tunnel scripts; decided here with a security review.
 * **Target Value:** Authenticated, rate-limited webhook starts a run.
 * **User Persona Profile:** Persona B, business process owner (PRD 1.3). PRD: [foundation/PRD.md](../foundation/PRD.md).
 
@@ -29,7 +29,17 @@
 * **When** it arrives
 * **Then** it is rejected with a clear error and no run starts
 
-### Scenario 3: Repeat
+### Scenario 3: Replay
+* **Given** a correctly signed request older than the replay window (for example 5 minutes)
+* **When** it arrives
+* **Then** it is rejected and audited
+
+### Scenario 4: Too big or too fast
+* **Given** a body over the size cap, or more requests than the rate limit
+* **When** they arrive
+* **Then** the excess is rejected before any run starts
+
+### Scenario 5: Repeat
 * **Given** the same idempotency key twice
 * **When** both arrive
 * **Then** only one run starts
@@ -40,7 +50,7 @@
 * **Dependencies:** [NZR-34 / US-034](US-034-live-engine-v1-chosen-option.md) Live engine v1 (chosen option)
 * **UI/UX Design:** N/A: API; trigger setup screen is listed in design.md inventory.
 * **Non-Functional Requirements:** Auth + schema + rate limit per contract. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `trigger.received`, `trigger.rejected`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `trigger.received`, `trigger.rejected`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

@@ -50,7 +50,7 @@
 * **Dependencies:** [NZR-23 / US-023](US-023-workflow-drafter-describe-draft-or-clarifying-question.md) Workflow drafter: describe -> draft or clarifying question
 * **UI/UX Design:** design.md Workflows slice gallery (MOCK, phone + desktop, light) (W-008 to W-012). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** Zero external writes (asserted in tests); every step result in the audit log. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `workflow.test_started`, `workflow.test_completed`, `workflow.test_write_blocked`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `workflow.test_started`, `workflow.test_completed`, `workflow.test_write_blocked`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

@@ -10,7 +10,7 @@
 ---
 
 ## 2. Business Context & Description
-* **Background:** Q66: live eval on each drafter change and nightly on the VPS; the committed result records drafter-file, dataset and model hashes; CI fails on mismatch or a lower score. Production reach blocked until re-baselined on Bedrock (Q58).
+* **Background:** Q66/Q89: live eval on each drafter change and nightly, on the VPS only (no model keys in GitHub); CI only checks the committed result's hashes and score. The committed result records drafter-file, dataset and model hashes; CI fails on mismatch or a lower score. Production reach blocked until re-baselined on Bedrock (Q58).
 * **Target Value:** 0 drafter merges without a matching eval result.
 * **User Persona Profile:** Factory operator (the owner running the VPS gauntlet; Q54). PRD: [foundation/PRD.md](../foundation/PRD.md).
 

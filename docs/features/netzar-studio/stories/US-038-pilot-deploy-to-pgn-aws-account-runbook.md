@@ -21,10 +21,20 @@
 
 ### Scenario 1: Deployed
 * **Given** owner yes for this deploy
-* **When** the runbook is followed
+* **When** the repo's own `npm run up` is run from the VPS against the new account (no GitHub Actions, no hand-made steps)
 * **Then** verify is green and the dashboard URL works
 
-### Scenario 2: Not re-baselined
+### Scenario 2: Chat channels off
+* **Given** the pilot install
+* **When** it is configured
+* **Then** Telegram and Slack are not connected (Q93)
+
+### Scenario 3: Staging branch guarded
+* **Given** the old `staging` auto-deploy
+* **When** the pilot plan is reviewed
+* **Then** the owner has disabled that workflow or protected the branch in GitHub settings (Q91)
+
+### Scenario 4: Not re-baselined
 * **Given** the Bedrock eval re-baseline is missing
 * **When** a deploy is attempted
 * **Then** it stops before deploy with the reason

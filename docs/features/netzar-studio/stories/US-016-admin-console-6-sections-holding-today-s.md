@@ -10,7 +10,7 @@
 ---
 
 ## 2. Business Context & Description
-* **Background:** Nothing deleted. Permission checks unchanged.
+* **Background:** Nothing deleted. Permission checks unchanged. Q86: the Admin link shows to anyone holding any Admin-screen capability; each screen's API keeps its own server-side check.
 * **Target Value:** Every old screen reachable; 0 permission regressions.
 * **User Persona Profile:** Persona E, enterprise administrator (PRD 1.3). PRD: [foundation/PRD.md](../foundation/PRD.md).
 
@@ -24,10 +24,15 @@
 * **When** they open Admin
 * **Then** every existing admin screen is reachable in <= 2 clicks
 
-### Scenario 2: Non-admin
-* **Given** a non-admin user
-* **When** they look for Admin or open its URL
-* **Then** no Admin link shows and the URL returns the existing permission error
+### Scenario 2: Link follows rights
+* **Given** a viewer who can open some Admin screens today
+* **When** they open the account menu
+* **Then** the Admin link shows and lists only the screens they can open (Q86)
+
+### Scenario 3: Server decides
+* **Given** a user without a screen's capability
+* **When** they call that screen's API directly
+* **Then** the server refuses (403); hiding the link is never the only check
 
 ---
 
@@ -35,7 +40,7 @@
 * **Dependencies:** [NZR-15 / US-015](US-015-workspace-shell-home-agents-workflows-my-work.md) Workspace shell: Home, Agents, Workflows, My Work, Library
 * **UI/UX Design:** design.md screen inventory (real screenshots after NZR-3 installs). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** Admin keeps today's density. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `nav.admin_opened`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `nav.admin_opened`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

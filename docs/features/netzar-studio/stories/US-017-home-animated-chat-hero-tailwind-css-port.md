@@ -35,7 +35,7 @@
 * **Dependencies:** [NZR-15 / US-015](US-015-workspace-shell-home-agents-workflows-my-work.md) Workspace shell: Home, Agents, Workflows, My Work, Library
 * **UI/UX Design:** design.md screen inventory (NO-MOCK-YET until Nov 24). See [design.md](../foundation/design.md).
 * **Non-Functional Requirements:** Keyboard usable; reduced-motion respected; no new dependency. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `home.quick_action`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `home.quick_action`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

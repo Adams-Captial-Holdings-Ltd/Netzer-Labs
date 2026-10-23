@@ -1,6 +1,6 @@
-# [US-045] Business brief: ICP, single pain, price hypothesis, 2 partner calls
+# [US-046] Business brief: ICP, single pain, price hypothesis, 2 partner calls
 
-> Backlog task NZR-45 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: OBJ-008. Provisional ID: confirmed when the Plane mirror creates it.
+> Backlog task NZR-46 ([backlog](../backlog.md)). Plan story: [US-000](US-000-netzar-studio-rebuild.md). Requirement IDs: OBJ-008. Provisional ID: confirmed when the Plane mirror creates it.
 
 ## 1. User Story Statement
 * **As a** Design partner (first insurance agency; Q63)

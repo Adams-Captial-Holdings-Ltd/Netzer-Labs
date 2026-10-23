@@ -35,7 +35,7 @@
 * **Dependencies:** [NZR-12 / US-012](US-012-workflow-definition-schema-validator.md) Workflow definition schema + validator
 * **UI/UX Design:** N/A: backend; version shown on the agent page (NZR-19).
 * **Non-Functional Requirements:** Expand/contract migration; running chats unaffected. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `agent.version_published`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `agent.version_published`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 

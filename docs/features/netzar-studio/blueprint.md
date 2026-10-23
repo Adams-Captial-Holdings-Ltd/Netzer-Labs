@@ -8,7 +8,7 @@ as_of_commit: d1d3a66970cd548f9529a234ef2b51ecdc29378e
 
 # Netzar Studio rebuild: Blueprint v2
 
-Date: 2026-10-23 · Repo: Netzer-Labs `origin/development` @ `d1d3a66` · Sources: PRD v1.1 ([foundation/PRD.md](foundation/PRD.md)), grill 1 (Q1 to Q45, 2026-10-20), grill 2 (Q46 to Q80, 2026-10-23).
+Date: 2026-10-23 · Repo: Netzer-Labs `origin/development` @ `d1d3a66` · Sources: PRD v1.1 ([foundation/PRD.md](foundation/PRD.md)), grill 1 (Q1 to Q45, 2026-10-20), grill 2 (Q46 to Q93, 2026-10-23).
 Status: v1 accepted by the owner on 2026-10-20; v2 changes come from the owner's grill-2 answers. Where v2 and v1 disagree, v2 wins.
 Execution queue: [backlog](backlog.md). Stories: [stories/](stories/README.md). Foundation docs: [foundation/](foundation/CONSTRAINTS.md).
 
@@ -39,6 +39,12 @@ A person with no coding knowledge describes a business process in chat and gets 
 | Analytics | Named product events in the existing audit log, separate event type, no personal data. | 55 |
 | Personas | A first-time AI user, B process owner, E admin, plus Factory operator; C and D wait until 2027. | 54 |
 | Installs | `npm ci --prefix web` (lockfile only) and Playwright chromium (official download), one at a time, in the clean clone with no `.env` (NZR-3). | 78 |
+| Security, round 4 | NZR-43 (new): `/api/config/*` secrets fix (category allowlist, server-side deny for secret categories, masking) lands **before** NZR-5 (same file); rotate after the patch and check the audit log for who read them. Private knowledge = admins + the agent's own runtime; everyone else gets shared/company scopes + their own chat files; one test per role (defined in SECURITY.md). Old chat files with no uploader fail closed to admin-only, with a reassign list. | 81, 82, 83 |
+| Legacy app | No deploy to the old account: app.pgnos.ai is marked known-vulnerable, holds no real data, and its secrets are rotated. | 84 |
+| Navigation | Admin link shows to anyone with any Admin-screen capability; each screen's API keeps a server-side check. Home at `/`, Overview at `/overview` (redirect); Jarvis ROUTE_TABLE and nav manifest tests updated in the same change. | 86, 87 |
+| Drafter + eval | Drafter prompt ships in the repo (product code) and seeds the S3 copy at deploy; one ADR line (exception to "prompts live in S3"). Live eval runs on the VPS only; CI checks hashes; no model keys in GitHub. | 88, 89 |
+| Local env | Floci to ≥ 2.1.0 (ConverseStream proxy; verified in the Floci changelog, compatibility checked by smoke tests, pinned by digest). Keyword search locally, so local drafter knowledge scores are labelled not representative. | 90 |
+| Deploy | Never use the `staging` branch; owner adds a GitHub guard (disable the workflow or protect the branch). New account deployed with the repo's own `npm run up` from the VPS. Pilot webhook ingress via the existing Cloudflare tunnel scripts, decided in NZR-35 with a security review (signing + replay window, rate limit, body-size cap). Telegram and Slack off in the pilot. | 91, 92, 93 |
 | Housekeeping | The plan lands as one docs PR cut from origin/development. Fetch before every build. | 74, 80 |
 
 ## 3. Decisions kept from v1 (grill 1)
@@ -94,14 +100,14 @@ A person with no coding knowledge describes a business process in chat and gets 
 ## 7. Cycles and exit gates
 | Cycle | Dates | Scope | Exit gate |
 |---|---|---|---|
-| C0 Week 0 | Oct 20 to Nov 1 | VPS clean clone + routing + review wiring; NZR-5/6 security patch; foundation docs + stories (this PR); AWS account | Docs PR ready; NZR-5/6 red tests frozen; routing logged; AWS requested |
+| C0 Week 0 | Oct 20 to Nov 1 | VPS clean clone + routing + review wiring; NZR-43 config-secrets fix, then NZR-5/6 knowledge fix; foundation docs + stories (this PR); AWS account | Docs PR ready; NZR-5/6 red tests frozen; routing logged; AWS requested |
 | C1 Foundations | Oct 27 to Nov 9 | ADRs; OBSERVABILITY + TEST-STRATEGY; local model env; replay harness; schema + validator; trigger contract; eval set + live baseline; brief; tester booking | **Nov 9 gate + fixed re-plan** with real cost per step; AWS account usable (drop-dead) |
 | C2a Core slice | Nov 10 to 23 | Plain Workflows tab; drafter; preview; edit-by-chat; sample-data test runner; live eval gate; golden workflow e2e | **Nov 23 gate:** golden workflow end to end; drafter ≥ 70% (kill rule); friendly dry-run; 2 partner calls held; Bedrock usable or C3 re-planned |
 | C2b Workspace + testers | Nov 24 to Dec 7 | Shell, Admin console, Home, Jarvis mic, agent page, readability/axe, welcome, agent versions, playbooks, Company facts, lessons, 5 tester sessions | ≥ 4 of 5 testers unaided in ≤ 20 min; axe 0 serious/critical; every old screen reachable |
 | C3 Live + pilot | Dec 8 to 31 | Engine spike → engine v1; webhook/API triggers; publish/activate/rollback; pilot deploy; partner live run + pilot/LOI | Dec 31 definition of done (section 1) |
 | January | Jan 4 to 29, 2027 | Paperclip migration and retirement | Nothing reads Paperclip |
 
-Main risk: C2b holds 57 points in 2 weeks. If the Nov 9 re-plan shows it does not fit, cut NZR-29 then NZR-18 first (NZR-39 is C3 stretch, NZR-37 already moved).
+Total: 205 points. Main risk: C2b holds 57 points in 2 weeks. If the Nov 9 re-plan shows it does not fit, cut NZR-29 then NZR-18 first (NZR-39 is C3 stretch, NZR-37 already moved).
 
 ## 8. MVP acceptance criteria (measurable)
 1. Drafter: schema-valid draft in ≤ 3 clarifying questions in ≥ 80% of the 30 live-eval cases (≥ 70% at Nov 23 or UI work stops).
@@ -117,6 +123,8 @@ Main risk: C2b holds 57 points in 2 weeks. If the Nov 9 re-plan shows it does no
 ## 9. Open owner items
 - Open the AWS account and request Bedrock (NZR-42, this week; drop-dead Nov 9).
 - Read the NVIDIA free-tier terms and say yes or no (gates NVIDIA builders and reviewers).
-- Book 5 testers by Nov 15 (NZR-46); hold 2 design-partner calls by Nov 23 (NZR-45).
+- Book 5 testers by Nov 15 (NZR-47); hold 2 design-partner calls by Nov 23 (NZR-46).
 - Answer the brief's owner-only questions: first insurance agency, what they pay today, who signs, pilot in PGN AWS (Q79).
+- GitHub: disable the `staging` deploy workflow or protect the branch (Q91; only the owner can change this setting).
+- Rotate the secrets exposed by `/api/config` after NZR-43 merges, in the rebuild and on legacy app.pgnos.ai (Q81, Q84).
 - Yes/no: push this branch and open the docs PR; mirror stories and the v2 backlog to Plane.

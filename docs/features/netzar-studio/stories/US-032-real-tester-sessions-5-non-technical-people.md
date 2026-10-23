@@ -10,7 +10,7 @@
 ---
 
 ## 2. Business Context & Description
-* **Background:** 1 hour each, fixed task, synthetic documents (Q67). Booked under NZR-46.
+* **Background:** 1 hour each, fixed task, synthetic documents (Q67). Booked under NZR-47.
 * **Target Value:** >= 4/5 build + test unaided in <= 20 min.
 * **User Persona Profile:** Persona A, first-time AI user (PRD 1.3). PRD: [foundation/PRD.md](../foundation/PRD.md).
 
@@ -32,10 +32,10 @@
 ---
 
 ## 4. Technical Notes & Constraints
-* **Dependencies:** [NZR-31 / US-031](US-031-golden-workflow-end-to-end-insurance-policy.md) Golden workflow end to end: insurance policy review; [NZR-15 / US-015](US-015-workspace-shell-home-agents-workflows-my-work.md) Workspace shell: Home, Agents, Workflows, My Work, Library; [NZR-46 / US-046](US-046-book-5-testers-friendly-dry-run-synthetic.md) Book 5 testers + friendly dry-run (synthetic documents)
+* **Dependencies:** [NZR-31 / US-031](US-031-golden-workflow-end-to-end-insurance-policy.md) Golden workflow end to end: insurance policy review; [NZR-15 / US-015](US-015-workspace-shell-home-agents-workflows-my-work.md) Workspace shell: Home, Agents, Workflows, My Work, Library; [NZR-47 / US-047](US-047-book-5-testers-friendly-dry-run-synthetic.md) Book 5 testers + friendly dry-run (synthetic documents)
 * **UI/UX Design:** N/A: uses the built screens.
 * **Non-Functional Requirements:** No tester personal data in the repo. Limits in [CONSTRAINTS.md](../foundation/CONSTRAINTS.md).
-* **Data & Analytics:** `journey.golden_completed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-43).
+* **Data & Analytics:** `journey.golden_completed`. Written to the existing audit log as a separate product event type with no personal data (Q55); catalogue in OBSERVABILITY.md (NZR-44).
 
 ---
 
@@ -52,7 +52,7 @@
 - [ ] User persona and "So That" benefit are clear and verified.
 - [ ] Acceptance criteria cover both happy paths and edge cases.
 - [ ] UX/UI designs: N/A: uses the built screens.
-- [ ] Dependencies have been identified and are unblocked (NZR-31, NZR-15, NZR-46).
+- [ ] Dependencies have been identified and are unblocked (NZR-31, NZR-15, NZR-47).
 - [ ] The team has reviewed and estimated the story points (5 pts; re-checked at the Nov 9 re-plan, Q71).
 - [ ] Task stories (build slices) are written at this step's PLANNING, before code (Q70).
 
