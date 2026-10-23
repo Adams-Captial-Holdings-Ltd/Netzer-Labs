@@ -2,106 +2,121 @@
 feature: netzar-studio
 document_role: decision
 status: accepted
-observed_at: 2026-10-20
+observed_at: 2026-10-23
 as_of_commit: d1d3a66970cd548f9529a234ef2b51ecdc29378e
 ---
 
-# Netzar Studio rebuild: Blueprint v1
+# Netzar Studio rebuild: Blueprint v2
 
-Date: 2026-10-20 · Repo: Netzer-Labs `development` @ `d1d3a66` · Source: PRD v1.1 + discovery + grill answers Q1–Q41 (the owner grill answers summarised in section 2).
-Status: **accepted by the owner on 2026-10-20** ("can you add it to plane", then "ok push"). Open owner items are tracked in [HANDOFF](HANDOFF.md).
+Date: 2026-10-23 · Repo: Netzer-Labs `origin/development` @ `d1d3a66` · Sources: PRD v1.1 ([foundation/PRD.md](foundation/PRD.md)), grill 1 (Q1 to Q45, 2026-10-20), grill 2 (Q46 to Q80, 2026-10-23).
+Status: v1 accepted by the owner on 2026-10-20; v2 changes come from the owner's grill-2 answers. Where v2 and v1 disagree, v2 wins.
+Execution queue: [backlog](backlog.md). Stories: [stories/](stories/README.md). Foundation docs: [foundation/](foundation/CONSTRAINTS.md).
 
-## 1. Goal and deadline
-A person with no coding knowledge describes a business process in chat and gets a correct, understandable, testable workflow, then (loop 2) runs it live on real incoming data.
-**Done by Dec 31, 2026 (~10 weeks):** factory fixes → knowledge security fix → MVP → loop 2 (Q28, Q32).
+## 1. Goal and definition of done
+A person with no coding knowledge describes a business process in chat and gets a correct, understandable, testable workflow, then runs it live on real incoming data.
 
-## 2. Decisions locked by the grill
+**Dec 31, 2026 done (Q63):** one design partner runs the golden workflow (insurance policy review) on a live webhook in a deployed install and agrees to a paid pilot or LOI. The install is a managed pilot in PGN's own AWS account (Q64), under a written exception to the customer-hosted data-plane rule, with no customer production data and the partner's consent. Customer-hosted installs come at general availability.
+
+## 2. What changed in v2 (grill 2)
+| Area | v2 decision | Q |
+|---|---|---|
+| Builder | The VPS gauntlet-loop builds Netzar: Codex builds, a fresh Claude critic checks, NVIDIA review roles join only after a bake-off. engdept is parked, so NZR-1, 2 and 4 are parked; NZR-3 and NZR-40 are rewritten for the gauntlet. | 59, 52 |
+| Review | T3 steps (schema, versions, security, engine, ADRs): full layers + one Greptile pass. T2 UI: critic + free checks + step maid. T1/docs: free checks. Codex reviews only code someone else built. | 68, 51 |
+| NVIDIA | No repo code goes to NVIDIA until the owner reads the free-tier terms and says yes. NVIDIA is fine as the dev model backend with test data only. | 65 |
+| AWS | Owner opens the AWS account and requests Bedrock this week (NZR-42, drop-dead Nov 9). Bedrock unusable by Nov 23 → re-plan C3. | 60 |
+| Order | Security patch (NZR-5/6) and foundation docs both start in week 0 (different files). The foundation-docs gate blocks new feature steps, not fixes to existing behavior. Core vertical slice next (Nov 10 to 23: drafter, preview, test runner, edit-by-chat in a plain Workflows tab); Workspace shell, Home and the rest after. | 62, 75, 61 |
+| Evaluation | Replay tests the harness only. Live eval on each drafter change and nightly; the committed result records hashes of the drafter files, dataset and model; CI fails on mismatch. Re-baseline on Bedrock; production reach blocked until then. | 66, 57, 58 |
+| Testers | Synthetic documents only. Book 5 by Nov 15; friendly dry-run Nov 23. | 67 |
+| Business | One-page brief (ICP, single pain, price hypothesis): Zion drafts by Nov 12, owner corrects by Nov 15; 2 design-partner calls by Nov 23. | 73, 79 |
+| Re-plan | Fixed date Nov 9 (C1 gate), using real cost per step. | 71, 56 |
+| Cuts | NZR-39, then NZR-37 (Paperclip retirement moves to January), then NZR-29, then NZR-18. Kill rule: drafter under 70% on the live eval at the Nov 23 gate stops UI work until the drafter is fixed. | 72 |
+| Capacity | One lane. Resize the VPS to 8 GB before running two lanes; Playwright runs serially. | 69 |
+| Plan docs | Before step 1 of new feature work: PRD, CONSTRAINTS, ARCHITECTURE, DATA-MODEL, SECURITY, DEPLOY, design.md (in [foundation/](foundation/CONSTRAINTS.md)). OBSERVABILITY and TEST-STRATEGY are C1 stories. | 48 |
+| Designs | Full MOCK set (phone + desktop, light mode, seeded sample data) for the Workflows slice. Every other screen is an inventory row marked NO-MOCK-YET with a due date. **Decision line (Q77):** this departs from the gauntlet PLAN gate wording "every screen has a screenshot"; accepted because the other screens are built weeks later and will change; revisit trigger: a NO-MOCK-YET screen reaching its step's PLANNING without a mock. Dark mode not required until CONSTRAINTS says so. | 49, 77 |
+| Stories | One plan story + one step story per backlog item in the owner's template; N/A lines carry a reason; task stories written at each step's planning. Stories cite PRD IDs. Points: 1 pt ≈ 1 h, rounded to 1/2/3/5/8/13. | 70, 46, 47, 53 |
+| Tracking | Repo is the source of truth; Plane mirrors it only with the owner's yes. Plane NZR-41 (review gauntlet v2) is now in the repo backlog, scoped to wiring. The AWS account is NZR-42. US-n = NZR-n. | 53, 74, 76 |
+| Done | Merged to development (owner yes for every merge/push) + verified locally; staging PENDING until the AWS account exists. UAT = owner accepts a short demo; real testers for golden-workflow stories. | 50, 51 |
+| Analytics | Named product events in the existing audit log, separate event type, no personal data. | 55 |
+| Personas | A first-time AI user, B process owner, E admin, plus Factory operator; C and D wait until 2027. | 54 |
+| Installs | `npm ci --prefix web` (lockfile only) and Playwright chromium (official download), one at a time, in the clean clone with no `.env` (NZR-3). | 78 |
+| Housekeeping | The plan lands as one docs PR cut from origin/development. Fetch before every build. | 74, 80 |
+
+## 3. Decisions kept from v1 (grill 1)
 | Area | Decision | Q |
 |---|---|---|
-| MVP | New 5-area Workspace + Conversational Workflow Studio (describe → draft → plain preview → sample-data test). No live activation, teams, canvas, dev studio, packs. | 1, 16 |
-| Paperclip | Replace. ADR now; migrate in loop 2. | 2, 10 |
-| Work Platform | Paused. PR #206 stays unmerged; reuse screens + step 4–6 libs (effect ledger, executor, approvals) later. | 3 |
-| Who builds | Customers build workflows. New ADR supersedes ADR 0017 decision 21. | 4 |
-| Agent framework | Keep Netzar's TS runtime. LangGraph.js later, only for AI teams, behind our own interface. No Python frameworks. | 11 |
-| Live engine | Loop 2 spike: Step Functions Standard vs own DynamoDB engine, then decide. | 12 |
-| Triggers | One trigger contract designed in MVP; loop 2 turns on webhook/API, then forms/embed, then integrations. | 5, 18 |
-| Lifecycle | Workflows are versioned data: Draft → Test → Publish (frozen) → Activate (approval) → Monitor → one-click rollback. MVP stops at Test. | 16 |
-| Evaluation | Eval flywheel starts in MVP with a drafter eval set. Changes must beat the previous version. Lessons proposed, human approves. Customer data opt-in, scrubbed, stays in their AWS. | 13, 14, 29 |
-| Knowledge | Layers Company → Team → Agent + Playbooks. Drafter reads playbooks + agent's own knowledge. Hive Mind = "Company facts", admin-approved writes. Security fix before MVP. | 19, 29–31 |
-| Slack/Telegram | Keep current chat working, no new investment. Later: a "send message" workflow step. Not for building workflows (declared parity skip). | 7, 20 |
-| Models / env | Bedrock banned → dev uses NVIDIA hosted models via Floci's Bedrock proxy; automated tests use recorded replies. Built and proven locally; staging deploy waits for new AWS account. | 17, 21, 22, 34 |
-| Scale | ≤50 users, ~1,000 runs/day per install; serverless pieces, no dead ends. | 15 |
-| UI | Workspace (Home, Agents, Workflows, My Work, Library) + Admin console (today's dashboard, 6 sections). Nothing deleted. 18px, WCAG 2.2 AA + automated axe checks. Dense only in Admin. | 6, 25, 35–41 |
-| Home | Hero chat input styled after the user's `animated-ai-chat.tsx` (glass box, `/` command palette, attachment chips, suggestion pills, typing indicator) + Build a workflow / Talk to an agent / Add knowledge + Waiting for you + Recent work. | 37 |
-| Jarvis | Mic button on Home + chat; orb page → Developer tools. | 38 |
+| MVP | Conversational Workflow Studio (describe → draft → plain preview → sample-data test) inside a 5-area Workspace. No AI teams, canvas, developer studio or packs until 2027. | 1, 16 |
+| Paperclip | Replaced. ADR in C1; retirement now January (v2). | 2, 10 |
+| Work Platform | Paused; PR #206 stays unmerged; reuse its screens and step 4 to 6 libraries (effect ledger, executor, approvals) later. | 3 |
+| Who builds | Customers build workflows (supersedes ADR 0017 decision 21). | 4 |
+| Agent runtime | Keep Netzar's TypeScript runtime. LangGraph.js later only for AI teams, behind our own interface. No Python frameworks. | 11 |
+| Live engine | C3 spike: Step Functions Standard vs own DynamoDB engine, then decide. | 12 |
+| Triggers | One trigger contract designed in C1; C3 turns on webhook/API; forms/embed later. | 5, 18 |
+| Lifecycle | Workflows are versioned data: Draft → Test → Publish (frozen) → Activate (approval) → Monitor → one-click rollback. | 16 |
+| Knowledge | Company → Team → Agent layers + Playbooks; Hive Mind becomes "Company facts" with admin-approved writes. | 19, 29 to 31 |
+| Slack/Telegram | Keep working, no new investment; not used to build workflows. | 7, 20 |
+| Scale | ≤ 50 users, about 1,000 runs/day per install; serverless pieces, no dead ends. | 15 |
+| UI | Workspace (Home, Agents, Workflows, My Work, Library) + Admin console (today's dashboard, 6 sections). Nothing deleted. 18px, WCAG 2.2 AA, axe in CI. Home chat look recreated with Tailwind/CSS (no framer-motion). | 6, 25, 35 to 41 |
 | Connections | Admins only for now. | 39 |
-| Agent page | About / Knowledge / Test / Channels; prompt + model under Advanced. | 40 |
-| Golden workflow | Insurance policy review: document in → agent reviews → gaps → report → approval. 3–5 real non-technical testers at end of MVP. | 23, 24 |
-| Tracking | Repo plan is source of truth (`docs/features/netzar-studio/`); Plane mirror. | 26 |
-| Factory | Fix EADS-28/29/30 first; clean clone, no `.env`; push/PR only with owner yes. 2 lanes where files don't overlap. Cap $250, alert $125. | 9, 27, 33 |
+| Golden workflow | Insurance policy review: document in → agent reviews → gaps → report → approval. | 23, 24 |
+| Factory spend | Cap $250, alert $125. | 33 |
 
-## 3. Keep / Modify / Remove / Build
+## 4. Keep / Modify / Remove / Build
 **Keep (as is):** agent runtime core (`agent-loop.ts`: cost gate, kill switches, audit per tool call, tool policy, MCP); upload/embedding pipeline; audit + cost ledger; Members/Seats/permission profiles; Telegram/Slack chat; all admin/ops screens; CI, branch model, feature-docs rules.
 **Modify:**
-- Navigation: Sidebar `NAV_ITEMS`, `App.tsx` routes, Jarvis `ROUTE_TABLE` (kept in sync, as the repo requires) → Workspace + Admin console.
-- Knowledge permissions: `/vectors*` routes enforce scope access; chat-dropped files private to the uploader's chat; Hive Mind writes go to an approval queue.
+- Navigation: Sidebar `NAV_ITEMS`, `App.tsx` routes, Jarvis `ROUTE_TABLE` (kept in sync, as the repo requires) → plain Workflows tab first (C2a), then Workspace + Admin console (C2b).
+- Knowledge permissions: `/vectors*` routes enforce scope access; chat-dropped files private to the uploader's chat (week 0); Hive Mind writes go to an approval queue.
 - Agent page: simplified tabs, Advanced section.
 - Design tokens: Workspace type scale base 18px; Admin keeps current density.
-- Agent versioning: immutable published versions (today the live S3 file is overwritten) — needed so a workflow pins an agent version.
+- Agent versioning: immutable published versions (today the live S3 file is overwritten) so a workflow pins an agent version.
 - Docs: PRD wording "S3 Vectors" → actual JSONL-in-S3.
-**Remove:** nothing in this phase (Paperclip retired in loop 2 after migration).
-**Build:**
-- Workflow definition schema (versioned JSON, steps: trigger, agent step, decision, approval, output) + validator.
-- Workflow drafter (agent prompt + tools reading playbooks/agent knowledge) → valid draft or a clarifying question.
-- Plain-language preview (numbered steps, who/what/when, approval points; no canvas).
-- Sample-data test runner: dry run with AI-step write-deny, no real side effects, per-step results.
-- Trigger contract (design only in MVP).
-- Playbooks store (Library) + Company facts approval queue.
-- Drafter eval set (~30 cases) + scorer + "must beat baseline" CI check (recorded replies).
-- Workspace shell + Home.
-- Loop 2: live engine (post-spike), webhook/API triggers, publish/activate/rollback, Paperclip migration + retirement, ADRs.
 
-## 4. User journeys (MVP)
-1. **First run:** sign in → Home → 3-step welcome (pick an agent, add a document, try an example) → done in < 5 min.
-2. **Build a workflow:** Home "Build a workflow" → describe in plain words (typed or 🎤) → Netzar asks ≤3 clarifying questions → shows the draft as plain numbered steps → user edits by chatting ("add my approval before sending") → saved as Draft.
-3. **Test it:** "Test with sample data" → pick/upload a sample (e.g. a policy PDF) → step-by-step results in plain words, nothing sent anywhere → mark Ready (Publish arrives in loop 2).
-4. **Teach the company:** Library → add a playbook ("How we review policies") → drafter uses it next time; corrections become proposed lessons an admin approves.
-5. **Admin:** account menu → Admin → 6 sections; owners see "Stop all agents".
+**Remove:** nothing in this phase (Paperclip retired in January after migration).
+**Build:** workflow schema + validator; drafter; plain-language preview; sample-data test runner (write-deny); trigger contract (design); playbooks store + Company facts queue; drafter eval set + live eval gate (hash-checked); Workspace shell + Home; C3: live engine (post-spike), webhook/API triggers, publish/activate/rollback, pilot deploy.
 
 ## 5. Architecture changes
-- Workflow = data in DynamoDB (draft, versions) + validator in `src/lib/workflows/`; no execution engine in MVP.
+- Workflow = data in DynamoDB (draft, versions) + validator in `src/lib/workflows/`; no execution engine until C3.
 - Test runner reuses the agent loop with write-deny and records each step to the audit log.
 - Agents pinned by immutable version id.
-- Model access unchanged in code (Bedrock client); locally pointed at Floci → NVIDIA. Recorded replies for CI.
-- Trigger contract: `{type: webhook|api|form|embed|integration|schedule, auth, schema, rate limit}` → one entry point (loop 2).
-- New ADRs: supersede 0012 (Paperclip replaced), supersede 0017 d21 (customers build), amend do-not-build #1 (Netzar owns workflow engine), workflows-as-data, eval flywheel, knowledge layers, agent runtime choice.
-- `handler.ts` route changes update `docs/diagrams.map` diagram (CI gate).
+- Model access unchanged in code (Bedrock client); locally pointed at Floci → NVIDIA (test data only). Recorded replies test the harness only; the live eval scores the drafter.
+- Trigger contract: `{type: webhook|api|form|embed|integration|schedule, auth, schema, rate limit, idempotency key}` → one entry point (C3).
+- New ADRs: supersede 0012 (Paperclip replaced), supersede 0017 d21 (customers build), amend do-not-build #1 (Netzar owns its workflow engine), workflows-as-data, eval flywheel, knowledge layers, agent runtime, pilot hosting exception, mock policy.
+- `handler.ts` route changes update the `docs/diagrams.map` diagram (CI gate).
+- Detail: [ARCHITECTURE](foundation/ARCHITECTURE.md), [DATA-MODEL](foundation/DATA-MODEL.md), [SECURITY](foundation/SECURITY.md), [DEPLOY](foundation/DEPLOY.md), [design](foundation/design.md).
 
-## 6. Phases (cycles) and exit gates
-| Cycle | Weeks | Scope | Exit gate |
+## 6. User journeys (MVP)
+1. **First run:** sign in → welcome (pick an agent, add a document, try an example) in < 5 min.
+2. **Build a workflow:** Workflows → describe in plain words (typed or mic) → ≤ 3 clarifying questions → plain numbered draft → edit by chat → saved as Draft.
+3. **Test it:** Test with sample data → pick a synthetic sample → per-step results, nothing sent anywhere → mark Ready.
+4. **Teach the company:** Library → add a playbook → the drafter uses it; corrections become proposed lessons an admin approves.
+5. **Admin:** account menu → Admin console → today's screens; owners see "Stop all agents".
+6. **Pilot (C3):** publish → approver activates → partner's system posts to the webhook → run waits for approval → report delivered; one-click rollback.
+
+## 7. Cycles and exit gates
+| Cycle | Dates | Scope | Exit gate |
 |---|---|---|---|
-| C0 Factory hardening | 1 (Oct 20–26) | EADS-28/29/30, clean-clone setup, final Opus review | Opus PASS; harness green; owner OK to touch Netzer-Labs |
-| C1 Foundations | 1–2 (Oct 27–Nov 9) | Knowledge security fix; ADRs; Floci→NVIDIA dev env; workflow schema + validator; trigger contract doc; eval harness skeleton | Fix tests prove cross-scope reads denied; ADRs merged; schema validates the golden workflow |
-| C2 MVP lane A: Workspace | 3–6 (Nov 10–Dec 7) | Shell, Home (animated chat look), Admin console regroup, agent page, 18px/axe | All 28 old screens reachable; axe 0 serious issues; nav manifest tests pass |
-| C2 MVP lane B: Studio | 3–6 (parallel) | Drafter, preview, test runner, playbooks, Company-facts queue, agent versions, eval set | Golden workflow drafted + tested end to end; eval ≥ target |
-| C2 exit: testers | 6 (~Dec 1–7) | 3–5 real testers, 1 hr each | ≥4 of 5 (80%) build + test the golden workflow unaided |
-| C3 Loop 2: Live | 7–10 (Dec 8–31) | Engine spike → decision; webhook/API triggers; publish/activate/rollback; Paperclip migration + retirement | Golden workflow runs on a live webhook locally; rollback works; Paperclip off; deploy runbook ready for new AWS account |
+| C0 Week 0 | Oct 20 to Nov 1 | VPS clean clone + routing + review wiring; NZR-5/6 security patch; foundation docs + stories (this PR); AWS account | Docs PR ready; NZR-5/6 red tests frozen; routing logged; AWS requested |
+| C1 Foundations | Oct 27 to Nov 9 | ADRs; OBSERVABILITY + TEST-STRATEGY; local model env; replay harness; schema + validator; trigger contract; eval set + live baseline; brief; tester booking | **Nov 9 gate + fixed re-plan** with real cost per step; AWS account usable (drop-dead) |
+| C2a Core slice | Nov 10 to 23 | Plain Workflows tab; drafter; preview; edit-by-chat; sample-data test runner; live eval gate; golden workflow e2e | **Nov 23 gate:** golden workflow end to end; drafter ≥ 70% (kill rule); friendly dry-run; 2 partner calls held; Bedrock usable or C3 re-planned |
+| C2b Workspace + testers | Nov 24 to Dec 7 | Shell, Admin console, Home, Jarvis mic, agent page, readability/axe, welcome, agent versions, playbooks, Company facts, lessons, 5 tester sessions | ≥ 4 of 5 testers unaided in ≤ 20 min; axe 0 serious/critical; every old screen reachable |
+| C3 Live + pilot | Dec 8 to 31 | Engine spike → engine v1; webhook/API triggers; publish/activate/rollback; pilot deploy; partner live run + pilot/LOI | Dec 31 definition of done (section 1) |
+| January | Jan 4 to 29, 2027 | Paperclip migration and retirement | Nothing reads Paperclip |
 
-Risk: C3 is tight (4 weeks incl. holidays). If C2 slips, cut forms/embed (already loop-2-later) and keep webhook/API only.
+Main risk: C2b holds 57 points in 2 weeks. If the Nov 9 re-plan shows it does not fit, cut NZR-29 then NZR-18 first (NZR-39 is C3 stretch, NZR-37 already moved).
 
-## 7. MVP acceptance criteria (measurable)
-1. From a plain description of the golden workflow, the drafter produces a schema-valid draft in ≤3 clarifying questions in ≥80% of the 30 eval cases (recorded replies).
-2. The preview describes every step in plain words; testers can explain what the workflow does (4/5).
-3. Sample test makes zero external writes (asserted in tests) and shows a per-step result.
-4. 4 of 5 non-technical testers build and test the golden workflow without help in ≤20 minutes.
-5. Workspace text ≥18px, touch targets ≥44px, automated axe: 0 serious/critical.
-6. All existing admin screens reachable from the Admin console with unchanged permission checks; all existing tests still pass (4,634+).
-7. No viewer can read another agent's private knowledge via any `/vectors*` route (tested).
-8. Every drafter change runs the eval set; a lower score blocks the merge.
-9. Feature docs (`docs/features/netzar-studio/`) pass docs CI; Plane mirrors the plan.
+## 8. MVP acceptance criteria (measurable)
+1. Drafter: schema-valid draft in ≤ 3 clarifying questions in ≥ 80% of the 30 live-eval cases (≥ 70% at Nov 23 or UI work stops).
+2. Preview: testers can explain what the workflow does (4 of 5).
+3. Sample test makes zero external writes (asserted) and shows a per-step result.
+4. ≥ 4 of 5 non-technical testers build and test the golden workflow unaided in ≤ 20 minutes.
+5. Workspace text ≥ 18px, touch targets ≥ 44px, axe 0 serious/critical.
+6. Every existing admin screen reachable from the Admin console with unchanged permission checks; all existing tests pass (4,634+).
+7. No viewer can read another agent's private knowledge, or another user's chat files, via any route (tested).
+8. Every drafter change has a live eval result whose hashes match; a lower score blocks the merge.
+9. Feature docs pass docs CI; Plane mirrors the plan after the owner's yes.
 
-## 8. Open items (need owner input — small)
-- **O1 Animated chat component:** it uses React + framer-motion; Netzar's web app is Preact. Recommendation: recreate the look with Tailwind/CSS animations (no new dependency). Alternative: add framer-motion via preact/compat (new dependency → needs your OK, some compat risk).
-- **O2 Installs:** `npm ci --prefix web` and Playwright browsers need network installs (owner OK) — required to build/test the UI.
-- **O3 NVIDIA usage:** test data only; free-tier credits. OK?
-- **O4 Plane:** create project "Netzar Rebuild" (identifier NZR) with cycles C0–C3 after this blueprint is approved.
+## 9. Open owner items
+- Open the AWS account and request Bedrock (NZR-42, this week; drop-dead Nov 9).
+- Read the NVIDIA free-tier terms and say yes or no (gates NVIDIA builders and reviewers).
+- Book 5 testers by Nov 15 (NZR-46); hold 2 design-partner calls by Nov 23 (NZR-45).
+- Answer the brief's owner-only questions: first insurance agency, what they pay today, who signs, pilot in PGN AWS (Q79).
+- Yes/no: push this branch and open the docs PR; mirror stories and the v2 backlog to Plane.
