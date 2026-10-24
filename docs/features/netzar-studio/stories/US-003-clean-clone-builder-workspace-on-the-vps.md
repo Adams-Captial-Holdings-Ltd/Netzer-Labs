@@ -199,7 +199,7 @@ G1 code review : PASS  reviewer=claude-opus fresh critic session=bd55ae03-61ea-4
 GR greptile    : PASS confidence=5 comments=1 plus=False
 G2 unit tests  : PASS        red=eeef987 green=eec716f counts=4692/4692 story_files=21/21 typecheck=ok
 G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
-G3 UAT         : PENDING scenarios=7/7 pending_owner=0 accepted_by=- date=-
+G3 UAT         : PASS scenarios=7/7 pending_owner=0 accepted_by=owner (Telegram) date=2026-10-24
 G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-3/e2e-run.txt counts=17/17
 G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
 Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012   New lessons: L-005, L-006, L-007, L-008, L-009, L-010, L-011, L-012
