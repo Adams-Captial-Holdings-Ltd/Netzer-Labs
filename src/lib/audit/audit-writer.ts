@@ -136,6 +136,9 @@ export interface AuditEvent {
     | 'guardrail_intervention'
     // Increment 2: runtime-config bridge writes.
     | 'config_updated'
+    // NZR-43: a refused /api/config* request (secret, unknown or out-of-tier
+    // category). Names only, never a value. Always audited.
+    | 'config_access_denied'
     | 'cost_cap_updated'
     // Increment 4: alert recipient management (SNS email subscriptions).
     | 'alert_recipient_added'
@@ -246,6 +249,8 @@ const ALWAYS_AUDITED_ACTIONS: ReadonlySet<AuditEvent['action']> = new Set([
   'panic_repaired',
   'panic_force_released',
   'auth_failure',
+  // NZR-43: probing the config routes for secrets must not be hideable.
+  'config_access_denied',
   'audit_suppressed',
   'jarvis_session_start',
   'jarvis_session_killed',
