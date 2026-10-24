@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { api, clearApiCache, getToken } from '../lib/api';
+import { hasCapability } from '../lib/auth';
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { SkeletonTableRow } from '../components/Skeleton';
@@ -209,7 +210,10 @@ export function Vectors() {
   const scopeOptions = [
     { value: 'default', label: 'Default scope' },
     { value: 'shared', label: 'Shared (all agents)' },
-    ...agents.map((a) => ({ value: a.id, label: `${a.displayName} (${a.id})` })),
+    // Agent scopes are admin tier (NZR-5); the server refuses them to everyone else.
+    ...(hasCapability('knowledge:private:read')
+      ? agents.map((a) => ({ value: a.id, label: `${a.displayName} (${a.id})` }))
+      : []),
   ];
   const scopeLabel = scopeOptions.find((o) => o.value === scope)?.label ?? scope;
 
