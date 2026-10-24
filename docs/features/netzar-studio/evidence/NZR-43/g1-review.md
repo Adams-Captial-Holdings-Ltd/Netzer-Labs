@@ -1,25 +1,32 @@
-G1 verdict for NZR-43 at HEAD 1c60454 is **PASS**, but the review file was not written: the write to `/root/.hermes/netzar-runner/runs/NZR-43/g1-review-1.md` was refused for lack of permission. Grant write access to that run folder and I'll write it; the full review text is ready.
+# G1 review 1 — NZR-43 (fix/nzr-43-review-1)
 
-There are no high or medium findings. All 4 `/config` routes check the category policy before touching the store, and every test is green: 166 in the story's own test run and 4669 in the full suite. Typecheck, secret-scan and diagrams-drift could not be run (permission refused), so the next gate must run them.
+HEAD: b755e0772fb7b5d12afda48f399c80cb3643f7d1
+Diff: `origin/integration/netzar-studio...HEAD` excluding `docs/features/netzar-studio` (5 files, +88/-3)
+Tier: T3. Reviewer: fresh critic (no build transcript).
 
-| Scenario | Result |
-|---|---|
-| 1. Pages that read config work as before (viewer and seat-user, themes unchanged byte for byte) | Covered by F43-6 and a permission-matrix row. Every page's config read and write uses an allowed category. |
-| 2. `oauth`, `oauth_state`, `mcp` refused on all 4 routes, every role incl. owner, nothing read from the store | Covered by F43-1, -2, -3, -8 |
-| 3. Unknown names (`OAUTH`, `oau%74h`, `constructor`, `__proto__`) refused the same way | Covered by F43-4 |
-| 4. Secret-looking values masked in responses, the write reply, the audit row and the log line | Covered by F43-5 and F43-9, plus unit tests |
-| 5. Admin-only and operator-only categories | Covered by F43-10 and a permission-matrix row |
-| 6. Every refusal audited, even with auditing switched off | Covered by F43-7 and an audit-writer test |
-| 7. Audit write or store down still means a refusal, never a 200 | Covered by F43-7b |
-| 8. Secret rotation and handoff | Owner step after merge. The runbook, the finding #1 status line and the `config-exposure` query are in place. |
+## Scope of the delta
+Review-fix follow-ups on the merged NZR-43 work:
+1. `configNameSchema` (Zod, `^[A-Za-z0-9_.:-]{1,128}$`) checked first in `configAccess` → 400 `invalid_config_param`, before any store call or audit row.
+2. `carriesMaskedSecret(key, value)` → POST refuses a value still carrying a `****xxxx` mask (whole secret key, or secret-shaped JSON field at any depth) with 400 `masked_value_rejected`, before `getConfig`/`setConfig`.
+3. E2E script logs method/path/status only (no bodies); adds masked write-back + oversized-name checks.
+4. Drift-gate line in `docs/diagrams/request-lifecycle.md` for the `config_access_denied` audit action.
 
-The failing tests were committed first (`f18a533`), before the fix.
+## Checks
+- **AC coverage:** Scenarios 1–7 unchanged by this delta; story tests green (`config-secrets`, `config-policy`, `authz-matrix`, `config-cost-guard`: 4 files, 155/155 pass). New F43-12 / F43-13 cover the two new branches incl. the 128 boundary and the "non-secret key may hold asterisks" negative.
+- **Auth bypass:** name validation runs inside `configAccess`, which every one of the 4 routes calls before any store call; POST still sits behind the `requiredRole` admin gate. Validation only narrows input; no path becomes reachable that wasn't before. Percent-decoded names still hit the exact-match policy.
+- **Secret leaks:** E2E no longer prints response bodies. The new 400 bodies carry no value. The masked-value check runs before `getConfig`, so no extra read.
+- **Broken callers:** grep of `getConfig/setConfig` in `src`, `web/src`, `scripts`: every literal key matches the new charset; the only dynamic key (`oauth/slack_app_${agentId}`) is in a denied category and uses a dedicated path, not the generic route. The SPA keys listed in the story all pass.
+- **Scope creep:** none. Small, on-topic diff. Uses zod (already a dependency).
 
-**Low and info findings (non-blocking):**
-- **Low:** the new masking of the free-text `reason` hides too much. It hides any written value of 4+ characters even when the key isn't secret, so "set true for launch" becomes "set **** for launch". It also hides any 16+ character word with a digit, such as IDs or commit hashes. Nothing leaks, but audit text gets harder to read. This masking (and its test F43-11) goes slightly beyond the story.
-- **Low:** the story's `SECURITY.md` updates (§2a row B1/I, §7 risk #2) and the rotation handoff are not done yet. The story ties them to the merge SHA, so they come after merge, but they need tracking before Done is signed off.
-- **Low:** the refusal audit row stores the requested category and key exactly as sent, with no length cap. Those rows can't be switched off, so someone probing the API can make them very large.
-- **Info:** if someone reads a value with a masked field and posts it back, the stored secret is overwritten with `****wxyz`. No page in the app does this today.
-- **Info:** typecheck, secret-scan and diagrams-drift were not run, as noted above.
+## Findings (none blocking)
+1. **low** — `carriesMaskedSecret` has no unit case in `src/lib/state/config-policy.test.ts`. Only route test F43-13 covers it (non-JSON, nested-array, non-string-masked `****` cases are untested at the unit level).
+2. **low** — `tests/e2e/nzr-43/run.mjs:88`: the "still holds the real value" check doesn't assert `status === 200` and passes no detail. It's still correct, because an overwritten `****zzzz` would read back as `****`.
+3. **info** — A 400 `invalid_config_param` writes no audit row (by design, per the doc comment). Malformed-name probing leaves only access-log traces.
+4. **info** — `MASKED` (`^\*{4}[^]{0,4}$`) also refuses a real secret value or a placeholder that happens to look like `****` plus up to 4 characters. The false-positive risk is negligible, and refusing is the safe default.
 
-{"gate":"G1","verdict":"PASS","findings_total":5,"findings_blocking":0,"findings":[{"severity":"low","text":"maskReason over-masks non-secret reasons: any known value >=4 chars (e.g. 'true') and any 16+ char letter+digit word (UUIDs, SHAs) become ****; hurts audit readability; slightly beyond the story's frozen scope (F43-11)"},{"severity":"low","text":"Story's SECURITY.md updates (§2a B1/I, §7 risk #2) and HANDOFF 'NZR-43 rotation' not done yet; deferred to merge SHA, must be tracked before DoD"},{"severity":"low","text":"config_access_denied detail.category/detail.key are attacker-chosen and uncapped; probing can bloat always-audited rows; truncate (~128 chars)"},{"severity":"info","text":"Masked values break round-trips: GET a JSON value with a masked field (e.g. media/servers_json bearerToken) then POST it back overwrites the real secret with ****wxyz; no SPA screen does this"},{"severity":"info","text":"Reviewer could not run npm run typecheck, secret-scan.mjs or diagrams-drift.mjs (permission denied); full vitest 4669/4669 green; review file write also denied"}]}
+## Not verified
+- `npm run typecheck` and full `npm test` were not run here (the permission gate blocked typecheck). They are left to G2.
+- I didn't check whether `docs/diagrams.map` maps `audit-writer.ts` to `request-lifecycle.md`. The `diagrams-drift.mjs` CI gate covers it.
+
+## Verdict
+PASS. 4 findings: 0 high, 0 medium, 2 low, 2 info.

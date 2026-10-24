@@ -183,6 +183,8 @@ import {
 import {
   CONFIG_POLICY,
   SECRET_CONFIG_CATEGORIES,
+  carriesMaskedSecret,
+  configNameSchema,
   maskConfigValue,
   maskConfigValues,
   maskReason,
@@ -887,8 +889,9 @@ async function hasCapability(c: DashboardCtx, need: Capability): Promise<boolean
  * Secret or unknown category → refused for everyone; a read also needs the
  * category's capability (CONFIG_POLICY). Writes keep the legacy admin gate in
  * requiredRole. Every refusal is the same 403 body (no oracle for which
- * categories exist) and an always-audited row carrying names only. Returns the
- * 403 response, or null when allowed.
+ * categories exist) and an always-audited row carrying names only. A malformed
+ * or oversized name is a 400 with no audit row. Returns the refusal response,
+ * or null when allowed.
  */
 async function configAccess(
   c: Context<DashboardEnv>,
@@ -896,6 +899,9 @@ async function configAccess(
   key: string | undefined,
   mode: 'read' | 'write',
 ): Promise<Response | null> {
+  if (!configNameSchema.safeParse(category).success || (key !== undefined && !configNameSchema.safeParse(key).success)) {
+    return c.json({ error: 'invalid_config_param' }, 400);
+  }
   const policy = CONFIG_POLICY.get(category);
   const reason = SECRET_CONFIG_CATEGORIES.has(category)
     ? 'secret_category'
@@ -3074,6 +3080,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       .catch(() => null);
     if (!body || typeof body.value !== 'string') {
       return c.json({ error: 'missing_value' }, 400);
+    }
+    if (carriesMaskedSecret(key, body.value)) {
+      return c.json({ error: 'masked_value_rejected' }, 400);
     }
     const principal = getPrincipal(c);
     const updatedBy = principal?.label ?? 'dashboard';
