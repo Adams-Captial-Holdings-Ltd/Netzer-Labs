@@ -132,6 +132,9 @@ export const CAPABILITIES = [
   // org-admin tier.
   'usage:org:read',
   'usage:self:read',
+  // NZR-5: read/write agent-private and reserved knowledge scopes (anything but
+  // default/shared). Admin tier; grantable in custom profiles.
+  'knowledge:private:read',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -237,6 +240,7 @@ const ADMIN_CAPS: readonly Capability[] = [
   'security:write',
   'tokens:write',
   'members:write',
+  'knowledge:private:read',
   // NOTE: kill-switches:read is now VIEWER-tier (it backs the Overview summary
   // card), so it is already inherited here via ...OPERATOR_CAPS → ...VIEWER_CAPS.
   // The kill-switch TRIP mutation is what admin/owner gates (security:write).

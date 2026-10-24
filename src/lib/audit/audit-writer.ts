@@ -139,6 +139,9 @@ export interface AuditEvent {
     // NZR-43: a refused /api/config* request (secret, unknown or out-of-tier
     // category). Names only, never a value. Always audited.
     | 'config_access_denied'
+    // NZR-5: a refused knowledge scope (dashboard routes + Jarvis vectors).
+    // detail.scopeHash only, never the scope name. Always audited.
+    | 'knowledge_scope_denied'
     | 'cost_cap_updated'
     // Increment 4: alert recipient management (SNS email subscriptions).
     | 'alert_recipient_added'
@@ -251,6 +254,8 @@ const ALWAYS_AUDITED_ACTIONS: ReadonlySet<AuditEvent['action']> = new Set([
   'auth_failure',
   // NZR-43: probing the config routes for secrets must not be hideable.
   'config_access_denied',
+  // NZR-5: probing other agents' knowledge scopes must not be hideable.
+  'knowledge_scope_denied',
   'audit_suppressed',
   'jarvis_session_start',
   'jarvis_session_killed',

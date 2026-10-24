@@ -24,6 +24,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../../observability/logger.js';
 import { cosineSimilarity } from './embedder.js';
 import { captureAwsClient } from '../observability/xray.js';
+import { normalizeScope } from './scope-access.js';
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 // Two DIFFERENT buckets, on purpose. `VECTORS_BUCKET` is the durable index and
@@ -358,20 +359,8 @@ export async function search(args: {
   return heap.sort((a, b) => b.score - a.score);
 }
 
-/**
- * Canonical on-disk form of a scope. MUST be applied on BOTH write and read.
- *
- * Scopes are operator-supplied — `knowledgeScope` in `agents/<id>/agent.yaml`,
- * free-form and unvalidated — and the documented format includes values like
- * `agent:ops`. Until 2026-08 this folding happened only on the write path, so
- * `agent:ops` was written to `index/agent_ops/` and listed from
- * `index/agent:ops/`: every read returned empty, with no error and nothing
- * actually missing. Any new code that builds an `index/` prefix goes through
- * here.
- */
-export function normalizeScope(scope: string): string {
-  return scope.replace(/[^A-Za-z0-9_-]/g, '_');
-}
+// Canonical on-disk scope form; defined beside the scope access rule (NZR-5).
+export { normalizeScope };
 
 /**
  * The single place an `index/` prefix is constructed.
