@@ -8,7 +8,8 @@ const SUITE = join(__dirname, 'test-netzar-clone.sh');
 const CASES: Record<string, string> = {
   t_check_clean: 'check passes on a fresh clone and ignores tracked env templates',
   t_check_dirty: 'check fails on an untracked .env, key file or nvapi- string without echoing the value',
-  t_check_scanner: 'check fails closed when the repo scanner is missing, crashes, or hits a path with spaces',
+  t_check_tracked: 'check fails on a secret in a tracked source file without echoing the value',
+  t_check_scanner:'check fails closed when the repo scanner is missing, crashes, or hits a path with spaces',
   t_hook_stable: 'pre-push hook is installed outside the repo tree and check fails when it is missing',
   t_fetch:'fetch reports the new origin sha and refuses a dirty tree',
   t_install_serial: 'install runs the three commands serially and in order',
