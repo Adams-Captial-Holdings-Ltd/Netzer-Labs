@@ -31,13 +31,16 @@ EOF
 #!/usr/bin/env bash
 echo "$(date +%s%N) start npm $*" >>"$STUB_LOG"; sleep 0.3
 [ "${STUB_DRIFT:-}" = 1 ] && [ "$*" = "ci --ignore-scripts" ] && echo '{"lock":"drift"}' >package-lock.json
+[ "${STUB_FAIL:-}" = 1 ] && [ "$*" = "ci --prefix web" ] && exit 1
+# STUB_HANG: leave a grandchild running and drop available memory, like npm's workers
+if [ -n "${STUB_HANG:-}" ]; then sleep 30 & echo $! >"$STUB_HANG"; : >"$STUB_DROP"; wait; fi
 echo "$(date +%s%N) end npm $*" >>"$STUB_LOG"
 EOF
   sed 's/npm/npx/g; /STUB_DRIFT/d' "$T/bin/npm" >"$T/bin/npx"
   cat >"$T/bin/free" <<'EOF'
 #!/usr/bin/env bash
 echo "              total        used        free      shared  buff/cache   available"
-echo "Mem:           3900        1500        1000          10        1400        ${STUB_AVAIL:-3000}"
+echo "Mem:           3900        1500        1000          10        1400        $([ -e "${STUB_DROP:-/nonexistent}" ] && echo 100 || echo "${STUB_AVAIL:-3000}")"
 EOF
   chmod +x "$T/bin/"*
   export PATH="$T/bin:$PATH" STUB_LOG="$T/stub.log"
@@ -238,7 +241,63 @@ t_hook_write_fail() {
   return 0
 }
 
-CASES="t_check_clean t_check_dirty t_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock t_hook_write_fail"
+# the clone holds no credentials, so fetch must inject a per-command helper like push does (read path only)
+t_fetch_cred() {
+  setup
+  printf '#!/usr/bin/env bash\necho "$*" >>"%s/git.log"\nexec %s "$@"\n' "$T" "$(command -v git)" >"$T/bin/git"
+  chmod +x "$T/bin/git"
+  NETZAR_FETCH_CRED="$T/bin/credstub" bash "$SCRIPT" fetch >/dev/null 2>&1 || fail "fetch"
+  line="$(grep -E '(^| )fetch( |$)' "$T/git.log" | head -1)"
+  has "$line" "credential.helper=$T/bin/credstub" "fetch carries the stub helper"
+  case "$line" in *push*) fail "fetch helper on a push" ;; esac
+  eq "$(git -C "$NETZAR_CLONE" config --local credential.helper)" "" "helper not persisted in the clone"
+}
+
+# npm's workers must die with the aborted install, not linger as orphans
+t_install_lowmem_kill() {
+  setup
+  STUB_DROP="$T/drop" STUB_HANG="$T/hang.pid" bash "$SCRIPT" install >/dev/null 2>&1
+  pid="$(cat "$T/hang.pid" 2>/dev/null)"; [ -n "$pid" ] || fail "stub never started"
+  sleep 0.3
+  if kill -0 "$pid" 2>/dev/null; then kill "$pid"; fail "grandchild survived the low-memory abort"; fi
+}
+
+# used:true or an empty owner_text is not an owner yes
+t_hook_bad_approval() {
+  setup
+  cd "$NETZAR_CLONE" || fail cd
+  sha="$(git rev-parse HEAD)"
+  printf '{"ts":"2026-01-01T00:00:00Z","sha":"%s","ref":"refs/heads/docs/u","owner_text":"yes","used":true}\n' "$sha" >"$NETZAR_APPROVALS"
+  printf '{"ts":"2026-01-01T00:00:00Z","sha":"%s","ref":"refs/heads/docs/e","owner_text":"","used":false}\n' "$sha" >>"$NETZAR_APPROVALS"
+  for r in u e; do
+    echo "HEAD $sha refs/heads/docs/$r 0000000000000000000000000000000000000000" | bash "$NETZAR_HOOKS/pre-push" origin url >/dev/null 2>&1 && fail "approval $r accepted"
+  done
+  return 0
+}
+
+# an edited installed hook is not the repo hook: check must notice
+t_check_hook_hash() {
+  setup
+  bash "$SCRIPT" check >/dev/null 2>&1 || fail "check before tamper"
+  chmod u+w "$NETZAR_HOOKS/pre-push"; printf 'exit 0\n' >>"$NETZAR_HOOKS/pre-push"; chmod 555 "$NETZAR_HOOKS/pre-push"
+  out="$(bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "tampered hook exit"; has "$out" "push guard" "tampered hook"
+}
+
+# a failed install must not leave a stamp that lets a later install skip over a half-written node_modules
+t_install_stamp() {
+  setup
+  bash "$SCRIPT" install >/dev/null 2>&1 || fail "first install"
+  ( cd "$NETZAR_CLONE" && echo '{"lock":"B"}' >package-lock.json && git commit -qam B ) || fail "commit B"
+  STUB_FAIL=1 bash "$SCRIPT" install >/dev/null 2>&1 && fail "failing install passed"
+  [ ! -e "$NETZAR_LOG_DIR/install-stamp" ] || fail "stamp survived a failed install"
+  git -C "$NETZAR_CLONE" reset -q --hard HEAD~1
+  : >"$STUB_LOG"
+  bash "$SCRIPT" install >/dev/null 2>&1 || fail "third install"
+  eq "$(grep -c 'start npm ci --ignore-scripts' "$STUB_LOG")" 1 "npm ci re-ran after the failed install"
+}
+
+CASES="t_check_clean t_check_dirty t_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock t_hook_write_fail t_fetch_cred t_install_lowmem_kill t_hook_bad_approval t_check_hook_hash t_install_stamp"
 if [ $# -gt 0 ]; then ( "$1" ); exit $?; fi
 pass=0; total=0
 for c in $CASES; do

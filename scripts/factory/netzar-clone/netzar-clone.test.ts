@@ -20,6 +20,11 @@ const CASES: Record<string, string> = {
   t_push_no_creds: 'the clone holds no push credentials and check fails if that block is missing',
   t_install_lock: 'a second install is refused while one runs, including the playwright step',
   t_hook_write_fail: 'the hook refuses the push when the attempt log cannot be written',
+  t_fetch_cred: 'fetch injects a per-command credential helper and does not persist it',
+  t_install_lowmem_kill: 'a low-memory abort kills the whole process group',
+  t_hook_bad_approval: 'the hook ignores approvals with used:true or an empty owner_text',
+  t_check_hook_hash: 'check fails when the installed hook differs from the repo copy',
+  t_install_stamp: 'a failed install removes the stamp so a later install cannot skip',
 };
 
 describe('netzar-clone.sh', () => {
