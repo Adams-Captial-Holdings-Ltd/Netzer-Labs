@@ -1,0 +1,44 @@
+[
+ {
+  "scenario": "1",
+  "title": "A fresh clone is secret-free",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-3/uat-transcript.md; vitest: check passes on a fresh clone and ignores tracked env templates"
+ },
+ {
+  "scenario": "2",
+  "title": "A secret in the clone fails the check",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-3/uat-transcript.md; vitest: check fails on an untracked .env, key file or nvapi- string without echoing the value"
+ },
+ {
+  "scenario": "3",
+  "title": "Fetch before every build, and a dirty tree is refused",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-3/uat-transcript.md; vitest: fetch reports the new origin sha and refuses a dirty tree"
+ },
+ {
+  "scenario": "4",
+  "title": "Lockfile-only installs, one at a time",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-3/uat-transcript.md; vitest: install runs the three commands serially and in order (attended real VPS install is separate owner evidence)"
+ },
+ {
+  "scenario": "5",
+  "title": "Install refuses drift and low memory",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-3/uat-transcript.md; vitest: install fails on lockfile drift; install aborts below 250 MB available"
+ },
+ {
+  "scenario": "6",
+  "title": "Push without an owner yes is refused and logged",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-3/uat-transcript.md; vitest: push is refused without an approval record and logged"
+ },
+ {
+  "scenario": "7",
+  "title": "An approved push goes through only for the approved SHA and ref",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-3/uat-transcript.md; vitest: approved push is allowed once, only for its sha and ref"
+ }
+]

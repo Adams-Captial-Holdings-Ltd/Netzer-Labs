@@ -187,3 +187,34 @@
 - [ ] QA: the fresh critic re-runs the gate against these criteria. UAT: N/A, no user-facing change; the owner accepts the evidence summary (attended `init → fetch → check → install → check` logs, plus one refused push line).
 - [ ] Documentation is updated: `review-gauntlet.md` §10, `SKILL.md` Housekeeping, `hermes-adaptation.md`; a dated session handoff in `~/.claude/plans/`; the clone path recorded in the Netzar STATE FILE.
 - [ ] Done = installed on the VPS and verified locally (factory change; nothing merges to `development`). Any push stays behind the owner's yes (Q50). Staging: N/A for factory files.
+
+---
+
+<!-- runner:evidence:start -->
+### Story exit gate evidence (runner)
+
+```
+Story: NZR-3   HEAD: eec716f6f38feab03857e7d54386de9477d0b8bc
+G1 code review : PASS  reviewer=claude-opus fresh critic session=bd55ae03-61ea-4461-927d-06477e3a5ae1 findings=6/16 open_low=10 greptile=GR:PASS
+GR greptile    : PASS confidence=5 comments=1 plus=False
+G2 unit tests  : PASS        red=eeef987 green=eec716f counts=4692/4692 story_files=21/21 typecheck=ok
+G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
+G3 UAT         : PASS scenarios=7/7 pending_owner=0 accepted_by=owner (Telegram) date=2026-10-24
+G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-3/e2e-run.txt counts=17/17
+G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
+Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012   New lessons: L-005, L-006, L-007, L-008, L-009, L-010, L-011, L-012
+```
+
+- [e2e-run.txt](../evidence/NZR-3/e2e-run.txt)
+- [g1-review.md](../evidence/NZR-3/g1-review.md)
+- [gates.md](../evidence/NZR-3/gates.md)
+- [uat-transcript.md](../evidence/NZR-3/uat-transcript.md)
+- [uat.json](../evidence/NZR-3/uat.json)
+<!-- runner:evidence:end -->
+
+## 8. NOTES
+
+- **Waiver (owner decision, 2026-10-24): push-bypass limit.** A builder sharing the unix user can borrow the owner's `gh` credentials and push around the clone guard. The owner WAIVED this limit to NZR-40 (separate unix user for builders). It is not solved here; `cmd_push` keeps its `shortcut:` comment.
+- **Owner decision (2026-10-24): fetch credentials.** The clone holds no credentials (`init`), so `fetch` injects a per-command helper (`NETZAR_FETCH_CRED`, default `!gh auth git-credential`) for the read only, the way `push` does. Test `t_fetch_cred` uses a stub helper.
+- **Script placement decision.** The scripts live in the repo at `scripts/factory/netzar-clone/` (reviewable, tested in CI), not only in `/root/.claude/bin`. `init` installs the hook to `$HOME/.claude/bin/hooks/netzar` (outside any checkout); `check` fails if that copy differs by sha256 from the repo copy.
+- **Cheap lows fixed:** low-memory abort kills the whole process group (`setsid`); the hook ignores approvals with `used:true` or an empty `owner_text`; the install stamp is removed before either package dir is touched and written only after success (`t_install_stamp`).
