@@ -314,6 +314,48 @@ describe('NZR-43 /api/config secret categories', () => {
     expect(JSON.stringify(logWarn.mock.calls)).toContain('swap ****abcd for ****zzzz');
   });
 
+  it('F43-12 an oversized or malformed category/key is a 400 before any store call or audit row', async () => {
+    const long = 'a'.repeat(129);
+    for (const path of [
+      `/api/config/${long}`,
+      `/api/config/${long}/k`,
+      `/api/config/profile/${long}`,
+      `/api/config?category=${long}`,
+      '/api/config/bad%20cat',
+      '/api/config/profile/bad%0Akey',
+    ]) {
+      const res = await req(path, 'admin');
+      expect(res.status, path).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_config_param' });
+    }
+    const post = await req(`/api/config/profile/${long}`, 'admin', 'POST', { value: 'x' });
+    expect(post.status).toBe(400);
+    expect(await post.json()).toEqual({ error: 'invalid_config_param' });
+    expectNoStoreCall();
+    expect(writeAudit).not.toHaveBeenCalled();
+    // The longest valid name still reaches the policy check.
+    await expectForbiddenCategory(await req(`/api/config/${'a'.repeat(128)}`, 'admin'));
+  });
+
+  it('F43-13 a masked value read back from GET is refused on POST and never overwrites the secret', async () => {
+    store.paperclip = { api_key: 'sk-live-1234567890abcd' };
+    store.media = { servers_json: '{"items":[{"id":"a","bearerToken":"tok-abcdefgh1234wxyz"}]}' };
+    for (const [path, value] of [
+      ['/api/config/paperclip/api_key', '****abcd'],
+      ['/api/config/paperclip/api_key', '****'],
+      ['/api/config/media/servers_json', '{"items":[{"id":"a","bearerToken":"****wxyz"}]}'],
+    ] as const) {
+      const res = await req(path, 'admin', 'POST', { value });
+      expect(res.status, value).toBe(400);
+      expect(await res.json()).toEqual({ error: 'masked_value_rejected' });
+    }
+    expect(setConfig).not.toHaveBeenCalled();
+    // A non-secret key may hold asterisks.
+    const ok = await req('/api/config/profile/first_name', 'admin', 'POST', { value: '****' });
+    expect(ok.status).toBe(200);
+    expect(setConfig).toHaveBeenCalledWith('profile', 'first_name', '****', expect.anything());
+  });
+
   it('F43-10 security-tier and integrations-tier categories refuse lower tiers', async () => {
     store.power = { url: 'https://power.example.invalid' };
     store.alerting = { recipients: 'ops@example.invalid' };
