@@ -15,7 +15,13 @@ has() { grep -qF -- "$2" <<<"$1" || fail "$3: missing '$2' in: $1"; }
 
 setup() {
   T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-  mkdir -p "$T/seed/web" "$T/bin"
+  mkdir -p "$T/seed/web" "$T/seed/scripts/ci" "$T/bin"
+  # stand-in for the repo scanner: SCAN_STUB_RC picks the exit code; rc 1 reports every arg like the real one
+  cat >"$T/seed/scripts/ci/secret-scan.mjs" <<'EOF'
+const rc = Number(process.env.SCAN_STUB_RC || 0);
+if (rc === 1) for (const f of process.argv.slice(2)) console.error(`${f}:3: [stub-id] excerpt-fragment`);
+process.exit(rc);
+EOF
   ( cd "$T/seed" && git init -q -b development &&
     echo 'FOO=' >.env.example && echo '{"name":"x"}' >package.json &&
     echo '{"lock":1}' >package-lock.json && echo '{"lock":2}' >web/package-lock.json &&
@@ -35,7 +41,7 @@ echo "Mem:           3900        1500        1000          10        1400       
 EOF
   chmod +x "$T/bin/"*
   export PATH="$T/bin:$PATH" STUB_LOG="$T/stub.log"
-  export NETZAR_ORIGIN="$T/origin.git" NETZAR_CLONE="$T/clone" NETZAR_LOG_DIR="$T/logs" NETZAR_APPROVALS="$T/approvals.jsonl"
+  export NETZAR_ORIGIN="$T/origin.git" NETZAR_CLONE="$T/clone" NETZAR_LOG_DIR="$T/logs" NETZAR_APPROVALS="$T/approvals.jsonl" NETZAR_HOOKS="$T/hooks"
   : >"$STUB_LOG"
   bash "$SCRIPT" init >/dev/null 2>&1 || fail "init"
 }
@@ -69,6 +75,35 @@ t_check_dirty() {
   r="$(latest clone-check)"
   case "$(cat "$r")" in *"$secret"*) fail "value in report" ;; esac
   eq "$(jq -c '[.env_files,.key_files,.extra_pattern_hits]' "$r")" '[[".env"],["id_rsa"],1]' "report"
+}
+
+t_check_scanner() {
+  setup
+  echo hi >"$NETZAR_CLONE/my notes.txt"
+  out="$(SCAN_STUB_RC=1 bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "hit exit"; has "$out" "CLONE NOT CLEAN: my notes.txt:3: [stub-id]" "hit on path with spaces"
+  case "$out" in *excerpt-fragment*) fail "excerpt echoed" ;; esac
+  out="$(SCAN_STUB_RC=2 bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "crash exit"; has "$out" "CLONE NOT CLEAN" "scanner crash fails closed"
+  case "$out" in *"CLONE CLEAN"*) fail "crash reported clean" ;; esac
+  rm "$NETZAR_CLONE/scripts/ci/secret-scan.mjs"
+  out="$(bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "missing exit"; has "$out" "scanner missing" "missing scanner fails closed"
+}
+
+t_hook_stable() {
+  setup
+  eq "$(git -C "$NETZAR_CLONE" config core.hooksPath)" "$NETZAR_HOOKS" "hooksPath"
+  [ -x "$NETZAR_HOOKS/pre-push" ] || fail "hook not installed"
+  case "$NETZAR_HOOKS" in "$DIR"/*) fail "hook inside repo tree" ;; esac
+  bash "$SCRIPT" check >/dev/null 2>&1 || fail "check with hook installed"
+  rm "$NETZAR_HOOKS/pre-push"
+  out="$(bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "missing hook exit"; has "$out" "push guard" "missing hook"
+  bash "$SCRIPT" init >/dev/null 2>&1 || fail "re-init"
+  git -C "$NETZAR_CLONE" config --unset core.hooksPath
+  out="$(bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "unset hooksPath exit"; has "$out" "push guard" "unset hooksPath"
 }
 
 t_fetch() {
@@ -142,7 +177,7 @@ t_push_approved() {
   eq "$(jq -s -c '[.[]|.result]' "$NETZAR_LOG_DIR/push-attempts.jsonl")" '["allowed","refused","refused"]' "log results"
 }
 
-CASES="t_check_clean t_check_dirty t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved"
+CASES="t_check_clean t_check_dirty t_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved"
 if [ $# -gt 0 ]; then ( "$1" ); exit $?; fi
 pass=0; total=0
 for c in $CASES; do
