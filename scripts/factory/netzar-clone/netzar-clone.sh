@@ -9,7 +9,8 @@ CLONE="${NETZAR_CLONE:-/root/work/netzer-baseline}"
 ORIGIN="${NETZAR_ORIGIN:-https://github.com/Adams-Captial-Holdings-Ltd/Netzer-Labs}"
 LOGS="${NETZAR_LOG_DIR:-$HOME/.claude/plans/netzar-logs}"
 APPROVALS="${NETZAR_APPROVALS:-$HOME/.claude/plans/netzar-push-approvals.jsonl}"
-HOOKS="${NETZAR_HOOKS:-$HERE/hooks}"
+# Hook runs from a stable path outside any checkout: a branch switch or worktree removal must not drop it.
+HOOKS="${NETZAR_HOOKS:-$HOME/.claude/bin/hooks/netzar}"
 export NETZAR_LOG_DIR="$LOGS" NETZAR_APPROVALS="$APPROVALS"
 MIN_AVAIL_MB=250
 
@@ -21,8 +22,9 @@ cmd_init() {
   mkdir -p "$LOGS" "$(dirname "$APPROVALS")"
   [ -d "$CLONE/.git" ] || git clone -q "$ORIGIN" "$CLONE" || { echo "clone failed" >&2; exit 1; }
   git -C "$CLONE" config remote.origin.pushurl DISABLED-owner-yes-required
+  mkdir -p "$HOOKS"
+  install -m 555 "$HERE/hooks/pre-push" "$HOOKS/pre-push"
   git -C "$CLONE" config core.hooksPath "$HOOKS"
-  chmod +x "$HOOKS/pre-push"
   [ -e "$APPROVALS" ] || { : >"$APPROVALS"; chmod 600 "$APPROVALS"; }
   echo "INIT $CLONE"
 }
@@ -62,12 +64,26 @@ cmd_check() {
     done < <(printf '%s\n' "$files" | grep -v '^$' | xargs -d '\n' -r grep -IHnE -m1 -e "$re" -- 2>/dev/null | cut -d: -f1,2 || true)
   done
 
-  if [ -f scripts/ci/secret-scan.mjs ] && [ -n "$files" ]; then
-    # keep only file:line:[id]; the scanner's excerpt is a secret fragment
-    while IFS= read -r h; do
-      [ -n "$h" ] && scan+=("$h")
-    done < <(printf '%s\n' "$files" | xargs -d '\n' -r node scripts/ci/secret-scan.mjs 2>&1 >/dev/null |
-      sed -nE 's/^([^ ]+:[0-9]+: \[[^]]*\]).*/\1/p' || true)
+  # fail closed: a missing or crashing scanner is a finding, never a skip
+  if [ ! -f scripts/ci/secret-scan.mjs ]; then
+    scan+=("scanner missing")
+  elif [ -n "$files" ]; then
+    local list=() rc=0 errs
+    mapfile -t list <<<"$files"
+    errs="$(node scripts/ci/secret-scan.mjs "${list[@]}" 2>&1 >/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      # keep only file:line: [id]; the scanner's excerpt is a secret fragment
+      while IFS= read -r h; do
+        [ -n "$h" ] && scan+=("$h")
+      done < <(printf '%s\n' "$errs" | sed -nE 's/^(.+:[0-9]+: \[[^]]*\]).*/\1/p')
+      if [ "$rc" -ne 1 ] || [ ${#scan[@]} -eq 0 ]; then scan+=("scanner failed (exit $rc)"); fi
+    fi
+  fi
+
+  # the push guard must be in place, or the clone is not safe to build in
+  if [ "$(git config remote.origin.pushurl || true)" != DISABLED-owner-yes-required ] ||
+    [ "$(git config core.hooksPath || true)" != "$HOOKS" ] || [ ! -x "$HOOKS/pre-push" ]; then
+    echo "CLONE NOT CLEAN: push guard missing (run init)"; exit 1
   fi
 
   sha="$(git rev-parse HEAD)"
