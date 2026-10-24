@@ -187,3 +187,12 @@
 - [ ] QA: the fresh critic re-runs the gate against these criteria. UAT: N/A, no user-facing change; the owner accepts the evidence summary (attended `init → fetch → check → install → check` logs, plus one refused push line).
 - [ ] Documentation is updated: `review-gauntlet.md` §10, `SKILL.md` Housekeeping, `hermes-adaptation.md`; a dated session handoff in `~/.claude/plans/`; the clone path recorded in the Netzar STATE FILE.
 - [ ] Done = installed on the VPS and verified locally (factory change; nothing merges to `development`). Any push stays behind the owner's yes (Q50). Staging: N/A for factory files.
+
+---
+
+## 8. NOTES
+
+- **Waiver (owner decision, 2026-10-24): push-bypass limit.** A builder sharing the unix user can borrow the owner's `gh` credentials and push around the clone guard. The owner WAIVED this limit to NZR-40 (separate unix user for builders). It is not solved here; `cmd_push` keeps its `shortcut:` comment.
+- **Owner decision (2026-10-24): fetch credentials.** The clone holds no credentials (`init`), so `fetch` injects a per-command helper (`NETZAR_FETCH_CRED`, default `!gh auth git-credential`) for the read only, the way `push` does. Test `t_fetch_cred` uses a stub helper.
+- **Script placement decision.** The scripts live in the repo at `scripts/factory/netzar-clone/` (reviewable, tested in CI), not only in `/root/.claude/bin`. `init` installs the hook to `$HOME/.claude/bin/hooks/netzar` (outside any checkout); `check` fails if that copy differs by sha256 from the repo copy.
+- **Cheap lows fixed:** low-memory abort kills the whole process group (`setsid`); the hook ignores approvals with `used:true` or an empty `owner_text`; the install stamp is removed before either package dir is touched and written only after success (`t_install_stamp`).

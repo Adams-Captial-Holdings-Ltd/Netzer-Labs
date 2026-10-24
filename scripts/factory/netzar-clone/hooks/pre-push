@@ -16,7 +16,7 @@ while read -r _lref lsha rref _rsha; do
   # an all-zero sha is a branch delete: never approvable
   if [ -s "$APPROVALS" ] && [ -n "${lsha//0/}" ]; then
     ok=$(jq -s --arg s "$lsha" --arg r "$rref" \
-      '[.[]|select(.sha==$s and .ref==$r)] | ([.[]|select(.event==null)]|length) > ([.[]|select(.event=="used")]|length)' \
+      '[.[]|select(.sha==$s and .ref==$r)] | ([.[]|select(.event==null and .used!=true and ((.owner_text//"")|length)>0)]|length) > ([.[]|select(.event=="used")]|length)' \
       "$APPROVALS" 2>/dev/null || echo false)
   fi
   reason=""

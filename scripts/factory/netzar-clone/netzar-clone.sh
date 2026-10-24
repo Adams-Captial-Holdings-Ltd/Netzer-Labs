@@ -37,7 +37,8 @@ cmd_init() {
 cmd_fetch() {
   cd "$CLONE"
   if dirty; then echo "REFUSED: dirty tree" >&2; exit 3; fi
-  git fetch -q origin --prune
+  # The clone holds no credentials (init), so inject a helper for this one read, as `push` does.
+  git -c credential.helper= -c "credential.helper=${NETZAR_FETCH_CRED:-!gh auth git-credential}" fetch -q origin --prune
   echo "FETCHED origin/development $(git rev-parse origin/development)"
 }
 
@@ -88,6 +89,7 @@ cmd_check() {
   # the push guard must be in place, or the clone is not safe to build in
   if [ "$(git config remote.origin.pushurl || true)" != DISABLED-owner-yes-required ] ||
     [ "$(git config core.hooksPath || true)" != "$HOOKS" ] || [ ! -x "$HOOKS/pre-push" ] ||
+    [ "$(sha256sum <"$HOOKS/pre-push")" != "$(sha256sum <"$HERE/hooks/pre-push")" ] ||
     [ -n "$(git config --local credential.helper || echo UNSET)" ] || [ "$(git config core.sshCommand || true)" != /bin/false ]; then
     echo "CLONE NOT CLEAN: push guard missing (run init)"; exit 1
   fi
@@ -143,12 +145,13 @@ cmd_install() {
     local pid rc
     sample
     if [ "$now" -lt "$MIN_AVAIL_MB" ]; then low_abort; fi
-    "$@" >&2 &
+    # own session: pid is the group id, so an abort can kill npm's workers too
+    setsid "$@" >&2 &
     pid=$!
     while kill -0 "$pid" 2>/dev/null; do
       sample
       if [ "$now" -lt "$MIN_AVAIL_MB" ]; then
-        kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; low_abort
+        kill -- "-$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; low_abort
       fi
       sleep 0.2
     done
@@ -160,7 +163,11 @@ cmd_install() {
 
   cur="$(sha256sum package-lock.json web/package-lock.json | sha256sum | cut -d' ' -f1)"
   # same lockfiles as the last good install and the trees exist: skip the npm steps
-  if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$cur" ] || [ ! -d node_modules ] || [ ! -d web/node_modules ]; then
+  local skip=0
+  if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$cur" ] && [ -d node_modules ] && [ -d web/node_modules ]; then skip=1; fi
+  # stale stamp = a later install could skip over a half-written tree: drop it before touching either dir
+  rm -f "$stamp"
+  if [ "$skip" = 0 ]; then
     step npm ci --ignore-scripts; drift
     step npm ci --prefix web; drift
   fi
