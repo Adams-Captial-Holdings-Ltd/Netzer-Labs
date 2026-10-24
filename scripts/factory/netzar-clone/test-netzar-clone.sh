@@ -95,6 +95,16 @@ t_check_tracked() {
   case "$out" in *"CLONE NOT CLEAN: .env.example"*) fail "template flagged" ;; esac
 }
 
+# the repo scanner has no placeholder filter, so committed test fixtures must not reach it; the stub flags every arg it gets
+t_check_scanner_tracked() {
+  setup
+  out="$(SCAN_STUB_RC=1 bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 0 "tracked-only exit"; has "$out" "CLONE CLEAN" "tracked files not scanned"
+  echo changed >>"$NETZAR_CLONE/package.json"
+  out="$(SCAN_STUB_RC=1 bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "modified exit"; has "$out" "CLONE NOT CLEAN: package.json:3: [stub-id]" "modified file scanned"
+}
+
 t_check_scanner() {
   setup
   echo hi >"$NETZAR_CLONE/my notes.txt"
@@ -312,7 +322,7 @@ t_install_stamp() {
   eq "$(grep -c 'start npm ci --ignore-scripts' "$STUB_LOG")" 1 "npm ci re-ran after the failed install"
 }
 
-CASES="t_check_clean t_check_dirty t_check_trackedt_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock t_hook_write_fail t_fetch_cred t_install_lowmem_kill t_hook_bad_approval t_check_hook_hash t_install_stamp"
+CASES="t_check_clean t_check_dirty t_check_tracked t_check_scanner t_check_scanner_trackedt_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock t_hook_write_fail t_fetch_cred t_install_lowmem_kill t_hook_bad_approval t_check_hook_hash t_install_stamp"
 if [ $# -gt 0 ]; then ( "$1" ); exit $?; fi
 pass=0; total=0
 for c in $CASES; do
