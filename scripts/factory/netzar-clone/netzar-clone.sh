@@ -45,12 +45,14 @@ cmd_fetch() {
 # Report paths and ids only, never matched values.
 cmd_check() {
   cd "$CLONE"
-  local files untracked f b p id re h sha out
+  local files changed untracked f b p id re h sha out
   local env=() key=() pat=() scan=()
   # filename checks: untracked only, so a tracked .env.example template stays exempt
   untracked="$(git ls-files -z -o | tr '\0' '\n' | grep -vE '(^|/)node_modules/' || true)"
   # content scans: tracked too, a secret committed to source must not read as clean (binaries skipped by grep -I / the scanner)
   files="$(git ls-files -z -c -o | tr '\0' '\n' | grep -vE '(^|/)node_modules/' | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done || true)"
+  # the repo scanner has no placeholder filter and flags committed test fixtures, so it sees untracked+modified files only
+  changed="$(git ls-files -z -o -m | tr '\0' '\n' | grep -vE '(^|/)node_modules/' | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done || true)"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     b="${f##*/}"
@@ -76,9 +78,9 @@ cmd_check() {
   # fail closed: a missing or crashing scanner is a finding, never a skip
   if [ ! -f scripts/ci/secret-scan.mjs ]; then
     scan+=("scanner missing")
-  elif [ -n "$files" ]; then
+  elif [ -n "$changed" ]; then
     local list=() rc=0 errs
-    mapfile -t list <<<"$files"
+    mapfile -t list <<<"$changed"
     errs="$(node scripts/ci/secret-scan.mjs "${list[@]}" 2>&1 >/dev/null)" || rc=$?
     if [ "$rc" -ne 0 ]; then
       # keep only file:line: [id]; the scanner's excerpt is a secret fragment
