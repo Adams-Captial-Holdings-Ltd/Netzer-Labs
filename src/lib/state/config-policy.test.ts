@@ -5,6 +5,7 @@ import {
   isSecretConfigKey,
   maskSecret,
   maskConfigValue,
+  maskReason,
 } from './config-policy.js';
 
 // NZR-43 unit tests for the runtime-config category policy and value masking.
@@ -84,5 +85,21 @@ describe('maskConfigValue', () => {
   it('leaves a non-JSON value that starts with { unchanged', () => {
     expect(maskConfigValue('note', '{not json')).toBe('{not json');
     expect(maskConfigValue('note', '[1,')).toBe('[1,');
+  });
+});
+
+describe('maskReason', () => {
+  it('masks the written value, the old value and token-shaped words in a free-text reason', () => {
+    expect(maskReason('rotated from sk-old-1111111111aaaa to sk-new-9999999999zzzz', 'sk-new-9999999999zzzz', 'sk-old-1111111111aaaa'))
+      .toBe('rotated from ****aaaa to ****zzzz');
+    expect(maskReason('pasted Bearer fake-pasted-token-0042 by mistake')).toBe('pasted Bearer ****0042 by mistake');
+    expect(maskReason('value was hunter22', 'hunter22')).toBe('value was ****');
+  });
+
+  it('keeps an ordinary reason readable and drops a non-string reason', () => {
+    expect(maskReason('raise daily cap for the Q4 launch', '5')).toBe('raise daily cap for the Q4 launch');
+    expect(maskReason('see docs/runbooks/rotate-config-secrets')).toBe('see docs/runbooks/rotate-config-secrets');
+    expect(maskReason(undefined, 'x')).toBeUndefined();
+    expect(maskReason(42)).toBeUndefined();
   });
 });

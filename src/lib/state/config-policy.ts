@@ -98,6 +98,22 @@ export function maskConfigValue<T extends string | null | undefined>(key: string
   return changed ? JSON.stringify(out) : value;
 }
 
+/**
+ * Mask the free-text `reason` of a config write before it is logged or
+ * audited: any occurrence of a known value (the new or old value) and any
+ * token-shaped word (16+ chars with a letter and a digit) becomes `****abcd`.
+ * shortcut: a short or digit-free secret typed into `reason` is not caught;
+ * upgrade to a real secret detector if reasons start carrying credentials.
+ */
+export function maskReason(reason: unknown, ...known: (string | null | undefined)[]): string | undefined {
+  if (typeof reason !== 'string') return undefined;
+  let out = reason;
+  for (const v of known) {
+    if (typeof v === 'string' && v.length >= 4) out = out.split(v).join(maskSecret(v));
+  }
+  return out.replace(/[A-Za-z0-9_\-./+=:]{16,}/g, (w) => (/[A-Za-z]/.test(w) && /\d/.test(w) ? maskSecret(w) : w));
+}
+
 /** maskConfigValue over a whole category. */
 export function maskConfigValues(values: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, maskConfigValue(k, v)]));

@@ -299,6 +299,21 @@ describe('NZR-43 /api/config secret categories', () => {
     expect(JSON.stringify(writeAudit.mock.calls)).not.toContain('9999999999');
   });
 
+  it('F43-11 a secret pasted into reason is masked in the log line and the config_updated row', async () => {
+    store.paperclip = { api_key: 'sk-live-1234567890abcd' };
+    const res = await req('/api/config/paperclip/api_key', 'admin', 'POST', {
+      value: 'sk-new-9999999999zzzz',
+      reason: 'swap sk-live-1234567890abcd for sk-new-9999999999zzzz, pasted fake-pasted-0000111122223333',
+    });
+    expect(res.status).toBe(200);
+    const updated = writeAudit.mock.calls.map(([e]) => e as { action: string; detail: Record<string, unknown> })
+      .find((e) => e.action === 'config_updated');
+    expect(updated?.detail.reason).toBe('swap ****abcd for ****zzzz, pasted ****3333');
+    const out = JSON.stringify([logWarn.mock.calls, writeAudit.mock.calls]);
+    for (const leak of ['1234567890', '9999999999', '0000111122223333']) expect(out).not.toContain(leak);
+    expect(JSON.stringify(logWarn.mock.calls)).toContain('swap ****abcd for ****zzzz');
+  });
+
   it('F43-10 security-tier and integrations-tier categories refuse lower tiers', async () => {
     store.power = { url: 'https://power.example.invalid' };
     store.alerting = { recipients: 'ops@example.invalid' };

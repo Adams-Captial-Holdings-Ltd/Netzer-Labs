@@ -185,6 +185,7 @@ import {
   SECRET_CONFIG_CATEGORIES,
   maskConfigValue,
   maskConfigValues,
+  maskReason,
 } from '../../lib/state/config-policy.js';
 import { getEffectiveCostCap } from '../../lib/state/cost-cap-repo.js';
 import { assembleStatusData, type AlarmRow } from '../status/data.js';
@@ -3080,8 +3081,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     await setConfig(category, key, body.value, { updatedBy });
     // Store the real value; everything that leaves (log, audit, echo) is masked.
     const masked = maskConfigValue(key, body.value);
+    const reason = maskReason(body.reason, body.value, before);
     logger.warn(
-      { category, key, value: masked, reason: body.reason, updatedBy },
+      { category, key, value: masked, reason, updatedBy },
       'runtime config set',
     );
     // Durable audit: which key changed, by whom, old -> new value (masked).
@@ -3096,7 +3098,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         key,
         oldValue: maskConfigValue(key, before) ?? null,
         newValue: masked,
-        ...(body.reason ? { reason: body.reason } : {}),
+        ...(reason ? { reason } : {}),
       },
     });
     return c.json({ ok: true, category, key, value: masked });
