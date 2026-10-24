@@ -450,7 +450,8 @@ export function requiredRole(method: string, subPath: string): TokenRole {
   // dead-ended a custom profile that holds security:write but not the admin
   // template, which is exactly the principal the UI shows the control to.
   if (subPath.startsWith('/kill-switches') && method !== 'GET') return 'viewer';
-  // Runtime config: reads stay viewer/operator. The COST category write (the
+  // Runtime config: reads pass this gate and are checked in-route by
+  // configAccess (category policy, NZR-43). The COST category write (the
   // daily cost-watch toggle) is operator-tier and is gated on the config:write
   // CAPABILITY inside the route, so the legacy role gate is relaxed to viewer for
   // ONLY the operator-tier cost-watch toggle (the config:write check is then the
@@ -3040,6 +3041,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // (requiredRole already forces admin for any cost key other than
     // watch_enabled; this is the in-route allowlist that makes the intent
     // explicit and rejects even an admin from cap/bookkeeping writes here.)
+    const denied = await configAccess(c, category, key, 'write');
+    if (denied) return denied;
     if (category === 'cost') {
       // Two cost keys are writable via this generic endpoint:
       //   - watch_enabled        the cost-watch toggle (config:write / operator)
@@ -3075,11 +3078,13 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const updatedBy = principal?.label ?? 'dashboard';
     const before = await getConfig(category, key);
     await setConfig(category, key, body.value, { updatedBy });
+    // Store the real value; everything that leaves (log, audit, echo) is masked.
+    const masked = maskConfigValue(key, body.value);
     logger.warn(
-      { category, key, value: body.value, reason: body.reason, updatedBy },
+      { category, key, value: masked, reason: body.reason, updatedBy },
       'runtime config set',
     );
-    // Durable audit: which key changed, by whom, old -> new value.
+    // Durable audit: which key changed, by whom, old -> new value (masked).
     void writeAudit({
       action: 'config_updated',
       surface: 'dashboard',
@@ -3089,12 +3094,12 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       detail: {
         category,
         key,
-        oldValue: before ?? null,
-        newValue: body.value,
+        oldValue: maskConfigValue(key, before) ?? null,
+        newValue: masked,
         ...(body.reason ? { reason: body.reason } : {}),
       },
     });
-    return c.json({ ok: true, category, key, value: body.value });
+    return c.json({ ok: true, category, key, value: masked });
   });
 
   router.get('/addons', async (c) => {
