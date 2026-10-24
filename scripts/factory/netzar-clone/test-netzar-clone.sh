@@ -322,7 +322,7 @@ t_install_stamp() {
   eq "$(grep -c 'start npm ci --ignore-scripts' "$STUB_LOG")" 1 "npm ci re-ran after the failed install"
 }
 
-CASES="t_check_clean t_check_dirty t_check_tracked t_check_scanner t_check_scanner_trackedt_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock t_hook_write_fail t_fetch_cred t_install_lowmem_kill t_hook_bad_approval t_check_hook_hash t_install_stamp"
+CASES="t_check_clean t_check_dirty t_check_tracked t_check_scanner t_check_scanner_tracked t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock t_hook_write_fail t_fetch_cred t_install_lowmem_kill t_hook_bad_approval t_check_hook_hash t_install_stamp"
 if [ $# -gt 0 ]; then ( "$1" ); exit $?; fi
 pass=0; total=0
 for c in $CASES; do

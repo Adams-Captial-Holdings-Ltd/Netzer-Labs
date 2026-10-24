@@ -136,6 +136,9 @@ cmd_install() {
   }
   sample() {
     now="$(avail)"; u="$(used)"
+    # fail closed: an unreadable `free` counts as 0 MB, so run_step aborts
+    case "$now" in ''|*[!0-9]*) now=0 ;; esac
+    case "$u" in ''|*[!0-9]*) u=0 ;; esac
     if [ -z "$min" ] || [ "$now" -lt "$min" ]; then min="$now"; fi
     if [ "$u" -gt "$peak" ]; then peak="$u"; fi
   }
