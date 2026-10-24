@@ -1,0 +1,18 @@
+PASS init creates clone with push block
+PASS check passes on fresh clone (CLONE CLEAN 0be7555af8e18b85b4fdc47c1dbf27d9fdad4c61)
+PASS check fails on .env, key file and nvapi string (CLONE NOT CLEAN: .env (env file))
+PASS check never prints the secret value
+PASS failing report lists paths, not values
+PASS fetch refuses a dirty tree (exit 3)
+PASS fetch prints the new origin sha
+PASS install runs the three commands serially in order (rc=0)
+PASS install leaves lockfiles unchanged
+PASS install fails on lockfile drift and runs nothing later
+PASS install aborts below 250 MB available
+PASS plain, --no-verify and explicit-URL pushes all fail (128,128,128)
+PASS push without approval exits 4 and is logged
+PASS approval does not cover a different branch
+PASS approved push is allowed and lands on origin
+PASS allowed push is logged
+PASS approval is single-use
+SUMMARY: 17/17 passed

@@ -190,6 +190,28 @@
 
 ---
 
+<!-- runner:evidence:start -->
+### Story exit gate evidence (runner)
+
+```
+Story: NZR-3   HEAD: eec716f6f38feab03857e7d54386de9477d0b8bc
+G1 code review : PASS  reviewer=claude-opus fresh critic session=bd55ae03-61ea-4461-927d-06477e3a5ae1 findings=6/16 open_low=10 greptile=GR:PASS
+GR greptile    : PASS confidence=5 comments=1 plus=False
+G2 unit tests  : PASS        red=eeef987 green=eec716f counts=4692/4692 story_files=21/21 typecheck=ok
+G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
+G3 UAT         : PENDING scenarios=7/7 pending_owner=0 accepted_by=- date=-
+G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-3/e2e-run.txt counts=17/17
+G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
+Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012   New lessons: L-005, L-006, L-007, L-008, L-009, L-010, L-011, L-012
+```
+
+- [e2e-run.txt](../evidence/NZR-3/e2e-run.txt)
+- [g1-review.md](../evidence/NZR-3/g1-review.md)
+- [gates.md](../evidence/NZR-3/gates.md)
+- [uat-transcript.md](../evidence/NZR-3/uat-transcript.md)
+- [uat.json](../evidence/NZR-3/uat.json)
+<!-- runner:evidence:end -->
+
 ## 8. NOTES
 
 - **Waiver (owner decision, 2026-10-24): push-bypass limit.** A builder sharing the unix user can borrow the owner's `gh` credentials and push around the clone guard. The owner WAIVED this limit to NZR-40 (separate unix user for builders). It is not solved here; `cmd_push` keeps its `shortcut:` comment.
