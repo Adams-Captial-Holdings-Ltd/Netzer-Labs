@@ -11,11 +11,17 @@
  */
 
 import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
+
+/** NZR-5: chat_* is the per-chat namespace (NZR-6); no agent knowledgeScope may sit in it. */
+function isReservedScope(scope: string): boolean {
+  return normalizeScope(scope).startsWith(RESERVED_SCOPE_PREFIX);
+}
 import { tools } from './registry.js';
 import { embedOne } from '../vectors/embedder.js';
 import { search, type QueryHit } from '../vectors/store.js';
 import { logger } from '../../observability/logger.js';
 import { ingestDocument } from '../vectors/ingest.js';
+import { normalizeScope, RESERVED_SCOPE_PREFIX } from '../vectors/scope-access.js';
 import {
   loadAgent,
   DEFAULT_KNOWLEDGE_SCOPE,
@@ -96,6 +102,7 @@ tools.register('s3_vectors_search', {
         };
       }
     }
+    if (isReservedScope(ownScope)) return { text: 'invalid knowledge scope', isError: true };
     // One list is both the fan-out and the read allowlist, so the two cannot
     // drift. The Set de-dups when the agent's own scope is itself the default
     // or the shared corpus, so no corpus is ever scanned twice.
@@ -247,6 +254,7 @@ tools.register('ingest_document', {
         };
       }
     }
+    if (isReservedScope(scope)) return { text: 'invalid knowledge scope', isError: true };
     if (typeof args.scope === 'string' && args.scope && args.scope !== scope) {
       return {
         text: `This tool can only ingest into this agent's own scope ('${scope}'). Other scopes are writable only via the dashboard ingest.`,

@@ -109,6 +109,7 @@ import {
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
+import { canReadScope, scopeHash } from '../../lib/vectors/scope-access.js';
 import {
   listDocuments,
   search as vectorSearch,
@@ -464,6 +465,13 @@ export function requiredRole(method: string, subPath: string): TokenRole {
   // every other /config/cost/* write still requires admin via the rule below.
   if (subPath === '/config/cost/watch_enabled' && method !== 'GET') return 'viewer';
   if (subPath.startsWith('/config') && method !== 'GET') return 'admin';
+  // NZR-5: the Knowledge tab's retrieval/answer tests are reads (vectors:read)
+  // and the staging upload URL is agents:write; each route's capability check
+  // plus scopeAccess is the single gate, so the legacy POST=operator rank is
+  // relaxed for exactly these three paths.
+  if (method === 'POST' && (subPath === '/vectors/search' || subPath === '/vectors/answer' || subPath === '/vectors/upload-url')) {
+    return 'viewer';
+  }
   // Irreversible GDPR erasure is admin-only; the export (GET) stays operator.
   if (subPath.startsWith('/export') && method === 'DELETE') return 'admin';
   // Jarvis read-only co-pilot — viewer can use voice + read the manifest. The
@@ -832,7 +840,7 @@ async function readCustomProfile(profileId: string): Promise<CustomProfile | nul
  * token resolves without a read. Unknown / unreadable custom profile => empty set
  * (fail closed). Returns the resolved profileId + caps set.
  */
-async function capabilitiesForPrincipal(
+export async function capabilitiesForPrincipal(
   p: TokenPrincipal,
 ): Promise<{ profileId: string; caps: Set<Capability> }> {
   const profileId = p.profileId ?? profileIdForRole(p.role);
@@ -882,6 +890,42 @@ async function hasCapability(c: DashboardCtx, need: Capability): Promise<boolean
   if (!p) return false;
   const { caps } = await capabilitiesForPrincipal(p);
   return caps.has(need);
+}
+
+/**
+ * NZR-5 scope gate for the knowledge routes, run after the route's own
+ * capability check and before any store, embedding or model call. A missing
+ * scope is 'default'; a malformed one (not a string, empty, >128 chars) is a 400
+ * with no audit row. A scope the caller may not read (private and unknown look
+ * identical) is a 403 plus an always-audited row carrying a scope hash only. A
+ * failing capability lookup refuses (fail closed).
+ */
+async function scopeAccess(
+  c: Context<DashboardEnv>,
+  rawScope: unknown,
+  route: string,
+): Promise<{ ok: true; scope: string } | { ok: false; res: Response }> {
+  if (rawScope === undefined || rawScope === null) return { ok: true, scope: 'default' };
+  if (typeof rawScope !== 'string' || rawScope.length < 1 || rawScope.length > 128) {
+    return { ok: false, res: c.json({ error: 'invalid_scope' }, 400) };
+  }
+  let allowed = false;
+  try {
+    const p = getPrincipal(c);
+    allowed = !!p && canReadScope((await capabilitiesForPrincipal(p)).caps, rawScope);
+  } catch {
+    allowed = false;
+  }
+  if (allowed) return { ok: true, scope: rawScope };
+  // Fire-and-forget; a lost row cannot turn the refusal into a read.
+  void writeAudit({
+    action: 'knowledge_scope_denied',
+    surface: 'dashboard',
+    result: 'blocked',
+    userId: dashboardIdentity(c),
+    detail: { route, scopeHash: scopeHash(rawScope), reason: 'private_scope', event: 'security.scope_denied' },
+  })?.catch(() => {});
+  return { ok: false, res: c.json({ error: 'forbidden_scope' }, 403) };
 }
 
 /**
@@ -3153,7 +3197,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'vectors:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
     }
-    const scope = c.req.query('scope') ?? 'default';
+    const access = await scopeAccess(c, c.req.query('scope'), 'GET /vectors');
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const docs = await listDocuments(scope);
     return c.json({ scope, count: docs.length, docs });
   });
@@ -3179,6 +3225,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!body || (!body.content && !body.contentBase64)) {
       return c.json({ error: 'missing_content_or_contentBase64' }, 400);
     }
+    const access = await scopeAccess(c, body.scope, 'POST /ingest');
+    if (!access.ok) return access.res;
     try {
       const result = await ingestDocument({
         ...(body.content ? { content: body.content } : {}),
@@ -3243,8 +3291,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
   // bypassing the CloudFront WAF's 8KB request-body cap (which blocks PDFs sent
   // as base64 JSON). It then calls /ingest/stream with the returned key.
   router.post('/vectors/upload-url', async (c) => {
-    if (!(await hasCapability(c, 'vectors:read'))) {
-      return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
+    // Minting a staging PUT URL is a write (NZR-5); viewers only read.
+    if (!(await hasCapability(c, 'agents:write'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
     }
     const body = await c.req.json<{ filename?: string }>().catch(() => null);
     const key = uploadKeyFor(body?.filename ?? 'upload', randomUUID());
@@ -3286,6 +3335,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!body || (!body.content && !body.contentBase64 && !body.s3Key)) {
       return c.json({ error: 'missing_content_contentBase64_or_s3Key' }, 400);
     }
+    // Before the stream: once it starts the status is already 200.
+    const access = await scopeAccess(c, body.scope, 'POST /ingest/stream');
+    if (!access.ok) return access.res;
     // Size ceilings for staged uploads. Binary docs are loaded fully into the
     // task's memory and base64'd (~1.33x), so we cap them well under the
     // Fargate task memory. Audio is streamed to Transcribe, not held in
@@ -3404,9 +3456,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
     }
     const body = await c.req.json<{ query?: string; scope?: string; topK?: number }>().catch(() => null);
+    const access = await scopeAccess(c, body?.scope, 'POST /vectors/search');
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const query = body?.query?.trim();
     if (!query) return c.json({ error: 'missing_query' }, 400);
-    const scope = body?.scope ?? 'default';
     try {
       const queryEmbedding = await embedOne(query);
       const hits = await vectorSearch({ scope, queryEmbedding, topK: Math.min(body?.topK ?? 5, 20) });
@@ -3449,12 +3503,16 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         history?: Array<{ role: 'user' | 'assistant'; text: string }>;
       }>()
       .catch(() => null);
+    // Before validation, the kill switch and the cost cap: a refused scope
+    // costs nothing and learns nothing about spend.
+    const access = await scopeAccess(c, body?.scope, 'POST /vectors/answer');
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const query = body?.query?.trim();
     const modelId = body?.modelId ?? '';
     if (!query) return c.json({ error: 'missing_query' }, 400);
     const model = listPlaygroundModels(process.env).find((m) => m.id === modelId);
     if (!model) return c.json({ error: 'unknown_model' }, 400);
-    const scope = body?.scope ?? 'default';
     const topK = Math.min(body?.topK ?? 5, 20);
 
     // Same safety gates as the Playground — this spends Bedrock money.
@@ -3596,7 +3654,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'agents:write'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
     }
-    const scope = c.req.param('scope');
+    const access = await scopeAccess(c, c.req.param('scope'), 'DELETE /vectors/:scope/:docId');
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const docId = c.req.param('docId');
     await removeDocument(scope, docId);
     void writeAudit({
