@@ -19,6 +19,15 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   '/hive': 'Hive Mind',
   '/scheduled': 'Scheduled Tasks',
   '/warroom': 'War Room',
+  '/work': 'Work',
+  '/work/cases': 'Cases',
+  '/work/approvals': 'Approvals',
+};
+
+// A detail page's last crumb names the kind of thing, never its raw id.
+const DETAIL_LABELS: Record<string, string> = {
+  '/work/cases': 'Case',
+  '/work/approvals': 'Approval',
 };
 
 function getBreadcrumbs(location: string): { label: string; href: string }[] {
@@ -29,7 +38,8 @@ function getBreadcrumbs(location: string): { label: string; href: string }[] {
   let path = '';
   for (const seg of segments) {
     path += `/${seg}`;
-    crumbs.push({ label: BREADCRUMB_LABELS[path] ?? seg, href: path });
+    const parent = path.slice(0, path.lastIndexOf('/'));
+    crumbs.push({ label: BREADCRUMB_LABELS[path] ?? DETAIL_LABELS[parent] ?? seg, href: path });
   }
   return crumbs;
 }

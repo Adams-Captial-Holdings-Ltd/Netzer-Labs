@@ -36,6 +36,9 @@ export default defineConfig(async ({ mode }) => {
       // production `vite build` never loads web/dev/ at all — a static import
       // would be evaluated on every build regardless of the guard, leaving the
       // build dependent on dev-only files being present.
+      ...(process.env.CCE_WORK_MOCK === '1'
+        ? [(await import('./dev/mock-work-plugin')).mockWorkPlugin()]
+        : []),
       ...(process.env.CCE_CHAT_MOCK === '1'
         ? [(await import('./dev/mock-stream-plugin')).mockStreamPlugin()]
         : []),

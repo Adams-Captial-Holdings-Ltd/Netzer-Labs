@@ -1,3 +1,4 @@
+import { Inbox, List, ClipboardCheck } from 'lucide-preact';
 import { signal } from '@preact/signals';
 import { Link, useLocation } from 'wouter-preact';
 import { ComponentChildren } from 'preact';
@@ -90,6 +91,9 @@ interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
+  { href: '/work', label: 'Inbox', section: 'Work', minCapability: 'work:read', icon: <Inbox size={18} strokeWidth={1.75} className="shrink-0" /> },
+  { href: '/work/cases', label: 'Cases', section: 'Work', minCapability: 'work:read', icon: <List size={18} strokeWidth={1.75} className="shrink-0" /> },
+  { href: '/work/approvals', label: 'Approvals', section: 'Work', minCapability: 'work:read', icon: <ClipboardCheck size={18} strokeWidth={1.75} className="shrink-0" /> },
   {
     // Wave 5 (granular RBAC): per-tab read cap. Matches the /  route gate
     // (overview:read) exactly so nav visibility and route access never diverge.
@@ -230,7 +234,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-const sections = ['Core', 'Operations', 'Security', 'Advanced', 'Collaboration', 'Team', 'Account'];
+const sections = ['Work', 'Core', 'Operations', 'Security', 'Advanced', 'Collaboration', 'Team', 'Account'];
 
 /* `mobile` is GONE as of round 6, rather than kept and ignored. Its only reader
    was the account row's `mobile && pageOwnsTopBar(location)` guard, and the row
@@ -241,8 +245,10 @@ const sections = ['Core', 'Operations', 'Security', 'Advanced', 'Collaboration',
 function SidebarContent({
   collapsed,
   onNavClick,
+  workEnabled,
 }: {
   collapsed: boolean;
+  workEnabled: boolean | null;
   onNavClick?: () => void;
 }) {
   const [location] = useLocation();
@@ -259,6 +265,8 @@ function SidebarContent({
   //    Hidden until identity resolves so a privileged tab never flashes in.
   //  - no minCapability → ungated, visible to everyone (its route is ungated too).
   const canSee = (item: NavItem) => {
+    if (item.section === 'Work' && workEnabled !== true) return false;
+    if (item.href === '/missions' && workEnabled === true && hasCapability('work:read')) return false;
     if (item.minCapability) {
       return identityResolved && hasCapability(item.minCapability);
     }
@@ -293,13 +301,14 @@ function SidebarContent({
         )}
         {!collapsed && (
           <div class="min-w-0">
-            <h1 class="text-heading-sm text-primary font-bold truncate">{companyName}</h1>
+            <p class="text-heading-sm text-primary font-bold truncate">{companyName}</p>
             <p class="text-overline text-muted uppercase tracking-wider truncate">{tagline}</p>
           </div>
         )}
       </div>
 
       <nav class="flex-1 overflow-y-auto py-3 px-2 space-y-4" role="navigation" aria-label="Main">
+        {workEnabled === null && <div role="status" class="skeleton h-10 mx-3"><span class="sr-only">Loading Work navigation</span></div>}
         {sections.map((section) => {
           const items = NAV_ITEMS.filter((i) => i.section === section && canSee(i));
           if (items.length === 0) return null;
@@ -310,7 +319,7 @@ function SidebarContent({
               )}
               <div class="space-y-0.5">
                 {items.map((item) => {
-                  const active = item.href === '/'
+                  const active = item.href === '/work' ? location === '/work' : item.href === '/'
                     ? location === '/'
                     : location.startsWith(item.href);
                   return (
@@ -437,7 +446,7 @@ function SidebarContent({
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ workEnabled = false }: { workEnabled?: boolean | null }) {
   const collapsed = sidebarCollapsed.value;
   const mobileOpen = mobileMenuOpen.value;
 
@@ -448,7 +457,7 @@ export function Sidebar() {
         class={`hidden lg:flex fixed top-0 left-0 h-full bg-surface border-r border-border flex-col transition-all duration-normal z-40
           ${collapsed ? 'w-[var(--sidebar-width-collapsed)]' : 'w-[var(--sidebar-width)]'}`}
       >
-        <SidebarContent collapsed={collapsed} />
+        <SidebarContent collapsed={collapsed} workEnabled={workEnabled} />
       </aside>
 
       {/* Mobile overlay */}
@@ -471,6 +480,7 @@ export function Sidebar() {
           >
             <SidebarContent
               collapsed={false}
+              workEnabled={workEnabled}
               onNavClick={() => { mobileMenuOpen.value = false; }}
             />
           </aside>

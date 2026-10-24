@@ -198,6 +198,7 @@ import { buildSeatAdminRouter } from './seat-admin.js';
 import { buildCostCapRouter } from './cost-cap.js';
 import { buildCostRouter } from './cost.js';
 import { buildIntegrationsRouter } from './integrations.js';
+import { buildWorkRouter } from './work.js';
 import { buildDashboardRouter } from './handler.js';
 
 type Tier = 'viewer' | 'operator' | 'admin' | 'owner';
@@ -251,6 +252,18 @@ function expectAllowed(res: Response): void {
   expect(res.status).not.toBe(403);
 }
 
+/** Work routes put the capability gate before feature and session checks. */
+async function expectWorkCapabilityGate(res: Response, cap: string, allowed: boolean): Promise<void> {
+  const body = (await res.json()) as Record<string, unknown>;
+  const deniedBody = { error: 'forbidden', requiredCapability: cap };
+  if (allowed) {
+    expect(body).not.toEqual(deniedBody);
+  } else {
+    expect(res.status).toBe(403);
+    expect(body).toEqual(deniedBody);
+  }
+}
+
 beforeEach(() => {
   getConfig.mockReset();
   getConfig.mockResolvedValue(undefined);
@@ -283,6 +296,14 @@ interface RouteCase {
 const TIER_INDEX: Record<Tier, number> = { viewer: 0, operator: 1, admin: 2, owner: 3 };
 
 const ROUTES: RouteCase[] = [
+  ...(['/inbox', '/cases', '/cases/case-1', '/approvals', '/approvals/a1'] as const).map((path) => ({
+    name: `Work read GET ${path}`, cap: 'work:read', minTier: 'operator' as const,
+    run: (t: Tier) => call(buildWorkRouter, '/api/work', path, 'GET', t),
+  })),
+  {
+    name: 'Work decide (POST /approvals/:id/decision)', cap: 'work:approve', minTier: 'operator',
+    run: (t) => call(buildWorkRouter, '/api/work', '/approvals/a1/decision', 'POST', t),
+  },
   // ── War Room mutations: agents:write (operator+). ──────────────────────────
   {
     name: 'War Room create (POST /)',
@@ -405,7 +426,8 @@ describe('authorization matrix — dedicated routers', () => {
         const allowed = TIER_INDEX[tier] >= TIER_INDEX[route.minTier];
         it(`${tier} is ${allowed ? 'ALLOWED' : 'DENIED'} (needs ${route.cap})`, async () => {
           const res = await route.run(tier);
-          if (allowed) expectAllowed(res);
+          if (route.name.startsWith('Work ')) await expectWorkCapabilityGate(res, route.cap, allowed);
+          else if (allowed) expectAllowed(res);
           else if (route.denyMayBeCoarse) expect(res.status).toBe(403);
           else await expectDenied(res, route.cap);
         });

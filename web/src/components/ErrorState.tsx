@@ -1,3 +1,5 @@
+import { Button } from './Button';
+
 interface ErrorStateProps {
   title?: string;
   message?: string;
@@ -20,18 +22,14 @@ export function ErrorState({
   class: className = '',
 }: ErrorStateProps) {
   return (
-    <div class={`flex flex-col items-center justify-center py-16 px-8 text-center border border-danger/30 rounded-xl bg-danger/5 ${className}`}>
+    <div role="alert" class={`flex flex-col items-center justify-center py-16 px-8 text-center border border-danger-a/30 rounded-xl bg-danger-dim ${className}`}>
       <div class="mb-4"><DangerIcon /></div>
-      <h3 class="text-heading-sm text-danger font-semibold mb-2">{title}</h3>
+      <h3 class="text-heading-sm text-danger-text font-semibold mb-2">{title}</h3>
       {message && <p class="text-body-sm text-secondary max-w-sm mb-6">{message}</p>}
       {onRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          class="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-normal px-4 py-2 text-body-sm gap-2 bg-danger/10 text-danger hover:bg-danger/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2"
-        >
+        <Button variant="secondary" onClick={onRetry}>
           Try again
-        </button>
+        </Button>
       )}
     </div>
   );

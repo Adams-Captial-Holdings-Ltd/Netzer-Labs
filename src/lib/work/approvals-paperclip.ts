@@ -3,10 +3,12 @@ import { loadPaperclipConfig } from '../paperclip/config.js';
 import { PaperclipDisabledError, PaperclipError, PaperclipLockClosedError } from '../paperclip/error.js';
 import { getPaperclipLockState } from '../paperclip/runtime-lock.js';
 import { isKillSwitchActive } from '../state/kill-switches-repo.js';
+import { getUser } from '../state/users-repo.js';
 import { dynamoShadowRows } from '../paperclip/shadow-rows-dynamo.js';
 import { defaultShadowKeyStore } from '../paperclip/shadow-keys.js';
 import { writeAuditOrThrow } from '../audit/audit-writer.js';
 import { createApprovals, type ApprovalRecord, type ApprovalsPort } from './approvals.js';
+import { dynamoPayloadRows } from './approval-payloads.js';
 
 type Client = Pick<PaperclipClient, 'request'>;
 type Dependencies = {
@@ -89,5 +91,6 @@ export function defaultApprovals(): ReturnType<typeof createApprovals> {
   defaultKeys ??= defaultShadowKeyStore();
   defaultRows ??= dynamoShadowRows();
   return createApprovals({ port: paperclipApprovalsPort(), shadows: defaultRows,
-    keys: defaultKeys, audit: writeAuditOrThrow, now: Date.now });
+    keys: defaultKeys, audit: writeAuditOrThrow, now: Date.now,
+    payloads: dynamoPayloadRows(), users: { isActive: async (id) => (await getUser(id))?.status === 'active' } });
 }

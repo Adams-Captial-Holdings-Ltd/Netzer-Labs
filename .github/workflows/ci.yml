@@ -295,3 +295,36 @@ jobs:
 
       - name: Chat E2E (Vite dev server + CCE_CHAT_MOCK=1)
         run: npm run e2e:chat
+  e2e-work:
+    name: Work E2E (local mock, no emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install dashboard dependencies
+        run: npm ci --prefix web
+
+      - name: Work web unit tests
+        run: |
+          shopt -s globstar
+          ./node_modules/.bin/vitest run web/src/**/*.test.ts web/src/**/*.test.tsx --config web/vite.config.ts
+
+      - name: Install the pinned Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Work E2E (Vite dev server + CCE_WORK_MOCK=1)
+        run: npm run e2e:work

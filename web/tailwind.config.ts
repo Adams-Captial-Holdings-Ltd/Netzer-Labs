@@ -45,8 +45,15 @@ export default {
         'primary-hover': 'var(--color-primary-hover)',
         'primary-light': 'var(--color-primary-light)',
         danger: 'var(--color-danger)',
+        'danger-text': 'var(--color-danger-text)',
         success: 'var(--color-success)',
         warning: 'var(--color-warning)',
+        // Status grounds (index.css). Alpha modifiers on the raw keys above emit no CSS.
+        'danger-dim': 'var(--color-danger-dim)',
+        'success-dim': 'var(--color-success-dim)',
+        'warning-dim': 'var(--color-warning-dim)',
+        // Plain dim behind a dialog that needs no blur (index.css).
+        scrim: 'var(--color-scrim)',
         // ── Alpha-capable siblings (additive; nothing above changes) ──
         // The semantic keys above are raw `var()` strings, so Tailwind has
         // nowhere to inject an alpha channel and an opacity modifier silently
@@ -173,6 +180,16 @@ export default {
         'sidebar': 'var(--sidebar-width)',
         'sidebar-collapsed': 'var(--sidebar-width-collapsed)',
         'header': 'var(--header-height)',
+      },
+      // Work screens (design.md section 6): named sizes instead of arbitrary values.
+      maxWidth: { 'work-main': '760px', measure: '75ch' },
+      gridTemplateColumns: {
+        // A row's cells at lg: the title is the only flexible track. Cells are stage, owner, time and
+        // status, or one wider cell across two tracks; the key track is only for a title without the key.
+        'work-row': 'minmax(0, 1fr) 7.25rem 7rem 4.5rem 8.75rem',
+        'work-row-key': 'minmax(0, 1fr) 5.5rem 7.25rem 7rem 4.5rem 8.75rem',
+        'work-detail': 'minmax(0, 1fr) 280px',
+        'payload-row': 'minmax(0, 12rem) minmax(0, 1fr)',
       },
       transitionDuration: {
         // Donor bridge: `duration-theme-normal` / `duration-theme-fast` (donor

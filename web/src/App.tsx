@@ -13,6 +13,7 @@ import { Sidebar, sidebarCollapsed } from './components/Sidebar';
 import { Header } from './components/Header';
 import { ToastContainer } from './components/Toast';
 import { JarvisWidget } from './components/JarvisWidget';
+import { ErrorState } from './components/ErrorState';
 import { EmptyState } from './components/EmptyState';
 import { TourOverlay } from './components/TourOverlay';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -94,6 +95,11 @@ const Compliance = lazyRoute(() => import('./pages/Compliance').then((m) => ({ d
 const Alerting = lazyRoute(() => import('./pages/Alerting').then((m) => ({ default: m.Alerting })));
 const Integrations = lazyRoute(() => import('./pages/Integrations').then((m) => ({ default: m.Integrations })));
 const Vectors = lazyRoute(() => import('./pages/Vectors').then((m) => ({ default: m.Vectors })));
+const WorkInbox = lazyRoute(() => import('./pages/work/Inbox').then(m => ({ default: m.Inbox })));
+const WorkCases = lazyRoute(() => import('./pages/work/Cases').then(m => ({ default: m.Cases })));
+const WorkCaseDetail = lazyRoute(() => import('./pages/work/CaseDetail').then(m => ({ default: m.CaseDetail })));
+const WorkApprovals = lazyRoute(() => import('./pages/work/Approvals').then(m => ({ default: m.Approvals })));
+const WorkApprovalDetail = lazyRoute(() => import('./pages/work/ApprovalDetail').then(m => ({ default: m.ApprovalDetail })));
 const Missions = lazyRoute(() => import('./pages/Missions').then((m) => ({ default: m.Missions })));
 const Memories = lazyRoute(() => import('./pages/Memories').then((m) => ({ default: m.Memories })));
 const HiveMind = lazyRoute(() => import('./pages/HiveMind').then((m) => ({ default: m.HiveMind })));
@@ -157,11 +163,40 @@ function RequireCapability({
   return <>{children}</>;
 }
 
+function WorkRedirect() {
+  const [, setLocation] = useLocation();
+  useEffect(() => { setLocation('/work', { replace: true }); }, [setLocation]);
+  return <div role="status" class="skeleton h-12 w-full"><span class="sr-only">Loading Work</span></div>;
+}
+
 function AppShell() {
   const collapsed = sidebarCollapsed.value;
   const [location, setLocation] = useLocation();
+  const [workEnabled, setWorkEnabled] = useState<boolean | null>(null);
+  const [workStatusError, setWorkStatusError] = useState(false);
+  const [workStatusVersion, setWorkStatusVersion] = useState(0);
 
   useEffect(() => { loadRole(); }, []);
+  useEffect(() => {
+    const ac = new AbortController();
+    setWorkStatusError(false);
+    async function check() {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const result = await api.get<{ enabled: unknown }>(`/work/status?_=${Date.now()}-${workStatusVersion}-${attempt}`, ac.signal);
+          if (typeof result.enabled !== 'boolean') throw new Error('invalid_work_status');
+          if (!ac.signal.aborted) setWorkEnabled(result.enabled);
+          return;
+        } catch {
+          if (ac.signal.aborted) return;
+          if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+      if (!ac.signal.aborted) { setWorkEnabled(false); setWorkStatusError(true); }
+    }
+    void check();
+    return () => ac.abort();
+  }, [workStatusVersion]);
 
   // First sign-in lands on the Getting Started checklist (replacing the old
   // OnboardingWizard modal). The legacy 'cce_onboarded' key marks existing
@@ -200,10 +235,18 @@ function AppShell() {
     return () => clearTimeout(t);
   }, []);
 
+  const workFailure = (
+    <div class="min-w-0">
+      <h1 class="text-display-sm text-primary font-bold mb-6">Work</h1>
+      <ErrorState title="Could not reach Work" message="The Work availability check failed. Try again."
+        onRetry={() => setWorkStatusVersion(v => v + 1)} />
+    </div>
+  );
+
   return (
     <div class="min-h-screen bg-page">
       <a href="#main-content" class="skip-to-content">Skip to content</a>
-      <Sidebar />
+      <Sidebar workEnabled={workEnabled} />
       <div
         class={`transition-all duration-normal ${collapsed ? 'lg:ml-[var(--sidebar-width-collapsed)]' : 'lg:ml-[var(--sidebar-width)]'}`}
       >
@@ -278,7 +321,12 @@ function AppShell() {
             <Route path="/alerting"><RequireCapability need="security:write" label="Alerting"><Alerting /></RequireCapability></Route>
             <Route path="/integrations"><RequireCapability need="integrations:read" label="Integrations"><Integrations /></RequireCapability></Route>
             <Route path="/vectors"><RequireCapability need="vectors:read" label="Knowledge"><Vectors /></RequireCapability></Route>
-            <Route path="/missions"><RequireCapability need="missions:read" label="Missions"><Missions /></RequireCapability></Route>
+            <Route path="/work"><RequireCapability need="work:read" label="Work">{workStatusError ? workFailure : <WorkInbox />}</RequireCapability></Route>
+            <Route path="/work/cases"><RequireCapability need="work:read" label="Cases">{workStatusError ? workFailure : <WorkCases />}</RequireCapability></Route>
+            <Route path="/work/cases/:caseId"><RequireCapability need="work:read" label="Case">{workStatusError ? workFailure : <WorkCaseDetail />}</RequireCapability></Route>
+            <Route path="/work/approvals"><RequireCapability need="work:read" label="Approvals">{workStatusError ? workFailure : <WorkApprovals />}</RequireCapability></Route>
+            <Route path="/work/approvals/:approvalId"><RequireCapability need="work:read" label="Approval">{workStatusError ? workFailure : <WorkApprovalDetail />}</RequireCapability></Route>
+            <Route path="/missions">{workEnabled === null ? <div role="status"><span class="sr-only">Loading Work</span><div class="skeleton h-8 w-1/3 mb-3" /><div class="skeleton h-12 w-full" /></div> : workEnabled && hasCapability('work:read') ? <WorkRedirect /> : <RequireCapability need="missions:read" label="Missions"><Missions /></RequireCapability>}</Route>
             <Route path="/memories"><RequireCapability need="memories:read" label="Memories"><Memories /></RequireCapability></Route>
             <Route path="/hive"><RequireCapability need="hive:read" label="Hive Mind"><HiveMind /></RequireCapability></Route>
             <Route path="/scheduled"><RequireCapability need="scheduled:read" label="Scheduled"><ScheduledTasks /></RequireCapability></Route>
