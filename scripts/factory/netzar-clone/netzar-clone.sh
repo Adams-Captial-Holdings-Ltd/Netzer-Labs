@@ -45,9 +45,12 @@ cmd_fetch() {
 # Report paths and ids only, never matched values.
 cmd_check() {
   cd "$CLONE"
-  local files f b p id re h sha out
+  local files untracked f b p id re h sha out
   local env=() key=() pat=() scan=()
-  files="$(git ls-files -z -o | tr '\0' '\n' | grep -vE '(^|/)node_modules/' || true)"
+  # filename checks: untracked only, so a tracked .env.example template stays exempt
+  untracked="$(git ls-files -z -o | tr '\0' '\n' | grep -vE '(^|/)node_modules/' || true)"
+  # content scans: tracked too, a secret committed to source must not read as clean (binaries skipped by grep -I / the scanner)
+  files="$(git ls-files -z -c -o | tr '\0' '\n' | grep -vE '(^|/)node_modules/' | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done || true)"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     b="${f##*/}"
@@ -56,7 +59,7 @@ cmd_check() {
       *.pem | id_rsa*) key+=("$f") ;;
       .npmrc) if grep -q _authToken "$f"; then key+=("$f"); fi ;;
     esac
-  done <<<"$files"
+  done <<<"$untracked"
 
   local PATS=(
     'ghp=ghp_[A-Za-z0-9]{36}' 'github_pat=github_pat_[A-Za-z0-9_]{20,}'
