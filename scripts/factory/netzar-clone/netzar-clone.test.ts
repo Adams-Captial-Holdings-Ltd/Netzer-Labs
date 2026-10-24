@@ -16,6 +16,9 @@ const CASES: Record<string, string> = {
   t_install_lowmem: 'install aborts below 250 MB available',
   t_push_refused: 'push is refused without an approval record and logged',
   t_push_approved: 'approved push is allowed once, only for its sha and ref',
+  t_hook_single_use: 'the hook consumes an approval atomically, so a direct-URL push cannot reuse it',
+  t_push_no_creds: 'the clone holds no push credentials and check fails if that block is missing',
+  t_install_lock: 'a second install is refused while one runs, including the playwright step',
 };
 
 describe('netzar-clone.sh', () => {

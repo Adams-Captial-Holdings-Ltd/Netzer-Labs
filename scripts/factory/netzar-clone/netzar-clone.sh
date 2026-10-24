@@ -22,6 +22,11 @@ cmd_init() {
   mkdir -p "$LOGS" "$(dirname "$APPROVALS")"
   [ -d "$CLONE/.git" ] || git clone -q "$ORIGIN" "$CLONE" || { echo "clone failed" >&2; exit 1; }
   git -C "$CLONE" config remote.origin.pushurl DISABLED-owner-yes-required
+  # The clone holds no push credentials (an empty helper resets any global one), so an explicit-URL
+  # `--no-verify` push has nothing to authenticate with. Only `push` injects credentials, after approval.
+  git -C "$CLONE" config credential.helper ""
+  git -C "$CLONE" config core.askPass /bin/false
+  git -C "$CLONE" config core.sshCommand /bin/false
   mkdir -p "$HOOKS"
   install -m 555 "$HERE/hooks/pre-push" "$HOOKS/pre-push"
   git -C "$CLONE" config core.hooksPath "$HOOKS"
@@ -82,7 +87,8 @@ cmd_check() {
 
   # the push guard must be in place, or the clone is not safe to build in
   if [ "$(git config remote.origin.pushurl || true)" != DISABLED-owner-yes-required ] ||
-    [ "$(git config core.hooksPath || true)" != "$HOOKS" ] || [ ! -x "$HOOKS/pre-push" ]; then
+    [ "$(git config core.hooksPath || true)" != "$HOOKS" ] || [ ! -x "$HOOKS/pre-push" ] ||
+    [ -n "$(git config --local credential.helper || echo UNSET)" ] || [ "$(git config core.sshCommand || true)" != /bin/false ]; then
     echo "CLONE NOT CLEAN: push guard missing (run init)"; exit 1
   fi
 
@@ -109,6 +115,10 @@ used() { free -m | awk '/^Mem:/{print $3}'; }
 cmd_install() {
   cd "$CLONE"
   mkdir -p "$LOGS"
+  # held (fd 9) until this command exits, so no other install can start mid-sequence, playwright step included
+  exec 9>"$LOGS/install.lock"
+  flock -n 9 || { echo "ABORTED: another install is running" >&2; exit 1; }
+  # an npm ci started outside this script (e.g. a staging script) is not covered by the lock
   if pgrep -f '^npm ci' >/dev/null; then echo "ABORTED: another npm ci is running" >&2; exit 1; fi
   local steps=() min="" peak=0 now u cur stamp="$LOGS/install-stamp" report="$LOGS/install-$(ts).json"
 
@@ -169,11 +179,11 @@ cmd_push() {
   br="$2"; git check-ref-format "refs/heads/$br" || exit 2
   ref="refs/heads/$br"
   url="$(git remote get-url origin)"
-  # Run the gate ourselves (git skips the hook for an up-to-date ref), then push
-  # to the explicit URL, which bypasses the disabled pushurl.
+  # Run the gate ourselves (git skips the hook for an up-to-date ref); the hook consumes the approval.
+  # Credentials are injected only here, for this one push: the clone itself holds none.
+  # shortcut: the owner's gh login is still readable by the same unix user; upgrade to a server-side check.
   printf 'HEAD %s %s 0000000000000000000000000000000000000000\n' "$sha" "$ref" | bash "$HOOKS/pre-push" origin "$url" || exit 4
-  out="$(git push --no-verify "$url" "$sha:$ref" 2>&1)" || { echo "$out" >&2; exit 1; }
-  jq -nc --arg ts "$(date -u +%FT%TZ)" --arg sha "$sha" --arg ref "$ref" '{ts:$ts,sha:$sha,ref:$ref,event:"used"}' >>"$APPROVALS"
+  out="$(git -c credential.helper= -c "credential.helper=${NETZAR_PUSH_CRED:-!gh auth git-credential}" push --no-verify "$url" "$sha:$ref" 2>&1)" || { echo "$out" >&2; exit 1; }
   echo "PUSHED $sha -> $ref"
 }
 

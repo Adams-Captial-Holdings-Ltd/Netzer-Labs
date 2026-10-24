@@ -177,7 +177,57 @@ t_push_approved() {
   eq "$(jq -s -c '[.[]|.result]' "$NETZAR_LOG_DIR/push-attempts.jsonl")" '["allowed","refused","refused"]' "log results"
 }
 
-CASES="t_check_clean t_check_dirty t_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved"
+# the hook (not only `push`) consumes the approval, atomically: git runs it for a direct URL push too
+t_hook_single_use() {
+  setup
+  cd "$NETZAR_CLONE" || fail cd
+  git switch -q -c docs/x && echo y >y.txt && git add -A && git commit -qm y
+  sha="$(git rev-parse HEAD)"
+  printf '{"ts":"2026-01-01T00:00:00Z","sha":"%s","ref":"refs/heads/docs/x","owner_text":"yes","used":false}\n' "$sha" >"$NETZAR_APPROVALS"
+  git push "$NETZAR_ORIGIN" HEAD:refs/heads/docs/x >/dev/null 2>&1 || fail "approved direct push refused"
+  git --git-dir="$NETZAR_ORIGIN" update-ref -d refs/heads/docs/x
+  git push "$NETZAR_ORIGIN" HEAD:refs/heads/docs/x >/dev/null 2>&1 && fail "approval reused after remote branch deleted"
+  git --git-dir="$NETZAR_ORIGIN" rev-parse -q --verify refs/heads/docs/x >/dev/null && fail "ref recreated"
+  eq "$(jq -s '[.[]|select(.event=="used")]|length' "$NETZAR_APPROVALS")" 1 "one used event"
+  # concurrent pushes of one approval: exactly one wins
+  echo z >z.txt && git add -A && git commit -qm z
+  sha="$(git rev-parse HEAD)"
+  printf '{"ts":"2026-01-01T00:00:00Z","sha":"%s","ref":"refs/heads/docs/y","owner_text":"yes","used":false}\n' "$sha" >"$NETZAR_APPROVALS"
+  for i in 1 2 3 4 5; do
+    ( echo "HEAD $sha refs/heads/docs/y 0000000000000000000000000000000000000000" | bash "$NETZAR_HOOKS/pre-push" origin url >/dev/null 2>&1 && echo ok >"$T/win.$i" ) &
+  done
+  wait
+  eq "$(ls "$T"/win.* 2>/dev/null | wc -l | tr -d ' ')" 1 "concurrent winners"
+}
+
+# the clone holds no push credentials: a direct https URL with --no-verify has nothing to authenticate with
+t_push_no_creds() {
+  setup
+  printf '#!/usr/bin/env bash\necho called >>"%s/cred.log"\necho username=u\necho password=p\n' "$T" >"$T/bin/credstub"
+  chmod +x "$T/bin/credstub"
+  printf '[credential]\n\thelper = %s/bin/credstub\n' "$T" >"$T/gitcfg"
+  printf 'protocol=https\nhost=example.test\n\n' | GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL="$T/gitcfg" git -C "$NETZAR_CLONE" credential fill >/dev/null 2>&1 && fail "clone can fetch a credential"
+  [ ! -s "$T/cred.log" ] || fail "global credential helper still runs in the clone"
+  eq "$(git -C "$NETZAR_CLONE" config core.sshCommand)" /bin/false "ssh disabled"
+  git -C "$NETZAR_CLONE" config --local --unset-all credential.helper
+  out="$(bash "$SCRIPT" check 2>&1)"; rc=$?
+  eq "$rc" 1 "check without cred block"; has "$out" "push guard" "check flags it"
+}
+
+# two installs never overlap, including during the playwright step
+t_install_lock() {
+  setup
+  ( bash "$SCRIPT" install >"$T/first.out" 2>&1 & )
+  for _ in $(seq 50); do grep -q 'start npx' "$STUB_LOG" && break; sleep 0.05; done
+  grep -q 'start npx' "$STUB_LOG" || fail "first install never reached playwright"
+  out="$(bash "$SCRIPT" install 2>&1)"; rc=$?
+  eq "$rc" 1 "second install exit"; has "$out" "another install is running" "msg"
+  for _ in $(seq 50); do grep -q 'INSTALL OK' "$T/first.out" && break; sleep 0.1; done
+  grep -q 'INSTALL OK' "$T/first.out" || fail "first install did not finish"
+  eq "$(grep -c 'start npm ci --ignore-scripts' "$STUB_LOG")" 1 "npm ci ran once"
+}
+
+CASES="t_check_clean t_check_dirty t_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock"
 if [ $# -gt 0 ]; then ( "$1" ); exit $?; fi
 pass=0; total=0
 for c in $CASES; do

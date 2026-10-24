@@ -4,7 +4,11 @@
 set -u
 LOGS="${NETZAR_LOG_DIR:-$HOME/.claude/plans/netzar-logs}"
 APPROVALS="${NETZAR_APPROVALS:-$HOME/.claude/plans/netzar-push-approvals.jsonl}"
-mkdir -p "$LOGS"
+mkdir -p "$LOGS" "$(dirname "$APPROVALS")"
+
+# check-and-consume under one lock, so concurrent or repeated pushes cannot share an approval
+exec 8>"$APPROVALS.lock"
+flock 8
 
 rc=0
 while read -r _lref lsha rref _rsha; do
@@ -18,6 +22,7 @@ while read -r _lref lsha rref _rsha; do
   reason=""
   if [ "$ok" = true ]; then
     res=allowed
+    jq -nc --arg ts "$(date -u +%FT%TZ)" --arg sha "$lsha" --arg ref "$rref" '{ts:$ts,sha:$sha,ref:$ref,event:"used"}' >>"$APPROVALS"
   else
     res=refused; rc=1
     reason="no owner yes for ${lsha:0:12} -> $rref"
