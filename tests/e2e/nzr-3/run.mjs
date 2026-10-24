@@ -145,8 +145,9 @@ try {
   git(P('clone'), 'add', 'x.txt');
   git(P('clone'), 'commit', '-qm', 'x');
   const cs = git(P('clone'), 'rev-parse', 'HEAD');
-  const tryPush = (...a) => spawnSync('git', ['push', ...a], { cwd: P('clone'), env, encoding: 'utf8', timeout: 60000 });
-  const attempts = [tryPush(), tryPush('--no-verify', 'origin', 'HEAD'), tryPush('--no-verify', P('origin.git'), 'HEAD')];
+  const tryPush = (...a) => spawnSync('git', ['push', ...a], { cwd: P('clone'), env: { ...env, GIT_TERMINAL_PROMPT: '0' }, encoding: 'utf8', timeout: 60000 });
+  // explicit URL must be unreachable https: a local path needs no credentials and would land the push
+  const attempts = [tryPush(), tryPush('--no-verify', 'origin', 'HEAD'), tryPush('--no-verify', 'https://example.invalid/x.git', 'HEAD')];
   const noRemote = () => spawnSync('git', ['--git-dir', P('origin.git'), 'rev-parse', '--verify', '-q', 'refs/heads/docs/x']).status !== 0;
   rec('plain, --no-verify and explicit-URL pushes all fail', attempts.every((r) => r.status !== 0) && noRemote(),
     attempts.map((r) => r.status).join(','));
