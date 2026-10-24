@@ -1,4 +1,9 @@
+import { z } from 'zod';
 import type { Capability } from '../auth/permissions.js';
+
+/** A category or key name from the URL. The 128 cap also bounds the
+ * always-audited config_access_denied row. */
+export const configNameSchema = z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/);
 
 /**
  * NZR-43: which runtime-config categories the generic /api/config* routes
@@ -112,6 +117,25 @@ export function maskReason(reason: unknown, ...known: (string | null | undefined
     if (typeof v === 'string' && v.length >= 4) out = out.split(v).join(maskSecret(v));
   }
   return out.replace(/[A-Za-z0-9_\-./+=:]{16,}/g, (w) => (/[A-Za-z]/.test(w) && /\d/.test(w) ? maskSecret(w) : w));
+}
+
+const MASKED = /^\*{4}[^]{0,4}$/;
+
+/** True when a value posted back still carries a mask from maskConfigValue
+ * (whole secret-shaped key, or a secret-shaped JSON field at any depth), so
+ * a read-modify-write cannot overwrite the real secret with the placeholder. */
+export function carriesMaskedSecret(key: string, value: string): boolean {
+  if (isSecretConfigKey(key)) return MASKED.test(value);
+  let found = false;
+  try {
+    JSON.parse(value, (k, v: unknown) => {
+      if (isSecretConfigKey(k) && typeof v === 'string' && MASKED.test(v)) found = true;
+      return v;
+    });
+  } catch {
+    // Not JSON: nothing nested to carry a mask.
+  }
+  return found;
 }
 
 /** maskConfigValue over a whole category. */
