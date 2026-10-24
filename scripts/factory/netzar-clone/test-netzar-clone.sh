@@ -227,7 +227,18 @@ t_install_lock() {
   eq "$(grep -c 'start npm ci --ignore-scripts' "$STUB_LOG")" 1 "npm ci ran once"
 }
 
-CASES="t_check_clean t_check_dirty t_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock"
+# a failed attempt-log write must refuse the push (an unlogged push is not allowed)
+t_hook_write_fail() {
+  setup
+  cd "$NETZAR_CLONE" || fail cd
+  sha="$(git rev-parse HEAD)"
+  printf '{"ts":"2026-01-01T00:00:00Z","sha":"%s","ref":"refs/heads/docs/w","owner_text":"yes","used":false}\n' "$sha" >"$NETZAR_APPROVALS"
+  mkdir -p "$NETZAR_LOG_DIR/push-attempts.jsonl" # a directory: appends fail even for root
+  echo "HEAD $sha refs/heads/docs/w 0000000000000000000000000000000000000000" | bash "$NETZAR_HOOKS/pre-push" origin url >/dev/null 2>&1 && fail "push allowed with unwritable attempt log"
+  return 0
+}
+
+CASES="t_check_clean t_check_dirty t_check_scanner t_hook_stable t_fetch t_install_serial t_install_drift t_install_lowmem t_push_refused t_push_approved t_hook_single_use t_push_no_creds t_install_lock t_hook_write_fail"
 if [ $# -gt 0 ]; then ( "$1" ); exit $?; fi
 pass=0; total=0
 for c in $CASES; do

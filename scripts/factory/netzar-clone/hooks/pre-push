@@ -22,13 +22,18 @@ while read -r _lref lsha rref _rsha; do
   reason=""
   if [ "$ok" = true ]; then
     res=allowed
-    jq -nc --arg ts "$(date -u +%FT%TZ)" --arg sha "$lsha" --arg ref "$rref" '{ts:$ts,sha:$sha,ref:$ref,event:"used"}' >>"$APPROVALS"
+    # fail closed: an approval we could not mark used stays reusable, so refuse
+    if ! jq -nc --arg ts "$(date -u +%FT%TZ)" --arg sha "$lsha" --arg ref "$rref" '{ts:$ts,sha:$sha,ref:$ref,event:"used"}' >>"$APPROVALS"; then
+      res=refused; rc=1
+      reason="could not record approval use for ${lsha:0:12} -> $rref"
+      echo "$reason" >&2
+    fi
   else
     res=refused; rc=1
     reason="no owner yes for ${lsha:0:12} -> $rref"
     echo "$reason" >&2
   fi
   jq -nc --arg ts "$(date -u +%FT%TZ)" --arg sha "$lsha" --arg ref "$rref" --arg res "$res" --arg why "$reason" \
-    '{ts:$ts,sha:$sha,ref:$ref,result:$res,reason:$why}' >>"$LOGS/push-attempts.jsonl"
+    '{ts:$ts,sha:$sha,ref:$ref,result:$res,reason:$why}' >>"$LOGS/push-attempts.jsonl" || { echo "could not log push attempt" >&2; rc=1; }
 done
 exit $rc

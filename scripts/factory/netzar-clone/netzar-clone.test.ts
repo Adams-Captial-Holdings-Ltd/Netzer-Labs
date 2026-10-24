@@ -19,6 +19,7 @@ const CASES: Record<string, string> = {
   t_hook_single_use: 'the hook consumes an approval atomically, so a direct-URL push cannot reuse it',
   t_push_no_creds: 'the clone holds no push credentials and check fails if that block is missing',
   t_install_lock: 'a second install is refused while one runs, including the playwright step',
+  t_hook_write_fail: 'the hook refuses the push when the attempt log cannot be written',
 };
 
 describe('netzar-clone.sh', () => {
