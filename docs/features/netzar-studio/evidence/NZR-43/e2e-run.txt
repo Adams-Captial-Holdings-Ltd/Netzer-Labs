@@ -1,1 +1,44 @@
-PENDING: the runner writes the output of `node tests/e2e/nzr-43/run.mjs` here (method, path, status and the SUMMARY line only).
+  GET /health -> 200
+PASS health
+  GET /api/config/profile -> 401
+PASS no token is 401 (401)
+  POST /api/config/profile/first_name -> 200
+PASS owner writes profile/first_name (200)
+  GET /api/config/profile/first_name -> 200
+PASS profile/first_name reads back unchanged
+  GET /api/config -> 200
+PASS GET /api/config keeps the {categories:{cost,sessions,rate_limits}} shape
+  POST /api/config/paperclip/api_key -> 200
+PASS POST paperclip/api_key echoes ****zzzz
+  GET /api/config/paperclip/api_key -> 200
+PASS GET paperclip/api_key is masked
+  GET /api/config/paperclip -> 200
+PASS GET paperclip category masks api_key
+PASS server log masks value and reason
+  GET /api/config/oauth -> 403
+PASS GET /api/config/oauth is 403 forbidden_category (403)
+  GET /api/config?category=oauth -> 403
+PASS GET /api/config?category=oauth is 403 forbidden_category (403)
+  GET /api/config/oauth/slack_app_ops -> 403
+PASS GET /api/config/oauth/slack_app_ops is 403 forbidden_category (403)
+  GET /api/config/mcp/servers -> 403
+PASS GET /api/config/mcp/servers is 403 forbidden_category (403)
+  GET /api/config/oauth_state/abc -> 403
+PASS GET /api/config/oauth_state/abc is 403 forbidden_category (403)
+  GET /api/config/OAUTH -> 403
+PASS GET /api/config/OAUTH is 403 forbidden_category (403)
+  GET /api/config/oau%74h/x -> 403
+PASS GET /api/config/oau%74h/x is 403 forbidden_category (403)
+  GET /api/config/no_such_category -> 403
+PASS GET /api/config/no_such_category is 403 forbidden_category (403)
+  POST /api/config/oauth/slack_client_secret -> 403
+PASS POST /api/config/oauth/slack_client_secret is 403 forbidden_category (403)
+  POST /api/config/no_such_category/k -> 403
+PASS POST /api/config/no_such_category/k is 403 forbidden_category (403)
+  POST /api/config/paperclip/api_key -> 400
+PASS POST of a masked value is 400 masked_value_rejected (400)
+  GET /api/config/paperclip/api_key -> 200
+PASS paperclip/api_key still holds the real value
+  GET /api/config/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -> 400
+PASS oversized category is 400 invalid_config_param (400)
+SUMMARY: 22/22 passed
