@@ -35,6 +35,7 @@ import {
   TEMPLATED_PROFILES,
   isCapability,
   isTemplatedProfileId,
+  legacyRoleForCapabilities,
   resolveCapabilities,
   type Capability,
   type CustomProfile,
@@ -1037,33 +1038,6 @@ async function mintSessionToken(user: UserProfile): Promise<string> {
 }
 
 /**
- * The legacy rungs, ranked, each pinned to the TEMPLATED capability set that
- * DEFINES it. The bridge stays in lockstep with the source of truth: the exact
- * caps a legacy role gates are exactly the templated profile's caps.
- *
- * A profile EARNS a legacy role only when it holds that role's ENTIRE templated
- * capability set (templated caps ⊆ profile caps — a SUBSET/superset rule, not a
- * single-capability touch). This never over-grants: a custom profile that holds
- * one admin-tier capability (e.g. members:write) but NOT the full admin template
- * is NOT admin; it falls through to the highest rung it fully covers, else viewer.
- */
-const LEGACY_ROLE_TEMPLATES: ReadonlyArray<{
-  role: TokenRole;
-  caps: readonly Capability[];
-}> = [
-  // Highest first: pick the most privileged role fully covered, never wider.
-  { role: 'admin', caps: TEMPLATED_PROFILES.admin },
-  { role: 'operator', caps: TEMPLATED_PROFILES.operator },
-  { role: 'viewer', caps: TEMPLATED_PROFILES.viewer },
-];
-
-/** True when every capability in `template` is present in `held` (template ⊆ held). */
-function holdsAll(held: readonly Capability[], template: readonly Capability[]): boolean {
-  const heldSet = new Set(held);
-  return template.every((cap) => heldSet.has(cap));
-}
-
-/**
  * Map a profileId to the legacy TokenRole the session row stores, derived
  * FAITHFULLY from the profile's effective capabilities (the permissions taxonomy
  * is the source of truth) rather than collapsing every non-template id to viewer.
@@ -1090,10 +1064,7 @@ async function roleForProfileId(profileId: string): Promise<TokenRole> {
   const caps = isTemplatedProfileId(profileId)
     ? resolveCapabilities(profileId)
     : resolveCapabilities(profileId, await readCustomProfile(profileId));
-  for (const { role, caps: template } of LEGACY_ROLE_TEMPLATES) {
-    if (holdsAll(caps, template)) return role;
-  }
-  return 'viewer';
+  return legacyRoleForCapabilities(caps);
 }
 
 /**

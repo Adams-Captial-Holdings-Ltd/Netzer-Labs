@@ -322,6 +322,38 @@ export function profileIdForLegacyRole(
 }
 
 /**
+ * Admin-tier caps added after the legacy bridge froze. They are excluded from
+ * the legacy-admin rung so a saved custom profile that held every earlier admin
+ * cap is not demoted (and stripped of legacy-admin routes like /tokens*).
+ */
+const POST_BRIDGE_ADMIN_CAPS: readonly Capability[] = ['knowledge:private:read'];
+
+const LEGACY_ROLE_TEMPLATES: ReadonlyArray<{
+  role: 'viewer' | 'operator' | 'admin';
+  caps: readonly Capability[];
+}> = [
+  // Highest first: pick the most privileged role fully covered, never wider.
+  { role: 'admin', caps: ADMIN_CAPS.filter((c) => !POST_BRIDGE_ADMIN_CAPS.includes(c)) },
+  { role: 'operator', caps: OPERATOR_CAPS },
+  { role: 'viewer', caps: VIEWER_CAPS },
+];
+
+/**
+ * The legacy TokenRole a capability set earns: the HIGHEST rung whose ENTIRE
+ * templated capability set is a subset of `caps`, else viewer. Never over-grants:
+ * one admin-tier cap without the full admin template is not admin.
+ */
+export function legacyRoleForCapabilities(
+  caps: readonly Capability[],
+): 'viewer' | 'operator' | 'admin' {
+  const held = new Set(caps);
+  for (const { role, caps: template } of LEGACY_ROLE_TEMPLATES) {
+    if (template.every((cap) => held.has(cap))) return role;
+  }
+  return 'viewer';
+}
+
+/**
  * Resolve a profileId (plus, for custom profiles, the stored custom-profile
  * record) into the effective capability set.
  *
