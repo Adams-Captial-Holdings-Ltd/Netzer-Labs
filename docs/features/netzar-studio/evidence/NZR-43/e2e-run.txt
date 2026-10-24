@@ -1,0 +1,1 @@
+PENDING: the runner writes the output of `node tests/e2e/nzr-43/run.mjs` here (method, path, status and the SUMMARY line only).

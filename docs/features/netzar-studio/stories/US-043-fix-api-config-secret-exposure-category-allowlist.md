@@ -221,7 +221,7 @@ G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
 Lessons checked: L-001,L-002   New lessons: none
 ```
 
-- [e2e-run.log](../evidence/NZR-43/e2e-run.log)
+- [e2e-run.txt](../evidence/NZR-43/e2e-run.txt)
 - [g1-review.md](../evidence/NZR-43/g1-review.md)
 - [gates.md](../evidence/NZR-43/gates.md)
 - [uat-live.json](../evidence/NZR-43/uat-live.json)

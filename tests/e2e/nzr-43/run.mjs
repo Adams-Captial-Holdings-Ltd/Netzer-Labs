@@ -25,7 +25,8 @@ async function call(method, path, body, auth = true) {
   try {
     json = JSON.parse(text);
   } catch {}
-  console.log(`  ${method} ${path} -> ${res.status} ${text.slice(0, 200)}`);
+  // Method, path, status only: bodies can carry config values.
+  console.log(`  ${method} ${path} -> ${res.status}`);
   return { status: res.status, json, text };
 }
 
@@ -79,6 +80,14 @@ try {
     const res = await call(method, path, body);
     rec(`${method} ${path} is 403 forbidden_category`, res.status === 403 && res.text === FORBIDDEN, String(res.status));
   }
+
+  // A masked value read back and posted again must not overwrite the secret.
+  const mb = await call('POST', '/api/config/paperclip/api_key', { value: '****zzzz' });
+  rec('POST of a masked value is 400 masked_value_rejected', mb.status === 400 && mb.json?.error === 'masked_value_rejected', String(mb.status));
+  const still = await call('GET', '/api/config/paperclip/api_key');
+  rec('paperclip/api_key still holds the real value', still.json?.value === '****zzzz');
+  const big = await call('GET', `/api/config/${'a'.repeat(129)}`);
+  rec('oversized category is 400 invalid_config_param', big.status === 400 && big.json?.error === 'invalid_config_param', String(big.status));
 } catch (err) {
   rec('script', false, err instanceof Error ? err.message : String(err));
 }
