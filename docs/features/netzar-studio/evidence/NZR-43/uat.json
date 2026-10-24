@@ -1,0 +1,50 @@
+[
+ {
+  "scenario": "1",
+  "title": "Allowed categories work as before for the screens that use them",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-43/uat-transcript.md#scenario-1 (live owner) + config-secrets.test.ts \u203a F43-6 serves the categories the SPA reads unchanged to a viewer and a seat-user"
+ },
+ {
+  "scenario": "2",
+  "title": "Secret categories are refused to everyone, on every route",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-2 (live owner) + config-secrets.test.ts \u203a F43-1, F43-2, F43-3, F43-8"
+ },
+ {
+  "scenario": "3",
+  "title": "Unknown categories are refused by default",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-3 (live owner) + config-secrets.test.ts \u203a F43-4 refuses a category that is not on the allowlist, in any spelling"
+ },
+ {
+  "scenario": "4",
+  "title": "Secret-shaped values are masked wherever they would leave",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-4 (live reads, POST echo, audit row) + config-secrets.test.ts \u203a F43-5, F43-9; config-policy.test.ts \u203a isSecretConfigKey\u2026, maskConfigValue\u2026"
+ },
+ {
+  "scenario": "5",
+  "title": "Sensitive but non-secret categories need a higher capability",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-5 (live admin-side 200) + config-secrets.test.ts \u203a F43-10; authz-matrix.test.ts \u203a Runtime config read (GET /config/power) \u2014 security:read, (GET /config/oauth) \u2014 denied for every tier"
+ },
+ {
+  "scenario": "6",
+  "title": "Every refusal is audited, even with audit suppression on",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-6 (live config_access_denied row) + config-secrets.test.ts \u203a F43-7; audit-writer.test.ts \u203a config_access_denied survives audit_log_disabled"
+ },
+ {
+  "scenario": "7",
+  "title": "Degraded mode \u2014 the store or the audit writer is down",
+  "result": "PASS",
+  "evidence": "unit only (state not reproducible locally): config-secrets.test.ts \u203a F43-7b a failing audit write or store never turns a refusal into a 200"
+ },
+ {
+  "scenario": "8",
+  "title": "Rotation after the patch, and the legacy app",
+  "result": "PENDING-OWNER",
+  "evidence": "owner step: HANDOFF 'NZR-43 rotation' + docs/features/netzar-studio/handoffs/<date>-nzr-43-rotation.md"
+ }
+]

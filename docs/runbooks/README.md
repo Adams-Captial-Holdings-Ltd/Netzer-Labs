@@ -17,6 +17,7 @@ Every command in here has been run at least once. If you find one that's wrong, 
 | [deploy-validation.md](deploy-validation.md) | Verify a deploy didn't ship a broken task definition (the `/health` 200 isn't enough) |
 | [rotate-dashboard-token.md](rotate-dashboard-token.md) | Dashboard bearer token leaked or due for quarterly rotation |
 | [rotate-cf-origin-secret.md](rotate-cf-origin-secret.md) | The `X-CloudFront-Origin` secret needs rotation (or has leaked) |
+| [rotate-config-secrets.md](rotate-config-secrets.md) | OAuth, Slack signing and MCP secrets exposed by `/api/config` before NZR-43 |
 | [restore-from-ddb-export.md](restore-from-ddb-export.md) | A DynamoDB table needs a point-in-time restore |
 | [kill-switches.md](kill-switches.md) | You need to trip or disarm one of the 40 kill switches |
 | [force-cf-invalidation.md](force-cf-invalidation.md) | A stale asset is being served by CloudFront edge cache |

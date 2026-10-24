@@ -180,6 +180,13 @@ import {
   setConfig,
   getConfigCategory,
 } from '../../lib/state/runtime-config-repo.js';
+import {
+  CONFIG_POLICY,
+  SECRET_CONFIG_CATEGORIES,
+  maskConfigValue,
+  maskConfigValues,
+  maskReason,
+} from '../../lib/state/config-policy.js';
 import { getEffectiveCostCap } from '../../lib/state/cost-cap-repo.js';
 import { assembleStatusData, type AlarmRow } from '../status/data.js';
 import { checkForUpdates } from '../../lib/updates/discovery.js';
@@ -444,7 +451,8 @@ export function requiredRole(method: string, subPath: string): TokenRole {
   // dead-ended a custom profile that holds security:write but not the admin
   // template, which is exactly the principal the UI shows the control to.
   if (subPath.startsWith('/kill-switches') && method !== 'GET') return 'viewer';
-  // Runtime config: reads stay viewer/operator. The COST category write (the
+  // Runtime config: reads pass this gate and are checked in-route by
+  // configAccess (category policy, NZR-43). The COST category write (the
   // daily cost-watch toggle) is operator-tier and is gated on the config:write
   // CAPABILITY inside the route, so the legacy role gate is relaxed to viewer for
   // ONLY the operator-tier cost-watch toggle (the config:write check is then the
@@ -872,6 +880,46 @@ async function hasCapability(c: DashboardCtx, need: Capability): Promise<boolean
   if (!p) return false;
   const { caps } = await capabilitiesForPrincipal(p);
   return caps.has(need);
+}
+
+/**
+ * NZR-43 gate for the generic /config* routes, run before any store call.
+ * Secret or unknown category → refused for everyone; a read also needs the
+ * category's capability (CONFIG_POLICY). Writes keep the legacy admin gate in
+ * requiredRole. Every refusal is the same 403 body (no oracle for which
+ * categories exist) and an always-audited row carrying names only. Returns the
+ * 403 response, or null when allowed.
+ */
+async function configAccess(
+  c: Context<DashboardEnv>,
+  category: string,
+  key: string | undefined,
+  mode: 'read' | 'write',
+): Promise<Response | null> {
+  const policy = CONFIG_POLICY.get(category);
+  const reason = SECRET_CONFIG_CATEGORIES.has(category)
+    ? 'secret_category'
+    : !policy
+      ? 'unknown_category'
+      : mode === 'read' && !(await hasCapability(c, policy.read))
+        ? 'missing_capability'
+        : null;
+  if (!reason) return null;
+  // Fire-and-forget: a refusal returns nothing, so a lost row cannot hide a leak.
+  void writeAudit({
+    action: 'config_access_denied',
+    surface: 'dashboard',
+    result: 'blocked',
+    userId: dashboardIdentity(c),
+    detail: {
+      category,
+      ...(key !== undefined ? { key } : {}),
+      method: c.req.method,
+      reason,
+      event: 'security.config_denied',
+    },
+  });
+  return c.json({ error: 'forbidden_category' }, 403);
 }
 
 // ── Users + magic-link: delegate to the reviewed users-repo / magic-link libs ──
@@ -2935,22 +2983,29 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     });
   });
 
-  // Runtime config (claudeclaw-runtime-config). Reads are operator-visible
-  // (default GET role), writes are admin-gated in requiredRole above. Values
-  // are plain tunables (cost cap, idle timeout) so they are safe to echo back.
+  // Runtime config (claudeclaw-runtime-config). The table also holds secrets
+  // (oauth, oauth_state, mcp), so every route runs configAccess first (NZR-43:
+  // category allowlist, default deny) and masks secret-shaped values on the way
+  // out. Writes are additionally admin-gated in requiredRole above.
   router.get('/config', async (c) => {
     const category = c.req.query('category');
     if (category) {
-      const values = await getConfigCategory(category);
+      const denied = await configAccess(c, category, undefined, 'read');
+      if (denied) return denied;
+      const values = maskConfigValues(await getConfigCategory(category));
       return c.json({ category, values });
     }
     // No category filter: aggregate the known runtime-config categories. New
     // categories get added here as later increments home more keys in the table.
     const categories = ['cost', 'sessions', 'rate_limits'];
+    for (const cat of categories) {
+      const denied = await configAccess(c, cat, undefined, 'read');
+      if (denied) return denied;
+    }
     const result: Record<string, Record<string, string>> = {};
     await Promise.all(
       categories.map(async (cat) => {
-        result[cat] = await getConfigCategory(cat);
+        result[cat] = maskConfigValues(await getConfigCategory(cat));
       }),
     );
     return c.json({ categories: result });
@@ -2958,16 +3013,18 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
 
   router.get('/config/:category', async (c) => {
     const category = c.req.param('category');
-    const values = await getConfigCategory(category);
+    const denied = await configAccess(c, category, undefined, 'read');
+    if (denied) return denied;
+    const values = maskConfigValues(await getConfigCategory(category));
     return c.json({ category, values });
   });
 
-  // Single-key read. Reads stay viewer/operator (default GET role); the
-  // matching POST below is admin-gated in requiredRole.
   router.get('/config/:category/:key', async (c) => {
     const category = c.req.param('category');
     const key = c.req.param('key');
-    const value = await getConfig(category, key);
+    const denied = await configAccess(c, category, key, 'read');
+    if (denied) return denied;
+    const value = maskConfigValue(key, await getConfig(category, key));
     return c.json({ category, key, value });
   });
 
@@ -2985,6 +3042,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // (requiredRole already forces admin for any cost key other than
     // watch_enabled; this is the in-route allowlist that makes the intent
     // explicit and rejects even an admin from cap/bookkeeping writes here.)
+    const denied = await configAccess(c, category, key, 'write');
+    if (denied) return denied;
     if (category === 'cost') {
       // Two cost keys are writable via this generic endpoint:
       //   - watch_enabled        the cost-watch toggle (config:write / operator)
@@ -3020,11 +3079,14 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const updatedBy = principal?.label ?? 'dashboard';
     const before = await getConfig(category, key);
     await setConfig(category, key, body.value, { updatedBy });
+    // Store the real value; everything that leaves (log, audit, echo) is masked.
+    const masked = maskConfigValue(key, body.value);
+    const reason = maskReason(body.reason, body.value, before);
     logger.warn(
-      { category, key, value: body.value, reason: body.reason, updatedBy },
+      { category, key, value: masked, reason, updatedBy },
       'runtime config set',
     );
-    // Durable audit: which key changed, by whom, old -> new value.
+    // Durable audit: which key changed, by whom, old -> new value (masked).
     void writeAudit({
       action: 'config_updated',
       surface: 'dashboard',
@@ -3034,12 +3096,12 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       detail: {
         category,
         key,
-        oldValue: before ?? null,
-        newValue: body.value,
-        ...(body.reason ? { reason: body.reason } : {}),
+        oldValue: maskConfigValue(key, before) ?? null,
+        newValue: masked,
+        ...(reason ? { reason } : {}),
       },
     });
-    return c.json({ ok: true, category, key, value: body.value });
+    return c.json({ ok: true, category, key, value: masked });
   });
 
   router.get('/addons', async (c) => {

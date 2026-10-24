@@ -14,6 +14,9 @@ const SAVED_QUERIES: Record<string, string> = {
   'kill-switch-events': 'SELECT ts, action, detail FROM audit_log WHERE action LIKE \'kill_switch%\' ORDER BY ts DESC LIMIT 50',
   'exfil-blocked': 'SELECT ts, agentId, detail FROM audit_log WHERE action=\'exfil_blocked\' ORDER BY ts DESC LIMIT 50',
   'panic-events': 'SELECT ts, action, detail, userId FROM audit_log WHERE action LIKE \'panic%\' ORDER BY ts DESC LIMIT 20',
+  // NZR-43: writes to secret categories, whose old values the pre-fix audit row carried in plain text.
+  // Reads of /api/config were never audited before NZR-43, so no query can say who read them.
+  'config-exposure': 'SELECT ts, userId, operatorLabel, detail FROM audit_log WHERE action=\'config_updated\' AND (detail LIKE \'%"category":"oauth"%\' OR detail LIKE \'%"category":"mcp"%\' OR detail LIKE \'%"category":"oauth_state"%\') ORDER BY ts',
 };
 
 const [, , command, ...rest] = process.argv;
