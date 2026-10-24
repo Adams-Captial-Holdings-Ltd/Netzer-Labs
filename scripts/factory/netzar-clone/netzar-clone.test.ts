@@ -1,0 +1,27 @@
+// NZR-3: runs each case of the bash suite so vitest (and the G2 gate) sees them.
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const SUITE = join(__dirname, 'test-netzar-clone.sh');
+
+const CASES: Record<string, string> = {
+  t_check_clean: 'check passes on a fresh clone and ignores tracked env templates',
+  t_check_dirty: 'check fails on an untracked .env, key file or nvapi- string without echoing the value',
+  t_fetch: 'fetch reports the new origin sha and refuses a dirty tree',
+  t_install_serial: 'install runs the three commands serially and in order',
+  t_install_drift: 'install fails on lockfile drift',
+  t_install_lowmem: 'install aborts below 250 MB available',
+  t_push_refused: 'push is refused without an approval record and logged',
+  t_push_approved: 'approved push is allowed once, only for its sha and ref',
+};
+
+describe('netzar-clone.sh', () => {
+  for (const [fn, title] of Object.entries(CASES)) {
+    it(title, () => {
+      const r = spawnSync('bash', [SUITE, fn], { encoding: 'utf8' });
+      expect(r.stderr + r.stdout).toBe('');
+      expect(r.status).toBe(0);
+    }, 30_000);
+  }
+});
