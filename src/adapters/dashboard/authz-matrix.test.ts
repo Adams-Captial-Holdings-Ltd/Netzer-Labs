@@ -568,6 +568,31 @@ describe('authorization matrix — handler routes', () => {
     const admin = await dash('/config/rate_limits/some_key', 'POST', 'admin', { value: '5' });
     expect(admin.status).not.toBe(403);
   });
+
+  // NZR-43: config reads are gated by the in-route category policy, which
+  // answers every refusal with { error:'forbidden_category' } (no
+  // requiredCapability, so the body is asserted directly).
+  const CONFIG_READS: Array<{ name: string; path: string; minTier: Tier | null }> = [
+    { name: 'Runtime config read (GET /config/power) — security:read', path: '/config/power', minTier: 'admin' },
+    { name: 'Runtime config read (GET /config/oauth) — denied for every tier', path: '/config/oauth', minTier: null },
+    { name: 'Runtime config read (GET /config/profile) — dashboard:read', path: '/config/profile', minTier: 'viewer' },
+  ];
+  for (const route of CONFIG_READS) {
+    describe(route.name, () => {
+      for (const tier of ALL_TIERS) {
+        const allowed = route.minTier !== null && TIER_INDEX[tier] >= TIER_INDEX[route.minTier];
+        it(`${tier} is ${allowed ? 'ALLOWED' : 'DENIED'}`, async () => {
+          const res = await dash(route.path, 'GET', tier);
+          if (allowed) {
+            expect(res.status).toBe(200);
+          } else {
+            expect(res.status).toBe(403);
+            expect(await res.json()).toEqual({ error: 'forbidden_category' });
+          }
+        });
+      }
+    });
+  }
 });
 
 // ───────────────────────────────────────────────────────────────────────────
