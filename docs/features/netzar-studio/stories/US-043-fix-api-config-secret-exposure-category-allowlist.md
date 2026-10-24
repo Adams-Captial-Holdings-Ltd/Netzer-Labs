@@ -206,3 +206,25 @@
 - [ ] QA: the fresh critic re-runs the gate against these criteria. UAT: N/A, no user-facing change; the owner accepts the evidence summary and the rotation record (Scenario 8).
 - [ ] Documentation is updated: feature HANDOFF (incl. "NZR-43 rotation") + a dated session handoff; SECURITY.md cites the test file at the merge SHA; finding #1 status line; `docs/runbooks/rotate-config-secrets.md`; architecture-security drift line.
 - [ ] Done = merged to `development` (owner yes for every merge/push, Q50) and verified locally. Staging: PENDING until NZR-42 (AWS account) exists. Legacy app.pgnos.ai: not deployed (Q84), marked known-vulnerable, secrets rotated.
+
+<!-- runner:evidence:start -->
+### Story exit gate evidence (runner)
+
+```
+Story: NZR-43   HEAD: 1c604540d30c3950a76e3b3c89e71d0280c878fe
+G1 code review : PASS  reviewer=claude-opus fresh critic session=5378222d-7343-48c0-a773-2d23c495582d findings=0/5 open_low=5 greptile=not-run
+G2 unit tests  : PASS        red=f18a533 green=1c60454 counts=4669/4669 story_files=212/212 typecheck=ok
+G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
+G3 UAT         : PENDING scenarios=7/8 pending_owner=1 accepted_by=- date=-
+G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-43/e2e-run.log counts=19/19
+G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
+Lessons checked: L-001,L-002   New lessons: none
+```
+
+- [e2e-run.log](../evidence/NZR-43/e2e-run.log)
+- [g1-review.md](../evidence/NZR-43/g1-review.md)
+- [gates.md](../evidence/NZR-43/gates.md)
+- [uat-live.json](../evidence/NZR-43/uat-live.json)
+- [uat-transcript.md](../evidence/NZR-43/uat-transcript.md)
+- [uat.json](../evidence/NZR-43/uat.json)
+<!-- runner:evidence:end -->
