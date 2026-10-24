@@ -1,0 +1,8 @@
+{
+  "prompt": "N/A: hand-written static HTML mock (not generated imagery)",
+  "generator": "Chromium headless screenshot (CDP Page.captureScreenshot) of a throwaway static HTML mock written by Zion (Hermes, Claude Opus); not product code; seeded synthetic sample data only",
+  "date": "2026-10-23",
+  "author": "@emmanuelmadams4 (owner) via Zion",
+  "postProcessing": "none; viewport 1440x900 desktop, full-page height, light mode",
+  "status": "MOCK (replace with real screenshots when the step that builds the screen lands)"
+}
