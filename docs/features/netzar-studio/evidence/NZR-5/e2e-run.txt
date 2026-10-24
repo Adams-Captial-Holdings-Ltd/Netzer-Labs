@@ -1,0 +1,38 @@
+  GET /health -> 200
+PASS health
+  POST /api/tokens -> 201
+  POST /api/tokens -> 201
+  GET /api/vectors -> 200
+PASS viewer lists default (no scope) (200)
+  GET /api/vectors?scope=shared -> 200
+PASS viewer lists shared (200)
+  GET /api/vectors?scope=finance_private -> 200
+PASS owner lists a private scope (200)
+  GET /api/vectors?scope=finance_private -> 403
+PASS viewer GET /api/vectors private is 403 forbidden_scope (403)
+  GET /api/vectors?scope=finance.private -> 403
+PASS viewer GET /api/vectors private is 403 forbidden_scope (403)
+  GET /api/vectors?scope=DEFAULT -> 403
+PASS viewer GET /api/vectors private is 403 forbidden_scope (403)
+  GET /api/vectors?scope=no_such_scope -> 403
+PASS viewer GET /api/vectors private is 403 forbidden_scope (403)
+  POST /api/vectors/search -> 403
+PASS viewer POST /api/vectors/search private is 403 forbidden_scope (403)
+  POST /api/vectors/answer -> 403
+PASS viewer POST /api/vectors/answer private is 403 forbidden_scope (403)
+  POST /api/vectors/search -> 400
+PASS empty scope is 400 invalid_scope (400)
+  POST /api/vectors/upload-url -> 403
+PASS viewer upload-url is 403 agents:write (403)
+  DELETE /api/vectors/finance_private/nzr5-e2e-doc -> 403
+PASS operator DELETE private is 403 forbidden_scope (403)
+  POST /api/ingest -> 403
+PASS operator ingest private is 403 forbidden_scope (403)
+  POST /api/ingest/stream -> 403
+PASS operator ingest/stream private is a JSON 403 before SSE (403)
+  GET /api/audit?days=1 -> 200
+PASS knowledge_scope_denied rows written (9 rows)
+PASS audit rows carry a 12-hex scopeHash and no scope name
+  DELETE /api/tokens/a69450cc9bb77b4f -> 200
+  DELETE /api/tokens/3739b15f59362247 -> 200
+SUMMARY: 17/17 passed
