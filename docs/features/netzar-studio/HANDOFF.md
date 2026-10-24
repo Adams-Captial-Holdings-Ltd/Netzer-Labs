@@ -17,6 +17,7 @@ as_of_commit: d1d3a66970cd548f9529a234ef2b51ecdc29378e
 - No product code changed.
 
 ## Next action
+- Owner Goal v1 (2026-10-24, [goal.md](goal.md)) adopted: exit gate extended with G2b integration and G5 Opik eval; new NZR-50 readiness report, NZR-51 TRACE.md, NZR-52 Opik in the gauntlet, NZR-53 retrospective agent. Plane updated (page + gate checklist comment on every open issue).
 Week 0 in parallel: NZR-43 config-secrets fix, then NZR-5/6 knowledge fix (failing tests first, T3), and owner review of this docs PR. Grill round 4 answered (Q81 to Q93, except Q85); Q85, Q94 and Q95 are open.
 
 ## Open owner items
