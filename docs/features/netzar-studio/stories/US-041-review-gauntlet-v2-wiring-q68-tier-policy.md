@@ -65,7 +65,7 @@
 ### Scenario 4: Third-party send needs a per-run yes
 * **Given** no yes record for step `nzr-5.s1`, layer `kodus`, SHA `<sha>`
 * **When** `review-plan.mjs send-check --layer kodus --step nzr-5.s1 --sha <sha>` runs
-* **Then** it exits 4 and prints `ASK OWNER: kodus would send Netzer-Labs@<sha12> (diff vs origin/development) to Kodus' service. Reply yes for this run only.`; after the coordinator appends `{"layer":"kodus","step":"nzr-5.s1","sha":"<sha>","owner_text":"yes kodus this run"}` the same command exits 0 once, and a second `send-check` for the same record exits 4 (`yes already used`)
+* **Then** it exits 4 and prints `ASK OWNER: kodus would send Netzer-Labs@<sha12> (diff vs origin/development) to Kodus' service. Reply yes for this run only.`; after the coordinator appends `{"layer":"kodus","step":"nzr-5.s1","sha":"<sha>","owner_text":"yes kodus this run","id":"<fresh consent id>"}` the same command exits 0 once, and a second `send-check` for the same record exits 4 (`yes already used`)
 * **Test:** `/root/.claude/bin/review-plan.test.mjs` › "kodus, coderabbit and greptile sends need a single-use per-run yes"
 
 ### Scenario 5: Ledger warns at 35 and stops at 45

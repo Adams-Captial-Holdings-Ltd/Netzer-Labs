@@ -84,7 +84,7 @@ async function verify(argv, out) {
   return 0;
 }
 
-// A yes record is single-use: a matching record is claimed by exclusively creating "<file>.used.<record hash>", so two
+// A yes record is single-use: a matching record is claimed by exclusively creating "<file>.used.<hash of consent id>", so two
 // racing send-checks can never both consume it and a crash cannot leave a lock behind.
 function sendCheck(argv, env, out) {
   const layer = need(argv, '--layer');
@@ -102,9 +102,11 @@ function sendCheck(argv, env, out) {
     try { r = JSON.parse(l); } catch { continue; }
     // owner_text must start with yes: "not yes" and "yes?" are not consent
     if (!r || r.layer !== layer || r.step !== step || r.sha !== sha || !/^\s*yes\b(?!\s*\?)/i.test(r.owner_text ?? '')) continue;
+    // a yes carries the consent id minted when the owner approved; without one it is not consent
+    if (typeof r.id !== 'string' || !r.id.trim()) continue;
     matched = true;
-    // keyed on the record's content so rewriting or reordering the file cannot revive a used yes (identical records share one yes)
-    const key = createHash('sha256').update(l.trim()).digest('hex').slice(0, 16);
+    // keyed on the consent id, not the JSON text, so reformatting or reordering the record cannot revive a used yes
+    const key = createHash('sha256').update(r.id).digest('hex').slice(0, 16);
     try { mkdirSync(dirname(file), { recursive: true }); closeSync(openSync(`${file}.used.${key}`, 'wx', 0o600)); } catch (e) {
       if (e.code === 'EEXIST') continue;
       throw e;

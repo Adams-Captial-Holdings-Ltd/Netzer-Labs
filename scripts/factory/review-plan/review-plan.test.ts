@@ -87,7 +87,7 @@ describe('review-plan.mjs', () => {
       expect(ask.out).toContain('Reply yes for this run only.');
     }
     expect(sendCheck('kodus', 'nzr-5.s1', A).out).toContain("to Kodus' service.");
-    appendFileSync(sends(), `${JSON.stringify({ layer: 'kodus', step: 'nzr-5.s1', sha: A, owner_text: 'yes kodus this run' })}\n`);
+    appendFileSync(sends(), `${JSON.stringify({ layer: 'kodus', step: 'nzr-5.s1', sha: A, owner_text: 'yes kodus this run', id: 'consent-0001' })}\n`);
     expect(sendCheck('kodus', 'nzr-5.s1', B).code).toBe(4); // other sha
     expect(sendCheck('coderabbit', 'nzr-5.s1', A).code).toBe(4); // other layer
     expect(sendCheck('kodus', 'nzr-5.s2', A).code).toBe(4); // other step

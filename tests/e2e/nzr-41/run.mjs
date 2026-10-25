@@ -42,7 +42,7 @@ try {
 
   r = cli('review-plan/review-plan.mjs', 'send-check', '--layer', 'kodus', '--step', 'e2e.s1', '--sha', A);
   rec('send without a yes is refused', r.rc === 4 && r.out.startsWith('ASK OWNER:'), `exit ${r.rc}`);
-  appendFileSync(env.GAUNTLET_SENDS, `${JSON.stringify({ layer: 'kodus', step: 'e2e.s1', sha: A, owner_text: 'yes kodus this run' })}\n`);
+  appendFileSync(env.GAUNTLET_SENDS, `${JSON.stringify({ layer: 'kodus', step: 'e2e.s1', sha: A, owner_text: 'yes kodus this run', id: 'e2e-consent-1' })}\n`);
   r = cli('review-plan/review-plan.mjs', 'send-check', '--layer', 'kodus', '--step', 'e2e.s1', '--sha', A);
   rec('send with a yes is allowed once', r.rc === 0, `exit ${r.rc}`);
   r = cli('review-plan/review-plan.mjs', 'send-check', '--layer', 'kodus', '--step', 'e2e.s1', '--sha', A);
