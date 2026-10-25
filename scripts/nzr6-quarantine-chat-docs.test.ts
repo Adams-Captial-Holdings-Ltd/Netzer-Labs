@@ -119,6 +119,8 @@ describe('NZR-6 quarantine script', () => {
       expect.objectContaining({ action: 'knowledge_quarantined', agentId: 'ops', result: 'ok' }),
     );
     expect(JSON.stringify(h.writeAuditOrThrow.mock.calls)).not.toContain('.pdf');
+    // No source scope names either (qDocId embeds them).
+    expect(JSON.stringify(h.writeAuditOrThrow.mock.calls)).not.toContain('ops_private');
 
     const second = await quarantineChatDocs({ apply: true, log: () => {} });
     expect(second.moved).toBe(0);

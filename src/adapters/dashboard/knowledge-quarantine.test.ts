@@ -174,9 +174,12 @@ describe('NZR-6 quarantined legacy chat files', () => {
 
   it('refuses to reassign to a chat with no dashboard owner', async () => {
     h.getSession.mockImplementation(async (agentId: string, chatId: string) =>
-      chatId === 'slack:C1' ? { agentId, chatId, surface: 'slack', userId: 'U123', turns: [] } : null,
+      chatId === 'slack:C1' ? { agentId, chatId, surface: 'slack', userId: 'U123', turns: [] }
+        // Legacy token-hash owner: chat search uses dashboard:user:<person>, so this scope would be unreachable.
+        : chatId === 'dashboard:legacy' ? { agentId, chatId, surface: 'dashboard', userId: 'dashboard:abc123tokenhash', turns: [] }
+        : null,
     );
-    for (const chatId of ['dashboard:nobody', 'slack:C1']) {
+    for (const chatId of ['dashboard:nobody', 'slack:C1', 'dashboard:legacy']) {
       const res = await reassign('admin', { agentId: 'ops', chatId });
       expect(res.status, chatId).toBe(409);
       expect(await res.json()).toEqual({ error: 'no_dashboard_owner' });
