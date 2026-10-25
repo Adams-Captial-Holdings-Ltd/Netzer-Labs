@@ -376,6 +376,20 @@ describe('ownership survives token rotation (WI-1.1, AC-1.1-1/-3)', () => {
 
     expect(res.status).toBe(200);
     expect(runAgentTurn).toHaveBeenCalledTimes(1);
+    // NZR-6: and the chat files that token added before linking stay searchable.
+    expect(runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'dashboard:user:user-a', tokenUserId: 'dashboard:hash-linked',
+    }));
+  });
+
+  it('a magic-link login carries no token identity into the turn (it never uploaded as one)', async () => {
+    getSession.mockResolvedValue(ownedBy('dashboard:user:user-a'));
+
+    const res = await postStream('member-a1');
+    await res.text();
+
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+    expect(runAgentTurn.mock.calls[0]![0]).not.toHaveProperty('tokenUserId');
   });
 
   it('a token linked to a person owns what that person owns (decision 1)', async () => {

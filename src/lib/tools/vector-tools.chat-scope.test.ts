@@ -95,4 +95,21 @@ describe("NZR-6 s3_vectors_search reads only the current chat's private scope", 
     await tools.invoke('s3_vectors_search', { query: 'report' }, { agentId: 'ops', chatId: 'dashboard:chatA' });
     expect(searched()).toEqual(['ops_private', 'default', 'shared']);
   });
+
+  it("keeps a linked token's pre-link chat files searchable in the same chat", async () => {
+    // Uploaded while the token had no person (uploader dashboard:<tokenHash>), searched after linking.
+    const ST = scopeOf('ops', 'dashboard:chatA', 'dashboard:tok1');
+    h.search.mockImplementation(async ({ scope }: { scope: string }) => (scope === ST ? [passage(ST)] : []));
+    const ctx = { ...ctxA, tokenUserId: 'dashboard:tok1' };
+    const out = await tools.invoke('s3_vectors_search', { query: 'my report' }, ctx);
+    expect(searched()).toEqual(['ops_private', 'default', 'shared', SA, ST]);
+    expect(out.text).toContain('ALICE PRIVATE PASSAGE');
+    h.search.mockClear();
+    expect((await tools.invoke('s3_vectors_search', { query: 'q', scope: ST }, ctx)).isError).toBeFalsy();
+    expect(searched()).toEqual([ST]);
+    // Another chat's token scope stays refused.
+    h.search.mockClear();
+    expect((await tools.invoke('s3_vectors_search', { query: 'q', scope: ST }, ctxB)).isError).toBe(true);
+    expect(h.search).not.toHaveBeenCalled();
+  });
 });

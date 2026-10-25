@@ -197,6 +197,21 @@ describe('NZR-6 quarantined legacy chat files', () => {
     expect(h.writeAuditOrThrow).not.toHaveBeenCalled();
   });
 
+  it("merges into the owner's existing copy instead of overwriting it", async () => {
+    // The owner re-uploaded the file after the fix: chunks 0 and 2 are already in SA.
+    const mine = { tags: ['chat', 'dashboard', 'agent:ops', `owner:${sha(ALICE).slice(0, 16)}`], source: 's3://raw-bucket/x', uploadedAt: '2026-10-20T00:00:00Z' };
+    const existing = [row('chat-aaa', 0, 'NEW0', mine), row('chat-aaa', 2, 'NEW2', mine)];
+    h.readDocumentRows.mockImplementation(async (scope: string, docId: string) =>
+      scope === 'chat_quarantine' && docId === Q1 ? Q1_ROWS : scope === SA && docId === 'chat-aaa' ? existing : [],
+    );
+    const res = await reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatA' });
+    expect(res.status).toBe(200);
+    const [, , rows] = h.putDocument.mock.calls[0]! as [string, string, typeof Q1_ROWS];
+    // Existing chunks win; the quarantine copy only fills the gap.
+    expect(rows.map((r) => [r.metadata.chunkIndex, r.text])).toEqual([[0, 'NEW0'], [1, 'de'], [2, 'NEW2']]);
+    expect(h.deleteDocument).toHaveBeenCalledWith('chat_quarantine', Q1);
+  });
+
   it('a failed audit leaves the doc in quarantine', async () => {
     h.writeAuditOrThrow.mockRejectedValue(new Error('audit table down'));
     const res = await reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatA' });
