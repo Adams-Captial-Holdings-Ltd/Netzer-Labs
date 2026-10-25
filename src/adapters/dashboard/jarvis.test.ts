@@ -98,4 +98,14 @@ describe('executeQueryTool — vectors scope rule (NZR-5)', () => {
     expect(ok.ok).toBe(true);
     expect(listDocuments).toHaveBeenCalledWith('shared');
   });
+
+  it('NZR-6 refuses raw chat_* scopes even to a knowledge:private:read holder', async () => {
+    const admin: TokenPrincipal = { tokenHash: 'a', label: 'A', hashPrefix16: 'a', role: 'admin' };
+    expect((await executeQueryTool(admin, 'vectors', { scope: 'finance_private' })).ok).toBe(true);
+    for (const scope of ['chat_quarantine', 'chat_0123456789abcdef01234567', 'chat:x']) {
+      expect(await executeQueryTool(admin, 'vectors', { scope })).toMatchObject({ ok: false, code: 'RESOURCE_FORBIDDEN' });
+    }
+    expect(listDocuments).toHaveBeenCalledTimes(1);
+    expect(writeAudit).toHaveBeenCalledTimes(3);
+  });
 });
