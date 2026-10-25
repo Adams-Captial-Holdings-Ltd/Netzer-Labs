@@ -3756,6 +3756,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (typeof owner !== 'string' || !/^dashboard:user:.+/.test(owner)) return c.json({ error: 'no_dashboard_owner' }, 409);
     const docId = qDocId.slice(sep + 2);
     const target = chatKnowledgeScope(agentId, chatId, owner);
+    // The owner may have re-added the file since the fix, and either copy can be
+    // partial (ingest keeps what embedded). Merged by chunk below; existing wins.
+    const existing = await readDocumentRows(target, docId);
     try {
       await writeAuditOrThrow({
         action: 'knowledge_reassigned',
@@ -3778,8 +3781,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         tags: [...(r.metadata.tags ?? []).filter((t) => !t.startsWith('from:') && !t.startsWith('owner:')), ownerTag(owner)],
       },
     }));
+    const have = new Set(existing.map((r) => r.metadata.chunkIndex));
+    const merged = [...existing, ...moved.filter((r) => !have.has(r.metadata.chunkIndex))]
+      .sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex);
     // Copy first: a failed delete leaves a duplicate in quarantine, never a loss.
-    await putDocument(target, docId, moved);
+    await putDocument(target, docId, merged);
     await deleteDocument(QUARANTINE_SCOPE, qDocId);
     return c.json({ ok: true, docId, agentId, chatId });
   });
