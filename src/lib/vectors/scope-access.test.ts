@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import type { Capability } from '../auth/permissions.js';
-import { canReadScope, scopeHash, normalizeScope, PUBLIC_SCOPES, RESERVED_SCOPE_PREFIX } from './scope-access.js';
+import { canReadScope, chatKnowledgeScope, scopeHash, normalizeScope, PUBLIC_SCOPES, RESERVED_SCOPE_PREFIX } from './scope-access.js';
 
 const READ = new Set<Capability>(['vectors:read']);
 const PRIVATE = new Set<Capability>(['vectors:read', 'knowledge:private:read' as Capability]);
@@ -39,5 +39,16 @@ describe('NZR-5 canReadScope', () => {
   it('normalizeScope folds like the store does', () => {
     expect(normalizeScope('finance/private')).toBe('finance_private');
     expect(normalizeScope('agent:ops')).toBe('agent_ops');
+  });
+});
+
+describe('NZR-6 chatKnowledgeScope', () => {
+  it("keys a chat by its saved conversation id, so '#' and '_' reach the same scope", () => {
+    // sessions-repo saves CHAT#<id with '#' -> '_'>; the sidebar reopens that id.
+    const u = 'dashboard:user:alice';
+    expect(chatKnowledgeScope('ops', 'dashboard:a#b', u)).toBe(chatKnowledgeScope('ops', 'dashboard:a_b', u));
+    expect(chatKnowledgeScope('ops', 'dashboard:chatA', u)).toBe(
+      `chat_${createHash('sha256').update(`ops|dashboard:chatA|${u}`).digest('hex').slice(0, 24)}`,
+    );
   });
 });

@@ -178,11 +178,17 @@ export interface Doc {
   createdAt: string;
 }
 
+/**
+ * `ifMatch` makes the write a compare-and-swap: an ETag from `readDocument`
+ * must still match, `null` means the doc must not exist yet. Returns false
+ * when another writer got there first; omit it for a plain overwrite.
+ */
 export async function putDocument(
   scope: string,
   docId: string,
   rows: VectorRow[],
-): Promise<void> {
+  ifMatch?: string | null,
+): Promise<boolean> {
   if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
   // Tag every chunk with the document's scope so retrieval-time scope
   // filtering and the per-doc rollup stay consistent even if a caller built
@@ -194,20 +200,29 @@ export async function putDocument(
       : { ...r, metadata: { ...r.metadata, scope } },
   );
   const body = tagged.map((r) => JSON.stringify(r)).join('\n');
-  await s3().send(
-    new PutObjectCommand({
-      Bucket: INDEX_BUCKET,
-      Key: keyFor(scope, docId),
-      Body: body,
-      ContentType: 'application/jsonl',
-      Metadata: {
-        scope,
-        'doc-id': docId,
-        chunks: String(rows.length),
-        'uploaded-at': new Date().toISOString(),
-      },
-    }),
-  );
+  try {
+    await s3().send(
+      new PutObjectCommand({
+        Bucket: INDEX_BUCKET,
+        Key: keyFor(scope, docId),
+        Body: body,
+        ContentType: 'application/jsonl',
+        Metadata: {
+          scope,
+          'doc-id': docId,
+          chunks: String(rows.length),
+          'uploaded-at': new Date().toISOString(),
+        },
+        ...(ifMatch === null ? { IfNoneMatch: '*' } : ifMatch ? { IfMatch: ifMatch } : {}),
+      }),
+    );
+  } catch (err) {
+    // 412: the ETag moved; 409: a concurrent conditional write to the same key.
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (ifMatch !== undefined && (status === 412 || status === 409)) return false;
+    throw err;
+  }
+  return true;
 }
 
 /**
@@ -288,6 +303,68 @@ export async function listDocuments(scope: string): Promise<Doc[]> {
   return Array.from(byDoc.values()).sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
   );
+}
+
+/** NZR-6: every scope that has an `index/<scope>/` prefix (normalized names). */
+export async function listScopePrefixes(): Promise<string[]> {
+  // Throw, not []: an empty list would let the quarantine --verify pass unread.
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  const scopes: string[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const list = await s3().send(
+      new ListObjectsV2Command({ Bucket: INDEX_BUCKET, Prefix: 'index/', Delimiter: '/', ContinuationToken: continuationToken }),
+    );
+    for (const p of list.CommonPrefixes ?? []) {
+      const name = p.Prefix?.slice('index/'.length, -1);
+      if (name) scopes.push(name);
+    }
+    continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return scopes;
+}
+
+/** NZR-6: one document's rows, or [] when it does not exist. */
+export async function readDocumentRows(scope: string, docId: string): Promise<VectorRow[]> {
+  return (await readDocument(scope, docId)).rows;
+}
+
+/**
+ * NZR-6: exclusive claim on a doc (create-only empty object under `claims/`,
+ * outside `index/` so listings never see it). False when someone else holds it.
+ */
+export async function claimDocument(scope: string, docId: string): Promise<boolean> {
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  try {
+    await s3().send(new PutObjectCommand({ Bucket: INDEX_BUCKET, Key: claimKeyFor(scope, docId), Body: '', IfNoneMatch: '*' }));
+  } catch (err) {
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (status === 412 || status === 409) return false;
+    throw err;
+  }
+  return true;
+}
+
+export async function releaseDocumentClaim(scope: string, docId: string): Promise<void> {
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  await s3().send(new DeleteObjectCommand({ Bucket: INDEX_BUCKET, Key: claimKeyFor(scope, docId) }));
+}
+
+/** NZR-6: rows plus the ETag to pass to `putDocument` (null when absent). */
+export async function readDocument(scope: string, docId: string): Promise<{ rows: VectorRow[]; etag: string | null }> {
+  if (!INDEX_BUCKET) return { rows: [], etag: null };
+  let body: string | undefined;
+  let etag: string | null = null;
+  try {
+    const resp = await s3().send(new GetObjectCommand({ Bucket: INDEX_BUCKET, Key: keyFor(scope, docId) }));
+    body = await resp.Body?.transformToString();
+    etag = resp.ETag ?? null;
+  } catch (err) {
+    const name = err instanceof Error ? err.name : '';
+    if (name === 'NoSuchKey' || name === 'NotFound') return { rows: [], etag: null };
+    throw err;
+  }
+  return { rows: (body ?? '').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as VectorRow), etag };
 }
 
 export async function* iterateRows(
@@ -378,4 +455,9 @@ export function indexPrefixFor(scope: string): string {
 export function keyFor(scope: string, docId: string): string {
   const safeDoc = docId.replace(/[^A-Za-z0-9._-]/g, '_');
   return `${indexPrefixFor(scope)}${safeDoc}.jsonl`;
+}
+
+/** NZR-6: reassign claims, kept out of `index/` so no doc id can collide with one. */
+function claimKeyFor(scope: string, docId: string): string {
+  return `claims/${keyFor(scope, docId).slice('index/'.length)}`;
 }

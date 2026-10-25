@@ -11,17 +11,13 @@
  */
 
 import type { Tool as BedrockTool } from '@aws-sdk/client-bedrock-runtime';
-
-/** NZR-5: chat_* is the per-chat namespace (NZR-6); no agent knowledgeScope may sit in it. */
-function isReservedScope(scope: string): boolean {
-  return normalizeScope(scope).startsWith(RESERVED_SCOPE_PREFIX);
-}
 import { tools } from './registry.js';
 import { embedOne } from '../vectors/embedder.js';
 import { search, type QueryHit } from '../vectors/store.js';
 import { logger } from '../../observability/logger.js';
 import { ingestDocument } from '../vectors/ingest.js';
-import { normalizeScope, RESERVED_SCOPE_PREFIX } from '../vectors/scope-access.js';
+// NZR-5: chat_* is the per-chat namespace (NZR-6); no agent knowledgeScope may sit in it.
+import { chatKnowledgeScope, isChatScope as isReservedScope } from '../vectors/scope-access.js';
 import {
   loadAgent,
   DEFAULT_KNOWLEDGE_SCOPE,
@@ -63,7 +59,7 @@ tools.register('s3_vectors_search', {
         scope: {
           type: 'string',
           description:
-            "Optional narrowing override. When omitted, this agent searches all three corpora it can read: its own knowledge scope, the default corpus, and the shared corpus. Naming one of those three narrows the search to just it; other agents' scopes are not searchable.",
+            "Optional narrowing override. When omitted, this agent searches every corpus it can read: its own knowledge scope, the default corpus, the shared corpus, and files added from this chat. Naming one of those narrows the search to just it; other agents' and other chats' scopes are not searchable.",
         },
         tag_filter: {
           type: 'array',
@@ -107,6 +103,11 @@ tools.register('s3_vectors_search', {
     // drift. The Set de-dups when the agent's own scope is itself the default
     // or the shared corpus, so no corpus is ever scanned twice.
     let scopes = [...new Set([ownScope, DEFAULT_KNOWLEDGE_SCOPE, SHARED_KNOWLEDGE_SCOPE])];
+    // NZR-6: plus this chat's own private scope, bound to the speaker. Never any
+    // other chat_* scope. Surface-agnostic: on Slack/Telegram it is simply empty.
+    if (ctx.userId) scopes.push(chatKnowledgeScope(ctx.agentId, ctx.chatId, ctx.userId));
+    // A linked token's files from before linking: same chat, its own earlier identity.
+    if (ctx.userId && ctx.tokenUserId) scopes.push(chatKnowledgeScope(ctx.agentId, ctx.chatId, ctx.tokenUserId));
     if (typeof args.scope === 'string' && args.scope) {
       if (!scopes.includes(args.scope)) {
         return {

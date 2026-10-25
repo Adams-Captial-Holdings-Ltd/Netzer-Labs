@@ -1,22 +1,19 @@
 /**
- * Chat → knowledge base auto-ingest.
+ * Chat → knowledge base ingest, when the sender opts in (`addToKnowledge`).
  *
- * When a user drops a document (or a voice/video note that produced a
- * transcript) into ANY chat surface — Telegram, Slack, dashboard chat — the
- * file is not just analyzed inline for the current turn: it is also ingested
- * into the vector knowledge base, so it becomes permanently queryable from
- * every surface via the s3_vectors_search tool. That is the product promise:
- * "drop a PDF in Telegram, ask about it from Slack tomorrow."
+ * The file is analyzed inline for the current turn and also ingested into the
+ * vector knowledge base, so the agent can search it in later turns of the
+ * SAME chat via s3_vectors_search.
  *
- * Safety posture:
- *   - Scope defaults to the TARGET AGENT's knowledgeScope (not `shared`), so a
- *     chat-dropped doc reaches the agent it was sent to — on every surface —
- *     without leaking to the whole fleet. `media/chat_kb_ingest_scope=shared`
- *     opts into org-wide.
+ * Safety posture (NZR-6):
+ *   - Scope is the chat-private `chatKnowledgeScope(agent, chat, uploader)`.
+ *     Nothing else (agent knowledgeScope, `media/chat_kb_ingest_scope`) can
+ *     widen it: one user's file never reaches another user of the same agent.
+ *   - No uploader identity → no ingest (fail closed), audited.
  *   - Kill switch `chat_kb_ingest_disabled` and runtime flag
  *     `media/chat_kb_ingest_enabled` gate the behavior (switch > flag).
- *   - Dedup: docId is a content hash, so the same file re-sent (on any
- *     surface) skips extraction + embedding entirely.
+ *   - Dedup: docId is a content hash, checked only within the chat's own scope,
+ *     so "already in the knowledge base" never reveals another user's file.
  *   - This function NEVER throws into a chat turn: ingest failure is logged +
  *     audited and the turn proceeds with inline analysis only.
  */
@@ -26,11 +23,7 @@ import { getConfig } from '../state/runtime-config-repo.js';
 import { isKillSwitchActive } from '../state/kill-switches-repo.js';
 import { ingestDocument, type IngestFormat } from '../vectors/ingest.js';
 import { documentExists } from '../vectors/store.js';
-import {
-  loadAgent,
-  DEFAULT_KNOWLEDGE_SCOPE,
-  SHARED_KNOWLEDGE_SCOPE,
-} from '../config/agent-loader.js';
+import { chatKnowledgeScope, ownerTag, scopeHash } from '../vectors/scope-access.js';
 import { writeAudit } from '../audit/audit-writer.js';
 import { logger } from '../../observability/logger.js';
 
@@ -58,21 +51,12 @@ export function ingestFormatFor(fileName: string): IngestFormat | null {
   return null;
 }
 
-export async function resolveChatIngestScope(targetAgentId: string): Promise<string> {
-  const mode = (await getConfig('media', 'chat_kb_ingest_scope')) ?? 'agent';
-  if (mode === 'shared') return SHARED_KNOWLEDGE_SCOPE;
-  try {
-    const agent = await loadAgent(targetAgentId);
-    return agent.knowledgeScope || DEFAULT_KNOWLEDGE_SCOPE;
-  } catch {
-    return DEFAULT_KNOWLEDGE_SCOPE;
-  }
-}
-
 export interface ChatKbIngestArgs {
   targetAgentId: string;
   chatId: string;
   surface: ChatSurface;
+  /** Who sent the file (dashboardIdentity on the dashboard). Empty → no ingest. */
+  uploaderId: string;
   fileName: string;
   /** Document bytes (pdf/docx/pptx/txt/md/csv path). */
   bytes?: Buffer;
@@ -132,7 +116,18 @@ export async function ingestChatMedia(
       : ingestFormatFor(args.fileName);
     if (!format) return null;
 
-    const scope = await resolveChatIngestScope(args.targetAgentId);
+    if (!args.uploaderId) {
+      void writeAudit({
+        action: 'knowledge_ingest',
+        agentId: args.targetAgentId,
+        chatId: args.chatId,
+        surface: args.surface,
+        detail: { via: 'chat', reason: 'no_uploader' },
+        result: 'blocked',
+      });
+      return null;
+    }
+    const scope = chatKnowledgeScope(args.targetAgentId, args.chatId, args.uploaderId);
     const docId = isTranscript
       ? contentDocId(Buffer.from(args.transcript ?? '', 'utf8'))
       : contentDocId(args.bytes as Buffer);
@@ -145,6 +140,7 @@ export async function ingestChatMedia(
       'chat',
       args.surface,
       `agent:${args.targetAgentId}`,
+      ownerTag(args.uploaderId),
       ...(args.extraTags ?? []),
     ];
     const result = await ingestDocument({
@@ -165,11 +161,11 @@ export async function ingestChatMedia(
       chatId: args.chatId,
       surface: args.surface,
       detail: {
+        // Hash only, no file name: the audit log is viewer-readable (NZR-6).
         docId: result.docId,
-        scope: result.scope,
+        scopeHash: scopeHash(result.scope),
         chunks: result.chunks,
         failed: result.failed,
-        fileName: args.fileName,
         via: 'chat',
       },
       result: 'ok',
@@ -186,7 +182,7 @@ export async function ingestChatMedia(
       agentId: args.targetAgentId,
       chatId: args.chatId,
       surface: args.surface,
-      detail: { fileName: args.fileName, via: 'chat', errMessage },
+      detail: { via: 'chat', errMessage },
       result: 'error',
     });
     return null;
@@ -198,8 +194,9 @@ export function buildKbConfirmation(
   kb: ChatKbIngestResult,
   fileName: string,
 ): string {
+  // Dedup is checked in this chat's own scope only, so this never reveals another user's file.
   if (kb.deduped) {
-    return `📚 ${fileName} is already in the knowledge base — ask me about it anytime.`;
+    return `📚 ${fileName} is already in the knowledge base — ask me about it in this chat.`;
   }
-  return `📚 Indexed ${fileName} (${kb.chunks} chunk${kb.chunks === 1 ? '' : 's'}). Ask me about it anytime — from Slack, Telegram, or the dashboard.`;
+  return `📚 Indexed ${fileName} (${kb.chunks} chunk${kb.chunks === 1 ? '' : 's'}). Ask me about it in this chat.`;
 }
