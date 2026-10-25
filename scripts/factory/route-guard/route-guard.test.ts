@@ -78,6 +78,16 @@ describe('route-guard.mjs', () => {
     expect(cx.out).toContain('ROUTE REFUSED: the critic must be a fresh Claude session');
   });
 
+  it('refuses a builder session that already criticised the step (order-independent separation)', () => {
+    run('jev', '--slug', 't', '--step', 's', '--question', 'q', '--choice', 'c', '--confidence', '0.9');
+    check('s', 'builder', 'codex', 'A');
+    check('s', 'critic', 'claude', 'B');
+    const r = check('s', 'builder', 'codex', 'B');
+    expect(r.code).toBe(4);
+    expect(r.out).toContain('ROUTE REFUSED: builder session B already criticised this step');
+    expect(run('summary', '--slug', 't', '--step', 's').out).toContain('(s:A) | critic claude/m (s:B)');
+  });
+
   it('consent allows advisory nvidia review but not nvidia builds', () => {
     writeFileSync(consent(), JSON.stringify(yes));
     const b = check('s', 'builder', 'nvidia', 'C');
