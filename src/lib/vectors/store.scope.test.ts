@@ -72,6 +72,16 @@ describe('the read path lists the prefix the write path writes', () => {
     expect(await prefixAskedFor('agent:ops')).toBe('index/agent_ops/');
   });
 
+  it('never fetches a reassign claim object (NZR-6: a released claim would 404)', async () => {
+    const { S3Client } = await import('@aws-sdk/client-s3');
+    const { iterateRows, keyFor } = await import('./store.js');
+    const send = vi
+      .spyOn(S3Client.prototype, 'send')
+      .mockResolvedValue({ Contents: [{ Key: keyFor('chat_quarantine', 'default__abc.claim') }] } as never);
+    for await (const _ of iterateRows('chat_quarantine')) void _;
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('asks for a prefix the written key actually falls under', async () => {
     const { keyFor } = await import('./store.js');
     for (const scope of ['agent:ops', 'tenant:acme corp/2026', 'default']) {
