@@ -88,6 +88,10 @@ export function decide({ log, consent, step, role, provider, session }) {
     if (!builders.length) return refuse('no_builder', 'no builder recorded for this step');
     if (builders.some((b) => b.session === session)) return refuse('critic_reused_session', `critic session ${session} also built this step`);
   }
+  // Separation must hold in either order (rule c / C-47): a session that criticised the step may not build it.
+  if (role === 'builder' && log.some((e) => e.step === step && e.role === 'critic' && e.result === 'allowed' && e.session === session)) {
+    return refuse('builder_was_critic', `builder session ${session} already criticised this step`);
+  }
   if ((role === 'reviewer' || role === 'security') && provider === 'codex' && builders.some((b) => b.provider === 'codex')) {
     return refuse('codex_self_review', 'codex built this step; codex may not review it (Q51)');
   }
