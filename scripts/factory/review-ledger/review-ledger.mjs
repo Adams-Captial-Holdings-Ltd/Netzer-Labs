@@ -98,10 +98,23 @@ function withLock(file, fn, waitMs = 10_000) {
       try { process.kill(pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; }
     } catch { try { return Date.now() - statSync(lock).mtimeMs > 30_000; } catch { return false; } }
   };
+  // Recovery is exclusive: one process at a time removes a lock, and it rechecks the holder inside that mutex so it can
+  // never delete a live lock another recoverer just created. A recovery mutex orphaned by a crash expires after 30s.
+  const recover = () => {
+    if (!holderGone()) return false;
+    const mutex = `${lock}.recover`;
+    try { mkdirSync(mutex); } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      try { if (Date.now() - statSync(mutex).mtimeMs > 30_000) rmSync(mutex, { recursive: true, force: true }); } catch { /* gone already */ }
+      return false;
+    }
+    try { if (holderGone()) rmSync(lock, { recursive: true, force: true }); } finally { rmSync(mutex, { recursive: true, force: true }); }
+    return true;
+  };
   for (;;) {
     try { mkdirSync(lock); writeFileSync(join(lock, 'pid'), `${process.pid}\n`); break; } catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      if (holderGone()) { rmSync(lock, { recursive: true, force: true }); continue; }
+      if (recover()) continue;
       if (Date.now() > deadline) throw fail('LOCKED', 'ledger is locked by another running process');
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }

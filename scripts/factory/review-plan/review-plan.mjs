@@ -48,7 +48,7 @@ async function verify(argv, out) {
     if (!line.startsWith('REVIEW:')) continue;
     const m = LINE.exec(line);
     if (!m) { problems.push(`UNPARSEABLE: line ${n}`); continue; }
-    const status = m[2].startsWith('NOT RUN') ? 'notrun' : m[2].startsWith('skipped') ? 'skipped' : 'ran';
+    const status = m[2].startsWith('NOT RUN') ? 'notrun' : m[2].startsWith('skipped') ? (m[1] === 'L2' && m[2] === 'skipped (not substantial)' ? 'skipped' : 'badskip') : 'ran';
     seen.set(m[1], [...(seen.get(m[1]) ?? []), { status, sha: m[3] }]);
   }
   const ran = (l) => (seen.get(l) ?? []).filter((e) => e.status === 'ran');
@@ -58,6 +58,7 @@ async function verify(argv, out) {
     const es = seen.get(l) ?? [];
     if (es.some((e) => e.status === 'ran')) continue;
     if (l === 'L2' && es.some((e) => e.status === 'skipped')) continue; // not substantial
+    if (es.some((e) => e.status === 'badskip')) { problems.push(`UNSUPPORTED SKIP: ${l} (only L2 "skipped (not substantial)" is allowed)`); continue; }
     if (es.some((e) => e.status === 'notrun')) { if (l === 'L3') l3NotRun = true; else incomplete.push(l); continue; }
     problems.push(`MISSING LAYER: ${l}`);
   }
