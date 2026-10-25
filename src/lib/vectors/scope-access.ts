@@ -46,10 +46,12 @@ export function isChatScope(scope: string): boolean {
 /**
  * NZR-6: the private scope of one uploader's files in one chat with one agent.
  * Binding the uploader means a reused chatId under another principal reaches
- * nothing. Hex only, so normalizeScope leaves it unchanged.
+ * nothing. Hex only, so normalizeScope leaves it unchanged. The chatId is keyed
+ * as sessions-repo saves it ('#' -> '_'), so a reopened conversation finds its files.
  */
 export function chatKnowledgeScope(agentId: string, chatId: string, uploaderId: string): string {
-  return `${RESERVED_SCOPE_PREFIX}${createHash('sha256').update(`${agentId}|${chatId}|${uploaderId}`).digest('hex').slice(0, 24)}`;
+  const saved = chatId.replace(/#/g, '_');
+  return `${RESERVED_SCOPE_PREFIX}${createHash('sha256').update(`${agentId}|${saved}|${uploaderId}`).digest('hex').slice(0, 24)}`;
 }
 
 /** NZR-6 tag naming a chat file's uploader without naming them. */
