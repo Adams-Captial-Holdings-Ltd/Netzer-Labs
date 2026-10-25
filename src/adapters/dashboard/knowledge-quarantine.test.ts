@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   authenticateDashboardToken: vi.fn(),
   iterateRows: vi.fn(),
   readDocumentRows: vi.fn(),
+  readDocument: vi.fn(),
   putDocument: vi.fn(),
   deleteDocument: vi.fn(),
   removeDocument: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock('../../lib/vectors/store.js', async (importActual) => {
     ...actual,
     iterateRows: h.iterateRows,
     readDocumentRows: h.readDocumentRows,
+    readDocument: h.readDocument,
     putDocument: h.putDocument,
     deleteDocument: h.deleteDocument,
   };
@@ -112,7 +114,12 @@ beforeEach(() => {
   h.readDocumentRows.mockReset().mockImplementation(async (scope: string, docId: string) =>
     scope === 'chat_quarantine' && docId === Q1 ? Q1_ROWS : [],
   );
-  h.putDocument.mockReset().mockResolvedValue(undefined);
+  // Versioned read on top of readDocumentRows: an absent doc has no ETag.
+  h.readDocument.mockReset().mockImplementation(async (scope: string, docId: string) => {
+    const rows = await h.readDocumentRows(scope, docId);
+    return { rows, etag: rows.length ? '"e1"' : null };
+  });
+  h.putDocument.mockReset().mockResolvedValue(true);
   h.deleteDocument.mockReset().mockResolvedValue(undefined);
   h.removeDocument.mockReset().mockResolvedValue(undefined);
   h.getSession.mockReset().mockImplementation(async (agentId: string, chatId: string) =>
@@ -210,6 +217,35 @@ describe('NZR-6 quarantined legacy chat files', () => {
     // Existing chunks win; the quarantine copy only fills the gap.
     expect(rows.map((r) => [r.metadata.chunkIndex, r.text])).toEqual([[0, 'NEW0'], [1, 'de'], [2, 'NEW2']]);
     expect(h.deleteDocument).toHaveBeenCalledWith('chat_quarantine', Q1);
+  });
+
+  it('retries the merge when a chat upload lands between the read and the write', async () => {
+    // First read: SA empty. A complete upload lands before our write, so the
+    // create-only write is refused; the retry must merge into the new copy.
+    const mine = { tags: ['chat', 'dashboard', 'agent:ops', `owner:${sha(ALICE).slice(0, 16)}`], source: 's3://raw-bucket/x', uploadedAt: '2026-10-20T00:00:00Z' };
+    const upload = [row('chat-aaa', 0, 'UP0', mine), row('chat-aaa', 1, 'UP1', mine), row('chat-aaa', 2, 'UP2', mine)];
+    h.readDocument
+      .mockImplementationOnce(async () => ({ rows: [], etag: null }))
+      .mockImplementationOnce(async () => ({ rows: upload, etag: '"up"' }));
+    h.putDocument.mockResolvedValueOnce(false);
+    const res = await reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatA' });
+    expect(res.status).toBe(200);
+    expect(h.putDocument).toHaveBeenCalledTimes(2);
+    expect(h.putDocument.mock.calls[0]![3]).toBeNull();
+    const [scope, , rows, etag] = h.putDocument.mock.calls[1]! as [string, string, typeof Q1_ROWS, string];
+    expect(scope).toBe(SA);
+    expect(etag).toBe('"up"');
+    expect(rows.map((r) => r.text)).toEqual(['UP0', 'UP1', 'UP2']);
+    expect(h.deleteDocument).toHaveBeenCalledTimes(1);
+    expect(h.writeAuditOrThrow).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the doc in quarantine when the target never stops changing', async () => {
+    h.putDocument.mockResolvedValue(false);
+    const res = await reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatA' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'reassign_conflict' });
+    expect(h.deleteDocument).not.toHaveBeenCalled();
   });
 
   it('a failed audit leaves the doc in quarantine', async () => {
