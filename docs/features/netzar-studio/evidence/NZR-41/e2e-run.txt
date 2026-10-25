@@ -1,0 +1,11 @@
+PASS T2 plan lists required and forbidden layers (exit 0)
+PASS T2 log with free layers only passes (exit 0)
+PASS T2 log with a Greptile run is rejected (exit 1)
+PASS T3 log with one Greptile pass passes (exit 0)
+PASS T3 log with a NOT RUN layer is INCOMPLETE (exit 2)
+PASS send without a yes is refused (exit 4)
+PASS send with a yes is allowed once (exit 0)
+PASS the same yes cannot be reused (exit 4)
+PASS first reserve for a step is granted (exit 0)
+PASS second reserve for the step needs --reason (exit 4)
+SUMMARY: 10/10 passed

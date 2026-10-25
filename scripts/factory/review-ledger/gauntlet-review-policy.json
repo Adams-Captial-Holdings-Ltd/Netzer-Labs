@@ -1,0 +1,6 @@
+{
+  "monthly_units": 50,
+  "soft_warn_pct": 70,
+  "hard_stop_pct": 90,
+  "reserve_units_high_risk": 0
+}
