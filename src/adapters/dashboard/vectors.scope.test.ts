@@ -27,14 +27,21 @@ const h = vi.hoisted(() => ({
   getDailyCostUsd: vi.fn(),
   getEffectiveCostCap: vi.fn(),
   writeAudit: vi.fn(),
+  writeAuditOrThrow: vi.fn(),
+  getObjectBuffer: vi.fn(),
+  deleteObject: vi.fn(),
 }));
 
-type Tier = 'viewer' | 'operator' | 'admin' | 'owner';
+type Tier = 'viewer' | 'operator' | 'admin' | 'owner' | 'alice' | 'bob';
 
 function principalFor(raw: string): TokenPrincipal | null {
   const id = raw.replace(/^Bearer\s+/i, '');
   if (id === 'viewer' || id === 'operator' || id === 'admin') {
     return { tokenHash: `hash-${id}`, label: id, hashPrefix16: id, role: id };
+  }
+  // NZR-6: two signed-in viewers, dashboard:user:alice and dashboard:user:bob.
+  if (id === 'alice' || id === 'bob') {
+    return { tokenHash: `hash-${id}`, label: id, hashPrefix16: id, role: 'viewer', userId: id };
   }
   if (id === 'owner') {
     return { tokenHash: 'hash-owner', label: 'Root token', hashPrefix16: 'owner', role: 'admin', profileId: 'owner' };
@@ -57,7 +64,14 @@ vi.mock('../../lib/auth/dashboard-auth.js', async (importActual) => {
 });
 vi.mock('../../lib/vectors/store.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/vectors/store.js')>();
-  return { ...actual, listDocuments: h.listDocuments, search: h.search, presignUploadUrl: h.presignUploadUrl };
+  return {
+    ...actual,
+    listDocuments: h.listDocuments,
+    search: h.search,
+    presignUploadUrl: h.presignUploadUrl,
+    getObjectBuffer: h.getObjectBuffer,
+    deleteObject: h.deleteObject,
+  };
 });
 vi.mock('../../lib/vectors/ingest.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/vectors/ingest.js')>();
@@ -80,7 +94,7 @@ vi.mock('../../lib/state/kill-switches-repo.js', async (importActual) => {
   const actual = await importActual<typeof import('../../lib/state/kill-switches-repo.js')>();
   return { ...actual, isKillSwitchActive: () => Promise.resolve({ active: false }) };
 });
-vi.mock('../../lib/audit/audit-writer.js', () => ({ writeAudit: h.writeAudit }));
+vi.mock('../../lib/audit/audit-writer.js', () => ({ writeAudit: h.writeAudit, writeAuditOrThrow: h.writeAuditOrThrow }));
 vi.mock('../../observability/logger.js', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   truncateForLog: (s: string) => s,
@@ -137,6 +151,9 @@ beforeEach(() => {
   h.getDailyCostUsd.mockReset().mockResolvedValue(0);
   h.getEffectiveCostCap.mockReset().mockResolvedValue(50);
   h.writeAudit.mockReset().mockResolvedValue(undefined);
+  h.writeAuditOrThrow.mockReset().mockResolvedValue(undefined);
+  h.getObjectBuffer.mockReset().mockResolvedValue(Buffer.from('%PDF-1.4 fake'));
+  h.deleteObject.mockReset().mockResolvedValue(undefined);
 });
 
 describe('NZR-5 knowledge routes enforce scope access', () => {
@@ -289,5 +306,104 @@ describe('NZR-5 knowledge routes enforce scope access', () => {
     h.writeAudit.mockRejectedValue(new Error('audit table down'));
     await expectForbiddenScope(await req('/api/vectors?scope=finance_private', 'viewer'));
     expect(h.listDocuments).not.toHaveBeenCalled();
+  });
+});
+
+/** NZR-6: chat-private scopes, derived from the caller's own identity. */
+const chatScope = (agentId: string, chatId: string, uploaderId: string) =>
+  `chat_${createHash('sha256').update(`${agentId}|${chatId}|${uploaderId}`).digest('hex').slice(0, 24)}`;
+const SA = chatScope('ops', 'dashboard:chatA', 'dashboard:user:alice');
+const SB = chatScope('ops', 'dashboard:chatB', 'dashboard:user:bob');
+
+describe('NZR-6 knowledge routes keep chat files private', () => {
+  it('F6-8 /vectors* refuse a chat-private scope to anyone but its owner', async () => {
+    for (const tier of ['viewer', 'operator', 'alice'] as const) {
+      for (const r of READS(SA)) await expectForbiddenScope(await r.run(tier), `${tier} ${r.route}`);
+    }
+    await expectForbiddenScope(await req(`/api/vectors/${SA}/doc1`, 'operator', 'DELETE'));
+    // A viewer cannot delete at all (agents:write comes first).
+    expect((await req(`/api/vectors/${SA}/doc1`, 'viewer', 'DELETE')).status).toBe(403);
+    // Writes into chat_* come only from the chat pipeline and the reassign route.
+    for (const tier of ['operator', 'admin'] as const) {
+      await expectForbiddenScope(await req('/api/ingest', tier, 'POST', { content: 'x', scope: SA }), `${tier} /ingest`);
+      await expectForbiddenScope(await req('/api/ingest/stream', tier, 'POST', { content: 'x', scope: 'chat_quarantine' }), `${tier} /ingest/stream`);
+    }
+    expectNoKnowledgeIo();
+    expect(h.writeAuditOrThrow).not.toHaveBeenCalled();
+    const raw = JSON.stringify(h.writeAudit.mock.calls);
+    expect(raw).not.toContain(SA);
+  });
+
+  it('F6-12 a user lists their own chat files by agentId and chatId', async () => {
+    h.listDocuments.mockImplementation(async (scope: string) =>
+      scope === SA ? [{ docId: 'chat-a', title: 'report.pdf', chunkCount: 2, createdAt: '2026-10-25T00:00:00Z' }] : [],
+    );
+    const a = await req('/api/vectors?agentId=ops&chatId=dashboard%3AchatA', 'alice');
+    expect(a.status).toBe(200);
+    const aBody = (await a.json()) as { scope: string; count: number; docs: Array<{ docId: string }> };
+    expect(aBody.scope).toBe(SA);
+    expect(aBody.count).toBe(1);
+    expect(aBody.docs.map((d) => d.docId)).toEqual(['chat-a']);
+
+    // Same URL for B derives B's own (empty) scope, never A's.
+    const b = await req('/api/vectors?agentId=ops&chatId=dashboard%3AchatA', 'bob');
+    expect(b.status).toBe(200);
+    expect(await b.json()).toEqual({
+      scope: chatScope('ops', 'dashboard:chatA', 'dashboard:user:bob'),
+      count: 0,
+      docs: [],
+    });
+
+    // search and answer accept {agentId, chatId} in place of scope.
+    const s = await req('/api/vectors/search', 'bob', 'POST', { query: 'q', agentId: 'ops', chatId: 'dashboard:chatB' });
+    expect(s.status).toBe(200);
+    expect(((await s.json()) as { scope: string }).scope).toBe(SB);
+    const ans = await req('/api/vectors/answer', 'alice', 'POST', { query: 'q', modelId: MODEL_ID, agentId: 'ops', chatId: 'dashboard:chatA' });
+    expect(ans.status).toBe(200);
+    expect(h.search.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([SB, SA]);
+
+    // Both a scope and agentId/chatId, or only half of the pair: 400.
+    for (const path of [
+      `/api/vectors?scope=default&agentId=ops&chatId=dashboard%3AchatA`,
+      '/api/vectors?agentId=ops',
+      '/api/vectors?chatId=dashboard%3AchatA',
+    ]) {
+      const res = await req(path, 'alice');
+      expect(res.status, path).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    }
+    expect(h.writeAuditOrThrow).not.toHaveBeenCalled();
+  });
+
+  it('F6-13 an admin reads a chat scope only through an audited override', async () => {
+    const ok = await req(`/api/vectors?scope=${SA}`, 'admin');
+    expect(ok.status).toBe(200);
+    expect(h.writeAuditOrThrow).toHaveBeenCalledTimes(1);
+    expect(h.writeAuditOrThrow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'session_read_override',
+        detail: { scope: 'knowledge', requestedBy: 'dashboard:hash-admin' },
+        result: 'ok',
+      }),
+    );
+    expect(h.listDocuments).toHaveBeenCalledWith(SA);
+
+    h.listDocuments.mockClear();
+    h.writeAuditOrThrow.mockRejectedValue(new Error('audit table down'));
+    const refused = await req(`/api/vectors?scope=${SA}`, 'admin');
+    expect(refused.status).toBe(500);
+    expect(await refused.json()).toEqual({ error: 'override_not_audited' });
+    expect(h.listDocuments).not.toHaveBeenCalled();
+  });
+
+  it("F6-9 /ingest/stream refuses an s3Key under another caller's chat upload prefix", async () => {
+    const tag = createHash('sha256').update('dashboard:user:alice').digest('hex').slice(0, 16);
+    const res = await req('/api/ingest/stream', 'operator', 'POST', { s3Key: `uploads/chat/${tag}/id-1/a.pdf`, docTitle: 'a.pdf' });
+    const text = await res.text();
+    expect(text).toContain('"stage":"error"');
+    expect(text).toContain('invalid upload key');
+    expect(h.getObjectBuffer).not.toHaveBeenCalled();
+    expect(h.deleteObject).not.toHaveBeenCalled();
+    expect(h.ingestDocument).not.toHaveBeenCalled();
   });
 });
