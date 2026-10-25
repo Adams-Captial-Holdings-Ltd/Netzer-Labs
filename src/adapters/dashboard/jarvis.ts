@@ -71,7 +71,7 @@ import { emitJarvisMetric } from '../../observability/emf-jarvis.js';
 import { listAgents } from '../../lib/state/agents-repo.js';
 import { listKnownAgentsAsync, loadAgent } from '../../lib/config/agent-loader.js';
 import { computeAgentHealth, collectAcrossDays, conversationsVisibleTo, readConversationRows, capabilitiesForPrincipal } from './handler.js';
-import { canReadScope, scopeHash } from '../../lib/vectors/scope-access.js';
+import { canReadScope, isChatScope, scopeHash } from '../../lib/vectors/scope-access.js';
 import type { Capability } from '../../lib/auth/permissions.js';
 import { getDailyCostUsd, getUsageByDay, recordUsage, JARVIS_USAGE_AGENT, SpendIndeterminateError } from '../../lib/usage/token-tracker.js';
 import {
@@ -1101,7 +1101,8 @@ export async function executeQueryTool(
     // Model-supplied: coerce, so a non-string is refused, never thrown on.
     const scope = String(params.scope ?? 'default');
     const caps = await capabilitiesForPrincipal(principal).then((r) => r.caps, () => new Set<Capability>());
-    if (!canReadScope(caps, scope)) {
+    // NZR-6: raw chat_* scopes are admin-override-only on the dashboard; Jarvis has no awaited override, so never.
+    if (isChatScope(scope) || !canReadScope(caps, scope)) {
       void writeAudit({
         action: 'knowledge_scope_denied',
         surface: 'dashboard',
