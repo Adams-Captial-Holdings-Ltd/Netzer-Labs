@@ -3738,7 +3738,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (rows.length === 0 || sep < 1) return c.json({ error: 'not_found' }, 404);
     const session = await getSession(agentId, chatId);
     const owner = session?.userId;
-    if (typeof owner !== 'string' || !owner.startsWith('dashboard:')) return c.json({ error: 'no_dashboard_owner' }, 409);
+    // Person owners only: chat search scopes by dashboard:user:<person>, so a legacy
+    // dashboard:<tokenHash> owner would get an unreachable scope. Migrate those first.
+    if (typeof owner !== 'string' || !/^dashboard:user:.+/.test(owner)) return c.json({ error: 'no_dashboard_owner' }, 409);
     const docId = qDocId.slice(sep + 2);
     const target = chatKnowledgeScope(agentId, chatId, owner);
     try {
