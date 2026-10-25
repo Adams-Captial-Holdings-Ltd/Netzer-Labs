@@ -1,6 +1,6 @@
 // NZR-40: the 8 story scenarios against the route-guard CLI. Temp dirs per test, no network, no model.
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -125,6 +125,26 @@ describe('route-guard.mjs', () => {
     expect(s.code).toBe(0);
     expect(s.out).toContain('JEV: unavailable -> advisor (sonnet): sol');
   });
+
+  it('competing processes recovering one abandoned lock never both pass the separation rule', async () => {
+    const deadPid = spawnSync('node', ['-e', '']).pid;
+    const go = (args: string[]) => new Promise<number | null>((res) => {
+      spawn('node', [GUARD, ...args], { env: { ...process.env, GAUNTLET_ROUTES: log(), GAUNTLET_CONSENT: consent() }, stdio: 'ignore' }).on('close', res);
+    });
+    const c = (role: string, provider: string, session: string) =>
+      ['check', '--slug', 't', '--step', 's', '--role', role, '--provider', provider, '--model', 'm', '--session', session];
+    for (let round = 0; round < 10; round++) {
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir);
+      check('s', 'builder', 'codex', 'Z');
+      mkdirSync(`${log()}.lock`);
+      writeFileSync(join(`${log()}.lock`, 'pid'), `${deadPid}\n`);
+      // 6 critics + 6 builders all on session X; serial order allows at most one side of the pair.
+      await Promise.all(Array.from({ length: 6 }, () => [go(c('critic', 'claude', 'X')), go(c('builder', 'codex', 'X'))]).flat());
+      const ok = lines().filter((l) => l.session === 'X' && l.result === 'allowed').map((l) => l.role);
+      expect(new Set(ok).size, `round ${round}: ${ok.join(',')}`).toBeLessThanOrEqual(1);
+    }
+  }, 60_000);
 
   it('selftest passes', () => {
     expect(run('selftest').code).toBe(0);
