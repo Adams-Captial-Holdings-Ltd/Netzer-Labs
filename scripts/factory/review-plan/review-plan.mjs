@@ -4,6 +4,7 @@
 //   review-plan.mjs verify --tier T --log FILE
 //   review-plan.mjs send-check --layer kodus|coderabbit|greptile --step ID --sha SHA [--slug S]
 // Exit codes: 0 ok, 1 verify failed, 2 usage (verify: INCOMPLETE, a required layer NOT RUN), 4 send-check refused.
+import { createHash } from 'node:crypto';
 import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -49,12 +50,15 @@ async function verify(argv, out) {
     const m = LINE.exec(line);
     if (!m) { problems.push(`UNPARSEABLE: line ${n}`); continue; }
     const status = m[2].startsWith('NOT RUN') ? 'notrun' : m[2].startsWith('skipped') ? (m[1] === 'L2' && m[2] === 'skipped (not substantial)' ? 'skipped' : 'badskip') : 'ran';
-    seen.set(m[1], [...(seen.get(m[1]) ?? []), { status, sha: m[3] }]);
+    seen.set(m[1], [...(seen.get(m[1]) ?? []), { status, sha: m[3], ledger: m[4] }]);
   }
   const ran = (l) => (seen.get(l) ?? []).filter((e) => e.status === 'ran');
   for (const l of spec.forbidden) if (ran(l).length) problems.push(`FORBIDDEN LAYER RAN: ${l} ${NAME[l]}`);
   let l3NotRun = false;
-  const finalSha = ran('L0').at(-1)?.sha ?? seen.get('L0')?.at(-1)?.sha;
+  // the last L0 line of any status is final; if it did not run, the newest sha has no free checks (fail closed)
+  const finalL0 = seen.get('L0')?.at(-1);
+  const finalSha = finalL0?.sha;
+  if (finalL0 && finalL0.status !== 'ran') problems.push(`FINAL L0 DID NOT RUN on ${finalSha.slice(0, 12)}`);
   for (const l of spec.required) {
     const all = seen.get(l) ?? [];
     // every required layer, skips and NOT RUN included, must be on the final L0 sha
@@ -70,6 +74,7 @@ async function verify(argv, out) {
     const g = ran('L6');
     if (g.length > 1) problems.push(`GREPTILE PASSES: ${g.length} (T3 allows 1)`);
     if (g.length && g.some((e) => e.sha !== finalSha)) problems.push('GREPTILE SHA != FINAL SHA');
+    if (g.some((e) => !e.ledger)) problems.push('GREPTILE LEDGER ID MISSING (L6 line needs ledger=<id>)');
   }
   for (const p of problems) out.log(p);
   if (problems.length) return 1;
@@ -79,7 +84,7 @@ async function verify(argv, out) {
   return 0;
 }
 
-// A yes record is single-use: the nth matching record is claimed by exclusively creating "<file>.used.<n>", so two
+// A yes record is single-use: a matching record is claimed by exclusively creating "<file>.used.<record hash>", so two
 // racing send-checks can never both consume it and a crash cannot leave a lock behind.
 function sendCheck(argv, env, out) {
   const layer = need(argv, '--layer');
@@ -87,15 +92,20 @@ function sendCheck(argv, env, out) {
   const step = need(argv, '--step');
   const sha = need(argv, '--sha');
   if (!SHA.test(sha)) throw new Usage('--sha must be the full lowercase commit id (40 hex characters)');
-  const file = env.GAUNTLET_SENDS ?? join(homedir(), '.claude', 'plans', `${arg(argv, '--slug') ?? 'netzar'}-reviews`, 'sends.jsonl');
+  const slug = arg(argv, '--slug') ?? 'netzar';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug) || slug.includes('..')) throw new Usage('--slug must be a plain name (letters, digits, . _ -)');
+  const file = env.GAUNTLET_SENDS ?? join(homedir(), '.claude', 'plans', `${slug}-reviews`, 'sends.jsonl');
   const lines = existsSync(file) ? readFileSync(file, 'utf8').split('\n') : [];
   let matched = false;
-  for (const [i, l] of lines.entries()) {
+  for (const l of lines) {
     let r;
     try { r = JSON.parse(l); } catch { continue; }
-    if (!r || r.layer !== layer || r.step !== step || r.sha !== sha || !/\byes\b/i.test(r.owner_text ?? '')) continue;
+    // owner_text must start with yes: "not yes" and "yes?" are not consent
+    if (!r || r.layer !== layer || r.step !== step || r.sha !== sha || !/^\s*yes\b(?!\s*\?)/i.test(r.owner_text ?? '')) continue;
     matched = true;
-    try { mkdirSync(dirname(file), { recursive: true }); closeSync(openSync(`${file}.used.${i}`, 'wx', 0o600)); } catch (e) {
+    // keyed on the record's content so rewriting or reordering the file cannot revive a used yes (identical records share one yes)
+    const key = createHash('sha256').update(l.trim()).digest('hex').slice(0, 16);
+    try { mkdirSync(dirname(file), { recursive: true }); closeSync(openSync(`${file}.used.${key}`, 'wx', 0o600)); } catch (e) {
       if (e.code === 'EEXIST') continue;
       throw e;
     }

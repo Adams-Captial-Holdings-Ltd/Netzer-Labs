@@ -176,3 +176,9 @@
 - [ ] QA: the fresh critic re-runs the gate against these criteria. UAT: N/A, no user-facing change; the owner accepts the evidence summary (preflight log, `review-ledger.mjs status` showing the new limits).
 - [ ] Documentation is updated: `review-gauntlet.md` sections 1, 2 and 10; `SKILL.md` rows 318, 350, 3789, 3894; a dated session handoff in `~/.claude/plans/`.
 - [ ] Done = installed on the VPS and verified locally (factory change; nothing merges to `development`). Staging: N/A for factory files.
+
+---
+
+## 8. NOTES
+* The helper installs to `/root/.claude/bin` (copy from `scripts/factory/review-plan/` and `scripts/factory/review-ledger/`, see the README there). The `SKILL.md` and `review-gauntlet.md` doc edits are a coordinator follow-up after merge.
+* Repo copies plus vitest and E2E were added instead of `node:test` at `/root/.claude/bin`.
