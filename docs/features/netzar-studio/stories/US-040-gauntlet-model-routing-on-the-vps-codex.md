@@ -181,3 +181,27 @@
 - [ ] QA: the fresh critic re-runs the gate against these criteria. UAT: N/A, no user-facing change; the owner accepts the evidence summary (route log from one real step).
 - [ ] Documentation is updated: `SKILL.md`, `review-gauntlet.md`, `hermes-adaptation.md`; a dated session handoff in `~/.claude/plans/`.
 - [ ] Done = installed on the VPS and verified locally (factory change; nothing merges to `development`). Staging: N/A for factory files.
+
+<!-- runner:evidence:start -->
+### Story exit gate evidence (runner)
+
+```
+Story: NZR-40   HEAD: c31844ac2a9c18685c708be8737f38ec81cd8809
+G1 code review : PASS  reviewer=claude-opus fresh critic session=f6694a9f-a591-4b12-b269-51e7bc6a0bb5 findings=1/12 open_low=11 greptile=GR:PASS
+GR greptile    : PASS confidence=5 comments=0 plus=False
+G2 unit tests  : PASS        red=c70fef8 green=c31844a counts=4779/4779 story_files=11/11 typecheck=ok
+G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
+G3 UAT         : PASS scenarios=8/8 pending_owner=0 accepted_by=owner (Telegram) date=2026-10-25
+G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-40/e2e-run.txt counts=7/7
+G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
+Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012,L-013,L-014,L-015,L-016,L-017,L-018,L-019   New lessons: L-018, L-019
+```
+
+- [e2e-run.txt](../evidence/NZR-40/e2e-run.txt)
+- [g1-review.md](../evidence/NZR-40/g1-review.md)
+- [gates.md](../evidence/NZR-40/gates.md)
+- [uat-transcript.md](../evidence/NZR-40/uat-transcript.md)
+- [uat-unit-tests.md](../evidence/NZR-40/uat-unit-tests.md)
+- [uat-walk.mjs](../evidence/NZR-40/uat-walk.mjs)
+- [uat.json](../evidence/NZR-40/uat.json)
+<!-- runner:evidence:end -->
