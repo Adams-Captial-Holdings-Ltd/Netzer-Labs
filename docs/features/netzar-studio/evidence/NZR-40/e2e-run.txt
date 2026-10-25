@@ -1,0 +1,8 @@
+PASS codex builder allowed (exit 0)
+PASS fresh claude critic allowed (exit 0)
+PASS summary prints the ROUTE and JEV line (exit 0)
+PASS critic reusing the builder session refused (exit 4)
+PASS codex reviewer refused on a codex-built step (exit 4)
+PASS nvidia builder refused without consent, codex fallback printed (exit 4)
+PASS broken consent file fails closed (exit 5)
+SUMMARY: 7/7 passed

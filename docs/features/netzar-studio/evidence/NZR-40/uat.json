@@ -1,0 +1,50 @@
+[
+ {
+  "scenario": "1",
+  "title": "Routed step (happy path)",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-1"
+ },
+ {
+  "scenario": "2",
+  "title": "No NVIDIA builder before consent",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-2"
+ },
+ {
+  "scenario": "3",
+  "title": "No NVIDIA reviewer before consent",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-3"
+ },
+ {
+  "scenario": "4",
+  "title": "Codex never reviews code Codex built",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-4"
+ },
+ {
+  "scenario": "5",
+  "title": "The critic is a fresh Claude session",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-5"
+ },
+ {
+  "scenario": "6",
+  "title": "Consent alone does not let NVIDIA build",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-6"
+ },
+ {
+  "scenario": "7",
+  "title": "Broken inputs fail closed",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-7"
+ },
+ {
+  "scenario": "8",
+  "title": "Jev is down",
+  "result": "PASS",
+  "evidence": "uat-transcript.md#scenario-8"
+ }
+]
