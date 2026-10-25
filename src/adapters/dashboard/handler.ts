@@ -2430,6 +2430,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
                 fileName,
                 mimeType: staged[index]!.type,
                 addToKnowledge: a.addToKnowledge === true,
+                uploaderId: dashboardIdentity(c),
                 bytes,
               },
               (stage) => {

@@ -144,6 +144,8 @@ export interface RawMediaInput {
   /** Pre-staged objects live in a different bucket (vectors staging). */
   s3Bucket?: string;
   addToKnowledge?: boolean;
+  /** Who sent the file; binds a knowledge ingest to their chat (NZR-6). Never inferred from chatId. */
+  uploaderId?: string;
 }
 
 export interface ProcessedMedia {
@@ -348,6 +350,7 @@ export async function processMedia(
       targetAgentId: input.targetAgentId,
       chatId: input.chatId,
       surface: input.surface,
+      uploaderId: input.uploaderId ?? '',
       fileName: safeName,
       bytes,
       sourceS3Url: s3Url,
@@ -358,6 +361,7 @@ export async function processMedia(
       targetAgentId: input.targetAgentId,
       chatId: input.chatId,
       surface: input.surface,
+      uploaderId: input.uploaderId ?? '',
       fileName: safeName,
       transcript,
       sourceS3Url: s3Url,
@@ -605,7 +609,7 @@ function buildAck(
       // tell the user the superpower they just gained instead of "stored".
       return kb.deduped
         ? `got ${fileName} (${kbSize} KB) — it's already in the knowledge base. Ask me anything about it.`
-        : `got ${fileName} (${kbSize} KB) and indexed it into the knowledge base (${kb.chunks} chunk${kb.chunks === 1 ? '' : 's'}). Ask me anything about it — from Slack, Telegram, or the dashboard.`;
+        : `got ${fileName} (${kbSize} KB) and indexed it into the knowledge base (${kb.chunks} chunk${kb.chunks === 1 ? '' : 's'}). Ask me anything about it in this chat.`;
     }
     return `got the file ${fileName} (${kbSize} KB), stored. It could not be read inline.`;
   }

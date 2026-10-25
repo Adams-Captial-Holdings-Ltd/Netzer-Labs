@@ -36,6 +36,27 @@ export function canReadScope(caps: ReadonlySet<Capability>, scope: string): bool
   return caps.has('knowledge:private:read');
 }
 
+/** NZR-6: admin-only home of legacy chat files whose uploader is unknown (Q83). */
+export const QUARANTINE_SCOPE = 'chat_quarantine';
+
+export function isChatScope(scope: string): boolean {
+  return normalizeScope(scope).startsWith(RESERVED_SCOPE_PREFIX);
+}
+
+/**
+ * NZR-6: the private scope of one uploader's files in one chat with one agent.
+ * Binding the uploader means a reused chatId under another principal reaches
+ * nothing. Hex only, so normalizeScope leaves it unchanged.
+ */
+export function chatKnowledgeScope(agentId: string, chatId: string, uploaderId: string): string {
+  return `${RESERVED_SCOPE_PREFIX}${createHash('sha256').update(`${agentId}|${chatId}|${uploaderId}`).digest('hex').slice(0, 24)}`;
+}
+
+/** NZR-6 tag naming a chat file's uploader without naming them. */
+export function ownerTag(uploaderId: string): string {
+  return `owner:${createHash('sha256').update(uploaderId).digest('hex').slice(0, 16)}`;
+}
+
 /** First 12 hex chars of sha256(normalized name): audit rows carry this, never the name. */
 export function scopeHash(scope: string): string {
   return createHash('sha256').update(normalizeScope(scope)).digest('hex').slice(0, 12);
