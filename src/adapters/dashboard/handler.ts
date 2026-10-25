@@ -122,6 +122,7 @@ import {
   listDocuments,
   iterateRows,
   readDocumentRows,
+  readDocument,
   putDocument,
   deleteDocument,
   type VectorRow,
@@ -3756,9 +3757,6 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (typeof owner !== 'string' || !/^dashboard:user:.+/.test(owner)) return c.json({ error: 'no_dashboard_owner' }, 409);
     const docId = qDocId.slice(sep + 2);
     const target = chatKnowledgeScope(agentId, chatId, owner);
-    // The owner may have re-added the file since the fix, and either copy can be
-    // partial (ingest keeps what embedded). Merged by chunk below; existing wins.
-    const existing = await readDocumentRows(target, docId);
     try {
       await writeAuditOrThrow({
         action: 'knowledge_reassigned',
@@ -3781,11 +3779,21 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         tags: [...(r.metadata.tags ?? []).filter((t) => !t.startsWith('from:') && !t.startsWith('owner:')), ownerTag(owner)],
       },
     }));
-    const have = new Set(existing.map((r) => r.metadata.chunkIndex));
-    const merged = [...existing, ...moved.filter((r) => !have.has(r.metadata.chunkIndex))]
-      .sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex);
+    // The owner may have re-added the file since the fix, and either copy can be
+    // partial (ingest keeps what embedded). Merged by chunk; existing wins. The
+    // write is conditional on the ETag read, so a chat upload landing in between
+    // makes us re-read and merge again instead of overwriting it.
+    let written = false;
+    for (let attempt = 0; attempt < 3 && !written; attempt++) {
+      const { rows: existing, etag } = await readDocument(target, docId);
+      const have = new Set(existing.map((r) => r.metadata.chunkIndex));
+      const merged = [...existing, ...moved.filter((r) => !have.has(r.metadata.chunkIndex))]
+        .sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex);
+      written = await putDocument(target, docId, merged, etag);
+    }
+    // Still racing: keep the quarantine copy so nothing is lost; the admin retries.
+    if (!written) return c.json({ error: 'reassign_conflict' }, 409);
     // Copy first: a failed delete leaves a duplicate in quarantine, never a loss.
-    await putDocument(target, docId, merged);
     await deleteDocument(QUARANTINE_SCOPE, qDocId);
     return c.json({ ok: true, docId, agentId, chatId });
   });
