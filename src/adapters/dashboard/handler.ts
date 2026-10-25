@@ -3755,7 +3755,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // Claim before reading: two admins reassigning the same doc to different chats
     // would otherwise both copy it (the target ETag check cannot see the other chat).
     // shortcut: a crash mid-move leaves the claim, so reassign answers 409 until an admin
-    // deletes it (DELETE /vectors/chat_quarantine/<docId>.claim); add a TTL if that recurs.
+    // deletes the S3 object claims/chat_quarantine/<docId>.jsonl; add a TTL if that recurs.
     if (!(await claimDocument(QUARANTINE_SCOPE, qDocId))) return c.json({ error: 'reassign_in_progress' }, 409);
     try {
       const rows = await readDocumentRows(QUARANTINE_SCOPE, qDocId);

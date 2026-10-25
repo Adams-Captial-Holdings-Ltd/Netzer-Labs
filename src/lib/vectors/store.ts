@@ -330,15 +330,24 @@ export async function readDocumentRows(scope: string, docId: string): Promise<Ve
 }
 
 /**
- * NZR-6: exclusive claim on a doc (create-only empty `<docId>.claim` beside it,
- * skipped by readers since it has no rows). False when someone else holds it.
+ * NZR-6: exclusive claim on a doc (create-only empty object under `claims/`,
+ * outside `index/` so listings never see it). False when someone else holds it.
  */
 export async function claimDocument(scope: string, docId: string): Promise<boolean> {
-  return putDocument(scope, `${docId}.claim`, [], null);
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  try {
+    await s3().send(new PutObjectCommand({ Bucket: INDEX_BUCKET, Key: claimKeyFor(scope, docId), Body: '', IfNoneMatch: '*' }));
+  } catch (err) {
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (status === 412 || status === 409) return false;
+    throw err;
+  }
+  return true;
 }
 
 export async function releaseDocumentClaim(scope: string, docId: string): Promise<void> {
-  await deleteDocument(scope, `${docId}.claim`);
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
+  await s3().send(new DeleteObjectCommand({ Bucket: INDEX_BUCKET, Key: claimKeyFor(scope, docId) }));
 }
 
 /** NZR-6: rows plus the ETag to pass to `putDocument` (null when absent). */
@@ -374,8 +383,7 @@ export async function* iterateRows(
       }),
     );
     for (const obj of list.Contents ?? []) {
-      // Skip reassign claims before the GET: one released mid-listing would 404 and 500 the caller.
-      if (!obj.Key || obj.Key.endsWith('.claim.jsonl')) continue;
+      if (!obj.Key) continue;
       const resp = await s3().send(
         new GetObjectCommand({ Bucket: INDEX_BUCKET, Key: obj.Key }),
       );
@@ -447,4 +455,9 @@ export function indexPrefixFor(scope: string): string {
 export function keyFor(scope: string, docId: string): string {
   const safeDoc = docId.replace(/[^A-Za-z0-9._-]/g, '_');
   return `${indexPrefixFor(scope)}${safeDoc}.jsonl`;
+}
+
+/** NZR-6: reassign claims, kept out of `index/` so no doc id can collide with one. */
+function claimKeyFor(scope: string, docId: string): string {
+  return `claims/${keyFor(scope, docId).slice('index/'.length)}`;
 }
