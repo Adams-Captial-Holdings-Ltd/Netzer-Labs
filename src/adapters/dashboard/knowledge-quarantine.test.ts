@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   readDocument: vi.fn(),
   putDocument: vi.fn(),
   deleteDocument: vi.fn(),
+  claimDocument: vi.fn(),
+  releaseDocumentClaim: vi.fn(),
   removeDocument: vi.fn(),
   getSession: vi.fn(),
   writeAudit: vi.fn(),
@@ -39,6 +41,8 @@ vi.mock('../../lib/vectors/store.js', async (importActual) => {
     readDocument: h.readDocument,
     putDocument: h.putDocument,
     deleteDocument: h.deleteDocument,
+    claimDocument: h.claimDocument,
+    releaseDocumentClaim: h.releaseDocumentClaim,
   };
 });
 vi.mock('../../lib/vectors/ingest.js', async (importActual) => {
@@ -121,6 +125,8 @@ beforeEach(() => {
   });
   h.putDocument.mockReset().mockResolvedValue(true);
   h.deleteDocument.mockReset().mockResolvedValue(undefined);
+  h.claimDocument.mockReset().mockResolvedValue(true);
+  h.releaseDocumentClaim.mockReset().mockResolvedValue(undefined);
   h.removeDocument.mockReset().mockResolvedValue(undefined);
   h.getSession.mockReset().mockImplementation(async (agentId: string, chatId: string) =>
     agentId === 'ops' && chatId === 'dashboard:chatA' ? { agentId, chatId, surface: 'dashboard', userId: ALICE, turns: [] } : null,
@@ -246,6 +252,52 @@ describe('NZR-6 quarantined legacy chat files', () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: 'reassign_conflict' });
     expect(h.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('two racing reassigns of one doc move it once and refuse the other', async () => {
+    // Real-ish store: one claim per doc, and the delete really removes it.
+    const BOB = 'dashboard:user:bob';
+    let inQuarantine = true;
+    const claims = new Set<string>();
+    h.readDocumentRows.mockImplementation(async (scope: string, docId: string) =>
+      scope === 'chat_quarantine' && docId === Q1 && inQuarantine ? Q1_ROWS : [],
+    );
+    h.deleteDocument.mockImplementation(async (scope: string, docId: string) => {
+      if (scope === 'chat_quarantine' && docId === Q1) inQuarantine = false;
+    });
+    h.claimDocument.mockImplementation(async (scope: string, docId: string) => {
+      const k = `${scope}/${docId}`;
+      if (claims.has(k)) return false;
+      claims.add(k);
+      return true;
+    });
+    h.releaseDocumentClaim.mockImplementation(async (scope: string, docId: string) => { claims.delete(`${scope}/${docId}`); });
+    h.getSession.mockImplementation(async (agentId: string, chatId: string) =>
+      chatId === 'dashboard:chatA' ? { agentId, chatId, surface: 'dashboard', userId: ALICE, turns: [] }
+        : chatId === 'dashboard:chatB' ? { agentId, chatId, surface: 'dashboard', userId: BOB, turns: [] }
+        : null,
+    );
+    const results = await Promise.all([
+      reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatA' }),
+      reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatB' }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    const loser = results.find((r) => r.status === 409)!;
+    expect(await loser.json()).toEqual({ error: 'reassign_in_progress' });
+    expect(h.putDocument).toHaveBeenCalledTimes(1);
+    expect(h.deleteDocument).toHaveBeenCalledTimes(1);
+    expect(h.writeAuditOrThrow).toHaveBeenCalledTimes(1);
+    // The claim is released once the move is done; a later reassign finds nothing.
+    expect(claims.size).toBe(0);
+    expect((await reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatB' })).status).toBe(404);
+  });
+
+  it('claims the quarantined doc before reading it and releases the claim on failure', async () => {
+    h.writeAuditOrThrow.mockRejectedValue(new Error('audit table down'));
+    expect((await reassign('admin', { agentId: 'ops', chatId: 'dashboard:chatA' })).status).toBe(500);
+    expect(h.claimDocument).toHaveBeenCalledWith('chat_quarantine', Q1);
+    expect(h.claimDocument.mock.invocationCallOrder[0]!).toBeLessThan(h.readDocumentRows.mock.invocationCallOrder[0]!);
+    expect(h.releaseDocumentClaim).toHaveBeenCalledWith('chat_quarantine', Q1);
   });
 
   it('a failed audit leaves the doc in quarantine', async () => {
