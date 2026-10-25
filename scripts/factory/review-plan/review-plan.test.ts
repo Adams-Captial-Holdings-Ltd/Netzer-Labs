@@ -103,6 +103,22 @@ describe('review-plan.mjs', () => {
     expect(exec(PLAN, ['send-check', '--layer', 'kodus', '--step', 's', '--sha', 'abc'], { GAUNTLET_SENDS: sends() }).code).toBe(2);
   });
 
+  it('a used yes stays used when the sends file is rewritten; only a leading yes counts; slug is validated', () => {
+    const rec = JSON.stringify({ layer: 'kodus', step: 's1', sha: A, owner_text: 'yes kodus this run' });
+    writeFileSync(sends(), `${rec}\n`);
+    expect(sendCheck('kodus', 's1', A).code).toBe(0);
+    writeFileSync(sends(), `{"junk":1}\n${rec}\n`); // record moves to another line index
+    expect(sendCheck('kodus', 's1', A).code).toBe(4);
+    for (const text of ['not yes', 'yes?', 'no, yes later']) {
+      writeFileSync(sends(), `${JSON.stringify({ layer: 'greptile', step: 's1', sha: A, owner_text: text })}\n`);
+      expect(sendCheck('greptile', 's1', A).code).toBe(4);
+    }
+    for (const slug of ['../x', 'a/b', '..', 'a\\b']) {
+      const res = exec(PLAN, ['send-check', '--layer', 'kodus', '--step', 's', '--sha', A, '--slug', slug], { GAUNTLET_SENDS: sends() });
+      expect(res.code).toBe(2);
+    }
+  });
+
   it('only "skipped (not substantial)" excuses L2; other skip reasons fail the tier', () => {
     const bad = verify('T3', t3({ L2: `REVIEW: L2 skipped (coderabbit signed out) ${A}` }));
     expect(bad.code).toBe(1);
@@ -129,6 +145,23 @@ describe('review-plan.mjs', () => {
       expect(res.code).toBe(1);
       expect(res.out).toContain(`STALE LAYER: ${layer}`);
     }
+  });
+
+  it('a later L0 that did not run on a newer sha fails verify instead of passing on the stale sha', () => {
+    for (const status of ['NOT RUN (typecheck broke)', 'skipped (not needed)']) {
+      const t1 = verify('T1', [r('L0', 'ran', A), r('L0', status, B)]);
+      expect(t1.code).not.toBe(0);
+      expect(t1.out).not.toContain('TIER OK');
+      const t3res = verify('T3', [...t3(), r('L0', status, B)]);
+      expect(t3res.code).not.toBe(0);
+      expect(t3res.out).not.toContain('TIER OK');
+    }
+  });
+
+  it('T3 needs ledger=<id> on the ran L6 line', () => {
+    const res = verify('T3', t3({ L6: r('L6', 'ran', A) }));
+    expect(res.code).toBe(1);
+    expect(res.out).toContain('GREPTILE LEDGER ID MISSING');
   });
 
   it('a NOT RUN required layer makes a T3 step INCOMPLETE, not PASS', () => {
