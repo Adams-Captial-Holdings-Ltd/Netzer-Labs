@@ -72,14 +72,28 @@ describe('the read path lists the prefix the write path writes', () => {
     expect(await prefixAskedFor('agent:ops')).toBe('index/agent_ops/');
   });
 
-  it('never fetches a reassign claim object (NZR-6: a released claim would 404)', async () => {
+  it('keeps reassign claims outside the index prefix (NZR-6: a released claim would 404 the listing)', async () => {
+    const { S3Client } = await import('@aws-sdk/client-s3');
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({} as never);
+    const { claimDocument, releaseDocumentClaim } = await import('./store.js');
+    await claimDocument('chat_quarantine', 'default__abc');
+    await releaseDocumentClaim('chat_quarantine', 'default__abc');
+    const keys = send.mock.calls.map((c) => (c[0] as unknown as { input: { Key: string } }).input.Key);
+    expect(keys).toHaveLength(2);
+    for (const k of keys) expect(k.startsWith('index/')).toBe(false);
+  });
+
+  it('still reads a real document whose id ends in .claim (NZR-6 GR P1)', async () => {
     const { S3Client } = await import('@aws-sdk/client-s3');
     const { iterateRows, keyFor } = await import('./store.js');
-    const send = vi
-      .spyOn(S3Client.prototype, 'send')
-      .mockResolvedValue({ Contents: [{ Key: keyFor('chat_quarantine', 'default__abc.claim') }] } as never);
-    for await (const _ of iterateRows('chat_quarantine')) void _;
-    expect(send).toHaveBeenCalledTimes(1);
+    const row = { chunkId: 'c1', text: 't', embedding: [1], metadata: { docId: 'report.claim', scope: 'default', chunkIndex: 0, start: 0, end: 1, uploadedAt: '' } };
+    vi.spyOn(S3Client.prototype, 'send').mockImplementation((async (cmd: { input: { Prefix?: string } }) =>
+      cmd.input.Prefix !== undefined
+        ? { Contents: [{ Key: keyFor('default', 'report.claim') }] }
+        : { Body: { transformToString: async () => JSON.stringify(row) } }) as never);
+    const ids: string[] = [];
+    for await (const r of iterateRows('default')) ids.push(r.metadata.docId);
+    expect(ids).toEqual(['report.claim']);
   });
 
   it('asks for a prefix the written key actually falls under', async () => {
