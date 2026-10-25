@@ -329,6 +329,18 @@ export async function readDocumentRows(scope: string, docId: string): Promise<Ve
   return (await readDocument(scope, docId)).rows;
 }
 
+/**
+ * NZR-6: exclusive claim on a doc (create-only empty `<docId>.claim` beside it,
+ * skipped by readers since it has no rows). False when someone else holds it.
+ */
+export async function claimDocument(scope: string, docId: string): Promise<boolean> {
+  return putDocument(scope, `${docId}.claim`, [], null);
+}
+
+export async function releaseDocumentClaim(scope: string, docId: string): Promise<void> {
+  await deleteDocument(scope, `${docId}.claim`);
+}
+
 /** NZR-6: rows plus the ETag to pass to `putDocument` (null when absent). */
 export async function readDocument(scope: string, docId: string): Promise<{ rows: VectorRow[]; etag: string | null }> {
   if (!INDEX_BUCKET) return { rows: [], etag: null };

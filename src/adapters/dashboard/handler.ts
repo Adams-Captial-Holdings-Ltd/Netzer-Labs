@@ -123,6 +123,8 @@ import {
   iterateRows,
   readDocumentRows,
   readDocument,
+  claimDocument,
+  releaseDocumentClaim,
   putDocument,
   deleteDocument,
   type VectorRow,
@@ -3750,55 +3752,65 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const valid = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 256;
     if (!valid(agentId) || !validChatId(chatId)) return c.json({ error: 'invalid_body' }, 400);
     const qDocId = c.req.param('docId');
-    const rows = await readDocumentRows(QUARANTINE_SCOPE, qDocId);
-    const sep = qDocId.indexOf('__');
-    if (rows.length === 0 || sep < 1) return c.json({ error: 'not_found' }, 404);
-    const session = await getSession(agentId, chatId);
-    const owner = session?.userId;
-    // Person owners only: chat search scopes by dashboard:user:<person>, so a legacy
-    // dashboard:<tokenHash> owner would get an unreachable scope. Migrate those first.
-    if (typeof owner !== 'string' || !/^dashboard:user:.+/.test(owner)) return c.json({ error: 'no_dashboard_owner' }, 409);
-    const docId = qDocId.slice(sep + 2);
-    const target = chatKnowledgeScope(agentId, chatId, owner);
+    // Claim before reading: two admins reassigning the same doc to different chats
+    // would otherwise both copy it (the target ETag check cannot see the other chat).
+    // shortcut: a crash mid-move leaves the claim, so reassign answers 409 until an admin
+    // deletes it (DELETE /vectors/chat_quarantine/<docId>.claim); add a TTL if that recurs.
+    if (!(await claimDocument(QUARANTINE_SCOPE, qDocId))) return c.json({ error: 'reassign_in_progress' }, 409);
     try {
-      await writeAuditOrThrow({
-        action: 'knowledge_reassigned',
-        surface: 'dashboard',
-        agentId,
-        chatId,
-        userId: dashboardIdentity(c),
-        detail: { docId, fromScopeHash: scopeHash(QUARANTINE_SCOPE), toScopeHash: scopeHash(target), chunks: rows.length },
-        result: 'ok',
-      });
-    } catch (err) {
-      logger.error({ errMessage: err instanceof Error ? err.message : String(err) }, 'quarantine reassign refused: audit not written');
-      return c.json(OVERRIDE_UNAUDITED, 500);
+      const rows = await readDocumentRows(QUARANTINE_SCOPE, qDocId);
+      const sep = qDocId.indexOf('__');
+      if (rows.length === 0 || sep < 1) return c.json({ error: 'not_found' }, 404);
+      const session = await getSession(agentId, chatId);
+      const owner = session?.userId;
+      // Person owners only: chat search scopes by dashboard:user:<person>, so a legacy
+      // dashboard:<tokenHash> owner would get an unreachable scope. Migrate those first.
+      if (typeof owner !== 'string' || !/^dashboard:user:.+/.test(owner)) return c.json({ error: 'no_dashboard_owner' }, 409);
+      const docId = qDocId.slice(sep + 2);
+      const target = chatKnowledgeScope(agentId, chatId, owner);
+      try {
+        await writeAuditOrThrow({
+          action: 'knowledge_reassigned',
+          surface: 'dashboard',
+          agentId,
+          chatId,
+          userId: dashboardIdentity(c),
+          detail: { docId, fromScopeHash: scopeHash(QUARANTINE_SCOPE), toScopeHash: scopeHash(target), chunks: rows.length },
+          result: 'ok',
+        });
+      } catch (err) {
+        logger.error({ errMessage: err instanceof Error ? err.message : String(err) }, 'quarantine reassign refused: audit not written');
+        return c.json(OVERRIDE_UNAUDITED, 500);
+      }
+      const moved: VectorRow[] = rows.map((r) => ({
+        ...r,
+        metadata: {
+          ...r.metadata,
+          docId,
+          tags: [...(r.metadata.tags ?? []).filter((t) => !t.startsWith('from:') && !t.startsWith('owner:')), ownerTag(owner)],
+        },
+      }));
+      // The owner may have re-added the file since the fix, and either copy can be
+      // partial (ingest keeps what embedded). Merged by chunk; existing wins. The
+      // write is conditional on the ETag read, so a chat upload landing in between
+      // makes us re-read and merge again instead of overwriting it.
+      let written = false;
+      for (let attempt = 0; attempt < 3 && !written; attempt++) {
+        const { rows: existing, etag } = await readDocument(target, docId);
+        const have = new Set(existing.map((r) => r.metadata.chunkIndex));
+        const merged = [...existing, ...moved.filter((r) => !have.has(r.metadata.chunkIndex))]
+          .sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex);
+        written = await putDocument(target, docId, merged, etag);
+      }
+      // Still racing: keep the quarantine copy so nothing is lost; the admin retries.
+      if (!written) return c.json({ error: 'reassign_conflict' }, 409);
+      // Copy first: a failed delete leaves a duplicate in quarantine, never a loss.
+      await deleteDocument(QUARANTINE_SCOPE, qDocId);
+      return c.json({ ok: true, docId, agentId, chatId });
+    } finally {
+      await releaseDocumentClaim(QUARANTINE_SCOPE, qDocId).catch((err: unknown) =>
+        logger.warn({ errMessage: err instanceof Error ? err.message : String(err) }, 'quarantine reassign: claim not released'));
     }
-    const moved: VectorRow[] = rows.map((r) => ({
-      ...r,
-      metadata: {
-        ...r.metadata,
-        docId,
-        tags: [...(r.metadata.tags ?? []).filter((t) => !t.startsWith('from:') && !t.startsWith('owner:')), ownerTag(owner)],
-      },
-    }));
-    // The owner may have re-added the file since the fix, and either copy can be
-    // partial (ingest keeps what embedded). Merged by chunk; existing wins. The
-    // write is conditional on the ETag read, so a chat upload landing in between
-    // makes us re-read and merge again instead of overwriting it.
-    let written = false;
-    for (let attempt = 0; attempt < 3 && !written; attempt++) {
-      const { rows: existing, etag } = await readDocument(target, docId);
-      const have = new Set(existing.map((r) => r.metadata.chunkIndex));
-      const merged = [...existing, ...moved.filter((r) => !have.has(r.metadata.chunkIndex))]
-        .sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex);
-      written = await putDocument(target, docId, merged, etag);
-    }
-    // Still racing: keep the quarantine copy so nothing is lost; the admin retries.
-    if (!written) return c.json({ error: 'reassign_conflict' }, 409);
-    // Copy first: a failed delete leaves a duplicate in quarantine, never a loss.
-    await deleteDocument(QUARANTINE_SCOPE, qDocId);
-    return c.json({ ok: true, docId, agentId, chatId });
   });
 
   router.get('/scheduled', async (c) => {
