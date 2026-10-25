@@ -375,6 +375,20 @@ describe('NZR-6 knowledge routes keep chat files private', () => {
     expect(h.writeAuditOrThrow).not.toHaveBeenCalled();
   });
 
+  it('accepts every chat id the send route accepts, however long', async () => {
+    // safeDashboardChatId passes a prefixed id through unchanged at any length.
+    const chatId = `dashboard:${'x'.repeat(300)}`;
+    const want = chatScope('ops', chatId, 'dashboard:user:alice');
+    const l = await req(`/api/vectors?agentId=ops&chatId=${encodeURIComponent(chatId)}`, 'alice');
+    expect(l.status).toBe(200);
+    expect(((await l.json()) as { scope: string }).scope).toBe(want);
+    const s = await req('/api/vectors/search', 'alice', 'POST', { query: 'q', agentId: 'ops', chatId });
+    expect(s.status).toBe(200);
+    const ans = await req('/api/vectors/answer', 'alice', 'POST', { query: 'q', modelId: MODEL_ID, agentId: 'ops', chatId });
+    expect(ans.status).toBe(200);
+    expect(h.search.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([want, want]);
+  });
+
   it('F6-13 an admin reads a chat scope only through an audited override', async () => {
     const ok = await req(`/api/vectors?scope=${SA}`, 'admin');
     expect(ok.status).toBe(200);
