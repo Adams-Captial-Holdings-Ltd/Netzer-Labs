@@ -110,9 +110,21 @@ import {
 } from '../../lib/state/sessions-repo.js';
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
-import { canReadScope, scopeHash } from '../../lib/vectors/scope-access.js';
+import {
+  canReadScope,
+  scopeHash,
+  isChatScope,
+  chatKnowledgeScope,
+  ownerTag,
+  QUARANTINE_SCOPE,
+} from '../../lib/vectors/scope-access.js';
 import {
   listDocuments,
+  iterateRows,
+  readDocumentRows,
+  putDocument,
+  deleteDocument,
+  type VectorRow,
   search as vectorSearch,
   presignUploadUrl,
   presignChatUploadUrl,
@@ -900,24 +912,47 @@ async function hasCapability(c: DashboardCtx, need: Capability): Promise<boolean
  * with no audit row. A scope the caller may not read (private and unknown look
  * identical) is a 403 plus an always-audited row carrying a scope hash only. A
  * failing capability lookup refuses (fail closed).
+ *
+ * NZR-6 chat scopes: `chat` ({agentId, chatId}) derives the caller's OWN chat
+ * scope from their identity (chat:read), so nobody can name another user's. A
+ * raw chat_* name is admin-only (knowledge:private:read + security:write) and
+ * read only after an awaited override row; `write` routes refuse it to everyone.
  */
 async function scopeAccess(
   c: Context<DashboardEnv>,
   rawScope: unknown,
   route: string,
+  opts: { chat?: { agentId?: unknown; chatId?: unknown }; write?: boolean } = {},
 ): Promise<{ ok: true; scope: string } | { ok: false; res: Response }> {
-  if (rawScope === undefined || rawScope === null) return { ok: true, scope: 'default' };
-  if (typeof rawScope !== 'string' || rawScope.length < 1 || rawScope.length > 128) {
+  const chatMode = opts.chat !== undefined && (opts.chat.agentId !== undefined || opts.chat.chatId !== undefined);
+  const validName = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 128;
+  if (!chatMode && (rawScope === undefined || rawScope === null)) return { ok: true, scope: 'default' };
+  if (chatMode ? rawScope != null || !validName(opts.chat!.agentId) || !validName(opts.chat!.chatId) : !validName(rawScope)) {
     return { ok: false, res: c.json({ error: 'invalid_scope' }, 400) };
   }
-  let allowed = false;
+  let caps: ReadonlySet<Capability> = new Set();
   try {
     const p = getPrincipal(c);
-    allowed = !!p && canReadScope((await capabilitiesForPrincipal(p)).caps, rawScope);
+    if (p) caps = (await capabilitiesForPrincipal(p)).caps;
   } catch {
-    allowed = false;
+    caps = new Set();
   }
-  if (allowed) return { ok: true, scope: rawScope };
+  if (chatMode) {
+    const scope = chatKnowledgeScope(opts.chat!.agentId as string, opts.chat!.chatId as string, dashboardIdentity(c));
+    if (caps.has('chat:read')) return { ok: true, scope };
+    return scopeDenied(c, scope, route);
+  }
+  const scope = rawScope as string;
+  if (isChatScope(scope)) {
+    if (opts.write || !caps.has('knowledge:private:read') || !caps.has('security:write')) return scopeDenied(c, scope, route);
+    if (!(await auditedOverride(c, 'knowledge'))) return { ok: false, res: c.json(OVERRIDE_UNAUDITED, 500) };
+    return { ok: true, scope };
+  }
+  if (canReadScope(caps, scope)) return { ok: true, scope };
+  return scopeDenied(c, scope, route);
+}
+
+function scopeDenied(c: Context<DashboardEnv>, rawScope: string, route: string): { ok: false; res: Response } {
   // Fire-and-forget; a lost row cannot turn the refusal into a read.
   void writeAudit({
     action: 'knowledge_scope_denied',
@@ -3169,7 +3204,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'vectors:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
     }
-    const access = await scopeAccess(c, c.req.query('scope'), 'GET /vectors');
+    const access = await scopeAccess(c, c.req.query('scope'), 'GET /vectors', {
+      chat: { agentId: c.req.query('agentId'), chatId: c.req.query('chatId') },
+    });
     if (!access.ok) return access.res;
     const { scope } = access;
     const docs = await listDocuments(scope);
@@ -3197,7 +3234,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!body || (!body.content && !body.contentBase64)) {
       return c.json({ error: 'missing_content_or_contentBase64' }, 400);
     }
-    const access = await scopeAccess(c, body.scope, 'POST /ingest');
+    const access = await scopeAccess(c, body.scope, 'POST /ingest', { write: true });
     if (!access.ok) return access.res;
     try {
       const result = await ingestDocument({
@@ -3308,7 +3345,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       return c.json({ error: 'missing_content_contentBase64_or_s3Key' }, 400);
     }
     // Before the stream: once it starts the status is already 200.
-    const access = await scopeAccess(c, body.scope, 'POST /ingest/stream');
+    const access = await scopeAccess(c, body.scope, 'POST /ingest/stream', { write: true });
     if (!access.ok) return access.res;
     // Size ceilings for staged uploads. Binary docs are loaded fully into the
     // task's memory and base64'd (~1.33x), so we cap them well under the
@@ -3339,7 +3376,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           const fmt: IngestFormat = body.format ?? detectFormat(body.docTitle ?? body.source);
           // Pull the bytes from the staging upload when an s3Key is given.
           if (body.s3Key) {
-            if (!isUploadKey(body.s3Key)) {
+            // NZR-6: chat staging objects belong to one sender's turn, never to knowledge ingest.
+            if (!isUploadKey(body.s3Key) || body.s3Key.startsWith('uploads/chat/')) {
               send({ stage: 'error', detail: 'invalid upload key' });
               return;
             }
@@ -3427,8 +3465,12 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'vectors:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
     }
-    const body = await c.req.json<{ query?: string; scope?: string; topK?: number }>().catch(() => null);
-    const access = await scopeAccess(c, body?.scope, 'POST /vectors/search');
+    const body = await c.req
+      .json<{ query?: string; scope?: string; agentId?: string; chatId?: string; topK?: number }>()
+      .catch(() => null);
+    const access = await scopeAccess(c, body?.scope, 'POST /vectors/search', {
+      chat: { agentId: body?.agentId, chatId: body?.chatId },
+    });
     if (!access.ok) return access.res;
     const { scope } = access;
     const query = body?.query?.trim();
@@ -3470,6 +3512,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       .json<{
         query?: string;
         scope?: string;
+        agentId?: string;
+        chatId?: string;
         modelId?: string;
         topK?: number;
         history?: Array<{ role: 'user' | 'assistant'; text: string }>;
@@ -3477,7 +3521,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       .catch(() => null);
     // Before validation, the kill switch and the cost cap: a refused scope
     // costs nothing and learns nothing about spend.
-    const access = await scopeAccess(c, body?.scope, 'POST /vectors/answer');
+    const access = await scopeAccess(c, body?.scope, 'POST /vectors/answer', {
+      chat: { agentId: body?.agentId, chatId: body?.chatId },
+    });
     if (!access.ok) return access.res;
     const { scope } = access;
     const query = body?.query?.trim();
@@ -3639,6 +3685,88 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       result: 'ok',
     });
     return c.json({ ok: true, scope, docId });
+  });
+
+  // NZR-6 (Q83): legacy chat files of unknown uploader, quarantined by
+  // scripts/nzr6-quarantine-chat-docs.ts. Admins list them, then reassign each
+  // to a dashboard chat or delete it (DELETE /vectors/chat_quarantine/:docId).
+  router.get('/knowledge/quarantine', async (c) => {
+    if (!(await hasCapability(c, 'knowledge:private:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'knowledge:private:read' }, 403);
+    }
+    const byDoc = new Map<string, { docId: string; title: string | null; agentId: string | null; surface: string | null; fromScope: string; uploadedAt: string; chunks: number; chars: number; suggestedChatId: string | null }>();
+    for await (const row of iterateRows(QUARANTINE_SCOPE)) {
+      const m = row.metadata;
+      const d = byDoc.get(m.docId);
+      if (d) {
+        d.chunks += 1;
+        d.chars += row.text.length;
+        if (m.uploadedAt && m.uploadedAt < d.uploadedAt) d.uploadedAt = m.uploadedAt;
+        continue;
+      }
+      const tags = m.tags ?? [];
+      const surface = tags.find((t) => t === 'telegram' || t === 'slack' || t === 'dashboard') ?? null;
+      // Raw key <surface>/<chatId>/YYYY/MM/DD/<file> names the FIRST uploader's chat only: a hint, not an owner.
+      const fromSource = /^s3:\/\/[^/]+\/(?:telegram|slack|dashboard)\/(.+)\/\d{4}\/\d{2}\/\d{2}\/[^/]+$/.exec(m.source ?? '');
+      byDoc.set(m.docId, {
+        docId: m.docId,
+        title: m.docTitle ?? null,
+        agentId: tags.find((t) => t.startsWith('agent:'))?.slice('agent:'.length) ?? null,
+        surface,
+        fromScope: tags.find((t) => t.startsWith('from:'))?.slice('from:'.length) ?? m.docId.split('__')[0]!,
+        uploadedAt: m.uploadedAt ?? '',
+        chunks: 1,
+        chars: row.text.length,
+        suggestedChatId: fromSource?.[1] ?? null,
+      });
+    }
+    const docs = [...byDoc.values()].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+    return c.json({ count: docs.length, docs });
+  });
+
+  router.post('/knowledge/quarantine/:docId/reassign', async (c) => {
+    for (const need of ['knowledge:private:read', 'security:write'] as const) {
+      if (!(await hasCapability(c, need))) return c.json({ error: 'forbidden', requiredCapability: need }, 403);
+    }
+    const body = await c.req.json<{ agentId?: unknown; chatId?: unknown }>().catch(() => null);
+    const { agentId, chatId } = body ?? {};
+    const valid = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 256;
+    if (!valid(agentId) || !valid(chatId)) return c.json({ error: 'invalid_body' }, 400);
+    const qDocId = c.req.param('docId');
+    const rows = await readDocumentRows(QUARANTINE_SCOPE, qDocId);
+    const sep = qDocId.indexOf('__');
+    if (rows.length === 0 || sep < 1) return c.json({ error: 'not_found' }, 404);
+    const session = await getSession(agentId, chatId);
+    const owner = session?.userId;
+    if (typeof owner !== 'string' || !owner.startsWith('dashboard:')) return c.json({ error: 'no_dashboard_owner' }, 409);
+    const docId = qDocId.slice(sep + 2);
+    const target = chatKnowledgeScope(agentId, chatId, owner);
+    try {
+      await writeAuditOrThrow({
+        action: 'knowledge_reassigned',
+        surface: 'dashboard',
+        agentId,
+        chatId,
+        userId: dashboardIdentity(c),
+        detail: { docId, fromScopeHash: scopeHash(QUARANTINE_SCOPE), toScopeHash: scopeHash(target), chunks: rows.length },
+        result: 'ok',
+      });
+    } catch (err) {
+      logger.error({ errMessage: err instanceof Error ? err.message : String(err) }, 'quarantine reassign refused: audit not written');
+      return c.json(OVERRIDE_UNAUDITED, 500);
+    }
+    const moved: VectorRow[] = rows.map((r) => ({
+      ...r,
+      metadata: {
+        ...r.metadata,
+        docId,
+        tags: [...(r.metadata.tags ?? []).filter((t) => !t.startsWith('from:') && !t.startsWith('owner:')), ownerTag(owner)],
+      },
+    }));
+    // Copy first: a failed delete leaves a duplicate in quarantine, never a loss.
+    await putDocument(target, docId, moved);
+    await deleteDocument(QUARANTINE_SCOPE, qDocId);
+    return c.json({ ok: true, docId, agentId, chatId });
   });
 
   router.get('/scheduled', async (c) => {
