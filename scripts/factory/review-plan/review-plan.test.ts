@@ -103,6 +103,16 @@ describe('review-plan.mjs', () => {
     expect(exec(PLAN, ['send-check', '--layer', 'kodus', '--step', 's', '--sha', 'abc'], { GAUNTLET_SENDS: sends() }).code).toBe(2);
   });
 
+  it('only "skipped (not substantial)" excuses L2; other skip reasons fail the tier', () => {
+    const bad = verify('T3', t3({ L2: `REVIEW: L2 skipped (coderabbit signed out) ${A}` }));
+    expect(bad.code).toBe(1);
+    expect(bad.out).toContain('UNSUPPORTED SKIP: L2');
+    expect(bad.out).not.toContain('TIER OK');
+    const other = verify('T3', t3().map((l) => (l.startsWith('REVIEW: L4 ') ? `REVIEW: L4 skipped (not substantial) ${A}` : l)));
+    expect(other.code).toBe(1);
+    expect(other.out).toContain('UNSUPPORTED SKIP: L4');
+  });
+
   it('a NOT RUN required layer makes a T3 step INCOMPLETE, not PASS', () => {
     const lines = t3().map((l) => (l.startsWith('REVIEW: L1 ') ? r('L1', 'NOT RUN (kodus signed out)') : l));
     const res = verify('T3', lines);
@@ -139,6 +149,21 @@ describe('ledger policy and step rule', () => {
     expect(second.out).toContain('NOT RUN: step nzr-5.s1 already had a paid review this month; a second needs --reason');
     expect(exec(LEDGER, ['reserve', 'base', sha(2), '--step', 'nzr-5.s1', '--reason', 'owner yes: rerun after blocker fix'], env()).code).toBe(0);
   });
+
+  it('racing processes recovering one abandoned lock never overspend the budget', async () => {
+    const { spawn } = await import('node:child_process');
+    const { mkdirSync } = await import('node:fs');
+    for (let round = 0; round < 6; round++) {
+      const e = { ...process.env, GAUNTLET_LEDGER: join(dir, `r${round}.jsonl`), GAUNTLET_POLICY: join(dir, `r${round}.json`), GAUNTLET_TEST_DELAY_MS: '50', GAUNTLET_SELFTEST: '1' };
+      writeFileSync(e.GAUNTLET_POLICY, JSON.stringify({ monthly_units: 4, reserve_units_high_risk: 0 }));
+      mkdirSync(`${e.GAUNTLET_LEDGER}.lock`);
+      writeFileSync(join(`${e.GAUNTLET_LEDGER}.lock`, 'pid'), '999999\n'); // dead holder
+      const codes = await Promise.all(Array.from({ length: 12 }, (_, i) => new Promise<number | null>((res) => {
+        spawn('node', [LEDGER, 'reserve', 'base', sha(i + 1)], { env: e, stdio: 'ignore' }).on('close', res);
+      })));
+      expect(codes.filter((c) => c === 0).length).toBe(4);
+    }
+  }, 60_000);
 
   it('ledger selftest passes with the new step assertion', () => {
     const s = exec(LEDGER, ['selftest']);
