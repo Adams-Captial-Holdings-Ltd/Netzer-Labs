@@ -2,8 +2,8 @@
 feature: paperclip
 document_role: decision
 status: accepted
-observed_at: 2026-09-29
-as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
+observed_at: 2026-10-25
+as_of_commit: a61d09ea6c962001bbe152a1212993b52db8664b
 ---
 
 # Work Platform: DO NOT BUILD
@@ -14,7 +14,7 @@ as_of_commit: 29309c8fab1d9b37121aee7d92f0efa0bb30fbc8
 
 | # | Do not build | Instead | Recorded in |
 |---|---|---|---|
-| 1 | Workflow engine, state machine, case store, business scheduler, SLA timer engine, approval engine | Paperclip owns work state: pipelines, routines, monitors and approvals | [ADR 0012](../../adr/0012-paperclip-owns-work-state.md), [ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md) |
+| 1 | Workflow engine, state machine, case store, business scheduler, SLA timer engine, approval engine | Paperclip owns work state: pipelines, routines, monitors and approvals. **Amended by [ADR 0024](../../adr/0024-netzar-owns-its-workflow-engine.md):** see [below](#amended-by-later-adrs) | [ADR 0012](../../adr/0012-paperclip-owns-work-state.md), [ADR 0016](../../adr/0016-human-decisions-via-shadow-users.md) |
 | 2 | A second connector plane or credential store | AgentCore Gateway and Identity, and Secrets Manager | [ADR 0015](../../adr/0015-agentcore-connector-credential-plane.md) |
 | 3 | Paperclip tool-access | Off. Netzer is the only MCP client | [ADR 0014](../../adr/0014-netzer-only-ai-runtime.md), [ADR 0015](../../adr/0015-agentcore-connector-credential-plane.md) |
 | 4 | A second AI runtime (Paperclip runner, local adapters, remote profiles) | Netzer `runAgentTurn` only | [ADR 0014](../../adr/0014-netzer-only-ai-runtime.md) |
@@ -37,6 +37,10 @@ These come from the [decision log](decision-log.md), not from the original plan:
 
 - **A remote kill switch or call-home for lapsed customers** (decision 17). A customer who stops paying keeps running the copy they already have. Reselling, redistributing or sublicensing Netzer or a pack is forbidden and the license says so; it is backed by what the plans already do: no source code in customer accounts, signed updates and packs only from Netzer staff, and the per-customer `deploymentId` in logs and audit rows.
 - **Staff tooling or logins that can read customer data** (decision 18). In a customer's AWS account, Netzer staff use a limited login that installs, upgrades and removes packs and the platform and shows system health only: status, counts, IDs and error codes. Staff cannot read cases, records, documents, secrets or content-bearing logs, open the Paperclip screens there, or grant themselves more access. `pack status` and alerts show IDs and counts only.
+
+## Amended by later ADRs
+
+- **Row 1, by [ADR 0024](../../adr/0024-netzar-owns-its-workflow-engine.md) (owner, 2026-10-20, Q12).** A workflow engine, state machine, run store and approval gates may be built in Netzar, for Studio workflows ([ADR 0022](../../adr/0022-netzar-owns-work-state-paperclip-replaced.md)). Step Functions Standard or an own engine is decided in NZR-33. A business scheduler and an SLA timer engine stay forbidden until a later ADR; schedule triggers are design-only in NZR-13. The approval rules restated in ADR 0024 item 4 (hash-bound payload, approver from the session, an AI agent never approves its own action) stay binding. Every other row is unchanged.
 
 ## What this list is not
 

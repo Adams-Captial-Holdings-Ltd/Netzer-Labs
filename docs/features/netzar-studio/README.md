@@ -6,6 +6,10 @@ observed_at: 2026-10-23
 as_of_commit: d1d3a66970cd548f9529a234ef2b51ecdc29378e
 approved_work:
   - docs/features/netzar-studio/backlog.md
+decisions:
+  - docs/adr/0022-netzar-owns-work-state-paperclip-replaced.md
+  - docs/adr/0023-customers-build-workflows.md
+  - docs/adr/0024-netzar-owns-its-workflow-engine.md
 ---
 
 # Netzar Studio rebuild
