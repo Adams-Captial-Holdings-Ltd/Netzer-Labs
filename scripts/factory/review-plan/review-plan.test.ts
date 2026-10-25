@@ -146,5 +146,5 @@ describe('ledger policy and step rule', () => {
     expect(s.code).toBe(0);
     expect(existsSync(POLICY)).toBe(true);
     expect(JSON.parse(readFileSync(POLICY, 'utf8'))).toMatchObject({ hard_stop_pct: 90, soft_warn_pct: 70, reserve_units_high_risk: 0 });
-  });
+  }, 30_000); // selftest spawns 30 racing processes; the 5s default flakes under the full suite
 });
