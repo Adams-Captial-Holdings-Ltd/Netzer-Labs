@@ -290,6 +290,39 @@ export async function listDocuments(scope: string): Promise<Doc[]> {
   );
 }
 
+/** NZR-6: every scope that has an `index/<scope>/` prefix (normalized names). */
+export async function listScopePrefixes(): Promise<string[]> {
+  if (!INDEX_BUCKET) return [];
+  const scopes: string[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const list = await s3().send(
+      new ListObjectsV2Command({ Bucket: INDEX_BUCKET, Prefix: 'index/', Delimiter: '/', ContinuationToken: continuationToken }),
+    );
+    for (const p of list.CommonPrefixes ?? []) {
+      const name = p.Prefix?.slice('index/'.length, -1);
+      if (name) scopes.push(name);
+    }
+    continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return scopes;
+}
+
+/** NZR-6: one document's rows, or [] when it does not exist. */
+export async function readDocumentRows(scope: string, docId: string): Promise<VectorRow[]> {
+  if (!INDEX_BUCKET) return [];
+  let body: string | undefined;
+  try {
+    const resp = await s3().send(new GetObjectCommand({ Bucket: INDEX_BUCKET, Key: keyFor(scope, docId) }));
+    body = await resp.Body?.transformToString();
+  } catch (err) {
+    const name = err instanceof Error ? err.name : '';
+    if (name === 'NoSuchKey' || name === 'NotFound') return [];
+    throw err;
+  }
+  return (body ?? '').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as VectorRow);
+}
+
 export async function* iterateRows(
   scope: string,
 ): AsyncIterableIterator<VectorRow> {
