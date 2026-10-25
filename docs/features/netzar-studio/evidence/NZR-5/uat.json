@@ -1,0 +1,68 @@
+[
+ {
+  "scenario": "1",
+  "title": "Viewer is refused another agent's private scope on every read route",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-1, F5-2, F5-3 (unit; no viewer locally); uat-transcript.md"
+ },
+ {
+  "scenario": "2",
+  "title": "Normalization cannot be used to get around the check",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-4"
+ },
+ {
+  "scenario": "3",
+  "title": "An unknown scope looks exactly like a private one",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-5"
+ },
+ {
+  "scenario": "4",
+  "title": "Operator cannot delete or ingest into a scope they cannot read",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-6, F5-10; uat-transcript.md live row 8"
+ },
+ {
+  "scenario": "5",
+  "title": "Viewer still reads the public corpora",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-7; uat-transcript.md live rows 1-3"
+ },
+ {
+  "scenario": "6",
+  "title": "Admin reads a private scope",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-8; uat-transcript.md live rows 4-7 (owner token)"
+ },
+ {
+  "scenario": "7",
+  "title": "Agent runtime reads its own scope, never another agent's",
+  "result": "PASS",
+  "evidence": "vector-tools.scope.test.ts incl. F5-11"
+ },
+ {
+  "scenario": "8",
+  "title": "The Jarvis query path is held to the same rule",
+  "result": "PASS",
+  "evidence": "jarvis.test.ts F5-12"
+ },
+ {
+  "scenario": "9",
+  "title": "Each refusal is audited without the scope name; malformed input is a 400",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-9, F5-9b; audit-writer.test.ts knowledge_scope_denied survives audit_log_disabled; uat-transcript.md live rows 9-11"
+ },
+ {
+  "scenario": "10",
+  "title": "Staging upload URLs need write access; the SPA hides scopes the user cannot open",
+  "result": "PENDING-OWNER",
+  "evidence": "Server half PASS (F5-13 + live row 12). SPA selector check NOT run: local :3900 serves legacy dashboard, Vite SPA build needed approval. See uat-transcript.md"
+ },
+ {
+  "scenario": "11",
+  "title": "Degraded mode",
+  "result": "PASS",
+  "evidence": "vectors.scope.test.ts F5-14"
+ }
+]

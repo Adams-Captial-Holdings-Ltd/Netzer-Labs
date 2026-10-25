@@ -130,7 +130,8 @@ Scope: Netzer-Labs `origin/development` @ `d1d3a66`. Every `file:line` below was
 - The only gate on all three is `vectors:read`, which every templated profile from viewer up holds (`permissions.ts:205`).
 - `DELETE /vectors/:scope/:docId` (`handler.ts:3522-3530`) deletes from any scope with `agents:write`.
 - By contrast, the agent tool already limits scope to the agent's own corpus plus `default` and `shared` (`vector-tools.ts:87-110`, with tests in `src/lib/tools/vector-tools.scope.test.ts`).
-- There is no per-agent access relation for dashboard principals yet. **Owner decision SEC-D1, needed before the tests are frozen**, proposed rule:
+- **Fixed in NZR-5** ([US-005](../stories/US-005-fix-vectors-scope-leak-knowledge-routes-enforce.md)). SEC-D1 is decided by Q82 (one test per role): admins and the agent's own runtime read an agent's private scope; everyone else reads `default`/`shared`. Evidence: `src/adapters/dashboard/vectors.scope.test.ts` (F5-1 to F5-14), `src/lib/vectors/scope-access.test.ts`, F5-11 in `src/lib/tools/vector-tools.scope.test.ts`, F5-12 in `src/adapters/dashboard/jarvis.test.ts`; red commit `1e7b5b4`, merge SHA recorded on merge. The rule lives in `canReadScope` (`src/lib/vectors/scope-access.ts`) and runs on 6 routes plus the Jarvis `vectors` resource. Builder finding: the legacy role gate blocked viewers from POST search/answer entirely, so it now defers to the in-route capability checks for those two paths and `upload-url`.
+- Rule (was the SEC-D1 proposal, now decided):
   - `default` and `shared` need `vectors:read`.
   - An agent-private scope needs a new capability `knowledge:private:read`, in the admin and owner templates and grantable in custom profiles. Per-agent grants come later with the knowledge-layers ADR (NZR-8).
   - A chat-private scope (3b) is open only to its owner, or to an admin through the existing audited override.
@@ -254,7 +255,7 @@ The pilot runs in PGN's own AWS account (managed pilot, Q64). This breaks the ru
 ## 7. Ranked open risks
 | # | Risk | Likelihood / impact | Plan |
 |---|---|---|---|
-| 1 | Any viewer reads any knowledge scope through `/vectors*` (NZR-5) | High / High | Week-0 T3 step, F5-1 to F5-8 |
+| 1 | Any viewer reads any knowledge scope through `/vectors*` (NZR-5) | High / High | Fixed in NZR-5 (SEC-D1 = Q82): F5-1 to F5-14 in `vectors.scope.test.ts` green; legacy app not patched (Q84) |
 | 2 | `GET /api/config/*` returns OAuth, Slack signing and MCP secrets to any signed-in principal (`handler.ts:2941-2972`) | High / Critical | **Not in the backlog.** Add to the week-0 step: `config:read` gate plus server-side redaction; then rotate the secrets it exposed |
 | 3 | Chat-added files reach every user of the agent, and fleet-wide through the `default`/`shared` fallback (NZR-6) | High / High | Week-0 step, F6-1 to F6-9, plus a move script |
 | 4 | A drafter steered by prompt injection produces a workflow with no approval, or one that sends data out; dangerous once C3 goes live | Medium / High | Section 4: AI-step allowlist, validator rules, preview built by code, adversarial eval cases |
@@ -267,5 +268,5 @@ The pilot runs in PGN's own AWS account (managed pilot, Q64). This breaks the ru
 | 11 | No enforced review, a single maintainer, factory agents with write access, secret scan blind to `src/` | Medium / Medium | Owner says yes to every merge (Q50); run the secret scan on each step's diff; GitHub Pro (posture G-1) |
 | 12 | Agent version integrity: overwritten live file, editor identity from a header | Low / Medium | T4: content-addressed write-once versions, author from the session |
 
-Open owner decisions: **SEC-D1** (the scope-read rule in 3a, needed before the tests are frozen); **SEC-D2** (add the `/config` secret fix to week 0); **SEC-D3** (do the pilot's Telegram and Slack connections stay off).
+Open owner decisions: ~~SEC-D1~~ (decided by Q82, NZR-5); **SEC-D2** (add the `/config` secret fix to week 0); **SEC-D3** (do the pilot's Telegram and Slack connections stay off).
 Landing notes: the repo root already has a `SECURITY.md` (the vulnerability-reporting policy). Land this page as `docs/features/netzar-studio/SECURITY.md` with the feature-doc frontmatter (`document_role: decision`, `as_of_commit`) so docs CI passes. Its relative links assume that location.

@@ -1,4 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'node:crypto';
+
+const { listDocuments, writeAudit } = vi.hoisted(() => ({
+  listDocuments: vi.fn(async (_scope: string) => [] as unknown[]),
+  writeAudit: vi.fn(async (_e: unknown) => {}),
+}));
+vi.mock('../../lib/vectors/store.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../lib/vectors/store.js')>();
+  return { ...actual, listDocuments };
+});
+vi.mock('../../lib/audit/audit-writer.js', () => ({ writeAudit }));
+
 import { executeQueryTool, buildGreetingLine } from './jarvis.js';
 import type { TokenPrincipal } from '../../lib/auth/dashboard-auth.js';
 
@@ -54,5 +66,36 @@ describe('executeQueryTool — authorizeRead gating (H3)', () => {
       expect(r.code).toBe('PARAM_REQUIRED');
       expect(r.param).toBe('chatId');
     }
+  });
+});
+
+describe('executeQueryTool — vectors scope rule (NZR-5)', () => {
+  beforeEach(() => {
+    listDocuments.mockClear();
+    writeAudit.mockClear();
+  });
+
+  it('F5-12 the vectors resource refuses a scope the principal cannot read', async () => {
+    const denied = await executeQueryTool(viewer, 'vectors', { scope: 'finance_private' });
+    expect(denied).toMatchObject({ ok: false, code: 'RESOURCE_FORBIDDEN' });
+    expect(listDocuments).not.toHaveBeenCalled();
+    const rows = writeAudit.mock.calls.map(([e]) => e as { action: string; surface: string; result: string; detail: Record<string, unknown> });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: 'knowledge_scope_denied',
+      surface: 'dashboard',
+      result: 'blocked',
+      detail: {
+        route: 'jarvis:vectors',
+        scopeHash: createHash('sha256').update('finance_private').digest('hex').slice(0, 12),
+        reason: 'private_scope',
+        event: 'security.scope_denied',
+      },
+    });
+    expect(JSON.stringify(rows)).not.toContain('finance');
+
+    const ok = await executeQueryTool(viewer, 'vectors', { scope: 'shared' });
+    expect(ok.ok).toBe(true);
+    expect(listDocuments).toHaveBeenCalledWith('shared');
   });
 });
