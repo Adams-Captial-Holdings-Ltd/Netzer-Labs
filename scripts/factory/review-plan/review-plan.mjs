@@ -54,8 +54,12 @@ async function verify(argv, out) {
   const ran = (l) => (seen.get(l) ?? []).filter((e) => e.status === 'ran');
   for (const l of spec.forbidden) if (ran(l).length) problems.push(`FORBIDDEN LAYER RAN: ${l} ${NAME[l]}`);
   let l3NotRun = false;
+  const finalSha = ran('L0').at(-1)?.sha ?? seen.get('L0')?.at(-1)?.sha;
   for (const l of spec.required) {
-    const es = seen.get(l) ?? [];
+    const all = seen.get(l) ?? [];
+    // every required layer, skips and NOT RUN included, must be on the final L0 sha
+    const es = l === 'L0' ? all : all.filter((e) => e.sha === finalSha);
+    if (all.length && !es.length) { problems.push(`STALE LAYER: ${l} (no record on final L0 ${finalSha?.slice(0, 12)})`); continue; }
     if (es.some((e) => e.status === 'ran')) continue;
     if (l === 'L2' && es.some((e) => e.status === 'skipped')) continue; // not substantial
     if (es.some((e) => e.status === 'badskip')) { problems.push(`UNSUPPORTED SKIP: ${l} (only L2 "skipped (not substantial)" is allowed)`); continue; }
@@ -65,7 +69,6 @@ async function verify(argv, out) {
   if (tier === 'T3') {
     const g = ran('L6');
     if (g.length > 1) problems.push(`GREPTILE PASSES: ${g.length} (T3 allows 1)`);
-    const finalSha = ran('L0').at(-1)?.sha;
     if (g.length && g.some((e) => e.sha !== finalSha)) problems.push('GREPTILE SHA != FINAL SHA');
   }
   for (const p of problems) out.log(p);
