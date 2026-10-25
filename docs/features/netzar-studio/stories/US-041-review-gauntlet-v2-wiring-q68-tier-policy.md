@@ -65,7 +65,7 @@
 ### Scenario 4: Third-party send needs a per-run yes
 * **Given** no yes record for step `nzr-5.s1`, layer `kodus`, SHA `<sha>`
 * **When** `review-plan.mjs send-check --layer kodus --step nzr-5.s1 --sha <sha>` runs
-* **Then** it exits 4 and prints `ASK OWNER: kodus would send Netzer-Labs@<sha12> (diff vs origin/development) to Kodus' service. Reply yes for this run only.`; after the coordinator appends `{"layer":"kodus","step":"nzr-5.s1","sha":"<sha>","owner_text":"yes kodus this run"}` the same command exits 0 once, and a second `send-check` for the same record exits 4 (`yes already used`)
+* **Then** it exits 4 and prints `ASK OWNER: kodus would send Netzer-Labs@<sha12> (diff vs origin/development) to Kodus' service. Reply yes for this run only.`; after the coordinator appends `{"layer":"kodus","step":"nzr-5.s1","sha":"<sha>","owner_text":"yes kodus this run","id":"<fresh consent id>"}` the same command exits 0 once, and a second `send-check` for the same record exits 4 (`yes already used`)
 * **Test:** `/root/.claude/bin/review-plan.test.mjs` › "kodus, coderabbit and greptile sends need a single-use per-run yes"
 
 ### Scenario 5: Ledger warns at 35 and stops at 45
@@ -176,3 +176,31 @@
 - [ ] QA: the fresh critic re-runs the gate against these criteria. UAT: N/A, no user-facing change; the owner accepts the evidence summary (preflight log, `review-ledger.mjs status` showing the new limits).
 - [ ] Documentation is updated: `review-gauntlet.md` sections 1, 2 and 10; `SKILL.md` rows 318, 350, 3789, 3894; a dated session handoff in `~/.claude/plans/`.
 - [ ] Done = installed on the VPS and verified locally (factory change; nothing merges to `development`). Staging: N/A for factory files.
+
+---
+
+<!-- runner:evidence:start -->
+### Story exit gate evidence (runner)
+
+```
+Story: NZR-41   HEAD: f89ea37f5564774d0f66e736ba11039332f6b090
+G1 code review : PASS  reviewer=claude-opus fresh critic session=dfc2e8b3-0c9a-4e35-abaf-5e3781718b82 findings=1/5 open_low=4 greptile=GR:PASS
+GR greptile    : PASS confidence=5 comments=1 plus=False
+G2 unit tests  : PASS        red=f036081 green=f89ea37 counts=4793/4793 story_files=14/14 typecheck=ok
+G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
+G3 UAT         : PASS scenarios=7/7 pending_owner=0 accepted_by=owner (Telegram) date=2026-10-25
+G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-41/e2e-run.txt counts=10/10
+G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
+Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012,L-013,L-014,L-015,L-016,L-017,L-018,L-019,L-020,L-021,L-022   New lessons: L-020, L-021, L-022
+```
+
+- [e2e-run.txt](../evidence/NZR-41/e2e-run.txt)
+- [g1-review.md](../evidence/NZR-41/g1-review.md)
+- [gates.md](../evidence/NZR-41/gates.md)
+- [uat-transcript.md](../evidence/NZR-41/uat-transcript.md)
+- [uat.json](../evidence/NZR-41/uat.json)
+<!-- runner:evidence:end -->
+
+## 8. NOTES
+* The helper installs to `/root/.claude/bin` (copy from `scripts/factory/review-plan/` and `scripts/factory/review-ledger/`, see the README there). The `SKILL.md` and `review-gauntlet.md` doc edits are a coordinator follow-up after merge.
+* Repo copies plus vitest and E2E were added instead of `node:test` at `/root/.claude/bin`.

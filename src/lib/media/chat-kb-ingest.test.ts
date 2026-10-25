@@ -43,11 +43,13 @@ import {
   ingestFormatFor,
   buildKbConfirmation,
 } from './chat-kb-ingest.js';
+import { chatKnowledgeScope, ownerTag } from '../vectors/scope-access.js';
 
 const baseArgs = {
   targetAgentId: 'ops',
   chatId: 'owner:emmanuel',
   surface: 'telegram' as const,
+  uploaderId: 'telegram-user-42',
   fileName: 'report.pdf',
   bytes: Buffer.from('%PDF-1.4 fake pdf bytes'),
   sourceS3Url: 's3://raw/telegram/x/report.pdf',
@@ -59,14 +61,17 @@ beforeEach(() => {
   getConfigMock.mockResolvedValue(undefined);
   documentExistsMock.mockResolvedValue(false);
   loadAgentMock.mockResolvedValue({ knowledgeScope: 'ops-scope' });
-  ingestDocumentMock.mockResolvedValue({
+  ingestDocumentMock.mockImplementation(async (a: { scope: string }) => ({
     docId: 'chat-abc',
-    scope: 'ops-scope',
+    scope: a.scope,
     chunks: 7,
     failed: 0,
     uploadedAt: '2026-06-12T00:00:00Z',
-  });
+  }));
 });
+
+// NZR-6: the uploading chat's private scope, for baseArgs.
+const CHAT_SCOPE = chatKnowledgeScope('ops', 'owner:emmanuel', 'telegram-user-42');
 
 describe('contentDocId', () => {
   it('is stable for the same bytes and differs for different bytes', () => {
@@ -94,22 +99,24 @@ describe('ingestFormatFor', () => {
 });
 
 describe('ingestChatMedia', () => {
-  it('ingests a document into the agent scope with chat tags', async () => {
+  // NZR-6 rewrite (was: "ingests a document into the agent scope", the leak).
+  it("ingests a document into the uploading chat's private scope with chat and owner tags", async () => {
     const result = await ingestChatMedia(baseArgs);
     expect(result).toEqual({
       docId: 'chat-abc',
-      scope: 'ops-scope',
+      scope: CHAT_SCOPE,
       chunks: 7,
       deduped: false,
     });
     expect(ingestDocumentMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: 'ops-scope',
+        scope: CHAT_SCOPE,
         docTitle: 'report.pdf',
         format: 'pdf',
-        tags: ['chat', 'telegram', 'agent:ops'],
+        tags: ['chat', 'telegram', 'agent:ops', ownerTag('telegram-user-42')],
       }),
     );
+    expect(loadAgentMock).not.toHaveBeenCalled();
     expect(writeAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'knowledge_ingest', result: 'ok' }),
     );
@@ -136,15 +143,15 @@ describe('ingestChatMedia', () => {
     expect(ingestDocumentMock).not.toHaveBeenCalled();
   });
 
-  it('uses the shared scope when configured', async () => {
+  // NZR-6 rewrite (was: "uses the shared scope when configured", the leak).
+  it('ignores a shared-scope config and stays in the chat scope', async () => {
     getConfigMock.mockImplementation(async (_cat: string, key: string) =>
       key === 'chat_kb_ingest_scope' ? 'shared' : undefined,
     );
     await ingestChatMedia(baseArgs);
     expect(ingestDocumentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'shared' }),
+      expect.objectContaining({ scope: CHAT_SCOPE }),
     );
-    expect(loadAgentMock).not.toHaveBeenCalled();
   });
 
   it('returns null when the file exceeds the size cap', async () => {
@@ -175,7 +182,7 @@ describe('ingestChatMedia', () => {
       expect.objectContaining({
         format: 'audio',
         content: 'we shipped the thing',
-        tags: ['chat', 'telegram', 'agent:ops', 'video'],
+        tags: ['chat', 'telegram', 'agent:ops', ownerTag('telegram-user-42'), 'video'],
       }),
     );
   });
@@ -188,24 +195,25 @@ describe('ingestChatMedia', () => {
     );
   });
 
-  it('falls back to default scope when loadAgent fails', async () => {
+  // NZR-6 rewrite (was: "falls back to default scope when loadAgent fails", the leak).
+  it('never falls back to the default scope when loadAgent fails', async () => {
     loadAgentMock.mockRejectedValue(new Error('no agent'));
     await ingestChatMedia(baseArgs);
     expect(ingestDocumentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'default' }),
+      expect.objectContaining({ scope: CHAT_SCOPE }),
     );
   });
 });
 
 describe('buildKbConfirmation', () => {
-  it('mentions cross-surface availability for fresh ingests', () => {
+  // NZR-6 rewrite (was: "mentions cross-surface availability", a false promise).
+  it('says the file is available in this chat', () => {
     const text = buildKbConfirmation(
-      { docId: 'chat-x', scope: 'default', chunks: 3, deduped: false },
+      { docId: 'chat-x', scope: CHAT_SCOPE, chunks: 3, deduped: false },
       'deck.pptx',
     );
-    expect(text).toContain('deck.pptx');
-    expect(text).toContain('3 chunks');
-    expect(text).toContain('Slack');
+    expect(text).toBe('📚 Indexed deck.pptx (3 chunks). Ask me about it in this chat.');
+    expect(text).not.toContain('Slack');
   });
 
   it('says already-indexed for dedups', () => {

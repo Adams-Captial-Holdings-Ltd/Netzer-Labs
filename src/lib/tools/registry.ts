@@ -24,6 +24,11 @@ export interface ToolContext {
   turnId?: string;
   /** Speaker id if known (Slack user / Telegram chat); used for audit attribution. */
   userId?: string;
+  /**
+   * Dashboard only: a linked token's own `dashboard:<tokenHash>`, the uploader
+   * of chat files it added before it was linked (NZR-6). Same chat only.
+   */
+  tokenUserId?: string;
   /** Surface this turn came from — lets tools tailor side effects. */
   surface?: 'telegram' | 'slack' | 'dashboard' | 'system';
   /**

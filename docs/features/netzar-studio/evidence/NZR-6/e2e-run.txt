@@ -1,0 +1,43 @@
+  GET /health -> 200
+PASS health
+  POST /api/tokens -> 201
+  POST /api/tokens -> 201
+  POST /api/tokens -> 201
+  GET /api/vectors -> 200
+PASS viewer lists own chat files by agentId+chatId (200)
+  GET /api/vectors -> 200
+PASS a second viewer of the same chat id derives a different scope (200)
+  POST /api/vectors/search -> 400
+PASS viewer searches own chat scope (400 search_failed after the gate: no embeddings locally)
+  GET /api/knowledge/quarantine -> 200
+PASS owner lists the quarantine (200)
+  GET /api/vectors -> 200
+PASS owner reads chat_quarantine through the override (200)
+  GET /api/vectors -> 403
+PASS viewer GET /api/vectors raw chat scope is 403 forbidden_scope (403)
+  GET /api/vectors -> 403
+PASS viewer GET /api/vectors raw chat scope is 403 forbidden_scope (403)
+  POST /api/vectors/search -> 403
+PASS viewer POST /api/vectors/search raw chat scope is 403 forbidden_scope (403)
+  GET /api/vectors -> 403
+PASS operator GET /api/vectors raw chat scope is 403 forbidden_scope (403)
+  GET /api/vectors -> 403
+PASS operator GET /api/vectors raw chat scope is 403 forbidden_scope (403)
+  POST /api/vectors/search -> 403
+PASS operator POST /api/vectors/search raw chat scope is 403 forbidden_scope (403)
+  GET /api/vectors -> 400
+PASS agentId without chatId is 400 invalid_scope (400)
+  GET /api/knowledge/quarantine -> 403
+PASS viewer quarantine list is 403 knowledge:private:read (403)
+  POST /api/ingest -> 403
+PASS even the owner cannot ingest into a chat_ scope (403)
+  POST /api/ingest/stream -> 200
+PASS ingest/stream refuses an uploads/chat/ key (200)
+  POST /api/knowledge/quarantine/default__nzr6-e2e-none/reassign -> 404
+PASS reassigning a doc not in quarantine is 404 (404)
+  GET /api/audit -> 200
+PASS session_read_override(knowledge) row written (1 rows)
+  DELETE /api/tokens/83e5e074403f07ed -> 200
+  DELETE /api/tokens/befbb737b2c4c207 -> 200
+  DELETE /api/tokens/50da1c0a61acee09 -> 200
+SUMMARY: 18/18 passed

@@ -171,6 +171,21 @@ describe('s3_vectors_search scope containment', () => {
     expect(out.text).toContain('agent:ops 1/1');
   });
 
+  it('F5-11 refuses an agent knowledgeScope in the reserved chat_ namespace', async () => {
+    for (const knowledgeScope of ['chat_abc', 'chat:abc']) {
+      loadAgentMock.mockResolvedValue({ knowledgeScope });
+      const search = await tools.invoke('s3_vectors_search', { query: 'q' }, ctx);
+      expect(search.isError).toBe(true);
+      expect(search.text).toContain('invalid knowledge scope');
+      const ingest = await tools.invoke('ingest_document', { content: 'x' }, ctx);
+      expect(ingest.isError).toBe(true);
+      expect(ingest.text).toContain('invalid knowledge scope');
+    }
+    expect(searchMock).not.toHaveBeenCalled();
+    expect(embedOneMock).not.toHaveBeenCalled();
+    expect(ingestDocumentMock).not.toHaveBeenCalled();
+  });
+
   it('states the filters in force rather than guessing a cause when empty', async () => {
     const out = await tools.invoke('s3_vectors_search', { query: 'q' }, ctx);
     expect(out.text).toContain('research-corpus');

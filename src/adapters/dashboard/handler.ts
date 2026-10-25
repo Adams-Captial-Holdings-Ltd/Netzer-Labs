@@ -35,6 +35,7 @@ import {
   TEMPLATED_PROFILES,
   isCapability,
   isTemplatedProfileId,
+  legacyRoleForCapabilities,
   resolveCapabilities,
   type Capability,
   type CustomProfile,
@@ -110,7 +111,23 @@ import {
 import { listMemoriesForChat, listMemoriesForAgent } from '../../lib/state/memories-repo.js';
 import { ingestDocument, removeDocument, detectFormat, type IngestFormat } from '../../lib/vectors/ingest.js';
 import {
+  canReadScope,
+  scopeHash,
+  isChatScope,
+  chatKnowledgeScope,
+  ownerTag,
+  QUARANTINE_SCOPE,
+} from '../../lib/vectors/scope-access.js';
+import {
   listDocuments,
+  iterateRows,
+  readDocumentRows,
+  readDocument,
+  claimDocument,
+  releaseDocumentClaim,
+  putDocument,
+  deleteDocument,
+  type VectorRow,
   search as vectorSearch,
   presignUploadUrl,
   presignChatUploadUrl,
@@ -180,6 +197,15 @@ import {
   setConfig,
   getConfigCategory,
 } from '../../lib/state/runtime-config-repo.js';
+import {
+  CONFIG_POLICY,
+  SECRET_CONFIG_CATEGORIES,
+  carriesMaskedSecret,
+  configNameSchema,
+  maskConfigValue,
+  maskConfigValues,
+  maskReason,
+} from '../../lib/state/config-policy.js';
 import { getEffectiveCostCap } from '../../lib/state/cost-cap-repo.js';
 import { assembleStatusData, type AlarmRow } from '../status/data.js';
 import { checkForUpdates } from '../../lib/updates/discovery.js';
@@ -315,6 +341,17 @@ function personOf(c: DashboardCtx): string | undefined {
 }
 
 /**
+ * NZR-6: a token linked to a person uploaded chat files as `dashboard:<tokenHash>`
+ * before the link. The turn carries that identity so search still reaches them,
+ * the knowledge twin of ownsConversation's tokenHash half. Magic-link logins
+ * always uploaded as the person, so they carry none.
+ */
+function tokenTurnIdentity(c: DashboardCtx): { tokenUserId?: string } {
+  const p = getPrincipal(c);
+  return p?.linkedUserId && !p.userId ? { tokenUserId: `dashboard:${p.tokenHash}` } : {};
+}
+
+/**
  * Who a conversation the caller starts belongs to, and whether it lasts: a
  * person's is durable, a principal with no person's expires (decision 1). What
  * appendTurns stamps, and what a slash command that creates one stamps (F2).
@@ -444,7 +481,8 @@ export function requiredRole(method: string, subPath: string): TokenRole {
   // dead-ended a custom profile that holds security:write but not the admin
   // template, which is exactly the principal the UI shows the control to.
   if (subPath.startsWith('/kill-switches') && method !== 'GET') return 'viewer';
-  // Runtime config: reads stay viewer/operator. The COST category write (the
+  // Runtime config: reads pass this gate and are checked in-route by
+  // configAccess (category policy, NZR-43). The COST category write (the
   // daily cost-watch toggle) is operator-tier and is gated on the config:write
   // CAPABILITY inside the route, so the legacy role gate is relaxed to viewer for
   // ONLY the operator-tier cost-watch toggle (the config:write check is then the
@@ -454,6 +492,13 @@ export function requiredRole(method: string, subPath: string): TokenRole {
   // every other /config/cost/* write still requires admin via the rule below.
   if (subPath === '/config/cost/watch_enabled' && method !== 'GET') return 'viewer';
   if (subPath.startsWith('/config') && method !== 'GET') return 'admin';
+  // NZR-5: the Knowledge tab's retrieval/answer tests are reads (vectors:read)
+  // and the staging upload URL is agents:write; each route's capability check
+  // plus scopeAccess is the single gate, so the legacy POST=operator rank is
+  // relaxed for exactly these three paths.
+  if (method === 'POST' && (subPath === '/vectors/search' || subPath === '/vectors/answer' || subPath === '/vectors/upload-url')) {
+    return 'viewer';
+  }
   // Irreversible GDPR erasure is admin-only; the export (GET) stays operator.
   if (subPath.startsWith('/export') && method === 'DELETE') return 'admin';
   // Jarvis read-only co-pilot — viewer can use voice + read the manifest. The
@@ -666,6 +711,9 @@ function safeDashboardChatId(input: string | undefined): string {
   return `dashboard:${sanitized}`;
 }
 
+/** Any chat id the send route can produce: safeDashboardChatId passes a prefixed id through at any length. */
+const validChatId = (v: unknown): v is string => typeof v === 'string' && v.length >= 1;
+
 /**
  * Replay only stored attachments that can become model blocks. Audio, voice
  * and video yield no block because their words are already in the stored message text;
@@ -822,7 +870,7 @@ async function readCustomProfile(profileId: string): Promise<CustomProfile | nul
  * token resolves without a read. Unknown / unreadable custom profile => empty set
  * (fail closed). Returns the resolved profileId + caps set.
  */
-async function capabilitiesForPrincipal(
+export async function capabilitiesForPrincipal(
   p: TokenPrincipal,
 ): Promise<{ profileId: string; caps: Set<Capability> }> {
   const profileId = p.profileId ?? profileIdForRole(p.role);
@@ -872,6 +920,109 @@ async function hasCapability(c: DashboardCtx, need: Capability): Promise<boolean
   if (!p) return false;
   const { caps } = await capabilitiesForPrincipal(p);
   return caps.has(need);
+}
+
+/**
+ * NZR-5 scope gate for the knowledge routes, run after the route's own
+ * capability check and before any store, embedding or model call. A missing
+ * scope is 'default'; a malformed one (not a string, empty, >128 chars) is a 400
+ * with no audit row. A scope the caller may not read (private and unknown look
+ * identical) is a 403 plus an always-audited row carrying a scope hash only. A
+ * failing capability lookup refuses (fail closed).
+ *
+ * NZR-6 chat scopes: `chat` ({agentId, chatId}) derives the caller's OWN chat
+ * scope from their identity (chat:read), so nobody can name another user's. A
+ * raw chat_* name is admin-only (knowledge:private:read + security:write) and
+ * read only after an awaited override row; `write` routes refuse it to everyone.
+ */
+async function scopeAccess(
+  c: Context<DashboardEnv>,
+  rawScope: unknown,
+  route: string,
+  opts: { chat?: { agentId?: unknown; chatId?: unknown }; write?: boolean } = {},
+): Promise<{ ok: true; scope: string } | { ok: false; res: Response }> {
+  const chatMode = opts.chat !== undefined && (opts.chat.agentId !== undefined || opts.chat.chatId !== undefined);
+  const validName = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 128;
+  if (!chatMode && (rawScope === undefined || rawScope === null)) return { ok: true, scope: 'default' };
+  if (chatMode ? rawScope != null || !validName(opts.chat!.agentId) || !validChatId(opts.chat!.chatId) : !validName(rawScope)) {
+    return { ok: false, res: c.json({ error: 'invalid_scope' }, 400) };
+  }
+  let caps: ReadonlySet<Capability> = new Set();
+  try {
+    const p = getPrincipal(c);
+    if (p) caps = (await capabilitiesForPrincipal(p)).caps;
+  } catch {
+    caps = new Set();
+  }
+  if (chatMode) {
+    const scope = chatKnowledgeScope(opts.chat!.agentId as string, opts.chat!.chatId as string, dashboardIdentity(c));
+    if (caps.has('chat:read')) return { ok: true, scope };
+    return scopeDenied(c, scope, route);
+  }
+  const scope = rawScope as string;
+  if (isChatScope(scope)) {
+    if (opts.write || !caps.has('knowledge:private:read') || !caps.has('security:write')) return scopeDenied(c, scope, route);
+    if (!(await auditedOverride(c, 'knowledge'))) return { ok: false, res: c.json(OVERRIDE_UNAUDITED, 500) };
+    return { ok: true, scope };
+  }
+  if (canReadScope(caps, scope)) return { ok: true, scope };
+  return scopeDenied(c, scope, route);
+}
+
+function scopeDenied(c: Context<DashboardEnv>, rawScope: string, route: string): { ok: false; res: Response } {
+  // Fire-and-forget; a lost row cannot turn the refusal into a read.
+  void writeAudit({
+    action: 'knowledge_scope_denied',
+    surface: 'dashboard',
+    result: 'blocked',
+    userId: dashboardIdentity(c),
+    detail: { route, scopeHash: scopeHash(rawScope), reason: 'private_scope', event: 'security.scope_denied' },
+  })?.catch(() => {});
+  return { ok: false, res: c.json({ error: 'forbidden_scope' }, 403) };
+}
+
+/**
+ * NZR-43 gate for the generic /config* routes, run before any store call.
+ * Secret or unknown category → refused for everyone; a read also needs the
+ * category's capability (CONFIG_POLICY). Writes keep the legacy admin gate in
+ * requiredRole. Every refusal is the same 403 body (no oracle for which
+ * categories exist) and an always-audited row carrying names only. A malformed
+ * or oversized name is a 400 with no audit row. Returns the refusal response,
+ * or null when allowed.
+ */
+async function configAccess(
+  c: Context<DashboardEnv>,
+  category: string,
+  key: string | undefined,
+  mode: 'read' | 'write',
+): Promise<Response | null> {
+  if (!configNameSchema.safeParse(category).success || (key !== undefined && !configNameSchema.safeParse(key).success)) {
+    return c.json({ error: 'invalid_config_param' }, 400);
+  }
+  const policy = CONFIG_POLICY.get(category);
+  const reason = SECRET_CONFIG_CATEGORIES.has(category)
+    ? 'secret_category'
+    : !policy
+      ? 'unknown_category'
+      : mode === 'read' && !(await hasCapability(c, policy.read))
+        ? 'missing_capability'
+        : null;
+  if (!reason) return null;
+  // Fire-and-forget: a refusal returns nothing, so a lost row cannot hide a leak.
+  void writeAudit({
+    action: 'config_access_denied',
+    surface: 'dashboard',
+    result: 'blocked',
+    userId: dashboardIdentity(c),
+    detail: {
+      category,
+      ...(key !== undefined ? { key } : {}),
+      method: c.req.method,
+      reason,
+      event: 'security.config_denied',
+    },
+  });
+  return c.json({ error: 'forbidden_category' }, 403);
 }
 
 // ── Users + magic-link: delegate to the reviewed users-repo / magic-link libs ──
@@ -939,33 +1090,6 @@ async function mintSessionToken(user: UserProfile): Promise<string> {
 }
 
 /**
- * The legacy rungs, ranked, each pinned to the TEMPLATED capability set that
- * DEFINES it. The bridge stays in lockstep with the source of truth: the exact
- * caps a legacy role gates are exactly the templated profile's caps.
- *
- * A profile EARNS a legacy role only when it holds that role's ENTIRE templated
- * capability set (templated caps ⊆ profile caps — a SUBSET/superset rule, not a
- * single-capability touch). This never over-grants: a custom profile that holds
- * one admin-tier capability (e.g. members:write) but NOT the full admin template
- * is NOT admin; it falls through to the highest rung it fully covers, else viewer.
- */
-const LEGACY_ROLE_TEMPLATES: ReadonlyArray<{
-  role: TokenRole;
-  caps: readonly Capability[];
-}> = [
-  // Highest first: pick the most privileged role fully covered, never wider.
-  { role: 'admin', caps: TEMPLATED_PROFILES.admin },
-  { role: 'operator', caps: TEMPLATED_PROFILES.operator },
-  { role: 'viewer', caps: TEMPLATED_PROFILES.viewer },
-];
-
-/** True when every capability in `template` is present in `held` (template ⊆ held). */
-function holdsAll(held: readonly Capability[], template: readonly Capability[]): boolean {
-  const heldSet = new Set(held);
-  return template.every((cap) => heldSet.has(cap));
-}
-
-/**
  * Map a profileId to the legacy TokenRole the session row stores, derived
  * FAITHFULLY from the profile's effective capabilities (the permissions taxonomy
  * is the source of truth) rather than collapsing every non-template id to viewer.
@@ -992,10 +1116,7 @@ async function roleForProfileId(profileId: string): Promise<TokenRole> {
   const caps = isTemplatedProfileId(profileId)
     ? resolveCapabilities(profileId)
     : resolveCapabilities(profileId, await readCustomProfile(profileId));
-  for (const { role, caps: template } of LEGACY_ROLE_TEMPLATES) {
-    if (holdsAll(caps, template)) return role;
-  }
-  return 'viewer';
+  return legacyRoleForCapabilities(caps);
 }
 
 /**
@@ -2361,6 +2482,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
                 fileName,
                 mimeType: staged[index]!.type,
                 addToKnowledge: a.addToKnowledge === true,
+                uploaderId: dashboardIdentity(c),
                 bytes,
               },
               (stage) => {
@@ -2486,6 +2608,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // well as there because a skipped feature is invisible at the call
           // site that skips it.
           userId: dashboardIdentity(c),
+          ...tokenTurnIdentity(c),
           // Per-seat spend attribution: the users-table id of the signed-in
           // principal (magic-link session). Token/break-glass principals have
           // none and attribute nothing.
@@ -2863,6 +2986,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         // missing primitive as the streamed route above, same note at the
         // emission site in `src/lib/tools/mission-tools.ts`.
         userId: dashboardIdentity(c),
+        ...tokenTurnIdentity(c),
         ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
       });
       if (persist && !result.blocked) {
@@ -2935,22 +3059,29 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     });
   });
 
-  // Runtime config (claudeclaw-runtime-config). Reads are operator-visible
-  // (default GET role), writes are admin-gated in requiredRole above. Values
-  // are plain tunables (cost cap, idle timeout) so they are safe to echo back.
+  // Runtime config (claudeclaw-runtime-config). The table also holds secrets
+  // (oauth, oauth_state, mcp), so every route runs configAccess first (NZR-43:
+  // category allowlist, default deny) and masks secret-shaped values on the way
+  // out. Writes are additionally admin-gated in requiredRole above.
   router.get('/config', async (c) => {
     const category = c.req.query('category');
     if (category) {
-      const values = await getConfigCategory(category);
+      const denied = await configAccess(c, category, undefined, 'read');
+      if (denied) return denied;
+      const values = maskConfigValues(await getConfigCategory(category));
       return c.json({ category, values });
     }
     // No category filter: aggregate the known runtime-config categories. New
     // categories get added here as later increments home more keys in the table.
     const categories = ['cost', 'sessions', 'rate_limits'];
+    for (const cat of categories) {
+      const denied = await configAccess(c, cat, undefined, 'read');
+      if (denied) return denied;
+    }
     const result: Record<string, Record<string, string>> = {};
     await Promise.all(
       categories.map(async (cat) => {
-        result[cat] = await getConfigCategory(cat);
+        result[cat] = maskConfigValues(await getConfigCategory(cat));
       }),
     );
     return c.json({ categories: result });
@@ -2958,16 +3089,18 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
 
   router.get('/config/:category', async (c) => {
     const category = c.req.param('category');
-    const values = await getConfigCategory(category);
+    const denied = await configAccess(c, category, undefined, 'read');
+    if (denied) return denied;
+    const values = maskConfigValues(await getConfigCategory(category));
     return c.json({ category, values });
   });
 
-  // Single-key read. Reads stay viewer/operator (default GET role); the
-  // matching POST below is admin-gated in requiredRole.
   router.get('/config/:category/:key', async (c) => {
     const category = c.req.param('category');
     const key = c.req.param('key');
-    const value = await getConfig(category, key);
+    const denied = await configAccess(c, category, key, 'read');
+    if (denied) return denied;
+    const value = maskConfigValue(key, await getConfig(category, key));
     return c.json({ category, key, value });
   });
 
@@ -2985,6 +3118,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     // (requiredRole already forces admin for any cost key other than
     // watch_enabled; this is the in-route allowlist that makes the intent
     // explicit and rejects even an admin from cap/bookkeeping writes here.)
+    const denied = await configAccess(c, category, key, 'write');
+    if (denied) return denied;
     if (category === 'cost') {
       // Two cost keys are writable via this generic endpoint:
       //   - watch_enabled        the cost-watch toggle (config:write / operator)
@@ -3016,15 +3151,21 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!body || typeof body.value !== 'string') {
       return c.json({ error: 'missing_value' }, 400);
     }
+    if (carriesMaskedSecret(key, body.value)) {
+      return c.json({ error: 'masked_value_rejected' }, 400);
+    }
     const principal = getPrincipal(c);
     const updatedBy = principal?.label ?? 'dashboard';
     const before = await getConfig(category, key);
     await setConfig(category, key, body.value, { updatedBy });
+    // Store the real value; everything that leaves (log, audit, echo) is masked.
+    const masked = maskConfigValue(key, body.value);
+    const reason = maskReason(body.reason, body.value, before);
     logger.warn(
-      { category, key, value: body.value, reason: body.reason, updatedBy },
+      { category, key, value: masked, reason, updatedBy },
       'runtime config set',
     );
-    // Durable audit: which key changed, by whom, old -> new value.
+    // Durable audit: which key changed, by whom, old -> new value (masked).
     void writeAudit({
       action: 'config_updated',
       surface: 'dashboard',
@@ -3034,12 +3175,12 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       detail: {
         category,
         key,
-        oldValue: before ?? null,
-        newValue: body.value,
-        ...(body.reason ? { reason: body.reason } : {}),
+        oldValue: maskConfigValue(key, before) ?? null,
+        newValue: masked,
+        ...(reason ? { reason } : {}),
       },
     });
-    return c.json({ ok: true, category, key, value: body.value });
+    return c.json({ ok: true, category, key, value: masked });
   });
 
   router.get('/addons', async (c) => {
@@ -3082,7 +3223,11 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'vectors:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
     }
-    const scope = c.req.query('scope') ?? 'default';
+    const access = await scopeAccess(c, c.req.query('scope'), 'GET /vectors', {
+      chat: { agentId: c.req.query('agentId'), chatId: c.req.query('chatId') },
+    });
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const docs = await listDocuments(scope);
     return c.json({ scope, count: docs.length, docs });
   });
@@ -3108,6 +3253,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!body || (!body.content && !body.contentBase64)) {
       return c.json({ error: 'missing_content_or_contentBase64' }, 400);
     }
+    const access = await scopeAccess(c, body.scope, 'POST /ingest', { write: true });
+    if (!access.ok) return access.res;
     try {
       const result = await ingestDocument({
         ...(body.content ? { content: body.content } : {}),
@@ -3172,8 +3319,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
   // bypassing the CloudFront WAF's 8KB request-body cap (which blocks PDFs sent
   // as base64 JSON). It then calls /ingest/stream with the returned key.
   router.post('/vectors/upload-url', async (c) => {
-    if (!(await hasCapability(c, 'vectors:read'))) {
-      return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
+    // Minting a staging PUT URL is a write (NZR-5); viewers only read.
+    if (!(await hasCapability(c, 'agents:write'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
     }
     const body = await c.req.json<{ filename?: string }>().catch(() => null);
     const key = uploadKeyFor(body?.filename ?? 'upload', randomUUID());
@@ -3215,6 +3363,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!body || (!body.content && !body.contentBase64 && !body.s3Key)) {
       return c.json({ error: 'missing_content_contentBase64_or_s3Key' }, 400);
     }
+    // Before the stream: once it starts the status is already 200.
+    const access = await scopeAccess(c, body.scope, 'POST /ingest/stream', { write: true });
+    if (!access.ok) return access.res;
     // Size ceilings for staged uploads. Binary docs are loaded fully into the
     // task's memory and base64'd (~1.33x), so we cap them well under the
     // Fargate task memory. Audio is streamed to Transcribe, not held in
@@ -3244,7 +3395,8 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           const fmt: IngestFormat = body.format ?? detectFormat(body.docTitle ?? body.source);
           // Pull the bytes from the staging upload when an s3Key is given.
           if (body.s3Key) {
-            if (!isUploadKey(body.s3Key)) {
+            // NZR-6: chat staging objects belong to one sender's turn, never to knowledge ingest.
+            if (!isUploadKey(body.s3Key) || body.s3Key.startsWith('uploads/chat/')) {
               send({ stage: 'error', detail: 'invalid upload key' });
               return;
             }
@@ -3332,10 +3484,16 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'vectors:read'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'vectors:read' }, 403);
     }
-    const body = await c.req.json<{ query?: string; scope?: string; topK?: number }>().catch(() => null);
+    const body = await c.req
+      .json<{ query?: string; scope?: string; agentId?: string; chatId?: string; topK?: number }>()
+      .catch(() => null);
+    const access = await scopeAccess(c, body?.scope, 'POST /vectors/search', {
+      chat: { agentId: body?.agentId, chatId: body?.chatId },
+    });
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const query = body?.query?.trim();
     if (!query) return c.json({ error: 'missing_query' }, 400);
-    const scope = body?.scope ?? 'default';
     try {
       const queryEmbedding = await embedOne(query);
       const hits = await vectorSearch({ scope, queryEmbedding, topK: Math.min(body?.topK ?? 5, 20) });
@@ -3373,17 +3531,25 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       .json<{
         query?: string;
         scope?: string;
+        agentId?: string;
+        chatId?: string;
         modelId?: string;
         topK?: number;
         history?: Array<{ role: 'user' | 'assistant'; text: string }>;
       }>()
       .catch(() => null);
+    // Before validation, the kill switch and the cost cap: a refused scope
+    // costs nothing and learns nothing about spend.
+    const access = await scopeAccess(c, body?.scope, 'POST /vectors/answer', {
+      chat: { agentId: body?.agentId, chatId: body?.chatId },
+    });
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const query = body?.query?.trim();
     const modelId = body?.modelId ?? '';
     if (!query) return c.json({ error: 'missing_query' }, 400);
     const model = listPlaygroundModels(process.env).find((m) => m.id === modelId);
     if (!model) return c.json({ error: 'unknown_model' }, 400);
-    const scope = body?.scope ?? 'default';
     const topK = Math.min(body?.topK ?? 5, 20);
 
     // Same safety gates as the Playground — this spends Bedrock money.
@@ -3525,7 +3691,9 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     if (!(await hasCapability(c, 'agents:write'))) {
       return c.json({ error: 'forbidden', requiredCapability: 'agents:write' }, 403);
     }
-    const scope = c.req.param('scope');
+    const access = await scopeAccess(c, c.req.param('scope'), 'DELETE /vectors/:scope/:docId');
+    if (!access.ok) return access.res;
+    const { scope } = access;
     const docId = c.req.param('docId');
     await removeDocument(scope, docId);
     void writeAudit({
@@ -3536,6 +3704,113 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
       result: 'ok',
     });
     return c.json({ ok: true, scope, docId });
+  });
+
+  // NZR-6 (Q83): legacy chat files of unknown uploader, quarantined by
+  // scripts/nzr6-quarantine-chat-docs.ts. Admins list them, then reassign each
+  // to a dashboard chat or delete it (DELETE /vectors/chat_quarantine/:docId).
+  router.get('/knowledge/quarantine', async (c) => {
+    if (!(await hasCapability(c, 'knowledge:private:read'))) {
+      return c.json({ error: 'forbidden', requiredCapability: 'knowledge:private:read' }, 403);
+    }
+    const byDoc = new Map<string, { docId: string; title: string | null; agentId: string | null; surface: string | null; fromScope: string; uploadedAt: string; chunks: number; chars: number; suggestedChatId: string | null }>();
+    for await (const row of iterateRows(QUARANTINE_SCOPE)) {
+      const m = row.metadata;
+      const d = byDoc.get(m.docId);
+      if (d) {
+        d.chunks += 1;
+        d.chars += row.text.length;
+        if (m.uploadedAt && m.uploadedAt < d.uploadedAt) d.uploadedAt = m.uploadedAt;
+        continue;
+      }
+      const tags = m.tags ?? [];
+      const surface = tags.find((t) => t === 'telegram' || t === 'slack' || t === 'dashboard') ?? null;
+      // Raw key <surface>/<chatId>/YYYY/MM/DD/<file> names the FIRST uploader's chat only: a hint, not an owner.
+      const fromSource = /^s3:\/\/[^/]+\/(?:telegram|slack|dashboard)\/(.+)\/\d{4}\/\d{2}\/\d{2}\/[^/]+$/.exec(m.source ?? '');
+      byDoc.set(m.docId, {
+        docId: m.docId,
+        title: m.docTitle ?? null,
+        agentId: tags.find((t) => t.startsWith('agent:'))?.slice('agent:'.length) ?? null,
+        surface,
+        fromScope: tags.find((t) => t.startsWith('from:'))?.slice('from:'.length) ?? m.docId.split('__')[0]!,
+        uploadedAt: m.uploadedAt ?? '',
+        chunks: 1,
+        chars: row.text.length,
+        suggestedChatId: fromSource?.[1] ?? null,
+      });
+    }
+    const docs = [...byDoc.values()].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+    return c.json({ count: docs.length, docs });
+  });
+
+  router.post('/knowledge/quarantine/:docId/reassign', async (c) => {
+    for (const need of ['knowledge:private:read', 'security:write'] as const) {
+      if (!(await hasCapability(c, need))) return c.json({ error: 'forbidden', requiredCapability: need }, 403);
+    }
+    const body = await c.req.json<{ agentId?: unknown; chatId?: unknown }>().catch(() => null);
+    const { agentId, chatId } = body ?? {};
+    const valid = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 256;
+    if (!valid(agentId) || !validChatId(chatId)) return c.json({ error: 'invalid_body' }, 400);
+    const qDocId = c.req.param('docId');
+    // Claim before reading: two admins reassigning the same doc to different chats
+    // would otherwise both copy it (the target ETag check cannot see the other chat).
+    // shortcut: a crash mid-move leaves the claim, so reassign answers 409 until an admin
+    // deletes the S3 object claims/chat_quarantine/<docId>.jsonl; add a TTL if that recurs.
+    if (!(await claimDocument(QUARANTINE_SCOPE, qDocId))) return c.json({ error: 'reassign_in_progress' }, 409);
+    try {
+      const rows = await readDocumentRows(QUARANTINE_SCOPE, qDocId);
+      const sep = qDocId.indexOf('__');
+      if (rows.length === 0 || sep < 1) return c.json({ error: 'not_found' }, 404);
+      const session = await getSession(agentId, chatId);
+      const owner = session?.userId;
+      // Person owners only: chat search scopes by dashboard:user:<person>, so a legacy
+      // dashboard:<tokenHash> owner would get an unreachable scope. Migrate those first.
+      if (typeof owner !== 'string' || !/^dashboard:user:.+/.test(owner)) return c.json({ error: 'no_dashboard_owner' }, 409);
+      const docId = qDocId.slice(sep + 2);
+      const target = chatKnowledgeScope(agentId, chatId, owner);
+      try {
+        await writeAuditOrThrow({
+          action: 'knowledge_reassigned',
+          surface: 'dashboard',
+          agentId,
+          chatId,
+          userId: dashboardIdentity(c),
+          detail: { docId, fromScopeHash: scopeHash(QUARANTINE_SCOPE), toScopeHash: scopeHash(target), chunks: rows.length },
+          result: 'ok',
+        });
+      } catch (err) {
+        logger.error({ errMessage: err instanceof Error ? err.message : String(err) }, 'quarantine reassign refused: audit not written');
+        return c.json(OVERRIDE_UNAUDITED, 500);
+      }
+      const moved: VectorRow[] = rows.map((r) => ({
+        ...r,
+        metadata: {
+          ...r.metadata,
+          docId,
+          tags: [...(r.metadata.tags ?? []).filter((t) => !t.startsWith('from:') && !t.startsWith('owner:')), ownerTag(owner)],
+        },
+      }));
+      // The owner may have re-added the file since the fix, and either copy can be
+      // partial (ingest keeps what embedded). Merged by chunk; existing wins. The
+      // write is conditional on the ETag read, so a chat upload landing in between
+      // makes us re-read and merge again instead of overwriting it.
+      let written = false;
+      for (let attempt = 0; attempt < 3 && !written; attempt++) {
+        const { rows: existing, etag } = await readDocument(target, docId);
+        const have = new Set(existing.map((r) => r.metadata.chunkIndex));
+        const merged = [...existing, ...moved.filter((r) => !have.has(r.metadata.chunkIndex))]
+          .sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex);
+        written = await putDocument(target, docId, merged, etag);
+      }
+      // Still racing: keep the quarantine copy so nothing is lost; the admin retries.
+      if (!written) return c.json({ error: 'reassign_conflict' }, 409);
+      // Copy first: a failed delete leaves a duplicate in quarantine, never a loss.
+      await deleteDocument(QUARANTINE_SCOPE, qDocId);
+      return c.json({ ok: true, docId, agentId, chatId });
+    } finally {
+      await releaseDocumentClaim(QUARANTINE_SCOPE, qDocId).catch((err: unknown) =>
+        logger.warn({ errMessage: err instanceof Error ? err.message : String(err) }, 'quarantine reassign: claim not released'));
+    }
   });
 
   router.get('/scheduled', async (c) => {

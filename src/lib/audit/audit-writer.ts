@@ -136,6 +136,16 @@ export interface AuditEvent {
     | 'guardrail_intervention'
     // Increment 2: runtime-config bridge writes.
     | 'config_updated'
+    // NZR-43: a refused /api/config* request (secret, unknown or out-of-tier
+    // category). Names only, never a value. Always audited.
+    | 'config_access_denied'
+    // NZR-5: a refused knowledge scope (dashboard routes + Jarvis vectors).
+    // detail.scopeHash only, never the scope name. Always audited.
+    | 'knowledge_scope_denied'
+    // NZR-6: a legacy chat file moved into chat_quarantine, and an admin moving
+    // one from there into a chat owner's private scope. Awaited; hashes, no names.
+    | 'knowledge_quarantined'
+    | 'knowledge_reassigned'
     | 'cost_cap_updated'
     // Increment 4: alert recipient management (SNS email subscriptions).
     | 'alert_recipient_added'
@@ -246,6 +256,13 @@ const ALWAYS_AUDITED_ACTIONS: ReadonlySet<AuditEvent['action']> = new Set([
   'panic_repaired',
   'panic_force_released',
   'auth_failure',
+  // NZR-43: probing the config routes for secrets must not be hideable.
+  'config_access_denied',
+  // NZR-5: probing other agents' knowledge scopes must not be hideable.
+  'knowledge_scope_denied',
+  // NZR-6: moving chat files between scopes changes who can read them.
+  'knowledge_quarantined',
+  'knowledge_reassigned',
   'audit_suppressed',
   'jarvis_session_start',
   'jarvis_session_killed',

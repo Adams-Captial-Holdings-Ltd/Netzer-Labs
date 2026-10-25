@@ -1,0 +1,44 @@
+[
+ {
+  "scenario": "1",
+  "title": "T2 picks critic + free checks + step maid, not Greptile",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-41/uat-transcript.md#scenario-1"
+ },
+ {
+  "scenario": "2",
+  "title": "T1 and docs get free checks only",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-41/uat-transcript.md#scenario-2"
+ },
+ {
+  "scenario": "3",
+  "title": "T3 gets every layer and exactly one Greptile pass",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-41/uat-transcript.md#scenario-3"
+ },
+ {
+  "scenario": "4",
+  "title": "Third-party send needs a per-run yes",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-41/uat-transcript.md#scenario-4"
+ },
+ {
+  "scenario": "5",
+  "title": "Ledger warns at 35 and stops at 45",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-41/uat-transcript.md#scenario-5"
+ },
+ {
+  "scenario": "6",
+  "title": "One Greptile reserve per step",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-41/uat-transcript.md#scenario-6"
+ },
+ {
+  "scenario": "7",
+  "title": "A layer that cannot run is NOT RUN, never faked",
+  "result": "PASS",
+  "evidence": "docs/features/netzar-studio/evidence/NZR-41/uat-transcript.md#scenario-7"
+ }
+]

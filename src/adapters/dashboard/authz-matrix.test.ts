@@ -396,6 +396,13 @@ const ROUTES: RouteCase[] = [
     denyMayBeCoarse: true,
     run: (t) => call(buildIntegrationsRouter, '/api/integrations', '/mcp', 'PUT', t, { servers: [] }),
   },
+  // ── NZR-5: minting a staging-bucket PUT URL is a write (operator+). ─────────
+  {
+    name: 'Staging upload URL (POST /vectors/upload-url)',
+    cap: 'agents:write',
+    minTier: 'operator',
+    run: (t) => call(buildDashboardRouter, '/api', '/vectors/upload-url', 'POST', t, { filename: 'a.txt' }),
+  },
 ];
 
 describe('authorization matrix — dedicated routers', () => {
@@ -567,6 +574,48 @@ describe('authorization matrix — handler routes', () => {
     expect(op.status).toBe(403);
     const admin = await dash('/config/rate_limits/some_key', 'POST', 'admin', { value: '5' });
     expect(admin.status).not.toBe(403);
+  });
+
+  // NZR-43: config reads are gated by the in-route category policy, which
+  // answers every refusal with { error:'forbidden_category' } (no
+  // requiredCapability, so the body is asserted directly).
+  const CONFIG_READS: Array<{ name: string; path: string; minTier: Tier | null }> = [
+    { name: 'Runtime config read (GET /config/power) — security:read', path: '/config/power', minTier: 'admin' },
+    { name: 'Runtime config read (GET /config/oauth) — denied for every tier', path: '/config/oauth', minTier: null },
+    { name: 'Runtime config read (GET /config/profile) — dashboard:read', path: '/config/profile', minTier: 'viewer' },
+  ];
+  for (const route of CONFIG_READS) {
+    describe(route.name, () => {
+      for (const tier of ALL_TIERS) {
+        const allowed = route.minTier !== null && TIER_INDEX[tier] >= TIER_INDEX[route.minTier];
+        it(`${tier} is ${allowed ? 'ALLOWED' : 'DENIED'}`, async () => {
+          const res = await dash(route.path, 'GET', tier);
+          if (allowed) {
+            expect(res.status).toBe(200);
+          } else {
+            expect(res.status).toBe(403);
+            expect(await res.json()).toEqual({ error: 'forbidden_category' });
+          }
+        });
+      }
+    });
+  }
+
+  // NZR-5: an agent's private knowledge scope is admin tier
+  // (knowledge:private:read); every refusal is { error:'forbidden_scope' }.
+  describe('Knowledge private scope read (GET /vectors?scope=ops_private)', () => {
+    for (const tier of ALL_TIERS) {
+      const allowed = TIER_INDEX[tier] >= TIER_INDEX.admin;
+      it(`${tier} is ${allowed ? 'ALLOWED' : 'DENIED'}`, async () => {
+        const res = await dash('/vectors?scope=ops_private', 'GET', tier);
+        if (allowed) {
+          expect(res.status).toBe(200);
+        } else {
+          expect(res.status).toBe(403);
+          expect(await res.json()).toEqual({ error: 'forbidden_scope' });
+        }
+      });
+    }
   });
 });
 

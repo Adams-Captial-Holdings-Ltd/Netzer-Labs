@@ -1,0 +1,62 @@
+[
+ {
+  "scenario": "1",
+  "title": "The uploader's file goes to their chat scope and the agent uses it there",
+  "result": "PASS",
+  "evidence": "chat-kb-ingest.scope.test.ts F6-1; vector-tools.chat-scope.test.ts F6-6; chat-kb-ingest.test.ts 'says the file is available in this chat'"
+ },
+ {
+  "scenario": "2",
+  "title": "Config and agent settings cannot widen a chat upload",
+  "result": "PASS",
+  "evidence": "chat-kb-ingest.scope.test.ts F6-2, F6-3"
+ },
+ {
+  "scenario": "3",
+  "title": "No uploader identity means no ingest",
+  "result": "PASS",
+  "evidence": "chat-kb-ingest.scope.test.ts F6-10"
+ },
+ {
+  "scenario": "4",
+  "title": "Same file from two users is two private copies",
+  "result": "PASS",
+  "evidence": "chat-kb-ingest.scope.test.ts F6-4"
+ },
+ {
+  "scenario": "5",
+  "title": "Another user of the same agent gets nothing, on any surface",
+  "result": "PASS",
+  "evidence": "vector-tools.chat-scope.test.ts F6-5, F6-7, F6-11"
+ },
+ {
+  "scenario": "6",
+  "title": "Knowledge routes give a user their own chat files and nobody else's",
+  "result": "PASS",
+  "evidence": "evidence/NZR-6/uat-transcript.md S6 (live); vectors.scope.test.ts F6-8, F6-12"
+ },
+ {
+  "scenario": "7",
+  "title": "Admin access to a chat scope is an audited override",
+  "result": "PASS",
+  "evidence": "evidence/NZR-6/uat-transcript.md S7 (live); vectors.scope.test.ts F6-13"
+ },
+ {
+  "scenario": "8",
+  "title": "A staged chat upload cannot be pulled into knowledge by someone else",
+  "result": "PASS",
+  "evidence": "evidence/NZR-6/uat-transcript.md S8 (live); vectors.scope.test.ts F6-9"
+ },
+ {
+  "scenario": "9",
+  "title": "Legacy chat files are quarantined, audited, nothing lost",
+  "result": "PASS",
+  "evidence": "nzr6-quarantine-chat-docs.test.ts F6-14, 'keeps a doc in place when its audit write fails' (local-data run owner-gated, not done)"
+ },
+ {
+  "scenario": "10",
+  "title": "Admins get the reassign list and can reassign or delete",
+  "result": "PASS",
+  "evidence": "evidence/NZR-6/uat-transcript.md S10 (live); knowledge-quarantine.test.ts 4 named tests"
+ }
+]

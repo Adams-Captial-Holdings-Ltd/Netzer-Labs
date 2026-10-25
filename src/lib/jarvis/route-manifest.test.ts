@@ -189,6 +189,8 @@ describe('route-drift guard', () => {
       // usage:self:read is the seat-user floor tier -> viewer rung.
       'seats:read': 'admin',
       'usage:self:read': 'viewer',
+      // NZR-5: agent-private knowledge scopes (ADMIN_CAPS and up).
+      'knowledge:private:read': 'admin',
     };
     for (const r of ROUTE_TABLE) {
       const roleWrap = app.match(

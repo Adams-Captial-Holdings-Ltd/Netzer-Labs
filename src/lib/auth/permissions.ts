@@ -132,6 +132,9 @@ export const CAPABILITIES = [
   // org-admin tier.
   'usage:org:read',
   'usage:self:read',
+  // NZR-5: read/write agent-private and reserved knowledge scopes (anything but
+  // default/shared). Admin tier; grantable in custom profiles.
+  'knowledge:private:read',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -237,6 +240,7 @@ const ADMIN_CAPS: readonly Capability[] = [
   'security:write',
   'tokens:write',
   'members:write',
+  'knowledge:private:read',
   // NOTE: kill-switches:read is now VIEWER-tier (it backs the Overview summary
   // card), so it is already inherited here via ...OPERATOR_CAPS → ...VIEWER_CAPS.
   // The kill-switch TRIP mutation is what admin/owner gates (security:write).
@@ -315,6 +319,38 @@ export function profileIdForLegacyRole(
   role: 'viewer' | 'operator' | 'admin',
 ): TemplatedProfileId {
   return role;
+}
+
+/**
+ * Admin-tier caps added after the legacy bridge froze. They are excluded from
+ * the legacy-admin rung so a saved custom profile that held every earlier admin
+ * cap is not demoted (and stripped of legacy-admin routes like /tokens*).
+ */
+const POST_BRIDGE_ADMIN_CAPS: readonly Capability[] = ['knowledge:private:read'];
+
+const LEGACY_ROLE_TEMPLATES: ReadonlyArray<{
+  role: 'viewer' | 'operator' | 'admin';
+  caps: readonly Capability[];
+}> = [
+  // Highest first: pick the most privileged role fully covered, never wider.
+  { role: 'admin', caps: ADMIN_CAPS.filter((c) => !POST_BRIDGE_ADMIN_CAPS.includes(c)) },
+  { role: 'operator', caps: OPERATOR_CAPS },
+  { role: 'viewer', caps: VIEWER_CAPS },
+];
+
+/**
+ * The legacy TokenRole a capability set earns: the HIGHEST rung whose ENTIRE
+ * templated capability set is a subset of `caps`, else viewer. Never over-grants:
+ * one admin-tier cap without the full admin template is not admin.
+ */
+export function legacyRoleForCapabilities(
+  caps: readonly Capability[],
+): 'viewer' | 'operator' | 'admin' {
+  const held = new Set(caps);
+  for (const { role, caps: template } of LEGACY_ROLE_TEMPLATES) {
+    if (template.every((cap) => held.has(cap))) return role;
+  }
+  return 'viewer';
 }
 
 /**

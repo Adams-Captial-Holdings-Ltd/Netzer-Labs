@@ -216,4 +216,41 @@ describe('expanded always-audited set (C5c)', () => {
       expect(ddbSend).toHaveBeenCalledTimes(6);
     } finally { killSwitchState.active = false; }
   });
+
+  it('config_access_denied survives audit_log_disabled', async () => {
+    const { writeAudit } = await import('./audit-writer.js');
+    ddbSend.mockReset();
+    ddbSend.mockResolvedValue({});
+    killSwitchState.active = true;
+    try {
+      await writeAudit({
+        action: 'config_access_denied',
+        result: 'blocked',
+        detail: { category: 'oauth', key: 'slack_app_ops', method: 'GET', reason: 'secret_category' },
+      });
+      await flush();
+      // The row itself, not an audit_suppressed marker standing in for it.
+      const actions = (ddbSend.mock.calls as unknown as Array<[{ input: { Item: { action: string } } }]>)
+        .map(([cmd]) => cmd.input.Item.action);
+      expect(actions).toEqual(['config_access_denied']);
+    } finally { killSwitchState.active = false; }
+  });
+
+  it('knowledge_scope_denied survives audit_log_disabled', async () => {
+    const { writeAudit } = await import('./audit-writer.js');
+    ddbSend.mockReset();
+    ddbSend.mockResolvedValue({});
+    killSwitchState.active = true;
+    try {
+      await writeAudit({
+        action: 'knowledge_scope_denied' as Parameters<typeof writeAudit>[0]['action'],
+        result: 'blocked',
+        detail: { route: 'GET /vectors', scopeHash: '0123456789ab', reason: 'private_scope' },
+      });
+      await flush();
+      const actions = (ddbSend.mock.calls as unknown as Array<[{ input: { Item: { action: string } } }]>)
+        .map(([cmd]) => cmd.input.Item.action);
+      expect(actions).toEqual(['knowledge_scope_denied']);
+    } finally { killSwitchState.active = false; }
+  });
 });

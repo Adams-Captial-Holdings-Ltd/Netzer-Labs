@@ -263,6 +263,8 @@ export interface AgentTurnRequest {
   /** Optional speaker id. For Slack this is the Slack user id; for
    * Telegram the numeric chat id; for dashboard a passed-in label. */
   userId?: string;
+  /** Dashboard: a linked token's pre-link identity; see ToolContext.tokenUserId. */
+  tokenUserId?: string;
   /**
    * The users-table userId of the DASHBOARD principal driving this turn
    * (magic-link session), when there is one. Distinct from `userId`, which is
@@ -1497,6 +1499,7 @@ async function runAdmittedTurn(
         chatId: req.chatId,
         turnId,
         ...(req.userId ? { userId: req.userId } : {}),
+        ...(req.tokenUserId ? { tokenUserId: req.tokenUserId } : {}),
         ...(req.surface ? { surface: req.surface } : {}),
         ...(req.runId ? { runId: req.runId } : {}),
         ...(req.requestId ? { requestId: req.requestId } : {}),

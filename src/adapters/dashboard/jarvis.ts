@@ -70,7 +70,9 @@ import { emitJarvisMetric } from '../../observability/emf-jarvis.js';
 // through HTTP; a removed import is a compile error, R8).
 import { listAgents } from '../../lib/state/agents-repo.js';
 import { listKnownAgentsAsync, loadAgent } from '../../lib/config/agent-loader.js';
-import { computeAgentHealth, collectAcrossDays, conversationsVisibleTo, readConversationRows } from './handler.js';
+import { computeAgentHealth, collectAcrossDays, conversationsVisibleTo, readConversationRows, capabilitiesForPrincipal } from './handler.js';
+import { canReadScope, isChatScope, scopeHash } from '../../lib/vectors/scope-access.js';
+import type { Capability } from '../../lib/auth/permissions.js';
 import { getDailyCostUsd, getUsageByDay, recordUsage, JARVIS_USAGE_AGENT, SpendIndeterminateError } from '../../lib/usage/token-tracker.js';
 import {
   isKillSwitchActive,
@@ -1094,6 +1096,23 @@ export async function executeQueryTool(
   // — not the manifest, not router middleware.
   const auth = authorizeRead(principal, resource, params);
   if (!auth.ok) return { ok: false, code: auth.code, param: auth.param };
+  // NZR-5: the vectors resource is held to the dashboard's scope rule.
+  if (auth.resource === 'vectors') {
+    // Model-supplied: coerce, so a non-string is refused, never thrown on.
+    const scope = String(params.scope ?? 'default');
+    const caps = await capabilitiesForPrincipal(principal).then((r) => r.caps, () => new Set<Capability>());
+    // NZR-6: raw chat_* scopes are admin-override-only on the dashboard; Jarvis has no awaited override, so never.
+    if (isChatScope(scope) || !canReadScope(caps, scope)) {
+      void writeAudit({
+        action: 'knowledge_scope_denied',
+        surface: 'dashboard',
+        result: 'blocked',
+        userId: principal.hashPrefix16,
+        detail: { route: 'jarvis:vectors', scopeHash: scopeHash(scope), reason: 'private_scope', event: 'security.scope_denied' },
+      })?.catch(() => {});
+      return { ok: false, code: 'RESOURCE_FORBIDDEN' };
+    }
+  }
 
   try {
     const result = await runQuery(auth.resource, params, principal);
