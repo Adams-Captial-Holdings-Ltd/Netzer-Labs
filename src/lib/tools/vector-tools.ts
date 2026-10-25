@@ -106,6 +106,8 @@ tools.register('s3_vectors_search', {
     // NZR-6: plus this chat's own private scope, bound to the speaker. Never any
     // other chat_* scope. Surface-agnostic: on Slack/Telegram it is simply empty.
     if (ctx.userId) scopes.push(chatKnowledgeScope(ctx.agentId, ctx.chatId, ctx.userId));
+    // A linked token's files from before linking: same chat, its own earlier identity.
+    if (ctx.userId && ctx.tokenUserId) scopes.push(chatKnowledgeScope(ctx.agentId, ctx.chatId, ctx.tokenUserId));
     if (typeof args.scope === 'string' && args.scope) {
       if (!scopes.includes(args.scope)) {
         return {

@@ -338,6 +338,17 @@ function personOf(c: DashboardCtx): string | undefined {
 }
 
 /**
+ * NZR-6: a token linked to a person uploaded chat files as `dashboard:<tokenHash>`
+ * before the link. The turn carries that identity so search still reaches them,
+ * the knowledge twin of ownsConversation's tokenHash half. Magic-link logins
+ * always uploaded as the person, so they carry none.
+ */
+function tokenTurnIdentity(c: DashboardCtx): { tokenUserId?: string } {
+  const p = getPrincipal(c);
+  return p?.linkedUserId && !p.userId ? { tokenUserId: `dashboard:${p.tokenHash}` } : {};
+}
+
+/**
  * Who a conversation the caller starts belongs to, and whether it lasts: a
  * person's is durable, a principal with no person's expires (decision 1). What
  * appendTurns stamps, and what a slash command that creates one stamps (F2).
@@ -2591,6 +2602,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
           // well as there because a skipped feature is invisible at the call
           // site that skips it.
           userId: dashboardIdentity(c),
+          ...tokenTurnIdentity(c),
           // Per-seat spend attribution: the users-table id of the signed-in
           // principal (magic-link session). Token/break-glass principals have
           // none and attribute nothing.
@@ -2968,6 +2980,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
         // missing primitive as the streamed route above, same note at the
         // emission site in `src/lib/tools/mission-tools.ts`.
         userId: dashboardIdentity(c),
+        ...tokenTurnIdentity(c),
         ...(getPrincipal(c)?.userId ? { dashboardUserId: getPrincipal(c)!.userId } : {}),
       });
       if (persist && !result.blocked) {
