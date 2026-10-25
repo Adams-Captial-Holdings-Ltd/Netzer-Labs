@@ -292,7 +292,8 @@ export async function listDocuments(scope: string): Promise<Doc[]> {
 
 /** NZR-6: every scope that has an `index/<scope>/` prefix (normalized names). */
 export async function listScopePrefixes(): Promise<string[]> {
-  if (!INDEX_BUCKET) return [];
+  // Throw, not []: an empty list would let the quarantine --verify pass unread.
+  if (!INDEX_BUCKET) throw new Error('VECTORS_BUCKET env var not set');
   const scopes: string[] = [];
   let continuationToken: string | undefined;
   do {
