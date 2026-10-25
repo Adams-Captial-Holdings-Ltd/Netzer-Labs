@@ -3,7 +3,7 @@
 // Append-only JSONL. Reserve BEFORE a paid review, commit/release AFTER. A reserve with no commit/release counts as spent
 // (a crash or a retry must never hide spend). Every write holds an exclusive lock around read-check-append, and a corrupt
 // ledger refuses to answer instead of guessing. Weights and the monthly budget are planning assumptions until verified.
-//   review-ledger.mjs status | reserve <base|plus|apex> <40-hex sha> [--risk high] [--reason TEXT] [--pr ID] [--apex-approved]
+//   review-ledger.mjs status | reserve <base|plus|apex> <40-hex sha> [--risk high] [--reason TEXT] [--pr ID] [--step ID] [--apex-approved]
 //                     | commit <id> | release <id> [reason] | selftest
 // Exit codes: 0 ok, 2 usage, 4 NOT RUN (budget or a rule refused the review), 5 ledger or policy unreadable (also NOT RUN).
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
@@ -59,7 +59,7 @@ export function summarize(events, policy, now = new Date()) {
   for (const e of events) {
     if (e.month !== cur) continue;
     const s = byId.get(e.id) ?? { id: e.id };
-    if (e.event === 'reserve') Object.assign(s, { tier: e.tier, units: e.units, sha: e.sha, pr: e.pr, state: 'pending' });
+    if (e.event === 'reserve') Object.assign(s, { tier: e.tier, units: e.units, sha: e.sha, pr: e.pr, step: e.step, state: 'pending' });
     else if (s.state === 'pending') s.state = e.event === 'commit' ? 'committed' : 'released';
     byId.set(e.id, s);
   }
@@ -69,7 +69,7 @@ export function summarize(events, policy, now = new Date()) {
   return { used, pending: live.filter((s) => s.state === 'pending').length, live, remaining: policy.monthly_units - used, reserve: policy.reserve_units_high_risk, byId };
 }
 
-export function decide({ events, policy, tier, sha, risk = 'normal', reason = '', apexApproved = false, now = new Date() }) {
+export function decide({ events, policy, tier, sha, risk = 'normal', reason = '', apexApproved = false, step, now = new Date() }) {
   if (!Object.hasOwn(policy.weights, tier)) return { ok: false, why: `unknown tier ${tier}` };
   if (!SHA.test(sha)) return { ok: false, why: 'sha must be the full lowercase commit id (40 hex characters)' };
   const units = policy.weights[tier];
@@ -80,6 +80,7 @@ export function decide({ events, policy, tier, sha, risk = 'normal', reason = ''
   if (risk !== 'high' && s.used + units > policy.monthly_units - policy.reserve_units_high_risk) {
     return { ok: false, why: `would use the ${policy.reserve_units_high_risk}-unit reserve kept for high-risk changes` };
   }
+  if (step && s.live.some((r) => r.step === step) && !reason) return { ok: false, why: `step ${step} already had a paid review this month; a second needs --reason` };
   if (s.live.some((r) => r.sha === sha) && !reason) return { ok: false, why: `${sha.slice(0, 12)} already has a paid review this month; a second needs --reason` };
   const after = s.used + units;
   return { ok: true, units, warn: (after / policy.monthly_units) * 100 >= policy.soft_warn_pct ? `soft warning: ${after}/${policy.monthly_units} units after this review` : null };
@@ -135,15 +136,15 @@ function main(argv, env = process.env, out = console) {
       const [tier, sha] = rest;
       if (!tier || !sha) return usage(out);
       note();
-      const [risk, reason, pr] = [val('--risk'), val('--reason') ?? '', val('--pr')];
+      const [risk, reason, pr, step] = [val('--risk'), val('--reason') ?? '', val('--pr'), val('--step')];
       return withLock(ledger, () => {
         const events = readEvents(ledger);
         const ms = Number(env.GAUNTLET_TEST_DELAY_MS); // honoured only inside selftest: widens the race window
         if (env.GAUNTLET_SELFTEST === '1' && Number.isFinite(ms) && ms > 0 && ms <= 5000) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-        const d = decide({ events, policy, tier, sha, risk, reason, apexApproved: rest.includes('--apex-approved') });
+        const d = decide({ events, policy, tier, sha, risk, reason, step, apexApproved: rest.includes('--apex-approved') });
         if (!d.ok) { out.log(`NOT RUN: ${d.why}`); return 4; }
         const id = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
-        write({ id, event: 'reserve', tier, units: d.units, sha, pr, reason, risk: risk ?? 'normal', apex_approved: rest.includes('--apex-approved') });
+        write({ id, event: 'reserve', tier, units: d.units, sha, pr, step, reason, risk: risk ?? 'normal', apex_approved: rest.includes('--apex-approved') });
         if (d.warn) out.error(d.warn);
         out.log(id);
         return 0;
@@ -166,7 +167,7 @@ function main(argv, env = process.env, out = console) {
     throw e;
   }
 }
-const usage = (out) => { out.error('usage: review-ledger.mjs status | reserve <base|plus|apex> <40-hex sha> [--risk high] [--reason TEXT] [--pr ID] [--apex-approved] | commit <id> | release <id> [reason] | selftest'); return 2; };
+const usage = (out) => { out.error('usage: review-ledger.mjs status | reserve <base|plus|apex> <40-hex sha> [--risk high] [--reason TEXT] [--pr ID] [--step ID] [--apex-approved] | commit <id> | release <id> [reason] | selftest'); return 2; };
 
 async function selftest() {
   const assert = (c, m) => { if (!c) throw new Error(`selftest failed: ${m}`); };
