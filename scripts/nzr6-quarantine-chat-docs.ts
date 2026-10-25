@@ -73,8 +73,8 @@ export async function quarantineChatDocs(opts: {
       await writeAuditOrThrow({
         action: 'knowledge_quarantined',
         ...(agentId ? { agentId } : {}),
-        // Hashes only, no file name: the audit log is viewer-readable.
-        detail: { docId: c.docId, qDocId, fromScopeHash: scopeHash(c.fromScope), toScopeHash: scopeHash(QUARANTINE_SCOPE), chunks: c.chunks },
+        // Hashes only, no file or scope name (qDocId embeds it): the audit log is viewer-readable.
+        detail: { docId: c.docId, fromScopeHash: scopeHash(c.fromScope), toScopeHash: scopeHash(QUARANTINE_SCOPE), chunks: c.chunks },
         result: 'ok',
       });
       await deleteDocument(c.fromScope, c.docId);
