@@ -104,10 +104,16 @@ describe('review-plan.mjs', () => {
   });
 
   it('a used yes stays used when the sends file is rewritten; only a leading yes counts; slug is validated', () => {
-    const rec = JSON.stringify({ layer: 'kodus', step: 's1', sha: A, owner_text: 'yes kodus this run' });
+    const rec = JSON.stringify({ layer: 'kodus', step: 's1', sha: A, owner_text: 'yes kodus this run', id: 'consent-0002' });
     writeFileSync(sends(), `${rec}\n`);
     expect(sendCheck('kodus', 's1', A).code).toBe(0);
     writeFileSync(sends(), `{"junk":1}\n${rec}\n`); // record moves to another line index
+    expect(sendCheck('kodus', 's1', A).code).toBe(4);
+    // same consent id, reordered properties and different spacing: still the used yes
+    writeFileSync(sends(), `{ "id": "consent-0002",  "owner_text": "yes kodus this run", "sha": "${A}", "step": "s1", "layer": "kodus" }\n`);
+    expect(sendCheck('kodus', 's1', A).code).toBe(4);
+    // a yes without a consent id is not consent
+    writeFileSync(sends(), `${JSON.stringify({ layer: 'kodus', step: 's1', sha: A, owner_text: 'yes kodus this run' })}\n`);
     expect(sendCheck('kodus', 's1', A).code).toBe(4);
     for (const text of ['not yes', 'yes?', 'no, yes later']) {
       writeFileSync(sends(), `${JSON.stringify({ layer: 'greptile', step: 's1', sha: A, owner_text: text })}\n`);
