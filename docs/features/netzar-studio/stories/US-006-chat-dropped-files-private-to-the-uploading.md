@@ -216,3 +216,25 @@ Fixture: agent `ops` (`knowledgeScope: ops_private`); user A = `dashboard:user:a
 - [ ] QA: the fresh critic re-runs the gate against these criteria. UAT: the owner accepts the evidence summary and the confirmation-text change.
 - [ ] Documentation is updated: feature HANDOFF + a dated session handoff; SECURITY.md §3b cites the test files at the merge SHA; architecture-security drift line; the "ask from Slack" promise removed from the header comment and docs.
 - [ ] Done = merged to `development` (owner yes for every merge/push, Q50) and verified locally. Staging: PENDING until NZR-42 (AWS account) exists. Legacy app: not deployed, script not run (Q84).
+
+<!-- runner:evidence:start -->
+### Story exit gate evidence (runner)
+
+```
+Story: NZR-6   HEAD: a0e224e5a35f9ad69cf4437d7ce026d4d57049fb
+G1 code review : PASS  reviewer=claude-opus fresh critic session=a14cd010-ea62-41ce-8455-9d3aff048a20 findings=1/9 open_low=8 greptile=GR:PASS
+GR greptile    : PASS confidence=5 comments=0 plus=True
+G2 unit tests  : PASS        red=2f20dfb green=a0e224e counts=4768/4768 story_files=68/68 typecheck=ok
+G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
+G3 UAT         : PENDING scenarios=10/10 pending_owner=0 accepted_by=- date=-
+G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-6/e2e-run.txt counts=18/18
+G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
+Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012,L-013,L-014,L-015,L-016,L-017   New lessons: L-014, L-015, L-016, L-017
+```
+
+- [e2e-run.txt](../evidence/NZR-6/e2e-run.txt)
+- [g1-review.md](../evidence/NZR-6/g1-review.md)
+- [gates.md](../evidence/NZR-6/gates.md)
+- [uat-transcript.md](../evidence/NZR-6/uat-transcript.md)
+- [uat.json](../evidence/NZR-6/uat.json)
+<!-- runner:evidence:end -->
