@@ -113,6 +113,24 @@ describe('review-plan.mjs', () => {
     expect(other.out).toContain('UNSUPPORTED SKIP: L4');
   });
 
+  it('required layers must sit on the final L0 sha, skips and NOT RUN included', () => {
+    const t2 = verify('T2', [r('L0', 'ran', A), r('critic', 'ran', A), r('step-maid', 'ran', A), r('L0', 'ran', B)]);
+    expect(t2.code).toBe(1);
+    expect(t2.out).toContain('STALE LAYER: critic');
+    expect(t2.out).toContain('STALE LAYER: step-maid');
+    expect(t2.out).not.toContain('TIER OK');
+    for (const [layer, line] of [
+      ['L1', r('L1', 'ran', A)],
+      ['L2', `REVIEW: L2 skipped (not substantial) ${A}`],
+      ['L3', r('L3', 'NOT RUN (no owner yes on NVIDIA terms)', A)],
+      ['L4', r('L4', 'ran', A)],
+    ]) {
+      const res = verify('T3', [...t3().map((l) => (l.startsWith(`REVIEW: ${layer} `) ? line : l)), r('L0', 'ran', B)]);
+      expect(res.code).toBe(1);
+      expect(res.out).toContain(`STALE LAYER: ${layer}`);
+    }
+  });
+
   it('a NOT RUN required layer makes a T3 step INCOMPLETE, not PASS', () => {
     const lines = t3().map((l) => (l.startsWith('REVIEW: L1 ') ? r('L1', 'NOT RUN (kodus signed out)') : l));
     const res = verify('T3', lines);
