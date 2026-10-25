@@ -36,7 +36,20 @@ function withLock(file, fn, waitMs = 10_000) {
   for (;;) {
     try { mkdirSync(lock); writeFileSync(join(lock, 'pid'), `${process.pid}\n`); break; } catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      if (holderGone()) { rmSync(lock, { recursive: true, force: true }); continue; }
+      if (holderGone()) {
+        // Recovery is exclusive: only the guard holder may remove, and it re-checks first, so it never deletes a lock a rival just took.
+        let guard = `${lock}.recover`;
+        try { mkdirSync(guard); } catch (g) {
+          if (g.code !== 'EEXIST') throw g;
+          // shortcut: a guard older than 30s means its owner crashed mid-recovery; removing it is itself unguarded.
+          try { if (Date.now() - statSync(guard).mtimeMs > 30_000) rmSync(guard, { recursive: true, force: true }); } catch {}
+          guard = null;
+        }
+        if (guard) {
+          try { if (holderGone()) rmSync(lock, { recursive: true, force: true }); } finally { rmSync(guard, { recursive: true, force: true }); }
+          continue;
+        }
+      }
       if (Date.now() > deadline) throw fail('LOCKED', 'route log is locked by another running process');
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
