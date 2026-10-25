@@ -1,6 +1,8 @@
 # ADR 0012 — Paperclip owns work state; pipelines are canonical, key-per-version
 
-**Status:** Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29). Plan number 0011; repo number 0012 — [why](../features/paperclip/decision-log.md#adr-numbers).
+**Status:** Superseded (2026-10-20) by [ADR 0022](0022-netzar-owns-work-state-paperclip-replaced.md). Was: Accepted (owner-approved plan, 2026-09-26; recorded 2026-09-29). Plan number 0011; repo number 0012 — [why](../features/paperclip/decision-log.md#adr-numbers).
+
+> **Superseded (2026-10-20).** The owner replaced Paperclip as the owner of workflow and work state (grill 1, Q2 and Q10; retirement in January, Q72). Netzar is the single authority for Studio workflows; Paperclip keeps running for Missions, and its approvals keep working, until the NZR-37 migration. See [ADR 0022](0022-netzar-owns-work-state-paperclip-replaced.md). This ADR is kept so old links resolve. Its history follows, unedited.
 
 ## Context
 
