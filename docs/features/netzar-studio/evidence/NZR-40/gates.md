@@ -6,10 +6,10 @@ G1 code review : PASS  reviewer=claude-opus fresh critic session=f6694a9f-a591-4
 GR greptile    : PASS confidence=5 comments=0 plus=False
 G2 unit tests  : PASS        red=c70fef8 green=c31844a counts=4779/4779 story_files=11/11 typecheck=ok
 G2b integration: PENDING run=- (not in runner scope yet, Goal v1)
-G3 UAT         : PENDING scenarios=8/8 pending_owner=0 accepted_by=- date=-
+G3 UAT         : PASS scenarios=8/8 pending_owner=0 accepted_by=owner (Telegram) date=2026-10-25
 G4 E2E         : PASS run=docs/features/netzar-studio/evidence/NZR-40/e2e-run.txt counts=7/7
 G5 Opik eval   : N/A     experiment=- (not in runner scope yet, Goal v1)
-Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012,L-013,L-014,L-015,L-016,L-017   New lessons: L-018, L-019
+Lessons checked: L-001,L-002,L-003,L-004,L-005,L-006,L-007,L-008,L-009,L-010,L-011,L-012,L-013,L-014,L-015,L-016,L-017,L-018,L-019   New lessons: L-018, L-019
 ```
 
 ## G1 open non-blocking findings
