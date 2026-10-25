@@ -709,6 +709,9 @@ function safeDashboardChatId(input: string | undefined): string {
   return `dashboard:${sanitized}`;
 }
 
+/** Any chat id the send route can produce: safeDashboardChatId passes a prefixed id through at any length. */
+const validChatId = (v: unknown): v is string => typeof v === 'string' && v.length >= 1;
+
 /**
  * Replay only stored attachments that can become model blocks. Audio, voice
  * and video yield no block because their words are already in the stored message text;
@@ -939,7 +942,7 @@ async function scopeAccess(
   const chatMode = opts.chat !== undefined && (opts.chat.agentId !== undefined || opts.chat.chatId !== undefined);
   const validName = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 128;
   if (!chatMode && (rawScope === undefined || rawScope === null)) return { ok: true, scope: 'default' };
-  if (chatMode ? rawScope != null || !validName(opts.chat!.agentId) || !validName(opts.chat!.chatId) : !validName(rawScope)) {
+  if (chatMode ? rawScope != null || !validName(opts.chat!.agentId) || !validChatId(opts.chat!.chatId) : !validName(rawScope)) {
     return { ok: false, res: c.json({ error: 'invalid_scope' }, 400) };
   }
   let caps: ReadonlySet<Capability> = new Set();
@@ -3745,7 +3748,7 @@ export function buildDashboardRouter(): Hono<DashboardEnv> {
     const body = await c.req.json<{ agentId?: unknown; chatId?: unknown }>().catch(() => null);
     const { agentId, chatId } = body ?? {};
     const valid = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 256;
-    if (!valid(agentId) || !valid(chatId)) return c.json({ error: 'invalid_body' }, 400);
+    if (!valid(agentId) || !validChatId(chatId)) return c.json({ error: 'invalid_body' }, 400);
     const qDocId = c.req.param('docId');
     const rows = await readDocumentRows(QUARANTINE_SCOPE, qDocId);
     const sep = qDocId.indexOf('__');
