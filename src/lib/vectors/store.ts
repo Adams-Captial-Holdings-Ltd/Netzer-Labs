@@ -374,7 +374,8 @@ export async function* iterateRows(
       }),
     );
     for (const obj of list.Contents ?? []) {
-      if (!obj.Key) continue;
+      // Skip reassign claims before the GET: one released mid-listing would 404 and 500 the caller.
+      if (!obj.Key || obj.Key.endsWith('.claim.jsonl')) continue;
       const resp = await s3().send(
         new GetObjectCommand({ Bucket: INDEX_BUCKET, Key: obj.Key }),
       );
