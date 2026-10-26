@@ -50,7 +50,9 @@ rec('FORWARD-LINKS 0017 links 0023', read('docs/adr/0017-netzer-identity-and-wor
 rec('FORWARD-LINKS decision-log row 21 links 0023', read('docs/features/paperclip/decision-log.md').split('\n').some((l) => l.startsWith('| 21 |') && l.includes('0023')));
 rec('FORWARD-LINKS do-not-build links 0024', read('docs/features/paperclip/do-not-build.md').includes('0024'));
 
-for (const f of ['docs/adr/0012-paperclip-owns-work-state.md', 'docs/adr/0017-netzer-identity-and-work-ui.md']) {
+// Branch-only: after merge the diff vs origin/development is empty, so the permanent vitest wrapper opts out.
+const branchFiles = process.env.NZR7_SKIP_BRANCH_CHECKS === '1' ? [] : ['docs/adr/0012-paperclip-owns-work-state.md', 'docs/adr/0017-netzer-identity-and-work-ui.md'];
+for (const f of branchFiles) {
   const r = run('git', 'diff', '--numstat', 'origin/development', '--', f);
   const [add, del] = (r.stdout.trim() || '0\t0').split('\t').map(Number);
   rec(`NO-HISTORY-EDIT ${f.slice(9, 13)} annotated with deletions <= 1`, r.status === 0 && add >= 1 && del <= 1, `exit ${r.status}`);
