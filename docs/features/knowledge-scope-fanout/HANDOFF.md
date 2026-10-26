@@ -16,15 +16,21 @@ as_of_commit: 0072dde
   [branch mapping](../../../development.md#branch-to-environment-mapping),
   `fix/*` and `development` both deploy nothing. Staging resources were used for
   verification only and the fixture was removed.
-- **Pushed:** yes. **PR:** #115 into `development`. **Deployed:** no.
+- **Pushed:** yes. **Merged:** `development` (#115), `qa` (#121), `staging`
+  (#122). **Deployed:** staging, automatically on the `staging` merge.
+  Production not yet promoted.
 - **Commits:** `476e25b` (scope resolution), `ded9dd3` (interim docs),
   `c3d27bb` (the three-corpus fan-out), `9bfbd97` (per-corpus reporting),
-  `3c8ef67` (docs), `0072dde` (harness tracked, development.md corrected).
+  `3c8ef67` (docs), `0072dde` (harness tracked, development.md corrected),
+  `660e7bb` (production measurements).
 
-**The feature is complete.** The fan-out is proven end to end; the per-corpus
-reporting added in `9bfbd97` is unit-proven but has **not** been seen against
-real infrastructure, because the AWS session expired before the harness could be
-re-run. See *What is not yet proven* below.
+**The feature is complete and proven end to end**, including the per-corpus
+reporting, which was re-verified live on `0072dde` after re-authenticating.
+
+**Before opening the `staging` → `production` PR**, re-check that production's
+`index/default/` is still empty. It was empty when measured on 2026-08-26, which
+is the only reason the read-widening carries no disclosure risk. That check is
+one CLI call and it guards the sole irreversible consequence of this change.
 
 ## What the proof actually was
 
@@ -65,8 +71,13 @@ three and reported no error at all — the silent failure this work exists to ki
 | `node scripts/ci/feature-knowledge.mjs` | OK |
 | `git diff --check` | clean |
 
-`npm run local:test:integration` was **not run** — Docker is unavailable on this
-machine. It is a pre-push gate and must run in CI before anyone pushes.
+`npm run local:test:integration` was **not run locally** — Docker is unavailable
+on this machine. It ran in CI instead: the **Integration Tests (LocalStack)**
+job passed on every promotion PR (#115, #121, #122), which closes that gate.
+
+CI also settles the local `npm test` noise below. **Typecheck + Unit Tests**
+passed on all three promotion PRs, so the suite is green on Linux and the
+Windows failures are environmental.
 
 ## Production reality, measured 2026-08-26
 
@@ -121,18 +132,23 @@ corrects that.
 
 ## The next action
 
-Open the PR into `development`. Then promote in documented order, one PR per
-step: `development` → `qa` → `staging` → `production`. Merging to `staging`
-deploys staging automatically, which gives this real-environment validation
-before production. **Production deploys nothing on merge** — someone must
-dispatch `deploy.yml` with `env: prod` and type `deploy`.
+Three of the four promotion steps are done: `development` (#115), `qa` (#121),
+`staging` (#122), each with all CI gates green. The `staging` merge triggered the
+staging deploy automatically.
 
-Two things belong in the PR body:
+What remains:
 
-- Everything in `default` is now readable by every agent, including agents with a
-  private scope that never read it. That is the intent, and it also makes an
-  accidentally mis-filed document retrievable rather than lost.
-- Top-K dilution, below.
+1. Re-check production's `index/default/` is still empty — see the warning at the
+   top of this document. This is the only irreversible risk in the change.
+2. Open and merge `staging` → `production`.
+3. **A human must then dispatch the deploy.** Merging to `production` deploys
+   nothing by itself: `deploy.yml` for prod is `workflow_dispatch` only, requires
+   typing `deploy` to confirm, and `deploy-source-guard.mjs` rejects any prod
+   deploy whose ref is not `refs/heads/production`.
+
+Note that because production's `default` corpus is empty, this deploy changes
+nothing observable in production. Anyone hoping to *test* the fan-out there will
+see no difference until something is filed in `default`.
 
 ## Open questions
 
@@ -164,6 +180,31 @@ Two things belong in the PR body:
       redirects a chat-dropped document to `default`, though that is now less
       harmful since `default` is universally readable.
 
+## Production is blocked, and not by this feature
+
+Two pre-existing problems, both found on 2026-08-26 and neither caused by this
+work. Full evidence in the [session log](handoffs/2026-08-26-promotion-and-deploy-blockers.md),
+section 6.3.
+
+**Every staging deploy fails.** Five consecutive failures since 2026-08-25 12:52
+at the "Populate Paperclip secret" step — the deploy role lacks
+`secretsmanager:GetSecretValue` and `PutSecretValue`. So **staging is not running
+this build**, and the promotion chain's real-environment validation did not
+happen. The feature's proof comes from driving the harness against staging
+infrastructure directly, which is still evidence, but it is not a deployed build.
+
+**A production deploy will likely fail the same way.** It defaults to tier 3,
+where `paperclipEnabled` is true, so it runs the identical step against
+`/claudeclaw/paperclip`. The last successful production deploy contains no
+Paperclip step at all, so there is no evidence that role carries the grants.
+
+**PR #61 (`staging` → `production`) has been conflicted since 2026-08-15.** A
+local test merge produced eleven conflicting files, all from the
+empty-turn-poisoning hotfixes. **None touch this feature** — `vector-tools.ts`,
+`agent-loader.ts` and the harness merge cleanly. A `hotfix/*` branch from
+`production` would therefore sidestep the conflicts entirely, though it still
+leaves the IAM grant in front of the deploy.
+
 ## Known divergence, reported not reconciled
 
 `origin/production` carries 15 commits `origin/development` does not — the
@@ -176,8 +217,9 @@ backported and some were not. Reconciling that drift is its own change.
 
 Newest first:
 
+- [2026-08-26 — promotion and deploy blockers](handoffs/2026-08-26-promotion-and-deploy-blockers.md)
+  — merged to staging; production blocked by two pre-existing problems
 - [2026-08-25 — three-corpus fan-out](handoffs/2026-08-25-three-corpus-fanout.md)
-  — supersedes the log below
 - [2026-08-25 — three-corpus retrieval](handoffs/2026-08-25-three-corpus-retrieval.md)
 
 ## Related
